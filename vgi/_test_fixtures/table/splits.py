@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass
-from typing import Annotated, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, cast
 
 import pyarrow as pa
 from vgi_rpc.rpc import OutputCollector
@@ -40,6 +40,9 @@ from vgi.metadata import FunctionExample, PartitionKind
 from vgi.cache_control import CacheControl
 from vgi.protocol import PlanResponse, ScanSplit
 from vgi.schema_utils import partition_field, schema
+
+if TYPE_CHECKING:
+    from vgi.table_filter_pushdown import PushdownFilters
 from vgi.table_function import (
     BindParams,
     TableCardinality,
@@ -1079,7 +1082,18 @@ class SplitDynamicFilterFunction(TableFunctionGenerator[SplitSequenceArgs, Split
             return
 
 
-def _render_filters_canonical(filters: object) -> str:
+def _bound_as_int(value: object) -> int:
+    """Coerce a bound value to a plain int.
+
+    ``ColumnBounds`` carries pyarrow ``Scalar``s, which support ``int()`` at
+    runtime but not in the type checker's eyes. Unwrapping through ``as_py``
+    first keeps both happy without an ignore comment.
+    """
+    as_py = getattr(value, "as_py", None)
+    return int(cast(Any, as_py() if callable(as_py) else value))
+
+
+def _render_filters_canonical(filters: "PushdownFilters | None") -> str:
     """The CANONICAL cross-SDK rendering of a pushed-down filter set.
 
     Every SDK must produce this byte-for-byte, because the shared SQL suite
@@ -1106,10 +1120,10 @@ def _render_filters_canonical(filters: object) -> str:
         # carries no inclusive flag at all, so `n > 40` must render as `n>=41`
         # here or the two workers disagree on a byte.
         if bounds.min_value is not None:
-            lo = int(bounds.min_value) + (0 if bounds.min_inclusive else 1)
+            lo = _bound_as_int(bounds.min_value) + (0 if bounds.min_inclusive else 1)
             parts.append(f"{c}>={lo}")
         if bounds.max_value is not None:
-            hi = int(bounds.max_value) - (0 if bounds.max_inclusive else 1)
+            hi = _bound_as_int(bounds.max_value) - (0 if bounds.max_inclusive else 1)
             parts.append(f"{c}<={hi}")
     return ",".join(parts) if parts else "(none)"
 
