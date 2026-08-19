@@ -22,6 +22,7 @@ from dataclasses import dataclass
 import pyarrow as pa
 from vgi_rpc.rpc._types import MethodType, rpc_methods  # type: ignore[attr-defined]
 
+from vgi.protocol import ScanSplit
 from vgi.catalog.catalog_interface import (
     AttachCatalogInfo,
     CatalogInfo,
@@ -59,10 +60,7 @@ EXTRA_RESPONSE_TYPES: tuple[type, ...] = (
     ScanFunctionResult,  # catalog_table_{scan,insert,update,delete}_function_get
     ScanBranchesResult,  # catalog_table_scan_branches_get (top-level wrapper)
     ScanBranch,  # one entry inside ScanBranchesResult.branches (binary blob)
-    # ScanSplit belongs here too — it is the same shape, one blob per entry of
-    # PlanResponse.splits — but the cpp/go/ts emitters have no large_binary case
-    # and ScanSplit uses it for four columns. Until they do, every SDK writes
-    # ScanSplit by hand, which is exactly how four of them drifted apart.
+    ScanSplit,  # one entry inside PlanResponse.splits (binary blob)
     AttachCatalogInfo,  # one entry inside CatalogAttachResult.attach_catalogs (binary blob)
 )
 

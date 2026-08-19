@@ -465,13 +465,19 @@ class ScanSplit(ArrowSerializableDataclass):
 
     """
 
-    payload: Annotated[bytes, ArrowType(pa.large_binary())] = b""
-    token: Annotated[bytes, ArrowType(pa.large_binary())] = b""
+    # ``binary``, not ``large_binary``. Every one of these is a single value in a
+    # ONE-ROW batch, and a split NAMES work rather than carrying it — 2 GB of
+    # int32 offsets is not a constraint anyone can reach. large_binary bought
+    # nothing and cost a great deal: the cpp/go/ts emitters have no case for it,
+    # so ScanSplit could not be generated and every SDK wrote it by hand, which
+    # is exactly how four of them ended up disagreeing on these types.
+    payload: Annotated[bytes, ArrowType(pa.binary())] = b""
+    token: Annotated[bytes, ArrowType(pa.binary())] = b""
     estimated_rows: int | None = None
     rows_exact: bool = False
     estimated_bytes: int | None = None
-    partition_bounds: Annotated[pa.RecordBatch | None, ArrowType(pa.large_binary())] = None
-    column_statistics: Annotated[bytes | None, ArrowType(pa.large_binary())] = None
+    partition_bounds: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
+    column_statistics: Annotated[bytes | None, ArrowType(pa.binary())] = None
     location_ids: list[int] | None = None
     start_position: Annotated[bytes | None, ArrowType(pa.binary())] = None
     end_position: Annotated[bytes | None, ArrowType(pa.binary())] = None
