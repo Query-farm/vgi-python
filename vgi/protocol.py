@@ -572,8 +572,12 @@ class PlanResponse(ArrowSerializableDataclass):
         next_cursors: Continuation cursors. Normally 0 or 1. More than one means
             parallel enumeration, which is only sound if the cursors partition the
             remaining enumeration **disjointly and exhaustively** — no split may be
-            reachable from two cursors. Clients dedup by split token regardless,
-            because a violation would otherwise produce duplicate rows.
+            reachable from two cursors. No client checks this: a dedup was tried
+            and removed — it needed a set holding a copy of every token (hundreds of
+            MB on a large plan, paid by every scan), it compared token bytes so it
+            could never work on a keyed worker where each mint uses a fresh nonce,
+            and the most a client can do with a duplicate is refuse anyway.
+            Violating it returns **duplicate rows**, silently.
         execution_id: Identifier for this scan, echoed on every split init. Scopes
             cross-process ``BoundStorage`` exactly as it does elsewhere.
         init_opaque_data: Opaque per-init state threaded into each split's stream.
