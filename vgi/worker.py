@@ -2738,7 +2738,15 @@ class Worker:
                 signing_key=signing_key,
                 auth=ctx.auth,
             )
-            stamped.append(dataclasses.replace(split, token=token).serialize_to_bytes())
+            # Clear the payload. The framework seals it INTO the token, and shipping
+            # the plaintext alongside in the same record made that seal decorative:
+            # an observer reading the response got the payload verbatim from the
+            # field next to the ciphertext. No client reads it — the C++ side pulls
+            # `token` alone and sends only the token back — and redemption recovers
+            # the payload from inside the envelope, so nothing needs it on the wire.
+            stamped.append(
+                dataclasses.replace(split, payload=b"", token=token).serialize_to_bytes()
+            )
 
         return dataclasses.replace(response, splits=stamped)
 

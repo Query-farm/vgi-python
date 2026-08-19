@@ -289,3 +289,55 @@ def test_a_worker_that_names_its_version_is_taken_at_its_word() -> None:
         )
         == b"file=1"
     )
+
+
+def test_stamping_clears_the_plaintext_payload() -> None:
+    """A stamped split must not carry its payload in the clear beside the token.
+
+    The framework seals the payload INTO the token so a caller cannot rewrite which
+    work a split names. Forwarding the same bytes in the neighbouring ``payload``
+    field made that seal decorative on a keyed worker: anyone reading the plan
+    response got the plaintext verbatim, without touching the ciphertext.
+
+    Nothing needs it there. The C++ client reads ``token`` alone and sends only the
+    token back, and redemption recovers the payload from inside the envelope — so
+    this is a leak with no consumer, which is the easiest kind to leave in place
+    for years.
+    """
+    from vgi.protocol import BindRequest as PBindRequest
+    from vgi.protocol import PlanResponse, ScanSplit, TableFunctionPlanRequest
+
+    secret = b"file=/tenant-a/private.parquet;v=47"
+
+    class _KeyedWorker:
+        _signing_key = b"k" * 32
+
+        def _current_split_anchor(self, request: object, ctx: object) -> bytes:
+            return (0).to_bytes(8, "little", signed=True)
+
+        _stamp_split_tokens = Worker._stamp_split_tokens
+
+    class _Ctx:
+        auth = None
+
+    bind = PBindRequest(function_name="f", arguments=b"", function_type="TABLE")
+    request = TableFunctionPlanRequest(bind_call=bind)
+    stamped = _KeyedWorker()._stamp_split_tokens(
+        PlanResponse(splits=[ScanSplit(payload=secret)]), request, _Ctx()
+    )
+
+    # Not in the field...
+    split = ScanSplit.deserialize_from_bytes(stamped.splits[0])
+    assert split.payload == b""
+    # ...and not anywhere else in the serialized record either, which is the
+    # assertion that survives someone moving the leak to a different column.
+    assert secret not in stamped.splits[0]
+
+    # Still fully recoverable from the token, so clearing the field cost nothing.
+    opened = open_split_token(
+        split.token,
+        signing_key=b"k" * 32,
+        expected_fingerprint=bind_fingerprint(bind),
+        current_anchor=(0).to_bytes(8, "little", signed=True),
+    )
+    assert opened == secret
