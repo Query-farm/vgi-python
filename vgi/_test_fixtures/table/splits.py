@@ -1043,8 +1043,6 @@ class SplitDynamicFilterFunction(TableFunctionGenerator[SplitSequenceArgs, Split
         out: OutputCollector,
     ) -> None:
         """Emit a batch, stamping every row with the filter this tick carried."""
-        from vgi._test_fixtures.table.filters import _format_pushed_filters_safe
-
         while True:
             if state.idx >= len(state.lo):
                 out.finish()
@@ -1069,7 +1067,7 @@ class SplitDynamicFilterFunction(TableFunctionGenerator[SplitSequenceArgs, Split
                 merged = cls.pushdown_filters(init.pushdown_filters, join_keys=init.join_keys)
             if merged is None:
                 merged = params.current_pushdown_filters
-            filter_str = _format_pushed_filters_safe(merged)
+            filter_str = _render_filters_canonical(merged)
             values = list(range(state.cur, end))
             out.emit(
                 pa.RecordBatch.from_pydict(
@@ -1079,6 +1077,41 @@ class SplitDynamicFilterFunction(TableFunctionGenerator[SplitSequenceArgs, Split
             )
             state.cur = end
             return
+
+
+def _render_filters_canonical(filters: object) -> str:
+    """The CANONICAL cross-SDK rendering of a pushed-down filter set.
+
+    Every SDK must produce this byte-for-byte, because the shared SQL suite
+    asserts on the string. A language's own debug formatting cannot be used —
+    ``repr(PushdownFilters)`` is Python-shaped and no other SDK can reproduce it,
+    so a test asserting it could only ever pass against this worker, which
+    defeats the point of a shared suite.
+
+    So it renders from ``get_column_bounds``, which every SDK mirrors: for each
+    filtered column in sorted order, ``col>=min`` and/or ``col<=max``, joined by
+    ``,``. Values are included deliberately — without them a tightening Top-N
+    filter and a loose one render identically and the test cannot tell them apart.
+    """
+    if filters is None:
+        return "(none)"
+    columns = sorted({f.column_name for f in filters.filters if getattr(f, "column_name", None)})
+    parts: list[str] = []
+    for c in columns:
+        bounds = filters.get_column_bounds(c)
+        if bounds is None:
+            continue
+        # Normalized to INCLUSIVE integer bounds, because that is the only form
+        # every SDK can produce: Rust's ColumnBounds is integer-coerced and
+        # carries no inclusive flag at all, so `n > 40` must render as `n>=41`
+        # here or the two workers disagree on a byte.
+        if bounds.min_value is not None:
+            lo = int(bounds.min_value) + (0 if bounds.min_inclusive else 1)
+            parts.append(f"{c}>={lo}")
+        if bounds.max_value is not None:
+            hi = int(bounds.max_value) - (0 if bounds.max_inclusive else 1)
+            parts.append(f"{c}<={hi}")
+    return ",".join(parts) if parts else "(none)"
 
 
 @bind_fixed_schema
