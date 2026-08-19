@@ -97,6 +97,7 @@ def _scan_branch() -> ScanBranch:
         source_table="events",
         format_name="parquet",
         format_locations=["s3://bucket/a.parquet"],
+        format_options={"delim": pa.scalar("|", pa.string())},
     )
 
 

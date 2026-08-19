@@ -1011,6 +1011,29 @@ def scan_arguments_from(
 # relevant methods below.
 
 
+def _serialize_named_scalars(values: "dict[str, pa.Scalar]") -> bytes | None:  # type: ignore[type-arg]
+    """Pack name→scalar pairs into a 1-row IPC batch, or ``None`` when empty.
+
+    The column NAMES carry the keys, which is the same trick ``arguments`` uses
+    and for the same reason: a value may be any Arrow type, so no static schema
+    could describe the map. ``None`` rather than an empty batch so "no options"
+    costs no bytes and reads as absent rather than as an empty struct.
+    """
+    if not values:
+        return None
+    schema = pa.schema([pa.field(name, value.type) for name, value in values.items()])
+    batch = pa.RecordBatch.from_pylist([dict(values)], schema=schema)
+    return serialize_record_batch_bytes(batch)
+
+
+def _deserialize_named_scalars(data: bytes | None) -> "dict[str, pa.Scalar]":  # type: ignore[type-arg]
+    """Inverse of :func:`_serialize_named_scalars`. Absent or empty reads as ``{}``."""
+    if not data:
+        return {}
+    batch, _ = deserialize_record_batch(data)
+    return {field.name: batch.column(field.name)[0] for field in batch.schema}
+
+
 @dataclass(frozen=True)
 class ScanBranch:
     """One physical source backing a multi-branch scan.
@@ -1098,6 +1121,11 @@ class ScanBranch:
             pa.field("source_table", pa.string(), nullable=True),
             pa.field("format_name", pa.string(), nullable=True),
             pa.field("format_locations", pa.list_(pa.string()), nullable=True),
+            # Reader options as a 1-row IPC batch whose COLUMN NAMES are the
+            # option names — the same nested-batch trick `arguments` uses,
+            # because an option value can be any Arrow type and no static schema
+            # could express that.
+            pa.field("format_options", pa.binary(), nullable=True),
         ]  # type: ignore[arg-type]
     )
 
@@ -1126,6 +1154,7 @@ class ScanBranch:
             "writable": self.writable,
             "format_name": self.format_name,
             "format_locations": list(self.format_locations),
+            "format_options": _serialize_named_scalars(self.format_options),
             "source_catalog": self.source_catalog,
             "source_schema": self.source_schema,
             "source_table": self.source_table,
@@ -1173,6 +1202,13 @@ class ScanBranch:
             source_catalog=cast("str | None", row.get("source_catalog")),
             source_schema=cast("str | None", row.get("source_schema")),
             source_table=cast("str | None", row.get("source_table")),
+            # The format fields round-trip too. They were omitted here, so a
+            # deserialized format branch came back looking like a (malformed)
+            # function branch — invisible in practice only because the C++ client
+            # is the sole consumer and parses the columns itself.
+            format_name=cast("str | None", row.get("format_name")),
+            format_locations=list(cast("list[str] | None", row.get("format_locations")) or []),
+            format_options=_deserialize_named_scalars(cast("bytes | None", row.get("format_options"))),
         )
 
 

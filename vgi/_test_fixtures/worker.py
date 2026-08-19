@@ -966,6 +966,15 @@ _EXAMPLE_CATALOG = Catalog(
                     columns=schema(n=pa.int64()),
                     comment="Multi-branch: sequence(50) + read_parquet — used by multi_branch_heterogeneous.test",
                 ),
+                # Format branch: the worker names a FORMAT and locations, and the
+                # client resolves the reader. Its format_options carry the reader's
+                # named arguments — the file is pipe-delimited with a header, and
+                # read_csv gets both columns only if those options arrive.
+                Table(
+                    name="multi_branch_format",
+                    columns=schema(n=pa.int64(), label=pa.string()),
+                    comment="Format branch: read_csv with delim/header options — used by multi_branch_format.test",
+                ),
                 # Iceberg cold arm: one VGI sequence() hot arm + one native
                 # iceberg_scan arm. The iceberg table is created by the test at a
                 # well-known path via COPY … TO (FORMAT iceberg) (see
@@ -1633,6 +1642,44 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                         function_name="read_parquet",
                         positional_arguments=[pa.scalar(f"{_BRANCH_DIR}/vgi_hetero_branch.parquet", pa.string())],
                         named_arguments={},
+                    ),
+                ],
+                required_extensions=[],
+            )
+
+        # multi_branch_format: a FORMAT branch — the worker names a format and
+        # some locations, and the client resolves the reader (read_csv) without
+        # the worker knowing that reader's argument spelling.
+        #
+        # The options are the point. A format branch's format_options BECOME the
+        # reader's named arguments, and for a long time nothing carried them on
+        # the wire, so a format branch could not pass a single reader option.
+        # The file is pipe-delimited with a header, but DuckDB's sniffer works
+        # both of those out unaided — verified by mutation, the test passed with
+        # the options discarded. So it also sends `nullstr`, which cannot be
+        # inferred from the data: exactly one label becomes NULL, and nothing
+        # else about the result changes.
+        if schema_name.lower() == "data" and name.lower() == "multi_branch_format":
+            return ScanBranchesResult(
+                branches=[
+                    ScanBranch(
+                        function_name="",
+                        positional_arguments=[],
+                        named_arguments={},
+                        format_name="csv",
+                        format_locations=[f"{_BRANCH_DIR}/vgi_format_branch.csv"],
+                        format_options={
+                            "delim": pa.scalar("|", pa.string()),
+                            "header": pa.scalar(True, pa.bool_()),
+                            # The load-bearing one. DuckDB's CSV sniffer infers
+                            # the delimiter and the header by itself, so those two
+                            # prove nothing on their own — the test passed with
+                            # the options thrown away. `nullstr` cannot be
+                            # guessed: it turns one specific label into NULL, so
+                            # the row count stays 5 either way and only the
+                            # non-null count moves.
+                            "nullstr": pa.scalar("row_2", pa.string()),
+                        },
                     ),
                 ],
                 required_extensions=[],
