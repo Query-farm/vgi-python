@@ -18,9 +18,11 @@ from vgi.split_token import (
     FORMAT_VERSION,
     SplitSnapshotExpired,
     SplitTokenInvalid,
+    bind_fingerprint,
     build_split_token,
     open_split_token,
 )
+from vgi.worker import Worker
 
 FIXTURES = pathlib.Path(__file__).parent / "data" / "split_tokens"
 MANIFEST = json.loads((FIXTURES / "manifest.json").read_text())
@@ -195,3 +197,95 @@ def test_reproducible_vectors_regenerate_identically() -> None:
             continue
         name = f"{case['name']}.bin"
         assert (FIXTURES / name).read_bytes() == before[name], f"{name} drifted"
+
+
+# --------------------------------------------------------------------------- #
+# The anchor must be minted from the same place redemption reads it
+# --------------------------------------------------------------------------- #
+
+
+def test_anchor_defaults_to_the_live_catalog_version_not_zero() -> None:
+    """A worker that plans without naming a version must still mint a usable token.
+
+    The anchor is compared at redemption against the catalog's live version. Minting
+    it from ``response.catalog_version or 0`` meant a worker whose catalog really does
+    count versions, but whose ``on_plan`` leaves the field unset, stamped every token
+    with 0 and then refused every one of them — and the documented response to
+    ``SPLIT_SNAPSHOT_EXPIRED`` is "re-run the query", which re-plans, mints 0 again and
+    fails again. A livelock returning no rows, with an error blaming the data for
+    moving when it had not.
+
+    Invisible wherever the catalog's version is 0, which is most fixtures — so this
+    pins the non-zero case specifically.
+    """
+    from vgi.protocol import BindRequest as PBindRequest
+    from vgi.protocol import PlanResponse, ScanSplit, TableFunctionPlanRequest
+
+    class _VersionedWorker:
+        """Stands in for a worker whose catalog reports a non-zero version."""
+
+        _signing_key = None
+
+        def _current_split_anchor(self, request: object, ctx: object) -> bytes:
+            return (47).to_bytes(8, "little", signed=True)
+
+        _stamp_split_tokens = Worker._stamp_split_tokens
+
+    bind = PBindRequest(function_name="f", arguments=b"", function_type="TABLE")
+    request = TableFunctionPlanRequest(bind_call=bind)
+
+    class _Ctx:
+        auth = None
+
+    # on_plan left catalog_version unset — the common case for a worker that has
+    # not thought about snapshots.
+    planned = PlanResponse(splits=[ScanSplit(payload=b"file=1")])
+    stamped = _VersionedWorker()._stamp_split_tokens(planned, request, _Ctx())
+
+    split = ScanSplit.deserialize_from_bytes(stamped.splits[0])
+    # Redemption compares against the live version; the token must name it.
+    opened = open_split_token(
+        split.token,
+        expected_fingerprint=bind_fingerprint(bind),
+        current_anchor=(47).to_bytes(8, "little", signed=True),
+    )
+    assert opened == b"file=1"
+
+
+def test_a_worker_that_names_its_version_is_taken_at_its_word() -> None:
+    """An explicit ``catalog_version`` wins: the worker knows which snapshot it planned."""
+    from vgi.protocol import BindRequest as PBindRequest
+    from vgi.protocol import PlanResponse, ScanSplit, TableFunctionPlanRequest
+
+    class _VersionedWorker:
+        _signing_key = None
+
+        def _current_split_anchor(self, request: object, ctx: object) -> bytes:
+            return (47).to_bytes(8, "little", signed=True)
+
+        _stamp_split_tokens = Worker._stamp_split_tokens
+
+    bind = PBindRequest(function_name="f", arguments=b"", function_type="TABLE")
+    request = TableFunctionPlanRequest(bind_call=bind)
+
+    class _Ctx:
+        auth = None
+
+    planned = PlanResponse(splits=[ScanSplit(payload=b"file=1")], catalog_version=11)
+    stamped = _VersionedWorker()._stamp_split_tokens(planned, request, _Ctx())
+    split = ScanSplit.deserialize_from_bytes(stamped.splits[0])
+
+    with pytest.raises(SplitSnapshotExpired):
+        open_split_token(
+            split.token,
+            expected_fingerprint=bind_fingerprint(bind),
+            current_anchor=(47).to_bytes(8, "little", signed=True),
+        )
+    assert (
+        open_split_token(
+            split.token,
+            expected_fingerprint=bind_fingerprint(bind),
+            current_anchor=(11).to_bytes(8, "little", signed=True),
+        )
+        == b"file=1"
+    )

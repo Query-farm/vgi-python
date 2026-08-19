@@ -1793,6 +1793,11 @@ class TableProducerState(_VgiCallStateHolder, ProducerState):
             output_schema=output_schema,
             settings=_batch_to_scalar_dict(self._call.init_call.bind_call.settings),
             secrets=SecretsAccessor(self._call.init_call.bind_call.secrets).to_dict(),
+            # The worker's key, or split_payloads refuses on every continuation.
+            # Over HTTP the params are rebuilt per tick, so omitting it here made
+            # a rehydrated split scan reject tokens this same process had sealed
+            # — the bug already fixed at init, one call site along.
+            signing_key=worker._signing_key,
             # Storage shards on the full plaintext (uuid||catalog_bytes); the
             # body sees only the stripped catalog bytes. Re-opened from the
             # sealed envelope rather than carried decrypted -- see VgiCallState.
@@ -1968,6 +1973,11 @@ class TableInOutExchangeState(_VgiCallStateHolder, ExchangeState):
             output_schema=output_schema,
             settings=_batch_to_scalar_dict(self._call.init_call.bind_call.settings),
             secrets=SecretsAccessor(self._call.init_call.bind_call.secrets).to_dict(),
+            # The worker's key, or split_payloads refuses on every continuation.
+            # Over HTTP the params are rebuilt per tick, so omitting it here made
+            # a rehydrated split scan reject tokens this same process had sealed
+            # — the bug already fixed at init, one call site along.
+            signing_key=worker._signing_key,
             # Storage shards on the full plaintext (uuid||catalog_bytes); the
             # body sees only the stripped catalog bytes. Re-opened from the
             # sealed envelope rather than carried decrypted -- see VgiCallState.

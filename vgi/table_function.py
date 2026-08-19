@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from abc import abstractmethod
 from collections.abc import Mapping
-from dataclasses import dataclass, is_dataclass
+from dataclasses import dataclass, field, is_dataclass
 from enum import Enum, auto
 from functools import cache
 from typing import (
@@ -707,7 +707,12 @@ class ProcessParams[TArgs]:
     #: or to these params — reading it off anything else yields ``None``, which
     #: off the HTTP path is invisible (nothing is sealed there) and on it means
     #: refusing every token this same process just sealed.
-    signing_key: bytes | None = None
+    #:
+    #: ``repr=False`` is not cosmetic. These params are handed to every user
+    #: ``process()`` / ``initial_state()``, so they are frame locals wherever a
+    #: worker raises — and an error reporter that captures locals (Sentry does by
+    #: default) would ship the deployment's master key with the stack trace.
+    signing_key: bytes | None = field(default=None, repr=False)
 
     @property
     def split_payloads(self) -> list[bytes] | None:
@@ -1244,7 +1249,12 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             The GlobalInitResponse with worker count and execution id.
 
         """
-        execution_id = uuid.uuid4().bytes
+        # Honour the id the client sent. A split init carries the plan's
+        # execution_id, and minting a fresh one per split would scope each split's
+        # BoundStorage to a different key — so a worker following the documented
+        # advice (carry plan-to-read state in storage keyed by execution_id) would
+        # write under one id and read under another, and see nothing. Silently.
+        execution_id = getattr(input, "execution_id", None) or uuid.uuid4().bytes
         auth = ctx.auth if ctx is not None else AuthContext.anonymous()
         params = InitParams[TArgs](
             args=cls._parse_arguments(cls.FunctionArguments, input.bind_call.arguments, blended=cls._is_blended()),

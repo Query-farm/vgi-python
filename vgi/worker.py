@@ -2659,9 +2659,24 @@ class Worker:
                 ),
                 ctx=ctx,
             )
+        except NotImplementedError:
+            # A catalog that does not implement versioning has nothing to check
+            # against. Unknown, so unchecked — the intended fall-through.
+            return None
         except Exception:
-            # A catalog that cannot answer is the same situation as one with no
-            # version: unknown, so unchecked.
+            # Anything else is a FAILURE, not an absence, and the two must not be
+            # conflated: a metastore timeout or a dropped snapshot would otherwise
+            # silently disable the staleness check in exactly the deployment that
+            # has a version counter to catch it with, and a genuinely stale token
+            # would be redeemed against the wrong snapshot without a word.
+            #
+            # Still non-fatal — refusing every scan because the version is
+            # momentarily unreadable is worse — but it is logged, so a silent
+            # downgrade is at least an observable one.
+            _logger.warning(
+                "split anchor unavailable; redeeming without a staleness check",
+                exc_info=True,
+            )
             return None
         if version is None:
             return None
@@ -2684,7 +2699,25 @@ class Worker:
         # The anchor is what a stale token is detected against. catalog_version is
         # the counter that MOVES within an attach; resolved_data_version is fixed at
         # attach and would say nothing.
-        anchor = int(response.catalog_version or 0).to_bytes(8, "little", signed=True)
+        #
+        # It has to come from the SAME place redemption compares against, or the
+        # two disagree by construction. Minting from ``response.catalog_version or
+        # 0`` did exactly that: a worker whose catalog really does count versions,
+        # but whose on_plan leaves the field unset, stamped every token with anchor
+        # 0 while redemption read the live counter — so every split failed
+        # SPLIT_SNAPSHOT_EXPIRED, and the documented response to that kind is
+        # "re-run the query", which re-plans, mints 0 again, and fails again.
+        # Invisible on a catalog whose version is 0, which is most fixtures.
+        #
+        # A worker that DOES set catalog_version is taken at its word — it knows
+        # which snapshot it planned against. ``is not None`` rather than falsy, so
+        # a genuine version 0 is not read as "unset".
+        if response.catalog_version is not None:
+            anchor_value = int(response.catalog_version)
+        else:
+            live = self._current_split_anchor(request, ctx)
+            anchor_value = int.from_bytes(live, "little", signed=True) if live else 0
+        anchor = anchor_value.to_bytes(8, "little", signed=True)
         signing_key = self._signing_key
 
         stamped: list[bytes] = []
@@ -2729,7 +2762,16 @@ class Worker:
         attach_plaintext = self._unwrap_attach_full(getattr(request.bind_call, "attach_opaque_data", None))
         func_cls = self._resolve_function(request.bind_call)
 
-        on_plan = getattr(func_cls, "on_plan", None)
+        # Gate on whether the class OVERRODE on_plan, not on whether it has one.
+        # TableFunctionBase defines on_plan, so ``getattr`` never returns None and
+        # this branch was dead for exactly the classes it was written for — every
+        # ordinary table function reaching the base implementation, which raises.
+        # A 1.4.0 client that calls table_function_plan unconditionally therefore
+        # got a hard failure blaming the worker author for a flag they never set,
+        # instead of the single-split default that means "not split-capable".
+        base_on_plan = getattr(TableFunctionBase.on_plan, "__func__", TableFunctionBase.on_plan)
+        cls_on_plan = getattr(func_cls, "on_plan", None)
+        on_plan = None if getattr(cls_on_plan, "__func__", cls_on_plan) is base_on_plan else cls_on_plan
         if on_plan is None:
             # Not split-capable: one split standing for the whole scan.
             return PlanResponse(splits=[ScanSplit(payload=b"").serialize_to_bytes()])  # noqa: E501 - not stamped: no on_plan means no opt-in
