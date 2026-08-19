@@ -7,7 +7,7 @@ that are registered with DuckDB's SecretManager during ATTACH.
 """
 
 from dataclasses import dataclass
-from typing import ClassVar, Self, cast
+from typing import Any, ClassVar, Self, cast
 
 import pyarrow as pa
 from vgi_rpc.utils import serialize_record_batch_bytes
@@ -60,19 +60,26 @@ class SecretTypeSpec:
         ]  # type: ignore[arg-type]  # PyArrow field metadata typing limitation
     )
 
+    def to_row_dict(self) -> dict[str, Any]:
+        """Build the wire row: one key per column of :data:`ARROW_SCHEMA`.
+
+        Split out of :meth:`serialize` for the same reason as
+        :meth:`vgi.catalog._descriptor_spec._SpecBase.to_row_dict` — a key the
+        schema does not declare is silently dropped and a column this dict omits
+        is silently null, so the row has to be inspectable for the parity test
+        to have anything to check.
+        """
+        return {
+            "name": self.name,
+            "description": self.description,
+            # The parameters schema carries the per-field `redact` metadata.
+            "parameters_schema": self.schema.serialize().to_pybytes(),
+        }
+
     def serialize(self) -> bytes:
         """Serialize to Arrow IPC bytes."""
-        # Serialize the parameters schema (with field metadata for redact keys)
-        schema_bytes = self.schema.serialize().to_pybytes()
-
         batch = pa.RecordBatch.from_pylist(
-            [
-                {
-                    "name": self.name,
-                    "description": self.description,
-                    "parameters_schema": schema_bytes,
-                }
-            ],
+            [self.to_row_dict()],
             schema=self.ARROW_SCHEMA,
         )
         return serialize_record_batch_bytes(batch)

@@ -122,11 +122,18 @@ class _SpecBase:
         del row
         return {}
 
-    def serialize(self) -> bytes:
-        """Serialize to Arrow IPC bytes."""
-        # Serialize type as a single-field schema
+    def to_row_dict(self) -> dict[str, Any]:
+        """Build the wire row: one key per column of :data:`ARROW_SCHEMA`.
+
+        Kept separate from :meth:`serialize` because ``from_pylist`` is keyed by
+        name and forgiving in both directions — a key the schema does not
+        declare is dropped without a word, and a column this dict omits is
+        written as null. Neither is visible in the bytes, so both look to a
+        reader like a worker that had nothing to say. Exposing the row is what
+        lets ``tests/test_wire_record_schema_parity.py`` compare its key set to
+        the schema's.
+        """
         type_schema = schema(value=self.type)
-        type_bytes = type_schema.serialize().to_pybytes()
 
         # Serialize default value if present
         default_bytes: bytes | None = None
@@ -134,16 +141,19 @@ class _SpecBase:
             default_batch = pa.RecordBatch.from_pydict({"value": [self.default]}, schema=type_schema)
             default_bytes = serialize_record_batch_bytes(default_batch)
 
+        return {
+            "name": self.name,
+            "description": self.desc,
+            # The type travels as a single-field schema, not a type literal.
+            "type": type_schema.serialize().to_pybytes(),
+            "default_value": default_bytes,
+            **self._extra_row(),
+        }
+
+    def serialize(self) -> bytes:
+        """Serialize to Arrow IPC bytes."""
         batch = pa.RecordBatch.from_pylist(
-            [
-                {
-                    "name": self.name,
-                    "description": self.desc,
-                    "type": type_bytes,
-                    "default_value": default_bytes,
-                    **self._extra_row(),
-                }
-            ],
+            [self.to_row_dict()],
             schema=self.ARROW_SCHEMA,
         )
         return serialize_record_batch_bytes(batch)
