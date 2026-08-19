@@ -798,40 +798,39 @@ class SplitShortTtlFunction(_SplitBase):
 
 
 @bind_fixed_schema
-class SplitOverlapCursorFunction(_SplitBase):
-    """Paginates with OVERLAPPING pages: page 2 re-emits what page 1 already gave.
+class SplitPaginatedFunction(_SplitBase):
+    """A plan enumerated over several pages, each page disjoint from the last.
 
-    Returning several cursors lets a client enumerate a large plan in parallel,
-    and that is only sound if the cursors partition the remaining enumeration
-    disjointly — no split reachable from two of them. That is a worker obligation
-    with no enforcement, and violating it does not produce a tidy error: it
-    produces DUPLICATE ROWS, arriving through the very mechanism meant to make
-    enumeration faster.
+    The control for :class:`SplitOverlapCursorFunction`. Refusing a repeated token
+    is only meaningful if ordinary pagination still works — without this, the
+    overlap assertions would be equally satisfied by a client that rejected every
+    multi-page plan, which is the failure mode a blunt check would actually have.
 
-    So the client dedups by token regardless of the contract, and this fixture is
-    what proves it. It hands out the same two splits on every page for three
-    pages, then stops. A client honouring the contract naively would read six
-    splits and return each row three times; one that dedups returns each once and
-    can say how many duplicates it dropped.
+    Splits are handed out a few at a time, in strictly ascending ranges, so no
+    split is ever reachable from two pages.
     """
 
-    _PAGES: ClassVar[int] = 3
+    _PER_PAGE: ClassVar[int] = 4
 
     class Meta:
-        name = "split_overlap_cursor"
+        name = "split_paginated"
         supports_splits = True
 
     @classmethod
     def on_plan(cls, params: BindParams[SplitSequenceArgs], request: Any) -> PlanResponse:
-        """Emit the same splits on every page, so pages overlap completely."""
-        page = len(getattr(request, "cursor", b"") or b"")
-        ranges = _ranges(params.args.n, params.args.splits)
-        splits = [ScanSplit(payload=_encode(lo, hi)) for lo, hi in ranges]
-        if page + 1 >= cls._PAGES:
-            # Last page: stop paginating, so the client finishes rather than
-            # hitting its page cap — the property under test is dedup, not the cap.
-            return PlanResponse(splits=splits)
-        return PlanResponse(splits=splits, next_cursors=[b"x" * (page + 1)])
+        """Emit one window of the range list, cursoring on the page index."""
+        cursor = getattr(request, "cursor", b"") or b""
+        page = int.from_bytes(cursor, "little") if cursor else 0
+        ranges = cls._plan_ranges(params)
+        lo = page * cls._PER_PAGE
+        window = ranges[lo : lo + cls._PER_PAGE]
+        splits = [
+            ScanSplit(payload=_encode(a, b), estimated_rows=b - a, rows_exact=True)
+            for a, b in window
+        ]
+        if lo + cls._PER_PAGE >= len(ranges):
+            return PlanResponse(splits=splits, estimated_total_rows=params.args.n)
+        return PlanResponse(splits=splits, next_cursors=[(page + 1).to_bytes(8, "little")])
 
 
 _PART_ROW = schema({"country": pa.string(), "sales": pa.int64()})
