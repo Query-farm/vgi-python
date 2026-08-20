@@ -192,11 +192,22 @@ def test_reproducible_vectors_regenerate_identically() -> None:
 
     before = {p.name: p.read_bytes() for p in FIXTURES.glob("*.bin")}
     subprocess.run([sys.executable, str(FIXTURES / "generate.py")], check=True, cwd=FIXTURES.parents[2])
-    for case in MANIFEST["cases"]:
-        if not case["reproducible"]:
-            continue
-        name = f"{case['name']}.bin"
-        assert (FIXTURES / name).read_bytes() == before[name], f"{name} drifted"
+    try:
+        for case in MANIFEST["cases"]:
+            if not case["reproducible"]:
+                continue
+            name = f"{case['name']}.bin"
+            assert (FIXTURES / name).read_bytes() == before[name], f"{name} drifted"
+    finally:
+        # Put the NON-reproducible vectors back. A sealed token draws a fresh
+        # random nonce, so regenerating rewrites its bytes every run and leaves
+        # the working tree dirty — which is how unrelated nonce churn ends up
+        # staged in someone else's commit. The reproducible ones are restored
+        # too: they compared equal, so this is a no-op for them.
+        for name, data in before.items():
+            path = FIXTURES / name
+            if path.read_bytes() != data:
+                path.write_bytes(data)
 
 
 # --------------------------------------------------------------------------- #

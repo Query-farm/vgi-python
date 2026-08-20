@@ -40,7 +40,7 @@ dependencies = [
     "pyarrow",
     "typer>=0.9",
     "platformdirs",
-    "vgi-rpc>=0.40.0",
+    "vgi-rpc>=0.43.0",
     "httpx2>=2.9.1",
 ]
 
@@ -258,6 +258,7 @@ members = ["packages/vgi-fixtures"]
 
 [tool.uv.sources]
 # duckdb = { path = "/path/to/duckdb-python/dist/duckdb-*.whl" }  # local engine-build override
+# vgi-rpc = { path = "../vgi-rpc-python", editable = true }  # local vgi-rpc co-development
 vgi-fixtures = { workspace = true }
 
 [dependency-groups]

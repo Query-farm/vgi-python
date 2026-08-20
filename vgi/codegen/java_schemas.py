@@ -47,7 +47,6 @@ from vgi.protocol import (
     CatalogAttachRequest,
     CopyFromContext,
     CopyToContext,
-    GlobalInitResponse,
     InitRequest,
     TableBufferingCombineRequest,
     TableBufferingDestructorRequest,
@@ -55,6 +54,7 @@ from vgi.protocol import (
     TableFunctionCardinalityRequest,
     TableFunctionPlanRequest,
 )
+from vgi.invocation import GlobalInitResponse
 from vgi.codegen._common import (
     EXTRA_RESPONSE_TYPES,
     EmittedSchema,
