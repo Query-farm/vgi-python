@@ -258,7 +258,13 @@ members = ["packages/vgi-fixtures"]
 
 [tool.uv.sources]
 # duckdb = { path = "/path/to/duckdb-python/dist/duckdb-*.whl" }  # local engine-build override
-# vgi-rpc = { path = "../vgi-rpc-python", editable = true }  # local vgi-rpc co-development
+# Local co-development source, REQUIRED until vgi-rpc 0.43.0 is published: the
+# floor above asks for a release that is not on PyPI yet, and `uv run`/`uv sync`
+# do not merely fail to resolve — they DELETE .venv on the way out. Two separate
+# sessions lost their environment to this in one afternoon, and a restored venv
+# silently carries the pre-0.43.0 schemas, which no longer match this extension.
+# Drop this line once 0.43.0 ships. Mirrors vgi-rust's [patch.crates-io] stanza.
+vgi-rpc = { path = "../vgi-rpc-python", editable = true }
 vgi-fixtures = { workspace = true }
 
 [dependency-groups]
