@@ -224,17 +224,17 @@ from vgi._test_fixtures.table import (
     SequenceFunction,
     SettingsAwareFunction,
     SpatialFilterExampleFunction,
+    SplitBatchIndexFunction,
+    SplitCacheableFunction,
+    SplitDynamicFilterFunction,
     SplitEchoFiltersFunction,
     SplitEmptyRangesFunction,
     SplitEndlessCursorFunction,
     SplitFailAtFunction,
     SplitManyFunction,
-    SplitSequenceFunction,
-    SplitBatchIndexFunction,
-    SplitCacheableFunction,
-    SplitDynamicFilterFunction,
     SplitPaginatedFunction,
     SplitPartitionedFunction,
+    SplitSequenceFunction,
     SplitShortTtlFunction,
     SplitSkewedFunction,
     SplitStalePlanFunction,
@@ -946,7 +946,9 @@ _EXAMPLE_CATALOG = Catalog(
                 Table(
                     name="multi_branch_split",
                     columns=schema(n=pa.int64()),
-                    comment="Multi-branch: split_sequence(30, splits=6) + sequence(20) — used by splits/multi_branch.test",
+                    comment=(
+                        "Multi-branch: split_sequence(30, splits=6) + sequence(20) — used by splits/multi_branch.test"
+                    ),
                 ),
                 # Multi-branch with branch_filters that partition the value range.
                 # Branch A: sequence(100) with `n < 50`; branch B: sequence(100)

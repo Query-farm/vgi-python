@@ -2744,9 +2744,7 @@ class Worker:
             # field next to the ciphertext. No client reads it — the C++ side pulls
             # `token` alone and sends only the token back — and redemption recovers
             # the payload from inside the envelope, so nothing needs it on the wire.
-            stamped.append(
-                dataclasses.replace(split, payload=b"", token=token).serialize_to_bytes()
-            )
+            stamped.append(dataclasses.replace(split, payload=b"", token=token).serialize_to_bytes())
 
         return dataclasses.replace(response, splits=stamped)
 
@@ -2790,16 +2788,12 @@ class Worker:
                 "scan planning only applies to table functions."
             )
             raise TypeError(msg)
-        params = func_cls._make_bind_params(
-            request.bind_call, auth_context=ctx.auth, attach_plaintext=attach_plaintext
-        )
+        params = func_cls._make_bind_params(request.bind_call, auth_context=ctx.auth, attach_plaintext=attach_plaintext)
         response = on_plan(params, request)
         if isinstance(response, PlanResponse):
             response = self._stamp_split_tokens(response, request, ctx)
         if not isinstance(response, PlanResponse):
-            raise TypeError(
-                f"{func_cls.__name__}.on_plan must return a PlanResponse, got {type(response).__name__}"
-            )
+            raise TypeError(f"{func_cls.__name__}.on_plan must return a PlanResponse, got {type(response).__name__}")
         return response
 
     def table_function_statistics(self, request: TableFunctionStatisticsRequest, ctx: CallContext) -> bytes | None:
@@ -3987,9 +3981,7 @@ class Worker:
                     ctx=ctx,
                     attach_plaintext=attach_plaintext,
                     signing_key=self._signing_key,
-                    current_anchor=(
-                        self._current_split_anchor(request, ctx) if request.split_tokens else None
-                    ),
+                    current_anchor=(self._current_split_anchor(request, ctx) if request.split_tokens else None),
                 )
             elif isinstance(instance, ScalarFunctionGenerator):
                 init_response = instance.global_init(request, attach_plaintext=attach_plaintext)

@@ -1395,10 +1395,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             where the process that plans is never the process that reads.
 
         """
-        msg = (
-            f"{cls.__name__} was handed {len(payloads)} split payload(s) but does not "
-            "implement on_split()."
-        )
+        msg = f"{cls.__name__} was handed {len(payloads)} split payload(s) but does not implement on_split()."
         raise NotImplementedError(msg)
 
     @classmethod

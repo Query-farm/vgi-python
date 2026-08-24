@@ -30,8 +30,8 @@ import sys
 from typing import TYPE_CHECKING
 
 from vgi.codegen._common import (
-    GeneratorError,
     DEFAULT_CPP_NAMESPACE,
+    GeneratorError,
     close_namespace,
     open_namespace,
     parse_cpp_namespace,

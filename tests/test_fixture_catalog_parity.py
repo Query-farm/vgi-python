@@ -107,6 +107,5 @@ def test_allowed_asymmetry_stays_honest(_lists: tuple[set[str], set[str]]) -> No
     sub, http = _lists
     for name, reason in _ALLOWED_ASYMMETRY.items():
         assert name in sub or name in http, (
-            f"_ALLOWED_ASYMMETRY excuses {name!r} ({reason}), but neither entry point "
-            "mentions it — drop the entry."
+            f"_ALLOWED_ASYMMETRY excuses {name!r} ({reason}), but neither entry point mentions it — drop the entry."
         )

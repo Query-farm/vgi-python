@@ -138,8 +138,7 @@ def main() -> None:
     manifest = {
         "format_version": 1,
         "layout": (
-            "format_version:u8 | flags:u8 | anchor_len:u16le | bind_fingerprint:16 | "
-            "anchor:anchor_len | payload:rest"
+            "format_version:u8 | flags:u8 | anchor_len:u16le | bind_fingerprint:16 | anchor:anchor_len | payload:rest"
         ),
         # Every vector is opened with expected_fingerprint=fingerprint_hex and
         # current_anchor=anchor_hex; stale_anchor is the one that carries a

@@ -22,6 +22,21 @@ from dataclasses import dataclass
 import pyarrow as pa
 from vgi_rpc.rpc._types import MethodType, rpc_methods  # type: ignore[attr-defined]
 
+from vgi.catalog.catalog_interface import (
+    AttachCatalogInfo,
+    CatalogInfo,
+    CatalogObject,
+    CopyFromFormatInfo,
+    FunctionInfo,
+    IndexInfo,
+    MacroInfo,
+    ScanBranch,
+    ScanBranchesResult,
+    ScanFunctionResult,
+    SchemaInfo,
+    TableInfo,
+    ViewInfo,
+)
 from vgi.invocation import GlobalInitResponse
 from vgi.protocol import (
     AggregateBindRequest,
@@ -40,23 +55,8 @@ from vgi.protocol import (
     TableBufferingProcessRequest,
     TableFunctionCardinalityRequest,
     TableFunctionPlanRequest,
+    VgiProtocol,
 )
-from vgi.catalog.catalog_interface import (
-    AttachCatalogInfo,
-    CatalogInfo,
-    CatalogObject,
-    CopyFromFormatInfo,
-    FunctionInfo,
-    IndexInfo,
-    MacroInfo,
-    ScanBranch,
-    ScanBranchesResult,
-    ScanFunctionResult,
-    SchemaInfo,
-    TableInfo,
-    ViewInfo,
-)
-from vgi.protocol import VgiProtocol
 
 # Info-object dataclasses that appear as inner items inside `{items: List<Binary>}`
 # responses. The wire layer erases them to `binary`, so the method signature
@@ -336,8 +336,7 @@ def parse_cpp_namespace(spec: str) -> list[str]:
     for p in parts:
         if not p.isidentifier():
             raise GeneratorError(
-                f"invalid C++ namespace component {p!r} in {spec!r}: "
-                f"expected identifiers separated by '::'"
+                f"invalid C++ namespace component {p!r} in {spec!r}: expected identifiers separated by '::'"
             )
     return parts
 

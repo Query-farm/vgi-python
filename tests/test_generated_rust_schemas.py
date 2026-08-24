@@ -264,8 +264,7 @@ def test_emitted_schemas_round_trip_to_pyarrow() -> None:
     parsed = _parse_generated(buf.getvalue())
 
     expected = {
-        snake_case(es.name): es
-        for es in collect_schemas(extra_response_types=(*EXTRA_RESPONSE_TYPES, *REQUEST_TYPES))
+        snake_case(es.name): es for es in collect_schemas(extra_response_types=(*EXTRA_RESPONSE_TYPES, *REQUEST_TYPES))
     }
     assert set(parsed) == set(expected), (
         f"emitted factories differ from collect_schemas(): "

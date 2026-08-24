@@ -1,6 +1,6 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
-"""Emit the VGI protocol's Arrow schemas as a Java class, for vgi-java.
+r"""Emit the VGI protocol's Arrow schemas as a Java class, for vgi-java.
 
 Unlike the C++ / Go / Rust / TypeScript emitters, whose output is *used* —
 those SDKs validate incoming batches against the generated schemas — vgi-java
@@ -142,9 +142,7 @@ def _emit_field(field: pa.Field[Any], *, origin: str, indent: str) -> str:
     if not children:
         return f'{indent}f("{field.name}", {nullable}, {type_expr})'
 
-    inner = ",\n".join(
-        _emit_field(child, origin=path, indent=indent + "        ") for child in children
-    )
+    inner = ",\n".join(_emit_field(child, origin=path, indent=indent + "        ") for child in children)
     return f'{indent}f("{field.name}", {nullable}, {type_expr},\n{inner})'
 
 
@@ -193,9 +191,7 @@ def _emit_schema_method(es: EmittedSchema) -> str:
     if not fields:
         body.append("        return new Schema(List.of());")
     else:
-        rendered = ",\n".join(
-            _emit_field(f, origin=es.name, indent="                ") for f in fields
-        )
+        rendered = ",\n".join(_emit_field(f, origin=es.name, indent="                ") for f in fields)
         body.append("        return new Schema(List.of(")
         body.append(rendered + "));")
     body.append("    }")
@@ -204,7 +200,7 @@ def _emit_schema_method(es: EmittedSchema) -> str:
 
 GENERATOR_VERSION = "1"
 
-_PREAMBLE = '''package farm.query.vgi.generated;
+_PREAMBLE = """package farm.query.vgi.generated;
 
 import org.apache.arrow.vector.types.FloatingPointPrecision;
 import org.apache.arrow.vector.types.TimeUnit;
@@ -277,7 +273,7 @@ public final class VgiProtocolSchemas {
             DictionaryEncoding encoding) {
         return new Field(name, new FieldType(nullable, valueType, encoding), List.of());
     }
-'''
+"""
 
 
 def emit(out: TextIO) -> None:
@@ -296,9 +292,7 @@ def emit(out: TextIO) -> None:
         body.write("\n\n")
 
     body.write("    private static final Map<String, Schema> SCHEMAS = Map.ofEntries(\n")
-    entries = ",\n".join(
-        f'            Map.entry("{es.name}", {_method_name(es.name)}())' for es in schemas
-    )
+    entries = ",\n".join(f'            Map.entry("{es.name}", {_method_name(es.name)}())' for es in schemas)
     body.write(entries + ");\n")
     body.write("}\n")
 

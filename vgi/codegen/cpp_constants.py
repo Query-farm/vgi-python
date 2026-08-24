@@ -32,8 +32,8 @@ from typing import TYPE_CHECKING, NamedTuple
 from vgi_rpc import metadata as _rpc_metadata
 
 from vgi.codegen._common import (
-    GeneratorError,
     DEFAULT_CPP_NAMESPACE,
+    GeneratorError,
     close_namespace,
     open_namespace,
     parse_cpp_namespace,

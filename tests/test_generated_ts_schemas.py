@@ -190,8 +190,7 @@ def test_checked_in_generated_ts_matches_generator() -> None:
 
     actual = _parse_generated_ts(path.read_text())
     expected = {
-        es.name: es.schema
-        for es in collect_schemas(extra_response_types=(*EXTRA_RESPONSE_TYPES, *REQUEST_TYPES))
+        es.name: es.schema for es in collect_schemas(extra_response_types=(*EXTRA_RESPONSE_TYPES, *REQUEST_TYPES))
     }
 
     missing = set(expected) - set(actual)
@@ -215,8 +214,7 @@ def test_parser_roundtrip_self_test() -> None:
     emit(buf)
     parsed = _parse_generated_ts(buf.getvalue())
     expected = {
-        es.name: es.schema
-        for es in collect_schemas(extra_response_types=(*EXTRA_RESPONSE_TYPES, *REQUEST_TYPES))
+        es.name: es.schema for es in collect_schemas(extra_response_types=(*EXTRA_RESPONSE_TYPES, *REQUEST_TYPES))
     }
     assert set(parsed) == set(expected), "parser missed a factory the generator emitted"
     for name, schema in expected.items():

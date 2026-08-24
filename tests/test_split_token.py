@@ -77,10 +77,7 @@ def test_keyless_and_keyed_round_trip() -> None:
     sealed = build_split_token(payload=PAYLOAD, fingerprint=FINGERPRINT, anchor=ANCHOR, signing_key=KEY)
     assert sealed[1] & FLAG_PAYLOAD_SEALED
     assert PAYLOAD not in sealed, "a sealed token must not leak its plaintext payload"
-    assert (
-        open_split_token(sealed, signing_key=KEY, expected_fingerprint=FINGERPRINT, current_anchor=ANCHOR)
-        == PAYLOAD
-    )
+    assert open_split_token(sealed, signing_key=KEY, expected_fingerprint=FINGERPRINT, current_anchor=ANCHOR) == PAYLOAD
 
 
 # --------------------------------------------------------------------------- #
@@ -171,9 +168,7 @@ def test_fixture_vectors_reach_their_recorded_verdict(case: dict) -> None:
     key = KEY if case["worker_keyed"] else None
 
     if case["verdict"] == "ok":
-        opened = open_split_token(
-            raw, signing_key=key, expected_fingerprint=FINGERPRINT, current_anchor=ANCHOR
-        )
+        opened = open_split_token(raw, signing_key=key, expected_fingerprint=FINGERPRINT, current_anchor=ANCHOR)
         assert opened == PAYLOAD
         return
 
@@ -333,9 +328,7 @@ def test_stamping_clears_the_plaintext_payload() -> None:
 
     bind = PBindRequest(function_name="f", arguments=b"", function_type="TABLE")
     request = TableFunctionPlanRequest(bind_call=bind)
-    stamped = _KeyedWorker()._stamp_split_tokens(
-        PlanResponse(splits=[ScanSplit(payload=secret)]), request, _Ctx()
-    )
+    stamped = _KeyedWorker()._stamp_split_tokens(PlanResponse(splits=[ScanSplit(payload=secret)]), request, _Ctx())
 
     # Not in the field...
     split = ScanSplit.deserialize_from_bytes(stamped.splits[0])

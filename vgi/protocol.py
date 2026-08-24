@@ -614,9 +614,7 @@ class PlanResponse(ArrowSerializableDataclass):
     # and serializes them once), while the wire carries the serialized blobs.
     # Both inhabit this field across its lifetime, so the annotation says so
     # rather than making every author cast.
-    splits: Annotated[list[ScanSplit] | list[bytes], ArrowType(pa.list_(pa.binary()))] = field(
-        default_factory=list
-    )
+    splits: Annotated[list[ScanSplit] | list[bytes], ArrowType(pa.list_(pa.binary()))] = field(default_factory=list)
     next_cursors: Annotated[list[bytes] | None, ArrowType(pa.list_(pa.binary()))] = None
 
     execution_id: bytes | None = None

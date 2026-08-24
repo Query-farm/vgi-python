@@ -58,8 +58,7 @@ _REGEN_HINT = (
 
 def _expected() -> dict[str, pa.Schema]:
     return {
-        es.name: es.schema
-        for es in collect_schemas(extra_response_types=(*EXTRA_RESPONSE_TYPES, *JAVA_EXTRA_TYPES))
+        es.name: es.schema for es in collect_schemas(extra_response_types=(*EXTRA_RESPONSE_TYPES, *JAVA_EXTRA_TYPES))
     }
 
 
@@ -144,9 +143,7 @@ def _parse_type(expr: str, children: list[pa.Field[Any]]) -> pa.DataType:
     raise AssertionError(f"cannot parse generated Java type expression: {expr!r}")
 
 
-_DICT_RE = re.compile(
-    r"new DictionaryEncoding\(0L, (true|false), (new ArrowType\.Int\(\d+, \w+\))\)"
-)
+_DICT_RE = re.compile(r"new DictionaryEncoding\(0L, (true|false), (new ArrowType\.Int\(\d+, \w+\))\)")
 
 
 def _parse_field(expr: str) -> pa.Field[Any]:

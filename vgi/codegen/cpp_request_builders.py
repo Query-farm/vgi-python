@@ -45,12 +45,12 @@ import pyarrow as pa
 
 from vgi.codegen._common import (
     DEFAULT_CPP_NAMESPACE,
-    close_namespace,
-    open_namespace,
-    parse_cpp_namespace,
     EmittedSchema,
     GeneratorError,
+    close_namespace,
     collect_schemas,
+    open_namespace,
+    parse_cpp_namespace,
     provenance_comment,
 )
 

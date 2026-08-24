@@ -33,21 +33,19 @@ from typing import TYPE_CHECKING, Annotated, Any, ClassVar, cast
 import pyarrow as pa
 from vgi_rpc.rpc import OutputCollector
 
-from vgi.protocol import VgiOutputCollector
-
 from vgi.arguments import Arg
-from vgi.metadata import FunctionExample, PartitionKind
 from vgi.cache_control import CacheControl
-from vgi.protocol import PlanResponse, ScanSplit
+from vgi.metadata import FunctionExample, PartitionKind
+from vgi.protocol import PlanResponse, ScanSplit, VgiOutputCollector
 from vgi.schema_utils import partition_field, schema
 
 if TYPE_CHECKING:
     from vgi.table_filter_pushdown import PushdownFilters
 from vgi.table_function import (
     BindParams,
-    TableCardinality,
     InitParams,
     ProcessParams,
+    TableCardinality,
     TableFunctionGenerator,
     bind_fixed_schema,
 )
@@ -234,7 +232,6 @@ class SplitSequenceFunction(_SplitBase):
 
     """
 
-
     class Meta:
         name = "split_sequence"
         supports_splits = True
@@ -249,7 +246,6 @@ class SplitZeroFunction(_SplitBase):
     Zero splits is legal — a fully-pruned scan reaches it — so the client must
     clamp its reader count to at least one and still terminate cleanly.
     """
-
 
     class Meta:
         name = "split_zero"
@@ -268,7 +264,6 @@ class SplitEmptyRangesFunction(_SplitBase):
     drops every split after the first empty one, and the query still looks
     correct. Interleaving is deliberate — a trailing empty split would not catch it.
     """
-
 
     class Meta:
         name = "split_empty_ranges"
@@ -291,7 +286,6 @@ class SplitSkewedFunction(_SplitBase):
     static assignment would leave them idle behind the big one. The row count is
     identical either way, so this is about *makespan*, not correctness.
     """
-
 
     class Meta:
         name = "split_skewed"
@@ -320,7 +314,6 @@ class SplitManyFunction(_SplitBase):
     prior stream has to be closed before the next init is written, or the init
     request lands inside an unterminated stream.
     """
-
 
     class Meta:
         name = "split_many"
@@ -371,9 +364,7 @@ class FailState(SplitState):
     def serialize_to_bytes(self) -> bytes:
         """Pack as: count, idx, cur, then the (lo, hi, ordinal) triples."""
         n = len(self.lo)
-        return struct.pack(
-            f"<qqq{3 * n}q", n, self.idx, self.cur, *self.lo, *self.hi, *self.ordinals
-        )
+        return struct.pack(f"<qqq{3 * n}q", n, self.idx, self.cur, *self.lo, *self.hi, *self.ordinals)
 
     @classmethod
     def deserialize_from_bytes(cls, data: bytes) -> FailState:
@@ -827,10 +818,7 @@ class SplitPaginatedFunction(_SplitBase):
         ranges = cls._plan_ranges(params)
         lo = page * cls._PER_PAGE
         window = ranges[lo : lo + cls._PER_PAGE]
-        splits = [
-            ScanSplit(payload=_encode(a, b), estimated_rows=b - a, rows_exact=True)
-            for a, b in window
-        ]
+        splits = [ScanSplit(payload=_encode(a, b), estimated_rows=b - a, rows_exact=True) for a, b in window]
         if lo + cls._PER_PAGE >= len(ranges):
             return PlanResponse(splits=splits, estimated_total_rows=params.args.n)
         return PlanResponse(splits=splits, next_cursors=[(page + 1).to_bytes(8, "little")])
@@ -1093,7 +1081,7 @@ def _bound_as_int(value: object) -> int:
     return int(cast(Any, as_py() if callable(as_py) else value))
 
 
-def _render_filters_canonical(filters: "PushdownFilters | None") -> str:
+def _render_filters_canonical(filters: PushdownFilters | None) -> str:
     """The CANONICAL cross-SDK rendering of a pushed-down filter set.
 
     Every SDK must produce this byte-for-byte, because the shared SQL suite

@@ -22,8 +22,7 @@ import argparse
 import sys
 from typing import TYPE_CHECKING
 
-from vgi.codegen._common import DEFAULT_CPP_NAMESPACE, parse_cpp_namespace
-from vgi.codegen._common import GeneratorError, collect_schemas
+from vgi.codegen._common import DEFAULT_CPP_NAMESPACE, GeneratorError, collect_schemas, parse_cpp_namespace
 from vgi.codegen.cpp_schemas import emit_schemas
 from vgi.secret_protocol import VgiSecretProtocol
 
