@@ -95,6 +95,7 @@ __all__ = [
     "RowSumFunction",
     "BlendedDropFunction",
     "SubstreamPartialSumFunction",
+    "MultiBatchFinishFunction",
     "SumAllColumnsFunction",
     "SumAllColumnsSimpleDistributed",
     "ExceptionProcessFunction",
@@ -193,6 +194,88 @@ class SubstreamPartialSumFunction(TableInOutFunction[SingleTableArguments, Subst
         total = sum(st.total for st in states)
         name = params.output_schema.names[0]
         return [pa.RecordBatch.from_pydict({name: [total]}, schema=params.output_schema)]
+
+
+@dataclass(kw_only=True)
+class MultiBatchFinishState(ArrowSerializableDataclass):
+    """This substream's running total and the number of rows it saw."""
+
+    total: int = 0
+    rows: int = 0
+
+
+class MultiBatchFinishFunction(TableInOutFunction[SingleTableArguments, MultiBatchFinishState]):
+    """Streaming FINALIZE that emits MANY batches — the shape no SDK had a fixture for.
+
+    Every other finalize fixture returns a single batch, and one batch is the
+    easy case: over HTTP a producer is strictly lock-step (one batch per
+    response), so a single-batch flush completes in one turn and never needs a
+    continuation. A flush of TWO OR MORE batches does, and in vgi-rust that path
+    was a hard error rather than a pagination — invisible for as long as nothing
+    exercised it.
+
+    So this emits one batch per input row the substream saw: ``rows`` batches,
+    the first carrying that substream's ``total`` and the rest carrying 0. The
+    split is deliberate — it makes the two failure modes distinguishable:
+
+    * ``SUM(n)`` wrong  → a batch's CONTENTS were lost, duplicated or reordered.
+    * ``COUNT(*)`` wrong → a BATCH was lost or repeated. This is the one that
+      catches a broken continuation: a flush truncated after its first batch
+      still sums correctly and only the count betrays it.
+
+    Both invariants hold regardless of how DuckDB fans the input across
+    substreams (each substream's partials sum to the whole, and its batch count
+    equals its row count), so the test needs no assumption about thread count.
+    """
+
+    class Meta:
+        name = "multi_batch_finish"
+        description = "Streaming finalize that emits one batch per input row (multi-batch flush)"
+        categories = ["testing", "aggregation"]
+
+    @classmethod
+    def cardinality(cls, params: BindParams[SingleTableArguments]) -> TableCardinality:
+        # One output row per input row, but the input size is unknown up-front.
+        return TableCardinality(estimate=1, max=None)
+
+    @classmethod
+    def on_bind(cls, params: BindParams[SingleTableArguments]) -> BindResponse:
+        assert params.bind_call.input_schema is not None
+        field = params.bind_call.input_schema.field(0)
+        return BindResponse(output_schema=schema({field.name: pa.int64()}))
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[SingleTableArguments]) -> MultiBatchFinishState:
+        return MultiBatchFinishState(total=0, rows=0)
+
+    @classmethod
+    def transform(
+        cls,
+        batch: pa.RecordBatch,
+        params: ProcessParams[SingleTableArguments],
+        state: MultiBatchFinishState | None,
+    ) -> list[pa.RecordBatch]:
+        if state is None:
+            raise ValueError("State must not be None in transform()")
+        col_sum = pc.sum(batch.column(0))
+        if col_sum.is_valid:
+            state.total += col_sum.as_py()
+        state.rows += batch.num_rows
+        return []  # accumulate only; the whole point is the flush
+
+    @classmethod
+    def finish(
+        cls,
+        params: ProcessParams[SingleTableArguments],
+        states: list[MultiBatchFinishState],
+    ) -> list[pa.RecordBatch]:
+        total = sum(st.total for st in states)
+        rows = sum(st.rows for st in states)
+        name = params.output_schema.names[0]
+        return [
+            pa.RecordBatch.from_pydict({name: [total if i == 0 else 0]}, schema=params.output_schema)
+            for i in range(rows)
+        ]
 
 
 class EchoFunction(TableInOutGenerator[SingleTableArguments]):
