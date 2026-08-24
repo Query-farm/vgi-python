@@ -9,9 +9,14 @@ from __future__ import annotations
 
 import json
 import pathlib
+from typing import Any
 
 import pytest
+from vgi_rpc.rpc import AuthContext, CallContext
 
+from vgi.arguments import Arguments
+from vgi.invocation import FunctionType
+from vgi.protocol import BindRequest, PlanResponse, ScanSplit, TableFunctionPlanRequest
 from vgi.split_token import (
     _HEADER_STRUCT,
     FLAG_PAYLOAD_SEALED,
@@ -33,11 +38,27 @@ ANCHOR = bytes.fromhex(MANIFEST["anchor_hex"])
 PAYLOAD = MANIFEST["payload"].encode()
 
 
-class _Auth:
-    def __init__(self, principal: str) -> None:
-        self.authenticated = True
-        self.domain = "test"
-        self.principal = principal
+def _auth(principal: str) -> AuthContext:
+    """A caller identity, as the transports actually build one."""
+    return AuthContext(domain="test", authenticated=True, principal=principal)
+
+
+def _anon_ctx() -> CallContext:
+    """The unauthenticated call context a subprocess worker runs under."""
+    return CallContext(auth=AuthContext.anonymous(), emit_client_log=lambda *a, **kw: None)
+
+
+def _stamped(response: PlanResponse, index: int) -> bytes:
+    """The serialized bytes of one stamped split.
+
+    ``PlanResponse.splits`` is ``list[ScanSplit] | list[bytes]`` because a worker
+    may hand back either, but stamping always returns the serialized form — so
+    asserting it here both narrows the union for the reader and pins that half of
+    the contract.
+    """
+    entry = response.splits[index]
+    assert isinstance(entry, bytes), "stamping must serialize every split"
+    return entry
 
 
 # --------------------------------------------------------------------------- #
@@ -105,11 +126,11 @@ def test_seal_binds_the_caller_principal() -> None:
     a split token names data (files, offsets, tenant partitions).
     """
     token = build_split_token(
-        payload=PAYLOAD, fingerprint=FINGERPRINT, anchor=ANCHOR, signing_key=KEY, auth=_Auth("alice")
+        payload=PAYLOAD, fingerprint=FINGERPRINT, anchor=ANCHOR, signing_key=KEY, auth=_auth("alice")
     )
-    assert open_split_token(token, signing_key=KEY, auth=_Auth("alice")) == PAYLOAD
+    assert open_split_token(token, signing_key=KEY, auth=_auth("alice")) == PAYLOAD
     with pytest.raises(SplitTokenInvalid):
-        open_split_token(token, signing_key=KEY, auth=_Auth("bob"))
+        open_split_token(token, signing_key=KEY, auth=_auth("bob"))
 
 
 def test_header_is_covered_by_the_aad() -> None:
@@ -156,7 +177,7 @@ def test_error_kinds_are_stable_strings() -> None:
 
 
 @pytest.mark.parametrize("case", MANIFEST["cases"], ids=lambda c: c["name"])
-def test_fixture_vectors_reach_their_recorded_verdict(case: dict) -> None:
+def test_fixture_vectors_reach_their_recorded_verdict(case: dict[str, Any]) -> None:
     """Every checked-in vector must reach the verdict its manifest records."""
     raw = (FIXTURES / f"{case['name']}.bin").read_bytes()
     assert len(raw) == case["size"]
@@ -224,31 +245,22 @@ def test_anchor_defaults_to_the_live_catalog_version_not_zero() -> None:
     Invisible wherever the catalog's version is 0, which is most fixtures — so this
     pins the non-zero case specifically.
     """
-    from vgi.protocol import BindRequest as PBindRequest
-    from vgi.protocol import PlanResponse, ScanSplit, TableFunctionPlanRequest
 
-    class _VersionedWorker:
+    class _VersionedWorker(Worker):
         """Stands in for a worker whose catalog reports a non-zero version."""
 
-        _signing_key = None
-
-        def _current_split_anchor(self, request: object, ctx: object) -> bytes:
+        def _current_split_anchor(self, request: Any, ctx: CallContext | None) -> bytes:
             return (47).to_bytes(8, "little", signed=True)
 
-        _stamp_split_tokens = Worker._stamp_split_tokens
-
-    bind = PBindRequest(function_name="f", arguments=b"", function_type="TABLE")
+    bind = BindRequest(function_name="f", arguments=Arguments(positional=()), function_type=FunctionType.TABLE)
     request = TableFunctionPlanRequest(bind_call=bind)
-
-    class _Ctx:
-        auth = None
 
     # on_plan left catalog_version unset — the common case for a worker that has
     # not thought about snapshots.
     planned = PlanResponse(splits=[ScanSplit(payload=b"file=1")])
-    stamped = _VersionedWorker()._stamp_split_tokens(planned, request, _Ctx())
+    stamped = _VersionedWorker()._stamp_split_tokens(planned, request, _anon_ctx())
 
-    split = ScanSplit.deserialize_from_bytes(stamped.splits[0])
+    split = ScanSplit.deserialize_from_bytes(_stamped(stamped, 0))
     # Redemption compares against the live version; the token must name it.
     opened = open_split_token(
         split.token,
@@ -260,26 +272,17 @@ def test_anchor_defaults_to_the_live_catalog_version_not_zero() -> None:
 
 def test_a_worker_that_names_its_version_is_taken_at_its_word() -> None:
     """An explicit ``catalog_version`` wins: the worker knows which snapshot it planned."""
-    from vgi.protocol import BindRequest as PBindRequest
-    from vgi.protocol import PlanResponse, ScanSplit, TableFunctionPlanRequest
 
-    class _VersionedWorker:
-        _signing_key = None
-
-        def _current_split_anchor(self, request: object, ctx: object) -> bytes:
+    class _VersionedWorker(Worker):
+        def _current_split_anchor(self, request: Any, ctx: CallContext | None) -> bytes:
             return (47).to_bytes(8, "little", signed=True)
 
-        _stamp_split_tokens = Worker._stamp_split_tokens
-
-    bind = PBindRequest(function_name="f", arguments=b"", function_type="TABLE")
+    bind = BindRequest(function_name="f", arguments=Arguments(positional=()), function_type=FunctionType.TABLE)
     request = TableFunctionPlanRequest(bind_call=bind)
 
-    class _Ctx:
-        auth = None
-
     planned = PlanResponse(splits=[ScanSplit(payload=b"file=1")], catalog_version=11)
-    stamped = _VersionedWorker()._stamp_split_tokens(planned, request, _Ctx())
-    split = ScanSplit.deserialize_from_bytes(stamped.splits[0])
+    stamped = _VersionedWorker()._stamp_split_tokens(planned, request, _anon_ctx())
+    split = ScanSplit.deserialize_from_bytes(_stamped(stamped, 0))
 
     with pytest.raises(SplitSnapshotExpired):
         open_split_token(
@@ -310,32 +313,24 @@ def test_stamping_clears_the_plaintext_payload() -> None:
     this is a leak with no consumer, which is the easiest kind to leave in place
     for years.
     """
-    from vgi.protocol import BindRequest as PBindRequest
-    from vgi.protocol import PlanResponse, ScanSplit, TableFunctionPlanRequest
-
     secret = b"file=/tenant-a/private.parquet;v=47"
 
-    class _KeyedWorker:
+    class _KeyedWorker(Worker):
         _signing_key = b"k" * 32
 
-        def _current_split_anchor(self, request: object, ctx: object) -> bytes:
+        def _current_split_anchor(self, request: Any, ctx: CallContext | None) -> bytes:
             return (0).to_bytes(8, "little", signed=True)
 
-        _stamp_split_tokens = Worker._stamp_split_tokens
-
-    class _Ctx:
-        auth = None
-
-    bind = PBindRequest(function_name="f", arguments=b"", function_type="TABLE")
+    bind = BindRequest(function_name="f", arguments=Arguments(positional=()), function_type=FunctionType.TABLE)
     request = TableFunctionPlanRequest(bind_call=bind)
-    stamped = _KeyedWorker()._stamp_split_tokens(PlanResponse(splits=[ScanSplit(payload=secret)]), request, _Ctx())
+    stamped = _KeyedWorker()._stamp_split_tokens(PlanResponse(splits=[ScanSplit(payload=secret)]), request, _anon_ctx())
 
     # Not in the field...
-    split = ScanSplit.deserialize_from_bytes(stamped.splits[0])
+    split = ScanSplit.deserialize_from_bytes(_stamped(stamped, 0))
     assert split.payload == b""
     # ...and not anywhere else in the serialized record either, which is the
     # assertion that survives someone moving the leak to a different column.
-    assert secret not in stamped.splits[0]
+    assert secret not in _stamped(stamped, 0)
 
     # Still fully recoverable from the token, so clearing the field cost nothing.
     opened = open_split_token(

@@ -67,7 +67,7 @@ class WireRecordCase:
     build: Callable[[], Any]
 
 
-def _scalar_args() -> tuple[list[pa.Scalar], dict[str, pa.Scalar]]:
+def _scalar_args() -> tuple[list[pa.Scalar[Any]], dict[str, pa.Scalar[Any]]]:
     return (
         [pa.scalar("s3://bucket/x.parquet", pa.string())],
         {"hive_partitioning": pa.scalar(True, pa.bool_())},
