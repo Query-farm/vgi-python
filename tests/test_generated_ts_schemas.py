@@ -21,7 +21,7 @@ from typing import Any, cast
 import pyarrow as pa
 import pytest
 
-from vgi.codegen._common import collect_schemas
+from vgi.codegen._common import EXTRA_RESPONSE_TYPES, REQUEST_TYPES, collect_schemas
 from vgi.codegen.ts_schemas import emit
 
 
@@ -99,6 +99,8 @@ def _parse_type(expr: str) -> pa.DataType:
         "float64()": pa.float64(),
         "utf8()": pa.string(),
         "binary()": pa.binary(),
+        "largeUtf8()": pa.large_string(),
+        "largeBinary()": pa.large_binary(),
     }
     if expr in simple:
         return simple[expr]
@@ -187,7 +189,10 @@ def test_checked_in_generated_ts_matches_generator() -> None:
         pytest.skip(f"{path} not found; set VGI_TS_GENERATED_TS or check out vgi-typescript next to vgi-python")
 
     actual = _parse_generated_ts(path.read_text())
-    expected = {es.name: es.schema for es in collect_schemas()}
+    expected = {
+        es.name: es.schema
+        for es in collect_schemas(extra_response_types=(*EXTRA_RESPONSE_TYPES, *REQUEST_TYPES))
+    }
 
     missing = set(expected) - set(actual)
     extra = set(actual) - set(expected)
@@ -209,7 +214,10 @@ def test_parser_roundtrip_self_test() -> None:
     buf = io.StringIO()
     emit(buf)
     parsed = _parse_generated_ts(buf.getvalue())
-    expected = {es.name: es.schema for es in collect_schemas()}
+    expected = {
+        es.name: es.schema
+        for es in collect_schemas(extra_response_types=(*EXTRA_RESPONSE_TYPES, *REQUEST_TYPES))
+    }
     assert set(parsed) == set(expected), "parser missed a factory the generator emitted"
     for name, schema in expected.items():
         assert schema.equals(parsed[name], check_metadata=False), (

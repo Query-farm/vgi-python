@@ -43,6 +43,8 @@ from typing import TYPE_CHECKING, Any
 import pyarrow as pa
 
 from vgi.codegen._common import (
+    EXTRA_RESPONSE_TYPES,
+    REQUEST_TYPES,
     EmittedSchema,
     GeneratorError,
     collect_schemas,
@@ -67,6 +69,12 @@ _SCALAR_MAP: dict[Any, str] = {
     pa.float64(): "arrow.PrimitiveTypes.Float64",
     pa.string(): "arrow.BinaryTypes.String",
     pa.binary(): "arrow.BinaryTypes.Binary",
+    # The large_ variants are on the wire (InitRequest.pushdown_filters and the
+    # join_keys / split_tokens list items are large_binary — a filter payload or
+    # a set of join keys can exceed the 2 GiB that 32-bit offsets address).
+    # arrow-go spells them as singletons on the same BinaryTypes struct.
+    pa.large_string(): "arrow.BinaryTypes.LargeString",
+    pa.large_binary(): "arrow.BinaryTypes.LargeBinary",
 }
 
 
@@ -83,6 +91,17 @@ def _emit_type(dtype: pa.DataType, *, origin: str) -> str:
         # Non-default item nullability or name — use ListOfField.
         return (
             f'arrow.ListOfField(arrow.Field{{Name: "{value_field.name}", '
+            f"Type: {inner_type}, Nullable: {str(value_field.nullable).lower()}}})"
+        )
+
+    if pa.types.is_large_list(dtype):
+        value_field = dtype.value_field
+        inner_type = _emit_type(value_field.type, origin=f"{origin}[large list item]")
+        if value_field.nullable and value_field.name == "item":
+            return f"arrow.LargeListOf({inner_type})"
+        # Non-default item nullability or name — use LargeListOfField.
+        return (
+            f'arrow.LargeListOfField(arrow.Field{{Name: "{value_field.name}", '
             f"Type: {inner_type}, Nullable: {str(value_field.nullable).lower()}}})"
         )
 
@@ -173,7 +192,11 @@ GENERATOR_VERSION = "1"
 
 def emit(out: TextIO) -> None:
     """Emit the generated Go schemas package to *out*."""
-    schemas = collect_schemas()
+    # The request records ride inside their method's params envelope as an
+    # opaque blob, so nothing reaches them from a method signature. Emitting
+    # them here gives vgi-go the same schema set every other SDK carries — and
+    # keeps the cross-language name check total.
+    schemas = collect_schemas(extra_response_types=(*EXTRA_RESPONSE_TYPES, *REQUEST_TYPES))
 
     body = io.StringIO()
     body.write("// Copyright 2025, 2026 Query Farm LLC - https://query.farm\n")

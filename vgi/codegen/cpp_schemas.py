@@ -33,6 +33,8 @@ from vgi.codegen._common import (
     parse_cpp_namespace,
     EmittedSchema,
     GeneratorError,
+    EXTRA_RESPONSE_TYPES,
+    REQUEST_TYPES,
     collect_schemas,
     provenance_comment,
 )
@@ -60,6 +62,14 @@ _SCALAR_MAP: dict[Any, str] = {
     pa.float64(): "arrow::float64()",
     pa.string(): "arrow::utf8()",
     pa.binary(): "arrow::binary()",
+    # The large_ variants are on the wire (InitRequest.pushdown_filters and the
+    # join_keys / split_tokens list items are large_binary — a filter payload or
+    # a set of join keys can exceed the 2 GiB that 32-bit offsets address).
+    # Their absence here was invisible for as long as nothing generated a schema
+    # containing one; adding the request records to the emitter surfaced it
+    # immediately, as a hard GeneratorError rather than a silent narrowing.
+    pa.large_string(): "arrow::large_utf8()",
+    pa.large_binary(): "arrow::large_binary()",
 }
 
 
@@ -68,6 +78,17 @@ def _emit_type(dtype: pa.DataType, *, origin: str) -> str:
     for proto, expr in _SCALAR_MAP.items():
         if dtype.equals(proto):
             return expr
+
+    if pa.types.is_large_list(dtype):
+        value_field = dtype.value_field
+        inner_type = _emit_type(value_field.type, origin=f"{origin}[large list item]")
+        if value_field.name == "item" and value_field.nullable:
+            return f"arrow::large_list({inner_type})"
+        return (
+            "arrow::large_list("
+            f'arrow::field("{value_field.name}", {inner_type}, '
+            f"/*nullable=*/{str(value_field.nullable).lower()}))"
+        )
 
     if pa.types.is_list(dtype):
         value_field = dtype.value_field
@@ -225,7 +246,12 @@ def emit(out: TextIO, namespace: list[str] | None = None) -> None:
     """Emit the generated C++ schemas header to *out*."""
     emit_schemas(
         out,
-        collect_schemas(),
+        # The request records are included so the C++ client can be CHECKED
+        # against them: it hand-builds BindRequest / InitRequest /
+        # CatalogAttachRequest in vgi_rpc_types.cpp, and until now nothing
+        # compared those to the protocol. Two real defects reached production
+        # that way.
+        collect_schemas(extra_response_types=(*EXTRA_RESPONSE_TYPES, *REQUEST_TYPES)),
         generator_module="vgi.codegen.cpp_schemas",
         generator_command="vgi-gen-cpp-schemas",
         regen_command_lines=[

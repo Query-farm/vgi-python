@@ -22,7 +22,25 @@ from dataclasses import dataclass
 import pyarrow as pa
 from vgi_rpc.rpc._types import MethodType, rpc_methods  # type: ignore[attr-defined]
 
-from vgi.protocol import ScanSplit
+from vgi.invocation import GlobalInitResponse
+from vgi.protocol import (
+    AggregateBindRequest,
+    AggregateCombineRequest,
+    AggregateDestructorRequest,
+    AggregateFinalizeRequest,
+    AggregateUpdateRequest,
+    BindRequest,
+    CatalogAttachRequest,
+    CopyFromContext,
+    CopyToContext,
+    InitRequest,
+    ScanSplit,
+    TableBufferingCombineRequest,
+    TableBufferingDestructorRequest,
+    TableBufferingProcessRequest,
+    TableFunctionCardinalityRequest,
+    TableFunctionPlanRequest,
+)
 from vgi.catalog.catalog_interface import (
     AttachCatalogInfo,
     CatalogInfo,
@@ -62,6 +80,37 @@ EXTRA_RESPONSE_TYPES: tuple[type, ...] = (
     ScanBranch,  # one entry inside ScanBranchesResult.branches (binary blob)
     ScanSplit,  # one entry inside PlanResponse.splits (binary blob)
     AttachCatalogInfo,  # one entry inside CatalogAttachResult.attach_catalogs (binary blob)
+)
+
+
+# Request records and stream responses that a method signature does not reach.
+#
+# A method's params schema is the outer envelope (`request: binary`); the request
+# dataclass itself rides inside it as an opaque blob, so only the endpoints know
+# its shape — which is exactly the pair that can disagree. `GlobalInitResponse`
+# is here because `init` is a STREAM and so has no unary result schema, and the
+# two Copy*Context records because they appear only as nested struct columns of
+# BindRequest.
+#
+# Emitted for the languages that need to CHECK these shapes: Java (its records
+# mirror them) and C++ (it hand-builds them, and had no way to verify that).
+REQUEST_TYPES: tuple[type, ...] = (
+    AggregateBindRequest,
+    AggregateCombineRequest,
+    AggregateDestructorRequest,
+    AggregateFinalizeRequest,
+    AggregateUpdateRequest,
+    BindRequest,
+    CatalogAttachRequest,
+    CopyFromContext,
+    CopyToContext,
+    GlobalInitResponse,
+    InitRequest,
+    TableBufferingCombineRequest,
+    TableBufferingDestructorRequest,
+    TableBufferingProcessRequest,
+    TableFunctionCardinalityRequest,
+    TableFunctionPlanRequest,
 )
 
 

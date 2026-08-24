@@ -37,26 +37,9 @@ from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
 
-from vgi.protocol import (
-    AggregateBindRequest,
-    AggregateCombineRequest,
-    AggregateDestructorRequest,
-    AggregateFinalizeRequest,
-    AggregateUpdateRequest,
-    BindRequest,
-    CatalogAttachRequest,
-    CopyFromContext,
-    CopyToContext,
-    InitRequest,
-    TableBufferingCombineRequest,
-    TableBufferingDestructorRequest,
-    TableBufferingProcessRequest,
-    TableFunctionCardinalityRequest,
-    TableFunctionPlanRequest,
-)
-from vgi.invocation import GlobalInitResponse
 from vgi.codegen._common import (
     EXTRA_RESPONSE_TYPES,
+    REQUEST_TYPES,
     EmittedSchema,
     GeneratorError,
     collect_schemas,
@@ -67,38 +50,11 @@ if TYPE_CHECKING:
     from typing import TextIO
 
 
-# Dataclasses vgi-java mirrors as wire records but which `collect_schemas()`
-# does not reach. Two kinds, both invisible to a walk over method signatures:
-#
-#   - REQUEST records. A method's params schema is the outer envelope
-#     (`request: binary`); the request dataclass itself rides inside it as an
-#     opaque blob, so only the endpoints know its shape. C++ writes these and
-#     Java reads them, which is exactly the pair that can disagree.
-#   - `GlobalInitResponse`, whose method (`init`) is a STREAM and so has no
-#     unary result schema, and the two `Copy*Context` records, which appear
-#     only as nested struct columns of `BindRequest`.
-#
-# Emitted for Java alone. The other emitters serve clients that validate
-# *responses*, so widening the shared list would churn four checked-in
-# generated files for schemas none of them reference.
-JAVA_EXTRA_TYPES: tuple[type, ...] = (
-    AggregateBindRequest,
-    AggregateCombineRequest,
-    AggregateDestructorRequest,
-    AggregateFinalizeRequest,
-    AggregateUpdateRequest,
-    BindRequest,
-    CatalogAttachRequest,
-    CopyFromContext,
-    CopyToContext,
-    GlobalInitResponse,
-    InitRequest,
-    TableBufferingCombineRequest,
-    TableBufferingDestructorRequest,
-    TableBufferingProcessRequest,
-    TableFunctionCardinalityRequest,
-    TableFunctionPlanRequest,
-)
+# Alias for the shared list in _common — kept so this module's drift test and
+# any external caller keep working. The C++ emitter needs the same set (it
+# hand-builds these records and had no way to verify them), so the list lives
+# in _common rather than here.
+JAVA_EXTRA_TYPES = REQUEST_TYPES
 
 
 _INT_WIDTHS = (8, 16, 32, 64)

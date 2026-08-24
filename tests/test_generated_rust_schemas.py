@@ -29,7 +29,7 @@ from typing import Any, cast
 import pyarrow as pa
 import pytest
 
-from vgi.codegen._common import collect_schemas
+from vgi.codegen._common import EXTRA_RESPONSE_TYPES, REQUEST_TYPES, collect_schemas
 from vgi.codegen.rust_schemas import emit, snake_case
 
 
@@ -263,7 +263,10 @@ def test_emitted_schemas_round_trip_to_pyarrow() -> None:
     emit(buf)
     parsed = _parse_generated(buf.getvalue())
 
-    expected = {snake_case(es.name): es for es in collect_schemas()}
+    expected = {
+        snake_case(es.name): es
+        for es in collect_schemas(extra_response_types=(*EXTRA_RESPONSE_TYPES, *REQUEST_TYPES))
+    }
     assert set(parsed) == set(expected), (
         f"emitted factories differ from collect_schemas(): "
         f"only-in-rust={sorted(set(parsed) - set(expected))}, "

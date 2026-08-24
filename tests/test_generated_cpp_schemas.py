@@ -21,6 +21,7 @@ from typing import Any, Literal, cast
 import pyarrow as pa
 import pytest
 
+from vgi.codegen._common import EXTRA_RESPONSE_TYPES, REQUEST_TYPES
 from vgi.codegen.cpp_schemas import _collect_schemas, emit
 
 
@@ -88,10 +89,18 @@ def _parse_type(expr: str) -> pa.DataType:
         "arrow::float64()": pa.float64(),
         "arrow::utf8()": pa.string(),
         "arrow::binary()": pa.binary(),
+        "arrow::large_utf8()": pa.large_string(),
+        "arrow::large_binary()": pa.large_binary(),
         "arrow::null()": pa.null(),
     }
     if expr in simple:
         return simple[expr]
+
+    if expr.startswith("arrow::large_list(") and expr.endswith(")"):
+        inner = expr[len("arrow::large_list(") : -1]
+        if inner.startswith("arrow::field("):
+            return cast("pa.DataType", pa.large_list(_parse_field(inner)))
+        return cast("pa.DataType", pa.large_list(_parse_type(inner)))
 
     if expr.startswith("arrow::list(") and expr.endswith(")"):
         inner = expr[len("arrow::list(") : -1]
@@ -191,7 +200,12 @@ def test_checked_in_generated_hpp_matches_generator() -> None:
         pytest.skip(f"{path} not found; set VGI_GENERATED_HPP or check out vgi repo next to vgi-python")
 
     actual = _parse_generated_hpp(path.read_text())
-    expected = {es.name: es.schema for es in _collect_schemas()}
+    expected = {
+        es.name: es.schema
+        for es in _collect_schemas(
+            extra_response_types=(*EXTRA_RESPONSE_TYPES, *REQUEST_TYPES),
+        )
+    }
 
     # Extra or missing factories.
     missing = set(expected) - set(actual)
@@ -214,7 +228,12 @@ def test_parser_roundtrip_self_test() -> None:
     buf = io.StringIO()
     emit(buf)
     parsed = _parse_generated_hpp(buf.getvalue())
-    expected = {es.name: es.schema for es in _collect_schemas()}
+    expected = {
+        es.name: es.schema
+        for es in _collect_schemas(
+            extra_response_types=(*EXTRA_RESPONSE_TYPES, *REQUEST_TYPES),
+        )
+    }
     assert set(parsed) == set(expected), "parser missed a factory the generator emitted"
     for name, schema in expected.items():
         assert schema.equals(parsed[name], check_metadata=False), (

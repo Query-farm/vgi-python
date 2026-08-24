@@ -60,6 +60,8 @@ import pyarrow as pa
 from vgi_rpc.rpc._types import rpc_methods
 
 from vgi.codegen._common import (
+    EXTRA_RESPONSE_TYPES,
+    REQUEST_TYPES,
     EmittedSchema,
     GeneratorError,
     collect_schemas,
@@ -248,7 +250,11 @@ GENERATOR_VERSION = "1"
 
 def emit(out: TextIO) -> None:
     """Emit the generated Rust schemas module to *out*."""
-    schemas = collect_schemas()
+    # The request records ride inside their method's params envelope as an
+    # opaque blob, so nothing reaches them from a method signature. Emitting
+    # them here gives vgi-rust the same schema set every other SDK carries —
+    # and keeps the cross-language name check total.
+    schemas = collect_schemas(extra_response_types=(*EXTRA_RESPONSE_TYPES, *REQUEST_TYPES))
 
     body = io.StringIO()
     body.write("// Copyright 2025, 2026 Query Farm LLC - https://query.farm\n")

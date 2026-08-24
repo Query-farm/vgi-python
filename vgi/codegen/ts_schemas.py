@@ -45,6 +45,8 @@ from typing import TYPE_CHECKING, Any
 import pyarrow as pa
 
 from vgi.codegen._common import (
+    EXTRA_RESPONSE_TYPES,
+    REQUEST_TYPES,
     EmittedSchema,
     GeneratorError,
     collect_schemas,
@@ -75,6 +77,14 @@ _SCALAR_MAP: dict[Any, tuple[str, str]] = {
     pa.float64(): ("float64()", "float64"),
     pa.string(): ("utf8()", "utf8"),
     pa.binary(): ("binary()", "binary"),
+    # The large_ variants are on the wire (InitRequest.pushdown_filters and the
+    # join_keys / split_tokens list items are large_binary — a filter payload or
+    # a set of join keys can exceed the 2 GiB that 32-bit offsets address).
+    # The facade gained `largeUtf8()` / `largeBinary()` for exactly this; both
+    # backends have the type natively (arrow-js `LargeUtf8`/`LargeBinary`,
+    # flechette `largeUtf8()`/`largeBinary()`).
+    pa.large_string(): ("largeUtf8()", "largeUtf8"),
+    pa.large_binary(): ("largeBinary()", "largeBinary"),
 }
 
 # pyarrow timestamp unit -> facade TimeUnit member.
@@ -107,6 +117,21 @@ def _emit_type(dtype: pa.DataType, *, origin: str) -> str:
         inner_type = _emit_type(value_field.type, origin=f"{origin}[list item]")
         nullable = "true" if value_field.nullable else "false"
         return f'list(field("{value_field.name}", {inner_type}, {nullable}))'
+
+    if pa.types.is_large_list(dtype):
+        # Deliberately unsupported rather than narrowed to `list`. flechette has
+        # `largeList()`, but arrow-js has no LargeList DataType at all (only the
+        # flatbuffer reader stub), so the facade cannot offer one on both
+        # backends — and silently emitting a 32-bit `list` would make the TS
+        # worker reject a wire batch every other SDK accepts. No VGI schema uses
+        # a large_list today; `list<large_binary>` (which IS on the wire) is a
+        # normal list and takes the branch above.
+        raise GeneratorError(
+            f"large_list at {origin}: the vgi-typescript Arrow facade has no "
+            "largeList() factory because arrow-js has no LargeList DataType. "
+            "Either keep the field a 32-bit `list`, or add a largeList() to the "
+            "facade once arrow-js supports it (flechette already does).",
+        )
 
     if pa.types.is_map(dtype):
         key_field = dtype.key_field
@@ -203,7 +228,11 @@ GENERATOR_VERSION = "2"
 
 def emit(out: TextIO) -> None:
     """Emit the generated TypeScript schemas module to *out*."""
-    schemas = collect_schemas()
+    # The request records ride inside their method's params envelope as an
+    # opaque blob, so nothing reaches them from a method signature. Emitting
+    # them here gives vgi-typescript the same schema set every other SDK
+    # carries — and keeps the cross-language name check total.
+    schemas = collect_schemas(extra_response_types=(*EXTRA_RESPONSE_TYPES, *REQUEST_TYPES))
 
     # Render all schemas FIRST to capture which facade symbols were used.
     _IMPORTS_IN_USE.clear()

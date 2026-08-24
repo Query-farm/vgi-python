@@ -344,10 +344,17 @@ def main() -> None:
 
         # Match vgi-fixture-worker (subprocess transport): always serve the
         # base ExampleWorker plus the projection_repro, schema_reconcile,
-        # and accumulate fixture catalogs. Add the writable catalog when its
-        # extra is installed. The twin_a/twin_b catalogs (same worker, one
-        # function name colliding across two catalogs) back
+        # accumulate and narrow_bind fixture catalogs. Add the writable catalog
+        # when its extra is installed. The twin_a/twin_b catalogs (same worker,
+        # one function name colliding across two catalogs) back
         # scalar/same_name_catalogs.test — catalog-qualified dispatch.
+        #
+        # This list and `main()` in vgi/_test_fixtures/worker.py must agree: the
+        # SAME .test files run over both transports, so a catalog present in one
+        # and not the other fails the file on that transport alone — which reads
+        # as a transport bug and is not one. narrow_bind drifted exactly that
+        # way, and it guards a client SIGSEGV, so it was the worst one to lose.
+        from vgi._test_fixtures.narrow_bind.worker import NarrowBindWorker
         from vgi._test_fixtures.twin_catalogs import TwinAWorker, TwinBWorker
         from vgi.worker import _get_vgi_version
 
@@ -356,6 +363,7 @@ def main() -> None:
             ProjReproWorker,
             SchemaReconcileWorker,
             AccumulateWorker,
+            NarrowBindWorker,
             TwinAWorker,
             TwinBWorker,
         ]

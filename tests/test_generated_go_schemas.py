@@ -21,7 +21,7 @@ from typing import Any, cast
 import pyarrow as pa
 import pytest
 
-from vgi.codegen._common import collect_schemas
+from vgi.codegen._common import EXTRA_RESPONSE_TYPES, REQUEST_TYPES, collect_schemas
 from vgi.codegen.go_schemas import emit
 
 
@@ -88,6 +88,8 @@ _SIMPLE_TYPE: dict[str, pa.DataType] = {
     "arrow.PrimitiveTypes.Float64": pa.float64(),
     "arrow.BinaryTypes.String": pa.string(),
     "arrow.BinaryTypes.Binary": pa.binary(),
+    "arrow.BinaryTypes.LargeString": pa.large_string(),
+    "arrow.BinaryTypes.LargeBinary": pa.large_binary(),
 }
 
 
@@ -103,6 +105,18 @@ def _parse_type(expr: str) -> pa.DataType:
     if expr.startswith("arrow.ListOfField(") and expr.endswith(")"):
         inner = expr[len("arrow.ListOfField(") : -1]
         return pa.list_(_parse_field(inner))
+
+    # `LargeListOf` must be tested BEFORE `ListOf`: the plain prefix check
+    # below would never see it (different stem), but keeping the pair adjacent
+    # is what stops a future `startswith("arrow.List")` shortcut from silently
+    # narrowing a large list to a 32-bit one.
+    if expr.startswith("arrow.LargeListOf(") and expr.endswith(")"):
+        inner = expr[len("arrow.LargeListOf(") : -1]
+        return pa.large_list(_parse_type(inner))
+
+    if expr.startswith("arrow.LargeListOfField(") and expr.endswith(")"):
+        inner = expr[len("arrow.LargeListOfField(") : -1]
+        return pa.large_list(_parse_field(inner))
 
     if expr.startswith("arrow.MapOf(") and expr.endswith(")"):
         inside = expr[len("arrow.MapOf(") : -1]
@@ -184,7 +198,10 @@ def test_checked_in_generated_go_matches_generator() -> None:
         )
 
     actual = _parse_generated_go(path.read_text())
-    expected = {es.name: es.schema for es in collect_schemas()}
+    expected = {
+        es.name: es.schema
+        for es in collect_schemas(extra_response_types=(*EXTRA_RESPONSE_TYPES, *REQUEST_TYPES))
+    }
 
     missing = set(expected) - set(actual)
     extra = set(actual) - set(expected)
@@ -206,7 +223,10 @@ def test_parser_roundtrip_self_test() -> None:
     buf = io.StringIO()
     emit(buf)
     parsed = _parse_generated_go(buf.getvalue())
-    expected = {es.name: es.schema for es in collect_schemas()}
+    expected = {
+        es.name: es.schema
+        for es in collect_schemas(extra_response_types=(*EXTRA_RESPONSE_TYPES, *REQUEST_TYPES))
+    }
     assert set(parsed) == set(expected), "parser missed a factory the generator emitted"
     for name, schema in expected.items():
         assert schema.equals(parsed[name], check_metadata=False), (
