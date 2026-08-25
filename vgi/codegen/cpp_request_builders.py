@@ -267,7 +267,12 @@ def _build_array_call(field: pa.Field[Any], param: str, *, method_name: str) -> 
     raise GeneratorError(f"unhandled field type {t!r} for '{field.name}'")
 
 
-def _emit_builder(es: EmittedSchema, *, method_name: str) -> str:
+def _emit_builder(
+    es: EmittedSchema,
+    *,
+    method_name: str,
+    exception_type: str = "IOException",
+) -> str:
     """Render one ``Build<Name>Params(...)`` function as an inline C++ definition."""
     schema = es.schema
     name = es.name  # e.g. ``CatalogSchemaCreateParams``
@@ -307,7 +312,7 @@ def _emit_builder(es: EmittedSchema, *, method_name: str) -> str:
     out.write(body + "\n")
     out.write("\tif (arrays.size() != static_cast<size_t>(schema->num_fields())) {\n")
     out.write(
-        f'\t\tthrow IOException("vgi codegen drift: {func_name} produced " '
+        f'\t\tthrow {exception_type}("vgi codegen drift: {func_name} produced " '
         f'+ std::to_string(arrays.size()) + " arrays but schema has " '
         f'+ std::to_string(schema->num_fields()) + " fields");\n'
     )
@@ -345,12 +350,35 @@ def emit_builders(
     regen_command_lines: list[str],
     schemas_include: str = "vgi_protocol_schemas.hpp",
     namespace: list[str] | None = None,
+    helpers_include: str = "vgi_rpc_types.hpp",
+    exception_include: str = '"duckdb/common/exception.hpp"',
+    exception_type: str = "IOException",
 ) -> None:
     """Render request-builder functions for a set of params schemas as a C++ header.
 
     Shared by the main protocol generator and the secret protocol generator;
     only the schema set, the schema-factory include, and the provenance banner
     differ.
+
+    The generated builders lean on two things this function does not
+    hard-code, so a non-DuckDB C++ SDK (a client, not just a worker) can
+    target this generator too:
+
+      * ``helpers_include`` / the ``Build<Type>Scalar`` family it must
+        declare — the DuckDB extension's copy lives in ``vgi_rpc_types.hpp``
+        (pure Arrow logic under ``namespace duckdb::vgi``), but any header
+        declaring the same function names against the same signatures works,
+        e.g. a plain ``namespace vgi_sqlite`` version with no DuckDB
+        dependency at all.
+      * ``exception_include`` / ``exception_type`` — the codegen-drift guard
+        each builder ends with needs *some* exception type constructible
+        from a ``std::string``; the DuckDB extension uses its own
+        ``IOException``, a standalone client can use ``std::runtime_error``
+        (with ``exception_include='<stdexcept>'``) instead.
+
+    Defaults reproduce the DuckDB-extension-coupled output exactly, so
+    existing callers (and the drift tests that compare against
+    ``vgi``'s checked-in copy) are unaffected.
     """
     if namespace is None:
         namespace = parse_cpp_namespace(DEFAULT_CPP_NAMESPACE)
@@ -358,10 +386,7 @@ def emit_builders(
     body.write("#pragma once\n\n")
     body.write("// Generated builders depend on helpers + the schema factories.\n")
     body.write("// Both live behind the same public header.\n")
-    body.write("// vgi_rpc_types.hpp goes through src/include; vgi_protocol_schemas.hpp is\n")
-    body.write("// a sibling in src/generated/ and resolves via this quoted include's\n")
-    body.write("// relative-path search.\n")
-    body.write('#include "vgi_rpc_types.hpp"\n')
+    body.write(f'#include "{helpers_include}"\n')
     body.write(f'#include "{schemas_include}"\n\n')
     body.write("#include <cstdint>\n")
     body.write("#include <optional>\n")
@@ -369,7 +394,7 @@ def emit_builders(
     body.write("#include <utility>\n")
     body.write("#include <vector>\n\n")
     body.write("#include <arrow/api.h>\n\n")
-    body.write('#include "duckdb/common/exception.hpp"\n\n')
+    body.write(f"#include {exception_include}\n\n")
     body.write(open_namespace(namespace))
     body.write("\n")
 
@@ -384,11 +409,11 @@ def emit_builders(
             body.write(
                 f"// SKIPPED: Build{es.name} — method '{method_name}' is in COMPLEX_METHODS\n"
                 f"//          (list<list<...>>, list<struct<...>>, or cross-field invariants).\n"
-                f"//          Hand-coded in vgi_rpc_types.cpp.\n\n"
+                f"//          Hand-coded alongside {helpers_include}.\n\n"
             )
             skipped.append(method_name)
             continue
-        chunk = _emit_builder(es, method_name=method_name)
+        chunk = _emit_builder(es, method_name=method_name, exception_type=exception_type)
         body.write(chunk + "\n")
         if chunk.lstrip().startswith("// SKIPPED"):
             skipped.append(method_name)
@@ -421,7 +446,15 @@ def emit_builders(
     out.write(body.getvalue())
 
 
-def emit(out: TextIO, namespace: list[str] | None = None) -> None:
+def emit(
+    out: TextIO,
+    namespace: list[str] | None = None,
+    *,
+    schemas_include: str = "vgi_protocol_schemas.hpp",
+    helpers_include: str = "vgi_rpc_types.hpp",
+    exception_include: str = '"duckdb/common/exception.hpp"',
+    exception_type: str = "IOException",
+) -> None:
     """Emit the generated C++ request-builder header to *out*."""
     emit_builders(
         out,
@@ -432,8 +465,11 @@ def emit(out: TextIO, namespace: list[str] | None = None) -> None:
             "uv run --project ~/Development/vgi-python vgi-gen-cpp-request-builders \\",
             "  > ~/Development/vgi/src/generated/vgi_request_builders.hpp",
         ],
-        schemas_include="vgi_protocol_schemas.hpp",
+        schemas_include=schemas_include,
         namespace=namespace,
+        helpers_include=helpers_include,
+        exception_include=exception_include,
+        exception_type=exception_type,
     )
 
 
@@ -449,6 +485,49 @@ def main() -> None:
             "standalone worker SDK wants something like `vgi::generated`."
         ),
     )
+    parser.add_argument(
+        "--schemas-include",
+        default="vgi_protocol_schemas.hpp",
+        help=(
+            "Quoted #include naming the header declaring the "
+            "<Name>Schema() factories the builders reference (default: "
+            "vgi_protocol_schemas.hpp, resolved as a sibling in the same "
+            "generated/ directory). A consumer whose schemas header lives "
+            "elsewhere on its include path points this at that path, e.g. "
+            "vgi/generated/vgi_protocol_schemas.hpp."
+        ),
+    )
+    parser.add_argument(
+        "--helpers-include",
+        default="vgi_rpc_types.hpp",
+        help=(
+            "Quoted #include naming the header that declares the "
+            "Build<Type>Scalar helper family the generated builders call "
+            "into (default: vgi_rpc_types.hpp, the DuckDB extension's copy). "
+            "A non-DuckDB C++ SDK points this at its own engine-neutral "
+            "header declaring the same function names/signatures, e.g. "
+            "vgi/wire_builders.h."
+        ),
+    )
+    parser.add_argument(
+        "--exception-include",
+        default='"duckdb/common/exception.hpp"',
+        help=(
+            "#include directive (with its own <> or \"\") for the exception "
+            "type named by --exception-type (default: "
+            '"duckdb/common/exception.hpp"). E.g. <stdexcept> for '
+            "std::runtime_error."
+        ),
+    )
+    parser.add_argument(
+        "--exception-type",
+        default="IOException",
+        help=(
+            "Exception type the codegen-drift guard throws, constructible "
+            "from a std::string (default: IOException, DuckDB's). E.g. "
+            "std::runtime_error."
+        ),
+    )
     args = parser.parse_args()
     try:
         namespace = parse_cpp_namespace(args.namespace)
@@ -456,7 +535,14 @@ def main() -> None:
         print(f"\nerror: {e}\n", file=sys.stderr)
         sys.exit(2)
     try:
-        emit(sys.stdout, namespace)
+        emit(
+            sys.stdout,
+            namespace,
+            schemas_include=args.schemas_include,
+            helpers_include=args.helpers_include,
+            exception_include=args.exception_include,
+            exception_type=args.exception_type,
+        )
     except GeneratorError as e:
         print(f"\nerror: {e}\n", file=sys.stderr)
         sys.exit(2)
