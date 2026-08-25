@@ -1545,6 +1545,15 @@ class Worker:
                 "--idle-timeout",
                 help="Self-shutdown after N seconds idle when serving --unix/--tcp.",
             ),
+            max_connections: int = typer.Option(
+                64,
+                "--max-connections",
+                min=1,
+                help=(
+                    "Maximum concurrent --unix/--tcp connections. Bounds worker file descriptors "
+                    "and threads while excess clients wait in the socket backlog."
+                ),
+            ),
             http_threads: int | None = typer.Option(  # noqa: B008
                 None,
                 "--http-threads",
@@ -1630,6 +1639,7 @@ class Worker:
                     server,
                     abs_path,
                     threaded=True,
+                    max_connections=max_connections,
                     idle_timeout=effective_idle,
                     on_bound=_emit,
                 )
@@ -1671,6 +1681,7 @@ class Worker:
                     tcp_host,
                     tcp_port,
                     threaded=True,
+                    max_connections=max_connections,
                     idle_timeout=effective_idle,
                     on_bound=_emit_tcp,
                 )
