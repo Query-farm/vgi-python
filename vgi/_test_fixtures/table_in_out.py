@@ -1180,7 +1180,19 @@ class CrashOnProcessFunction(BufferInputFunction):
             os.kill(os.getpid(), signal.SIGABRT)
         else:
             os.kill(os.getpid(), signal.SIGKILL)
-        return params.execution_id  # unreachable
+        # Killing YOURSELF is not synchronous: kill(2) returns on the calling
+        # thread and the kernel tears the task down asynchronously. RETURNING
+        # here hands that window to the framework, which then races to serialize
+        # and write the process response — and how many bytes escape before the
+        # process actually dies decides what the client sees: nothing (the
+        # "RPC response stream EOF" these tests assert), a schema only, a
+        # truncated batch message, or the whole response, in which case the
+        # query SUCCEEDS with zero rows. Measured in the Go SDK, whose fixture
+        # had the identical shape, that was a 23% failure rate — see
+        # vgi-go 41f18d1. CPython's slower interpreter makes it rarer here, not
+        # impossible. Park instead, so this worker can never write another byte.
+        time.sleep(5)
+        raise AssertionError("crash_on_process: SIGKILL did not terminate the worker")
 
 
 class CrashOnCombineFunction(BufferInputFunction):
