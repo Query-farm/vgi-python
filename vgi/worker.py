@@ -1613,10 +1613,23 @@ class Worker:
                     max_externalized_response_bytes=max_externalized_response_bytes,
                 )
             elif unix is not None:
-                # AF_UNIX launcher path.  Bind to the requested socket,
-                # print UNIX:<abs_path> on stdout, idle-shutdown after
-                # idle_timeout seconds.
-                from vgi_rpc.rpc import serve_unix
+                # AF_UNIX launcher path on POSIX; Windows has no
+                # socket.AF_UNIX in this code path, so --unix there
+                # carries a named-pipe name (\\.\pipe\...) instead - the
+                # launcher constructs whichever one is appropriate for the
+                # platform it's running on. Mirrors vgi_rpc.rpc.run_server's
+                # own platform dispatch (vgi_rpc/rpc/__init__.py) exactly -
+                # this classmethod has its own, separate serving path (not
+                # a call to run_server) because it also handles Sentry/OTel
+                # setup and cls-specific worker construction, but the
+                # transport-level platform choice must stay identical
+                # between the two, or a worker built against this
+                # classmethod (e.g. any vgi.worker.Worker subclass) crashes
+                # on Windows with "AttributeError: module 'socket' has no
+                # attribute 'AF_UNIX'" while one built directly against
+                # run_server works fine - confirmed as a real, live bug
+                # this way, not theoretical.
+                from vgi_rpc.rpc import serve_named_pipe, serve_unix
 
                 from vgi.serve import _maybe_init_sentry, _resolve_otel_config
 
@@ -1629,20 +1642,36 @@ class Worker:
 
                     instrument_server(server, otel_config)
                     worker._vgi_tracer = VgiTracer.create(otel_config)
-                abs_path = os.path.abspath(unix)
                 effective_idle = idle_timeout if idle_timeout > 0 else None
 
-                def _emit(bound: str) -> None:
-                    print(f"UNIX:{bound}", flush=True)
+                if sys.platform == "win32":
+                    pipe_name = unix
 
-                serve_unix(
-                    server,
-                    abs_path,
-                    threaded=True,
-                    max_connections=max_connections,
-                    idle_timeout=effective_idle,
-                    on_bound=_emit,
-                )
+                    def _emit(bound: str) -> None:
+                        print(f"PIPE:{bound}", flush=True)
+
+                    serve_named_pipe(
+                        server,
+                        pipe_name,
+                        threaded=True,
+                        max_connections=max_connections,
+                        idle_timeout=effective_idle,
+                        on_bound=_emit,
+                    )
+                else:
+                    abs_path = os.path.abspath(unix)
+
+                    def _emit(bound: str) -> None:
+                        print(f"UNIX:{bound}", flush=True)
+
+                    serve_unix(
+                        server,
+                        abs_path,
+                        threaded=True,
+                        max_connections=max_connections,
+                        idle_timeout=effective_idle,
+                        on_bound=_emit,
+                    )
             elif tcp is not None:
                 # TCP launcher path.  Bind to [HOST:]PORT, print
                 # TCP:<host>:<port> on stdout (mirrors run_server's
