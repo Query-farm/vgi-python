@@ -24,6 +24,7 @@ StreamState Implementations
 from __future__ import annotations
 
 import base64
+import binascii
 import contextlib
 import dataclasses
 import logging
@@ -1514,6 +1515,80 @@ def _merge_parent_rows(
     merged: dict[str, str] = dict(metadata) if metadata else {}
     merged["vgi_rpc.parent_row#b64"] = base64.b64encode(raw).decode("ascii")
     return merged
+
+
+def _decode_parent_rows(
+    metadata: pa.KeyValueMetadata | None,
+    *,
+    output_rows: int,
+    input_rows: int,
+) -> list[int]:
+    """Decode ``vgi_rpc.parent_row#b64`` from an exchange output batch's metadata.
+
+    The client-side counterpart to :func:`_merge_parent_rows` above — ported
+    from the VGI DuckDB extension's own reference decoder
+    (``vgi_lateral_batch_operator.cpp``'s ``DecodeParentRow``) byte-for-byte,
+    since a wrong or malformed ``parent_row`` array is not a missed
+    optimization the way most other worker-declared metadata is: the caller
+    has no independent way to recompute which output row came from which
+    input row, so an unvalidated value here would produce silent data
+    corruption (or an out-of-bounds read) rather than a merely suboptimal
+    result. Every check below is load-bearing, not defensive polish.
+
+    Args:
+        metadata: The output batch's ``custom_metadata``, or ``None``.
+        output_rows: Row count of the output batch this metadata came with.
+        input_rows: Row count of the input batch shipped for this call.
+
+    Returns:
+        ``parent_rows[i]`` = the 0-based index into the input batch that
+        produced output row ``i``. Always a concrete list — absent metadata
+        synthesizes the identity map (only valid when ``output_rows ==
+        input_rows``, else it's a raise, not a ``None``; see below).
+
+    Raises:
+        RuntimeError: If the metadata is malformed, or if it's absent but
+            the row counts don't match (a worker emitting a different row
+            count without provenance is a worker bug, not something to
+            silently paper over).
+
+    """
+    if output_rows == 0:
+        # Unambiguous regardless of input_rows or whether metadata is present:
+        # a 0-row emit is a legitimate 1->0 filter (every input row dropped),
+        # and _merge_parent_rows never encodes vgi_rpc.parent_row for an empty
+        # emit in the first place (see its own `batch.num_rows == 0` branch) --
+        # so this must be checked BEFORE the absent-metadata row-count-mismatch
+        # check below, or a fully-filtered batch would wrongly look like a
+        # worker bug.
+        return []
+
+    raw_b64 = metadata.get(b"vgi_rpc.parent_row#b64") if metadata else None
+    if raw_b64 is None:
+        if output_rows != input_rows:
+            raise RuntimeError(
+                f"worker returned {output_rows} output row(s) for {input_rows} input row(s) "
+                "without vgi_rpc.parent_row provenance; a fan-out (1->N) or filtering (1->0) "
+                "blended row-transform emit must carry per-output-row parent indices"
+            )
+        return list(range(output_rows))
+
+    try:
+        raw = base64.b64decode(raw_b64, validate=True)
+    except (binascii.Error, ValueError) as e:
+        raise RuntimeError(f"vgi_rpc.parent_row#b64 is not valid base64: {e}") from e
+
+    expected_len = output_rows * 4
+    if len(raw) != expected_len:
+        raise RuntimeError(
+            f"vgi_rpc.parent_row is {len(raw)} byte(s) for {output_rows} output row(s) (expected {expected_len})"
+        )
+
+    values = struct.unpack(f"<{output_rows}i", raw)
+    for i, v in enumerate(values):
+        if v < 0 or v >= input_rows:
+            raise RuntimeError(f"parent_row[{i}] = {v} is out of range [0, {input_rows})")
+    return list(values)
 
 
 def _merge_cache_control(

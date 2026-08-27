@@ -118,6 +118,7 @@ from vgi.protocol import (
     TableBufferingProcessRequest,
     TableFunctionPlanRequest,
     VgiProtocol,
+    _decode_parent_rows,
 )
 from vgi.table_function import TableInOutFunctionInitPhase
 
@@ -295,6 +296,33 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         if len(combined) == 0:
             return batches[0]
         return combined[0]
+
+    @staticmethod
+    def _combine_parent_rows(parent_rows_batches: list[list[int]]) -> list[int]:
+        """Concatenate per-output-batch parent-row lists in emission order.
+
+        Mirrors `_combine_batches` for blended row-transform provenance: when
+        a table-in-out call produces multiple output batches for one input
+        batch (a worker replying `HAVE_MORE_OUTPUT` more than once), each
+        sub-batch's decoded parent-row list already indexes into that same
+        shipped input batch (see `_decode_parent_rows`'s contract), so
+        concatenating the lists in the order the sub-batches were emitted is
+        sound — no index renumbering is needed, because `_combine_batches`
+        also concatenates the sub-batches themselves in that same order.
+
+        Args:
+            parent_rows_batches: One decoded parent-row list per output
+                sub-batch, in emission order.
+
+        Returns:
+            The concatenated parent-row list, aligned row-for-row with what
+            `_combine_batches` produces from the corresponding output batches.
+
+        """
+        combined: list[int] = []
+        for batch_rows in parent_rows_batches:
+            combined.extend(batch_rows)
+        return combined
 
     @staticmethod
     def _on_worker_log(msg: Message) -> None:
@@ -1618,7 +1646,9 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         worker: WorkerConnection,
         input_batch: pa.RecordBatch,
         batch_index: int,
-    ) -> list[pa.RecordBatch]:
+        *,
+        decode_parent_rows: bool = False,
+    ) -> tuple[list[pa.RecordBatch], list[list[int]] | None]:
         """Send a batch to a worker and collect all output batches.
 
         Sends the input batch via stream.exchange(), then checks the vgi.status
@@ -1629,19 +1659,32 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             worker: The worker connection to use. Must have stream initialized.
             input_batch: The input `RecordBatch` to send to the worker.
             batch_index: Index of this batch in the input sequence (for logging).
+            decode_parent_rows: When True, additionally decode each output
+                batch's `vgi_rpc.parent_row#b64` metadata (see
+                `vgi.protocol._decode_parent_rows`) — used by blended
+                row-transform table functions, where a worker's output row
+                count need not match its input row count. False for every
+                other table-in-out / scalar caller, which has no provenance
+                concept and must not have the row-count-mismatch check inside
+                `_decode_parent_rows` start firing for it.
 
         Returns:
-            List of output `RecordBatch`es produced by processing this input batch.
+            A tuple of (output batches, per-batch decoded parent-row lists).
+            The second element is `None` when `decode_parent_rows` is False —
+            keeps the common path from building a list it never uses.
 
         Raises:
-            [`ClientError`][]: If worker.stream is None, or if the worker returns
-                an unexpected status, or if the RPC call fails.
+            [`ClientError`][]: If worker.stream is None, if the worker returns
+                an unexpected status, if the RPC call fails, or (when
+                `decode_parent_rows` is True) if `vgi_rpc.parent_row#b64` is
+                malformed or absent-with-mismatched-row-counts.
 
         """
         if worker.stream is None:
             raise ClientError(f"Worker {worker.worker_index} stream not initialized")
 
         output_batches: list[pa.RecordBatch] = []
+        parent_rows_batches: list[list[int]] | None = [] if decode_parent_rows else None
 
         while True:
             _logger.debug(
@@ -1665,6 +1708,18 @@ class Client(CatalogClientMixin, AggregateClientMixin):
 
             output_batches.append(output.batch)
 
+            if parent_rows_batches is not None:
+                try:
+                    parent_rows_batches.append(
+                        _decode_parent_rows(
+                            output.custom_metadata,
+                            output_rows=output.batch.num_rows,
+                            input_rows=input_batch.num_rows,
+                        )
+                    )
+                except RuntimeError as e:
+                    raise ClientError(str(e)) from e
+
             # Check vgi.status for table-in-out status
             status = None
             if output.custom_metadata:
@@ -1678,22 +1733,25 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             else:
                 raise ClientError(f"Unexpected status from worker {worker.worker_index}: {status!r}")
 
-        return output_batches
+        return output_batches, parent_rows_batches
 
     def _worker_thread_loop(
         self,
         worker: WorkerConnection,
         input_queue: Queue[tuple[int, pa.RecordBatch] | None],
-        output_queue: Queue[tuple[int, list[pa.RecordBatch]] | BaseException],
+        output_queue: Queue[tuple[int, list[pa.RecordBatch], list[list[int]] | None] | BaseException],
+        *,
+        decode_parent_rows: bool = False,
     ) -> None:
         """Thread function that processes batches for a single worker.
 
         Runs in a dedicated thread, pulling (batch_index, batch) tuples from
         the input queue, processing them via _process_batch_on_worker, and
-        pushing (batch_index, output_batches) tuples to the output queue.
+        pushing (batch_index, output_batches, parent_rows_batches) tuples to
+        the output queue.
 
         When None is received from input_queue, signals thread completion by
-        pushing (-1, []) to output_queue and exits.
+        pushing (-1, [], None) to output_queue and exits.
 
         If an exception occurs during processing, it is caught, logged, and
         pushed to output_queue as the exception object itself.
@@ -1703,6 +1761,8 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             input_queue: Thread-safe queue providing (batch_index, `RecordBatch`)
                 tuples for processing. A None value signals end of input.
             output_queue: Thread-safe queue for results.
+            decode_parent_rows: Forwarded to `_process_batch_on_worker` — see
+                its docstring.
 
         """
         try:
@@ -1710,12 +1770,14 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 item = input_queue.get()
                 if item is None:
                     # End of input - signal thread completion
-                    output_queue.put((-1, []))
+                    output_queue.put((-1, [], None))
                     break
 
                 batch_index, input_batch = item
-                outputs = self._process_batch_on_worker(worker, input_batch, batch_index)
-                output_queue.put((batch_index, outputs))
+                outputs, parent_rows_batches = self._process_batch_on_worker(
+                    worker, input_batch, batch_index, decode_parent_rows=decode_parent_rows
+                )
+                output_queue.put((batch_index, outputs, parent_rows_batches))
         except Exception as e:
             _logger.exception("worker_thread_error worker_index=%s", worker.worker_index)
             output_queue.put(e)
@@ -1726,6 +1788,8 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         all_workers: list[WorkerConnection],
         first_batch: pa.RecordBatch,
         remaining_input: Iterator[pa.RecordBatch],
+        decode_parent_rows: bool = False,
+        parent_row_callback: Callable[[list[int]], None] | None = None,
     ) -> Generator[pa.RecordBatch]:
         """Distribute input batches round-robin across workers and collect output.
 
@@ -1738,6 +1802,15 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             first_batch: The first input batch, already consumed from the
                 iterator by the calling method.
             remaining_input: Iterator for remaining input batches.
+            decode_parent_rows: See `_process_batch_on_worker`. Forwarded to
+                every worker thread; False (the default) preserves today's
+                behavior exactly for every existing caller.
+            parent_row_callback: Optional callback invoked once per yielded
+                output batch, immediately before the yield, with that batch's
+                combined parent-row list (see `_combine_parent_rows`) — the
+                same "callback then yield" contract `table_function`'s
+                `batch_metadata_callback` uses. Only meaningful when
+                `decode_parent_rows` is True; ignored otherwise.
 
         Yields:
             Output `RecordBatch`es from processing. When multiple batches are
@@ -1754,7 +1827,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
 
         # Create queues for each worker
         input_queues: list[Queue[tuple[int, pa.RecordBatch] | None]] = [Queue() for _ in range(num_workers)]
-        output_queue: Queue[tuple[int, list[pa.RecordBatch]] | BaseException] = Queue()
+        output_queue: Queue[tuple[int, list[pa.RecordBatch], list[list[int]] | None] | BaseException] = Queue()
 
         # Start worker threads
         threads: list[threading.Thread] = []
@@ -1762,6 +1835,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             thread = threading.Thread(
                 target=self._worker_thread_loop,
                 args=(worker, input_queues[i], output_queue),
+                kwargs={"decode_parent_rows": decode_parent_rows},
                 daemon=True,
             )
             thread.start()
@@ -1804,12 +1878,14 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                     raise ClientError.from_rpc_error(result) from result
                 raise ClientError(f"Worker thread failed: {result}") from result
 
-            batch_idx, output_batches = result
+            batch_idx, output_batches, parent_rows_batches = result
             outputs_received += 1
 
             # Combine output batches if needed
             combined = self._combine_batches(output_batches)
             if combined is not None:
+                if decode_parent_rows and parent_row_callback is not None and parent_rows_batches is not None:
+                    parent_row_callback(self._combine_parent_rows(parent_rows_batches))
                 yield combined
 
             _logger.debug(
@@ -1838,6 +1914,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         pushdown_filters: bytes | None = None,
         settings: dict[str, Any] | None = None,
         transaction_opaque_data: bytes | None = None,
+        parent_row_callback: Callable[[list[int]], None] | None = None,
     ) -> Generator[pa.RecordBatch]:
         """Invoke a table-in-out function on the worker and stream results.
 
@@ -1865,6 +1942,20 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             settings: Optional dictionary of settings/pragmas to
                 pass to the function.
             transaction_opaque_data: Optional unique identifier for the DuckDB transaction.
+            parent_row_callback: Optional callback invoked once per yielded
+                output batch (before finalize), immediately before the yield,
+                with that batch's decoded `vgi_rpc.parent_row` provenance —
+                `parent_rows[i]` is the 0-based index into the input batch
+                that produced output row `i`. Passing this switches on
+                provenance decoding: a batch with no `vgi_rpc.parent_row`
+                metadata is only accepted when its row count matches the
+                input batch's (raising `ClientError` otherwise), since a
+                worker changing row count without provenance is a worker bug
+                for a function that opted into this contract. Intended for
+                blended row-transform functions (`RowTransformFunction`,
+                `FunctionInfo.input_from_args`); leave unset for ordinary
+                table-in-out functions, which have no provenance concept and
+                may legitimately change row count.
 
         Yields:
             Output `RecordBatch`es from the function. In single-worker mode, output
@@ -1915,6 +2006,8 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                     all_workers=all_workers,
                     first_batch=first_batch,
                     remaining_input=input,
+                    decode_parent_rows=parent_row_callback is not None,
+                    parent_row_callback=parent_row_callback,
                 )
 
                 # Close all input streams
