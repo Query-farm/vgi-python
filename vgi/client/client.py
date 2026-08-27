@@ -52,6 +52,7 @@ Key methods
     client.schema_contents(...)   — list tables/views/functions/macros
     client.scalar_function(...)   — invoke a scalar
     client.table_function(...)    — invoke a table function
+    client.table_function_plan(...) — plan a table function into named, redeemable splits
     client.table_in_out_function(...) — invoke a table-in-out function
     client.aggregate_function(...) — run a grouped/global aggregate
     client.aggregate_session(...) — raw aggregate RPCs (update/combine/window)
@@ -81,7 +82,7 @@ import subprocess
 import threading
 from collections.abc import Callable, Generator, Iterator, Sequence
 from contextlib import AbstractContextManager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from queue import Queue
 from typing import IO, Any, Literal, cast
 
@@ -110,9 +111,12 @@ from vgi.protocol import (
     CopyFromContext,
     CopyToContext,
     InitRequest,
+    PlanResponse,
+    ScanSplit,
     TableBufferingCombineRequest,
     TableBufferingDestructorRequest,
     TableBufferingProcessRequest,
+    TableFunctionPlanRequest,
     VgiProtocol,
 )
 from vgi.table_function import TableInOutFunctionInitPhase
@@ -1144,6 +1148,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         execution_id: bytes | None = None,
         init_opaque_data: bytes | None = None,
         finalize_state_id: bytes | None = None,
+        split_tokens: list[bytes] | None = None,
     ) -> StreamSession:
         """Call init on a worker proxy and return a `StreamSession`.
 
@@ -1160,6 +1165,9 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 the primary worker's init response.
             finalize_state_id: For ``TABLE_BUFFERING_FINALIZE`` init, the
                 opaque finalize partition key this producer stream serves.
+            split_tokens: Split tokens (from a prior `table_function_plan()`
+                call) to redeem in this init, or `None` for an ordinary
+                whole-scan init.
 
         Returns:
             `StreamSession` for data exchange or production.
@@ -1178,6 +1186,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             execution_id=execution_id,
             init_opaque_data=init_opaque_data,
             finalize_state_id=finalize_state_id,
+            split_tokens=split_tokens,
         )
         try:
             stream: StreamSession = proxy.init(request=init_request)  # type: ignore[assignment]
@@ -1201,6 +1210,9 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         phase: TableInOutFunctionInitPhase | None,
         bind_result_callback: Callable[[BindResponse], None] | None,
         copy_from: CopyFromContext | None = None,
+        split_tokens: list[bytes] | None = None,
+        split_execution_id: bytes | None = None,
+        split_init_opaque_data: bytes | None = None,
     ) -> tuple[BindRequest, BindResponse, GlobalInitResponse]:
         """Run the canonical bind → init → fan-out-workers sequence.
 
@@ -1219,6 +1231,24 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         Centralizing this keeps HTTP/subprocess differences and protocol
         changes (e.g. future scoped-secret re-bind, init hints) in one
         place.
+
+        ``split_tokens``, when given, redeems those specific named units of
+        work from a prior ``table_function_plan()`` call instead of an
+        ordinary whole-scan init — and forces single-worker mode (skips
+        ``_spawn_additional_workers`` by clamping ``max_workers`` to 1): the
+        server-advertised ``max_workers`` header describes fan-out for
+        reading the *whole* table, which doesn't apply to redeeming one
+        already-named unit of work. A caller wanting split-level parallelism
+        drives multiple splits through multiple `Client`/thread instances
+        itself (mirroring how `VgiCatalog._exchange_client()` in vgi-polars
+        gives each thread its own `Client`), not via this method's own
+        worker fan-out. ``split_execution_id``/``split_init_opaque_data``
+        (from that same ``PlanResponse``) are echoed on this init exactly
+        like a secondary worker's would be — ``PlanResponse.execution_id``'s
+        docstring: "echoed on every split init. Scopes cross-process
+        BoundStorage exactly as it does elsewhere" — so a worker whose splits
+        share cross-process state via ``BoundStorage`` can find it, even
+        though this is a *first* (not secondary) init for this connection.
         """
         assert self._primary is not None, "primary worker not started"
 
@@ -1242,11 +1272,14 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             projection_ids=projection_ids,
             pushdown_filters_batch=pushdown_filters_batch,
             phase=phase,
+            split_tokens=split_tokens,
+            execution_id=split_execution_id,
+            init_opaque_data=split_init_opaque_data,
         )
         self._primary.stream = stream
 
         init_response = stream.typed_header(GlobalInitResponse)
-        max_workers = self._determine_max_workers(init_response.max_workers)
+        max_workers = 1 if split_tokens is not None else self._determine_max_workers(init_response.max_workers)
 
         self._spawn_additional_workers(
             max_workers,
@@ -2014,6 +2047,125 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         finally:
             finalize_stream.close()
 
+    def table_function_plan(
+        self,
+        *,
+        function_name: str,
+        schema_name: str,
+        arguments: Arguments | None = None,
+        projection_ids: list[int] | None = None,
+        pushdown_filters: bytes | None = None,
+        settings: dict[str, Any] | None = None,
+        transaction_opaque_data: bytes | None = None,
+        target_split_bytes: int | None = None,
+        min_splits: int | None = None,
+        max_splits_per_response: int | None = None,
+        cursor: bytes | None = None,
+    ) -> PlanResponse:
+        """Plan a table-function scan into named, independently redeemable splits.
+
+        Runs `bind()` then `on_plan()` and returns the resulting
+        [`PlanResponse`][], whose `splits` are each individually redeemable by
+        :meth:`table_function` via its `split_tokens` argument — from this
+        process or, since a split names work rather than describing it ("these
+        three files at version 47", not "rows 0-999 of whatever this returns
+        now"), any other. Workers that don't opt in via `supports_splits`
+        (`FunctionInfo.supports_splits`) inherit a framework default (commonly
+        one split for the whole scan) — check that flag first if the caller
+        cares whether real parallelism/checkpointing is available versus a
+        single degenerate split.
+
+        A response's `next_cursors` is normally empty or one entry; more than
+        one means the plan is paginated across parallel, disjoint enumeration
+        branches — the *caller* is responsible for that disjointness (VGI
+        itself does not verify it; see the "Split disjointness is a worker
+        contract" note in the VGI extension's own docs). For a single
+        sequential caller, following `next_cursors` one at a time (via
+        `cursor=`) and concatenating each response's `splits` is always
+        correct, whether the plan doled out one cursor or several.
+
+        Args:
+            function_name: Name of the table function to plan.
+            schema_name: Name of the catalog schema that declares the function.
+            arguments: Optional [`Arguments`][] container. Defaults to empty
+                `Arguments()`.
+            projection_ids: Optional list of column indices for projection —
+                threaded into the plan so split sizing can account for it.
+            pushdown_filters: Optional byte string of filter predicates,
+                same wire format as :meth:`table_function`'s.
+            settings: Optional dictionary of settings/pragmas.
+            transaction_opaque_data: Optional transaction identifier.
+            target_split_bytes: Requested split size — the primary sizing
+                lever; the client can't see per-split cost and will treat
+                returned splits as interchangeable units.
+            min_splits: Parallelism floor — ask for at least this many splits
+                even for a small table, so a caller with idle readers has
+                enough units to hand them.
+            max_splits_per_response: Pagination cap on this one response
+                (distinct from `min_splits`, which is a sizing hint, not a
+                pagination control).
+            cursor: Resume point from a previous response's `next_cursors`,
+                or `None` to start a fresh plan.
+
+        Returns:
+            [`PlanResponse`][] with `splits` (each an individually redeemable
+            [`ScanSplit`][], carrying the `token` to pass back into
+            `table_function(split_tokens=...)`) and `next_cursors` for
+            pagination.
+
+        Raises:
+            [`ClientError`][]: If the client is not started, communication with
+                the worker fails, or the worker returns an exception.
+
+        """
+        if arguments is None:
+            arguments = Arguments()
+
+        if self._primary is None:
+            raise ClientError("Client not started. Call start() or use context manager.")
+
+        try:
+            pushdown_filters_batch = self._deserialize_pushdown_filters(pushdown_filters)
+
+            bind_request = self._make_bind_request(
+                function_name=function_name,
+                schema_name=schema_name,
+                arguments=arguments,
+                function_type=FunctionType.TABLE,
+                settings=settings,
+                secrets=None,
+                transaction_opaque_data=transaction_opaque_data,
+            )
+            bind_response = self._do_bind(self._primary.proxy, bind_request, None)
+
+            plan_request = TableFunctionPlanRequest(
+                bind_call=bind_request,
+                bind_opaque_data=bind_response.opaque_data,
+                projection_ids=projection_ids,
+                pushdown_filters=pushdown_filters_batch,
+                target_split_bytes=target_split_bytes,
+                min_splits=min_splits,
+                max_splits_per_response=max_splits_per_response,
+                cursor=cursor,
+            )
+            try:
+                response: PlanResponse = self._primary.proxy.table_function_plan(request=plan_request)  # type: ignore[assignment]
+            except RpcError as e:
+                raise ClientError.from_rpc_error(e) from e
+
+            # The wire carries each split as a serialized blob in a
+            # list<binary> column (see PlanResponse.splits' docstring: "Both
+            # [ScanSplit objects and serialized blobs] inhabit this field
+            # across its lifetime") — deserialize them here so callers get
+            # typed ScanSplit objects (with .token ready to redeem) rather
+            # than raw bytes they'd all have to know to decode themselves.
+            deserialized_splits = [
+                s if isinstance(s, ScanSplit) else ScanSplit.deserialize_from_bytes(s) for s in response.splits
+            ]
+            return replace(response, splits=deserialized_splits)
+        except ClientError as e:
+            raise self._client_error_with_stderr(e) from e.__cause__
+
     def table_function(
         self,
         *,
@@ -2026,6 +2178,9 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         settings: dict[str, Any] | None = None,
         transaction_opaque_data: bytes | None = None,
         copy_from: CopyFromContext | None = None,
+        split_tokens: list[bytes] | None = None,
+        split_execution_id: bytes | None = None,
+        split_init_opaque_data: bytes | None = None,
     ) -> Generator[pa.RecordBatch]:
         """Invoke a table function (source function) and stream output batches.
 
@@ -2035,6 +2190,8 @@ class Client(CatalogClientMixin, AggregateClientMixin):
 
         For parallel processing (max_workers > 1), output is read from all
         workers concurrently using threads. Output order is non-deterministic.
+        This is unrelated to (and mutually exclusive in effect with) redeeming
+        splits — see ``split_tokens`` below.
 
         Args:
             function_name: Name of the function to invoke. Must exist in the
@@ -2055,10 +2212,27 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             copy_from: Optional [`CopyFromContext`][] marking this scan as a
                 ``COPY ... FROM`` read. Prefer :meth:`copy_from`, which builds
                 the context for you.
+            split_tokens: Redeem these specific split tokens (from a prior
+                :meth:`table_function_plan` call) instead of an ordinary
+                whole-scan init. Forces single-worker mode for this call — the
+                server's advertised ``max_workers`` describes fan-out for
+                reading the whole table, not for one already-named unit of
+                work. To read multiple splits in parallel, drive them through
+                multiple `Client`/thread instances yourself; to read them
+                sequentially (still sound and replayable, just without
+                concurrency), call this once per split token in a loop.
+            split_execution_id: When redeeming a split, the originating
+                ``PlanResponse.execution_id`` — echoed on this init so a
+                worker whose splits share cross-process state via
+                ``BoundStorage`` can find it. `None` for an ordinary
+                whole-scan init.
+            split_init_opaque_data: When redeeming a split, the originating
+                ``PlanResponse.init_opaque_data``, echoed the same way.
 
         Yields:
             Output `RecordBatch`es from the function. In parallel mode
-            (max_workers > 1), output order is non-deterministic.
+            (max_workers > 1, only possible when ``split_tokens`` is `None`),
+            output order is non-deterministic.
 
         Raises:
             [`ClientError`][]: If the client is not started, communication with the
@@ -2088,6 +2262,9 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 phase=None,
                 bind_result_callback=bind_result_callback,
                 copy_from=copy_from,
+                split_tokens=split_tokens,
+                split_execution_id=split_execution_id,
+                split_init_opaque_data=split_init_opaque_data,
             )
 
             # Read output from all workers in parallel
