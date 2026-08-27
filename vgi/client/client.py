@@ -2392,7 +2392,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 cursor=cursor,
             )
             try:
-                response: PlanResponse = self._primary.proxy.table_function_plan(request=plan_request)  # type: ignore[assignment]
+                response: PlanResponse = self._primary.proxy.table_function_plan(request=plan_request)
             except RpcError as e:
                 raise ClientError.from_rpc_error(e) from e
 
