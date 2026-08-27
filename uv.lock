@@ -929,6 +929,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/b9/6d/a637d52449d98a6892d9a4dc0262587afdb6a66f201871842dce5a97b1c1/httpx2-2.10.0-py3-none-any.whl", hash = "sha256:5e3194a432701e1cc6f69a8b1b2fa199ef907013fede8d9a09a2c5b7b8141a18", size = 94355, upload-time = "2026-08-09T09:11:30.882Z" },
 ]
 
+[package.optional-dependencies]
+zstd = [
+    { name = "zstandard", marker = "python_full_version < '3.14'" },
+]
+
 [[package]]
 name = "httpx2-jsfetch"
 version = "1.0"
@@ -2555,7 +2560,7 @@ requires-dist = [
 
 [[package]]
 name = "vgi-python"
-version = "0.29.1"
+version = "0.29.2"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -2698,7 +2703,7 @@ docs = [
 
 [[package]]
 name = "vgi-rpc"
-version = "0.43.0"
+version = "0.43.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "docstring-parser" },
@@ -2706,9 +2711,9 @@ dependencies = [
     { name = "pywin32", marker = "sys_platform == 'win32'" },
     { name = "tzdata", marker = "sys_platform == 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e6/ee/94a47d89eaebcd2ad433b86b0c6017131f5b15ef1d7f02c60fbab4906dbc/vgi_rpc-0.43.0.tar.gz", hash = "sha256:abae616414353cbc18467d4c325369adb5acf0cab36332a35c2a7d463692885b", size = 1142865, upload-time = "2026-08-24T00:43:51.796Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/27/a0/b308cc62cde38fe2a7bc7a2c57bbb8e956084dd04134a4b0d805378daf16/vgi_rpc-0.43.1.tar.gz", hash = "sha256:d94a3c2cfcf90e1122b2b7ec23a47912f1b3e2d265267aa6704bd64c3a7f2a55", size = 1145519, upload-time = "2026-08-27T14:51:14.923Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5c/03/680bc346a6335451f97618e5432ddae3b976e1ff6682ee1e736540980f20/vgi_rpc-0.43.0-py3-none-any.whl", hash = "sha256:227fac13e0053caa73b2d75e62eab155d36dcb457a165d215f7817fdae865fb0", size = 526747, upload-time = "2026-08-24T00:43:50.055Z" },
+    { url = "https://files.pythonhosted.org/packages/96/f2/15bd8a76ee3534c4d911b0f76c948378db4c175a40ceeb30325e6ab994a6/vgi_rpc-0.43.1-py3-none-any.whl", hash = "sha256:1eecd6c17f06d6fadae332be33998d22cdd01e5caaaae7889b747f0c1eaac498", size = 526753, upload-time = "2026-08-27T14:51:12.975Z" },
 ]
 
 [package.optional-dependencies]
@@ -2723,7 +2728,7 @@ external = [
 ]
 http = [
     { name = "falcon" },
-    { name = "httpx2" },
+    { name = "httpx2", extra = ["zstd"] },
     { name = "msgpack" },
     { name = "pycryptodome" },
     { name = "pynacl", marker = "sys_platform == 'linux'" },
