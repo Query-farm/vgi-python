@@ -1,6 +1,6 @@
 [project]
 name = "vgi-python"
-version = "0.29.3"
+version = "0.29.4"
 description = "Vector Gateway Interface - Connect DuckDB to external programs via Apache Arrow"
 readme = "README.md"
 keywords = [
@@ -40,7 +40,7 @@ dependencies = [
     "pyarrow",
     "typer>=0.9",
     "platformdirs",
-    "vgi-rpc>=0.43.0",
+    "vgi-rpc>=0.43.2",
     "httpx2>=2.9.1",
 ]
 
@@ -52,6 +52,11 @@ dependencies = [
 haybarn = ["haybarn>=1.5.5rc1"]
 duckdb = ["duckdb>=1.5.3"]
 http = ["vgi-rpc[http]"]
+# transport="launch": vgi_rpc.launcher imports filelock unconditionally at
+# module level, which lives behind vgi-rpc's own `cli` extra (alongside
+# typer, already a core dependency here, and httpx2, ditto) rather than in
+# vgi-rpc's core dependency set.
+launch = ["vgi-rpc[cli]"]
 # Alternative HTTP server: granian moves socket I/O and HTTP parsing into Rust,
 # off the GIL. Optional because it is a compiled extension where waitress is
 # pure Python; select it with `vgi-serve --http --server granian`.
@@ -93,8 +98,8 @@ dev = [
     "pytest-ruff",
     "pytest-xdist",
     "ruff",
-    "vgi-python[test-fixtures,test-fixtures-writable,http,oauth,otel,sentry,azure]",
-    "vgi-rpc[conformance,external,http,oauth,otel,sentry]",
+    "vgi-python[test-fixtures,test-fixtures-writable,http,launch,oauth,otel,sentry,azure]",
+    "vgi-rpc[cli,conformance,external,http,oauth,otel,sentry]",
 ]
 [project.scripts]
 vgi-serve = "vgi.serve:main"

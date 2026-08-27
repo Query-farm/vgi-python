@@ -184,10 +184,10 @@ _HTTP_TRANSPORT_READY = True
 
 @dataclass
 class WorkerConnection:
-    """Holds state for a single worker connection (subprocess, HTTP, or TCP).
+    """Holds state for a single worker connection (subprocess, HTTP, TCP, or launch).
 
-    Exactly one of {proc+connection, _pool_ctx, _http_ctx, _tcp_ctx} is active
-    per connection — transport-specific teardown inspects these fields.
+    Exactly one of {proc+connection, _pool_ctx, _http_ctx, _tcp_ctx, _launch_ctx}
+    is active per connection — transport-specific teardown inspects these fields.
 
     Attributes:
         proxy: The typed `[`VgiProtocol`][]` proxy used to invoke the worker.
@@ -209,6 +209,8 @@ class WorkerConnection:
     _http_ctx: AbstractContextManager[Any] | None = field(default=None, repr=False)
     # TCP transport: context manager from vgi_rpc.rpc.tcp_connect.
     _tcp_ctx: AbstractContextManager[Any] | None = field(default=None, repr=False)
+    # Launch transport: context manager from vgi_rpc.launcher.resolve_and_connect.
+    _launch_ctx: AbstractContextManager[Any] | None = field(default=None, repr=False)
 
 
 class Client(CatalogClientMixin, AggregateClientMixin):
@@ -389,13 +391,17 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         attach_opaque_data: bytes | None = None,
         pool: WorkerPool | None = _default_pool,
         *,
-        transport: Literal["subprocess", "http", "tcp"] = "subprocess",
+        transport: Literal["subprocess", "http", "tcp", "launch"] = "subprocess",
         base_url: str | None = None,
         tcp_host: str | None = None,
         tcp_port: int | None = None,
         bearer_token: str | None = None,
         httpx_client: Any | None = None,
         external_location: Any | None = None,
+        launch_argv: Sequence[str] | None = None,
+        launch_idle_timeout: float = 300.0,
+        launch_state_dir: str | None = None,
+        launch_socket_path: str | None = None,
     ):
         """Initialize the VGI client.
 
@@ -430,7 +436,10 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 a running worker via ``vgi_rpc.http.http_connect``; ``"tcp"``
                 connects to a running worker via ``vgi_rpc.rpc.tcp_connect``
                 (raw Arrow-IPC framing, no auth/encryption — loopback /
-                trusted networks only; use ``Client.from_tcp(...)``).
+                trusted networks only; use ``Client.from_tcp(...)``); ``"launch"``
+                spawns-or-reuses a warm worker shared across every client
+                pointing at the same command, coordinated via
+                ``vgi_rpc.launcher`` (use ``Client.from_launch(...)``).
             base_url: HTTP-only. Base URL of the running worker, e.g.
                 ``"http://127.0.0.1:8765"``.
             tcp_host: TCP-only. Hostname or IP of the running worker.
@@ -449,6 +458,20 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 transport so pointer batches are resolved automatically.
                 Subprocess transport ignores this — subprocess workers
                 don't return pointer batches.
+            launch_argv: Launch-only. The worker command and arguments (an
+                argv sequence, not a shell string — matches
+                ``vgi_rpc.launcher.LaunchConfig.worker_argv``). Requires the
+                ``vgi-python[launch]`` extra (pulls in ``vgi-rpc[cli]`` for
+                ``filelock``, which ``vgi_rpc.launcher`` imports unconditionally).
+            launch_idle_timeout: Launch-only. The shared worker self-terminates
+                after this many idle seconds with zero connected clients.
+                Forwarded to ``LaunchConfig.idle_timeout``.
+            launch_state_dir: Launch-only. Override the launcher's default
+                per-user state directory (lockfiles + sockets). Forwarded to
+                ``LaunchConfig.state_dir``.
+            launch_socket_path: Launch-only. Explicit socket path, skipping
+                the hash-derived default. Forwarded to
+                ``LaunchConfig.socket_path``.
 
         Raises:
             ValueError: If the transport / server_path / base_url
@@ -472,6 +495,15 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 raise ValueError("server_path is only meaningful for transport='subprocess'")
             if base_url is not None:
                 raise ValueError("base_url is only meaningful for transport='http'")
+        elif transport == "launch":
+            if not launch_argv:
+                raise ValueError("transport='launch' requires a non-empty launch_argv")
+            if server_path is not None:
+                raise ValueError("server_path is only meaningful for transport='subprocess'")
+            if base_url is not None:
+                raise ValueError("base_url is only meaningful for transport='http'")
+            if tcp_host is not None or tcp_port is not None:
+                raise ValueError("tcp_host/tcp_port are only meaningful for transport='tcp'")
         else:
             raise ValueError(f"unknown transport {transport!r}")
 
@@ -482,13 +514,19 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         self._tcp_port = tcp_port
         self._bearer_token = bearer_token
         self._httpx_client = httpx_client
+        self._launch_argv = tuple(launch_argv) if launch_argv is not None else None
+        self._launch_idle_timeout = launch_idle_timeout
+        self._launch_state_dir = launch_state_dir
+        self._launch_socket_path = launch_socket_path
         # True when ``_get_or_create_httpx_client`` constructed the client and
         # is therefore responsible for closing it on ``stop()``. False when
         # the caller passed ``httpx_client=`` — ownership stays with them.
         self._httpx_client_owned = False
-        # Auto-enable pointer-batch resolution for HTTP unless the caller
-        # asked for something different. See ``external_location`` docs above.
-        if transport in ("http", "tcp") and external_location is None:
+        # Auto-enable pointer-batch resolution for HTTP/TCP/launch unless the
+        # caller asked for something different — all three are ordinary RPC
+        # transports a worker can externalize batches over, unlike subprocess
+        # (which never returns pointer batches). See ``external_location`` docs above.
+        if transport in ("http", "tcp", "launch") and external_location is None:
             from vgi_rpc.external import ExternalLocationConfig
 
             external_location = ExternalLocationConfig()
@@ -559,6 +597,63 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             transport="tcp",
             tcp_host=host,
             tcp_port=port,
+            external_location=external_location,
+            worker_limit=worker_limit,
+            attach_opaque_data=attach_opaque_data,
+            pool=None,
+        )
+
+    @classmethod
+    def from_launch(
+        cls,
+        worker_argv: Sequence[str],
+        *,
+        idle_timeout: float = 300.0,
+        state_dir: str | None = None,
+        socket_path: str | None = None,
+        external_location: Any | None = None,
+        worker_limit: int | None = None,
+        attach_opaque_data: bytes | None = None,
+    ) -> Client:
+        """Create a `[`Client`][]` bound to a launcher-managed warm worker.
+
+        Spawns (or reuses) a worker process serving over an ``AF_UNIX``
+        socket via ``vgi_rpc.launcher`` — every client across the machine
+        pointing at the same ``worker_argv`` shares one warm worker,
+        coordinated by a per-command-hash flock, and the worker
+        self-terminates after ``idle_timeout`` idle seconds with zero
+        connected clients. This is the Python client-side counterpart to the
+        VGI DuckDB extension's ``launch:<argv>`` LOCATION scheme. Requires
+        the ``vgi-python[launch]`` extra.
+
+        Args:
+            worker_argv: The worker command and arguments, as an argv
+                sequence — not a shell string, and not split with
+                ``shlex.split`` the way ``server_path`` is for
+                ``transport="subprocess"``.
+            idle_timeout: Shared worker self-shutdown after this many idle
+                seconds.
+            state_dir: Override the launcher's default per-user state
+                directory (lockfiles + sockets).
+            socket_path: Explicit socket path, skipping the hash-derived
+                default — every caller passing the same explicit path
+                shares that worker regardless of ``worker_argv`` differences.
+            external_location: Optional ``ExternalLocationConfig`` — see the
+                constructor's docstring.
+            worker_limit: Maximum number of parallel worker connections.
+            attach_opaque_data: Optional unique identifier for the DuckDB
+                database attachment.
+
+        Returns:
+            A `[`Client`][]` bound to the launcher-managed worker.
+
+        """
+        return cls(
+            transport="launch",
+            launch_argv=worker_argv,
+            launch_idle_timeout=idle_timeout,
+            launch_state_dir=state_dir,
+            launch_socket_path=socket_path,
             external_location=external_location,
             worker_limit=worker_limit,
             attach_opaque_data=attach_opaque_data,
@@ -660,6 +755,8 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             return self._spawn_http_connection(worker_index)
         if self._transport == "tcp":
             return self._spawn_tcp_connection(worker_index)
+        if self._transport == "launch":
+            return self._spawn_launch_connection(worker_index)
         return self._spawn_subprocess_connection(worker_index)
 
     def _spawn_tcp_connection(self, worker_index: int) -> WorkerConnection:
@@ -690,6 +787,41 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             proxy=proxy,
             worker_index=worker_index,
             _tcp_ctx=ctx,
+        )
+
+    def _spawn_launch_connection(self, worker_index: int) -> WorkerConnection:
+        """Connect to a launcher-managed worker via ``vgi_rpc.launcher.resolve_and_connect``.
+
+        Every ``Client`` (in this process or any other on the machine) built
+        with the same ``launch_argv`` shares one warm worker — see
+        ``from_launch``. Multiple ``worker_index`` values open independent
+        connections to that same shared worker.
+        """
+        from vgi_rpc.launcher import LaunchConfig, resolve_and_connect
+
+        assert self._launch_argv is not None  # enforced in __init__
+        config = LaunchConfig(
+            worker_argv=self._launch_argv,
+            socket_path=self._launch_socket_path,
+            idle_timeout=self._launch_idle_timeout,
+            state_dir=self._launch_state_dir,
+        )
+        ctx: AbstractContextManager[VgiProtocol] = resolve_and_connect(
+            VgiProtocol,  # type: ignore[type-abstract]
+            config,
+            on_log=self._on_worker_log,
+            external_location=self._external_location,
+        )
+        proxy = ctx.__enter__()
+        _logger.debug(
+            "launch_connection_opened worker_index=%s argv=%s",
+            worker_index,
+            self._launch_argv,
+        )
+        return WorkerConnection(
+            proxy=proxy,
+            worker_index=worker_index,
+            _launch_ctx=ctx,
         )
 
     def _spawn_http_connection(self, worker_index: int) -> WorkerConnection:
@@ -863,6 +995,14 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             _logger.debug("tcp_connection_closed worker_index=%s", worker.worker_index)
             return 0
 
+        if worker._launch_ctx is not None:
+            # Launch transport — close the RPC proxy (and its socket). The
+            # shared worker process itself is untouched: it lives on for other
+            # clients and self-terminates via its own idle timer.
+            worker._launch_ctx.__exit__(None, None, None)
+            _logger.debug("launch_connection_closed worker_index=%s", worker.worker_index)
+            return 0
+
         if worker._pool_ctx is not None:
             # Return to pool — pool handles subprocess lifecycle
             worker._pool_ctx.__exit__(None, None, None)
@@ -979,6 +1119,8 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             id_repr = f"http({self._base_url})"
         elif self._primary._tcp_ctx is not None:
             id_repr = f"tcp({self._tcp_host}:{self._tcp_port})"
+        elif self._primary._launch_ctx is not None:
+            id_repr = f"launch({' '.join(self._launch_argv or ())})"
         else:
             id_repr = "pooled"
         _logger.debug("server_started id=%s", id_repr)

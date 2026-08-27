@@ -100,9 +100,11 @@ class CatalogClientMixin:
     non-DuckDB use case this mixin supports.
 
     Other attributes expected from ``Client``: ``_transport`` (subprocess,
-    http, or tcp), ``_base_url`` (HTTP base URL), ``_tcp_host`` / ``_tcp_port``
-    (TCP endpoint), and ``_get_or_create_httpx_client()`` (shared HTTP client
-    factory).
+    http, tcp, or launch), ``_base_url`` (HTTP base URL), ``_tcp_host`` /
+    ``_tcp_port`` (TCP endpoint), ``_launch_argv`` / ``_launch_idle_timeout`` /
+    ``_launch_state_dir`` / ``_launch_socket_path`` (launcher worker
+    identity + lifecycle), and ``_get_or_create_httpx_client()`` (shared
+    HTTP client factory).
 
     Attributes:
         server_path: Worker command used for subprocess transport — a string to
@@ -111,10 +113,14 @@ class CatalogClientMixin:
 
     # Type hints for attributes expected from Client
     server_path: str | Sequence[str]
-    _transport: Literal["subprocess", "http", "tcp"]
+    _transport: Literal["subprocess", "http", "tcp", "launch"]
     _base_url: str | None
     _tcp_host: str | None
     _tcp_port: int | None
+    _launch_argv: tuple[str, ...] | None
+    _launch_idle_timeout: float
+    _launch_state_dir: str | None
+    _launch_socket_path: str | None
     _external_location: Any | None
 
     def _worker_argv(self) -> list[str]:
@@ -144,6 +150,11 @@ class CatalogClientMixin:
         ``Client._get_or_create_httpx_client`` so auth headers and
         connection pooling are consistent.
 
+        Launch: opens a short-lived ``resolve_and_connect`` session per call
+        against the launcher-managed shared worker — same warm-worker sharing
+        as exchange-mode calls (``Client._spawn_launch_connection``), just a
+        fresh connection to it per catalog RPC rather than one held open.
+
         Worker errors are caught and re-raised as ``CatalogClientError``.
 
         Yields:
@@ -170,6 +181,22 @@ class CatalogClientMixin:
                     VgiProtocol,  # type: ignore[type-abstract]
                     self._tcp_host,
                     self._tcp_port,
+                    external_location=getattr(self, "_external_location", None),
+                ) as proxy:
+                    yield proxy
+            elif transport == "launch":
+                from vgi_rpc.launcher import LaunchConfig, resolve_and_connect
+
+                assert self._launch_argv is not None
+                config = LaunchConfig(
+                    worker_argv=self._launch_argv,
+                    socket_path=self._launch_socket_path,
+                    idle_timeout=self._launch_idle_timeout,
+                    state_dir=self._launch_state_dir,
+                )
+                with resolve_and_connect(
+                    VgiProtocol,  # type: ignore[type-abstract]
+                    config,
                     external_location=getattr(self, "_external_location", None),
                 ) as proxy:
                     yield proxy

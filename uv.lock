@@ -715,6 +715,15 @@ wheels = [
 ]
 
 [[package]]
+name = "filelock"
+version = "3.32.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/6d/30/03b03951873a1a0ffc7e8ca0e10c15597b59e8d0e39260704cd2ea087bc4/filelock-3.32.4.tar.gz", hash = "sha256:2bde2e4cf732e0153406d8a7bc80620ecf5e621fe0d25e41143c4e3b4733ff30", size = 222126, upload-time = "2026-08-23T17:37:55.363Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/01/a4/9b63d595d748e3aff8812b65eacc1a2c4bd90b7c2012e08e72373b4835eb/filelock-3.32.4-py3-none-any.whl", hash = "sha256:22e58ca3b1ae3b98993b762d7338367ae64fe50252bf78d59da3bfebcdf1cedd", size = 99864, upload-time = "2026-08-23T17:37:53.913Z" },
+]
+
+[[package]]
 name = "frozenlist"
 version = "1.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2560,7 +2569,7 @@ requires-dist = [
 
 [[package]]
 name = "vgi-python"
-version = "0.29.2"
+version = "0.29.4"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -2591,7 +2600,7 @@ dev = [
     { name = "pytest-xdist" },
     { name = "ruff" },
     { name = "sqlglot" },
-    { name = "vgi-rpc", extra = ["conformance", "external", "http", "oauth", "otel", "sentry"] },
+    { name = "vgi-rpc", extra = ["cli", "conformance", "external", "http", "oauth", "otel", "sentry"] },
 ]
 duckdb = [
     { name = "duckdb" },
@@ -2608,6 +2617,9 @@ haybarn = [
 ]
 http = [
     { name = "vgi-rpc", extra = ["http"] },
+]
+launch = [
+    { name = "vgi-rpc", extra = ["cli"] },
 ]
 oauth = [
     { name = "vgi-rpc", extra = ["oauth"] },
@@ -2672,17 +2684,18 @@ requires-dist = [
     { name = "typer", specifier = ">=0.9" },
     { name = "vgi-fixtures", marker = "extra == 'fixtures'", editable = "packages/vgi-fixtures" },
     { name = "vgi-python", extras = ["test-fixtures"], marker = "extra == 'test-fixtures-writable'" },
-    { name = "vgi-python", extras = ["test-fixtures", "test-fixtures-writable", "http", "oauth", "otel", "sentry", "azure"], marker = "extra == 'dev'" },
+    { name = "vgi-python", extras = ["test-fixtures", "test-fixtures-writable", "http", "launch", "oauth", "otel", "sentry", "azure"], marker = "extra == 'dev'" },
     { name = "vgi-python", extras = ["transactor"], marker = "extra == 'test-fixtures-writable'" },
-    { name = "vgi-rpc", specifier = ">=0.43.0" },
-    { name = "vgi-rpc", extras = ["conformance", "external", "http", "oauth", "otel", "sentry"], marker = "extra == 'dev'" },
+    { name = "vgi-rpc", specifier = ">=0.43.2" },
+    { name = "vgi-rpc", extras = ["cli"], marker = "extra == 'launch'" },
+    { name = "vgi-rpc", extras = ["cli", "conformance", "external", "http", "oauth", "otel", "sentry"], marker = "extra == 'dev'" },
     { name = "vgi-rpc", extras = ["http"], marker = "extra == 'granian'" },
     { name = "vgi-rpc", extras = ["http"], marker = "extra == 'http'" },
     { name = "vgi-rpc", extras = ["oauth"], marker = "extra == 'oauth'" },
     { name = "vgi-rpc", extras = ["otel"], marker = "extra == 'otel'" },
     { name = "vgi-rpc", extras = ["sentry"], marker = "extra == 'sentry'" },
 ]
-provides-extras = ["haybarn", "duckdb", "http", "granian", "oauth", "otel", "sentry", "azure", "test-fixtures", "transactor", "fixtures", "test-fixtures-writable", "dev"]
+provides-extras = ["haybarn", "duckdb", "http", "launch", "granian", "oauth", "otel", "sentry", "azure", "test-fixtures", "transactor", "fixtures", "test-fixtures-writable", "dev"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -2703,7 +2716,7 @@ docs = [
 
 [[package]]
 name = "vgi-rpc"
-version = "0.43.1"
+version = "0.43.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "docstring-parser" },
@@ -2711,12 +2724,17 @@ dependencies = [
     { name = "pywin32", marker = "sys_platform == 'win32'" },
     { name = "tzdata", marker = "sys_platform == 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/27/a0/b308cc62cde38fe2a7bc7a2c57bbb8e956084dd04134a4b0d805378daf16/vgi_rpc-0.43.1.tar.gz", hash = "sha256:d94a3c2cfcf90e1122b2b7ec23a47912f1b3e2d265267aa6704bd64c3a7f2a55", size = 1145519, upload-time = "2026-08-27T14:51:14.923Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ce/04/efb99f0fb56535bcba110e6c12448c31b429e0861aae4bc2f7136299cfc2/vgi_rpc-0.43.2.tar.gz", hash = "sha256:6a06437af17442451bfe07186bc472a2efb57e030b0e5b38a28922034a814123", size = 1147340, upload-time = "2026-08-27T18:33:54.608Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/96/f2/15bd8a76ee3534c4d911b0f76c948378db4c175a40ceeb30325e6ab994a6/vgi_rpc-0.43.1-py3-none-any.whl", hash = "sha256:1eecd6c17f06d6fadae332be33998d22cdd01e5caaaae7889b747f0c1eaac498", size = 526753, upload-time = "2026-08-27T14:51:12.975Z" },
+    { url = "https://files.pythonhosted.org/packages/ac/b9/33cdb4fe27ef3893e1cded63f396af8bc517e390615f34db6f4bd227ef4c/vgi_rpc-0.43.2-py3-none-any.whl", hash = "sha256:b112ab76828367176a41f1b9a4ceeaba8979629e4e5972f64bf769c94b3e36a4", size = 528134, upload-time = "2026-08-27T18:33:52.829Z" },
 ]
 
 [package.optional-dependencies]
+cli = [
+    { name = "filelock" },
+    { name = "httpx2" },
+    { name = "typer" },
+]
 conformance = [
     { name = "jsonschema" },
     { name = "psutil" },
