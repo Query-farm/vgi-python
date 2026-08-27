@@ -238,3 +238,45 @@ class TestBlendedArityAndVarargs:
 
         assert len(results) == 1
         assert results[0].column("row_sum").to_pylist() == [3.0, 5.0]
+
+
+class TestHasFinalizeSkip:
+    """`has_finalize=False` skips the FINALIZE `init()` entirely for a no-finalize function.
+
+    Real interop bug found live against a non-Python worker SDK: the client
+    unconditionally sent a FINALIZE-phase init() for every table-in-out call,
+    which the Python fixture worker happens to no-op gracefully but a
+    TypeScript-SDK worker rejects outright ("a blended row-transform function
+    has no FINALIZE phase"). `has_finalize=False` avoids sending that init()
+    at all rather than depending on every SDK tolerating an unexpected one.
+    Output must be identical either way for a function that has no finalize
+    stage (there is nothing to skip yielding) -- this is the equivalence this
+    suite can prove locally; the cross-SDK rejection itself is TypeScript-only.
+    """
+
+    def test_output_identical_with_and_without_has_finalize(self, client_transport: Any) -> None:
+        """Same output whether the FINALIZE init() is sent or skipped, both transports."""
+        input_schema = make_schema([pa.field("n", pa.int64())])
+        batch = pa.RecordBatch.from_pydict({"n": [0, 1, 3, 2]}, schema=input_schema)
+
+        with client_transport() as client:
+            with_finalize = list(
+                client.table_in_out_function(
+                    function_name="blended_explode",
+                    schema_name="main",
+                    input=iter([batch]),
+                )
+            )
+        with client_transport() as client:
+            without_finalize = list(
+                client.table_in_out_function(
+                    function_name="blended_explode",
+                    schema_name="main",
+                    input=iter([batch]),
+                    has_finalize=False,
+                )
+            )
+
+        assert len(with_finalize) == 1
+        assert len(without_finalize) == 1
+        assert with_finalize[0].column("i").to_pylist() == without_finalize[0].column("i").to_pylist()

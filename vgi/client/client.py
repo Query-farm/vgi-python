@@ -1915,6 +1915,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         settings: dict[str, Any] | None = None,
         transaction_opaque_data: bytes | None = None,
         parent_row_callback: Callable[[list[int]], None] | None = None,
+        has_finalize: bool = True,
     ) -> Generator[pa.RecordBatch]:
         """Invoke a table-in-out function on the worker and stream results.
 
@@ -1956,6 +1957,20 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 `FunctionInfo.input_from_args`); leave unset for ordinary
                 table-in-out functions, which have no provenance concept and
                 may legitimately change row count.
+            has_finalize: Whether this function declares a FINALIZE stage
+                (`FunctionInfo.has_finalize`). Defaults to `True` — every
+                caller before this parameter existed got a FINALIZE-phase
+                `init()` unconditionally, so this preserves that exactly.
+                Pass `False` for a function known to have no finalize (every
+                blended `RowTransformFunction` — `has_finalize` is always
+                false for those, enforced at `resolve_metadata()`) to skip
+                the FINALIZE `init()` entirely, not just send one expecting
+                an empty reply. Confirmed load-bearing, not cosmetic: some
+                worker SDKs (e.g. the TypeScript one) actively reject an
+                unexpected FINALIZE `init()` for a function that never
+                advertised `has_finalize`, rather than silently no-op'ing
+                it — the C++ DuckDB extension avoids this the same way, by
+                conditionally registering `in_out_function_final` at all.
 
         Yields:
             Output `RecordBatch`es from the function. In single-worker mode, output
@@ -2019,7 +2034,14 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 # Close secondary workers
                 self._close_secondary_workers()
 
-                # Finalize on primary worker
+                # Finalize on primary worker — skipped entirely (not just
+                # sent expecting an empty reply) when the function has no
+                # finalize stage. See has_finalize's docstring: some worker
+                # SDKs reject an unadvertised FINALIZE init() outright.
+                if not has_finalize:
+                    _logger.debug("skipping_finalize_no_finalize_stage")
+                    return
+
                 _logger.debug("finalizing_primary_worker")
                 yield from self._finalize_primary_worker(
                     bind_request,
