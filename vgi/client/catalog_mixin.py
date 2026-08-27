@@ -59,6 +59,8 @@ from vgi.catalog import (
     MacroInfo,
     MacroType,
     OnConflict,
+    ScanBranch,
+    ScanBranchesResult,
     ScanFunctionResult,
     SchemaInfo,
     SchemaObjectType,
@@ -603,6 +605,8 @@ class CatalogClientMixin:
         transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_name: str,
         name: str,
+        at_unit: str | None = None,
+        at_value: str | None = None,
     ) -> TableInfo | None:
         """Get information about a table.
 
@@ -611,6 +615,10 @@ class CatalogClientMixin:
             transaction_opaque_data: Optional transaction ID for transactional reads.
             schema_name: The schema containing the table.
             name: The table name.
+            at_unit: Optional time travel unit (e.g. 'timestamp', 'version') —
+                the schema at a past point may differ from the live one.
+                `None` for the live schema.
+            at_value: Optional time travel value, paired with `at_unit`.
 
         Returns:
             [`TableInfo`][] for the table, or None if not found.
@@ -621,6 +629,8 @@ class CatalogClientMixin:
                 attach_opaque_data=attach_opaque_data,
                 schema_name=schema_name,
                 name=name,
+                at_unit=at_unit,
+                at_value=at_value,
                 transaction_opaque_data=transaction_opaque_data,
             ).to_optional()
 
@@ -773,6 +783,82 @@ class CatalogClientMixin:
             )
             batch, _ = deserialize_record_batch(result_bytes)
             return ScanFunctionResult.deserialize(batch)
+
+    def table_scan_branches_get(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+        schema_name: str,
+        name: str,
+        at_unit: str | None = None,
+        at_value: str | None = None,
+    ) -> ScanBranchesResult:
+        """Get the list of scan branches for a (possibly multi-source) table.
+
+        Multi-branch tables compose a logical scan from N physical sources
+        (canonical case: Kafka hot tier + Iceberg cold tier). The VGI DuckDB
+        extension's optimizer rewrites the placeholder scan into
+        ``LogicalSetOperation(UNION_ALL, ...)``, one arm per branch — a
+        caller of this method is expected to do the equivalent (e.g.
+        `pl.concat` over one scan per branch in vgi-polars).
+
+        Falls back to :meth:`table_scan_function_get`, wrapped as a
+        single-branch `ScanBranchesResult`, when the worker raises
+        `MethodNotImplementedError` for the additive `catalog_table_scan_
+        branches_get` RPC — mirroring exactly how the C++ extension reads
+        that same fallback, so a worker written before this RPC existed
+        still works, just as a one-branch table.
+
+        Args:
+            attach_opaque_data: The attachment ID from catalog_attach.
+            transaction_opaque_data: Optional transaction ID for transactional reads.
+            schema_name: The schema containing the table.
+            name: The table name.
+            at_unit: Optional time travel unit (e.g., 'timestamp', 'version').
+                The C++ extension refuses `AT(...)` on tables with more than
+                one branch at bind time — a worker returning multiple
+                branches should expect this to always be `None`.
+            at_value: Optional time travel value.
+
+        Returns:
+            `ScanBranchesResult` with one or more `ScanBranch` entries plus
+            the union of required DuckDB extensions across all branches.
+
+        """
+        with self._catalog_connect() as proxy:
+            try:
+                result_bytes = proxy.catalog_table_scan_branches_get(
+                    attach_opaque_data=attach_opaque_data,
+                    schema_name=schema_name,
+                    name=name,
+                    at_unit=at_unit,
+                    at_value=at_value,
+                    transaction_opaque_data=transaction_opaque_data,
+                )
+            except RpcError as e:
+                if "MethodNotImplemented" not in type(e).__name__ and "not implemented" not in str(e).lower():
+                    raise
+                scan_fn = self.table_scan_function_get(
+                    attach_opaque_data=attach_opaque_data,
+                    transaction_opaque_data=transaction_opaque_data,
+                    schema_name=schema_name,
+                    name=name,
+                    at_unit=at_unit,
+                    at_value=at_value,
+                )
+                return ScanBranchesResult(
+                    branches=[
+                        ScanBranch(
+                            function_name=scan_fn.function_name,
+                            positional_arguments=list(scan_fn.positional_arguments),
+                            named_arguments=dict(scan_fn.named_arguments),
+                        )
+                    ],
+                    required_extensions=list(scan_fn.required_extensions),
+                )
+            batch, _ = deserialize_record_batch(result_bytes)
+            return ScanBranchesResult.deserialize(batch)
 
     def table_comment_set(
         self,

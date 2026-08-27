@@ -1089,6 +1089,8 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         transaction_opaque_data: bytes | None = None,
         copy_from: CopyFromContext | None = None,
         copy_to: CopyToContext | None = None,
+        at_unit: str | None = None,
+        at_value: str | None = None,
     ) -> BindRequest:
         """Create a BindRequest for the given function parameters."""
         return BindRequest(
@@ -1103,6 +1105,8 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             transaction_opaque_data=transaction_opaque_data,
             copy_from=copy_from,
             copy_to=copy_to,
+            at_unit=at_unit,
+            at_value=at_value,
         )
 
     @staticmethod
@@ -1213,6 +1217,8 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         split_tokens: list[bytes] | None = None,
         split_execution_id: bytes | None = None,
         split_init_opaque_data: bytes | None = None,
+        at_unit: str | None = None,
+        at_value: str | None = None,
     ) -> tuple[BindRequest, BindResponse, GlobalInitResponse]:
         """Run the canonical bind → init → fan-out-workers sequence.
 
@@ -1262,6 +1268,8 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             secrets=secrets,
             transaction_opaque_data=transaction_opaque_data,
             copy_from=copy_from,
+            at_unit=at_unit,
+            at_value=at_value,
         )
         bind_response = self._do_bind(self._primary.proxy, bind_request, bind_result_callback)
 
@@ -2181,6 +2189,9 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         split_tokens: list[bytes] | None = None,
         split_execution_id: bytes | None = None,
         split_init_opaque_data: bytes | None = None,
+        batch_metadata_callback: Callable[[pa.KeyValueMetadata | None], None] | None = None,
+        at_unit: str | None = None,
+        at_value: str | None = None,
     ) -> Generator[pa.RecordBatch]:
         """Invoke a table function (source function) and stream output batches.
 
@@ -2228,6 +2239,22 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 whole-scan init.
             split_init_opaque_data: When redeeming a split, the originating
                 ``PlanResponse.init_opaque_data``, echoed the same way.
+            batch_metadata_callback: Optional callback invoked once per yielded
+                batch, before it's yielded, with that batch's ``custom_metadata``
+                (``None`` if it carried none) — e.g. a worker's ``vgi.cache.*``
+                cacheability advertisement (``vgi/cache_control.py``), which
+                rides ``AnnotatedBatch.custom_metadata`` and is otherwise
+                unreachable through this generator's plain ``pa.RecordBatch``
+                yields. Invoked serially from the generator's own consumption
+                loop (even in parallel mode, where multiple worker threads
+                feed one shared queue) — never concurrently with itself.
+            at_unit: Optional time travel unit (e.g. 'timestamp', 'version') —
+                scan the table as of a past point rather than live. `None`
+                for a live scan. Threaded straight into `BindRequest.at_unit`
+                (the wire protocol has always carried this field; a worker
+                that doesn't support time travel on this function rejects it
+                at bind, the same as any other unsupported bind option).
+            at_value: Optional time travel value, paired with `at_unit`.
 
         Yields:
             Output `RecordBatch`es from the function. In parallel mode
@@ -2265,10 +2292,12 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 split_tokens=split_tokens,
                 split_execution_id=split_execution_id,
                 split_init_opaque_data=split_init_opaque_data,
+                at_unit=at_unit,
+                at_value=at_value,
             )
 
             # Read output from all workers in parallel
-            yield from self._table_function_parallel()
+            yield from self._table_function_parallel(batch_metadata_callback=batch_metadata_callback)
         except ClientError as e:
             raise self._client_error_with_stderr(e) from e.__cause__
 
@@ -2423,12 +2452,23 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         except ClientError as e:
             raise self._client_error_with_stderr(e) from e.__cause__
 
-    def _table_function_parallel(self) -> Generator[pa.RecordBatch]:
+    def _table_function_parallel(
+        self,
+        *,
+        batch_metadata_callback: Callable[[pa.KeyValueMetadata | None], None] | None = None,
+    ) -> Generator[pa.RecordBatch]:
         """Read output from table function workers using parallel threads.
 
         Handles both single-worker and multi-worker cases uniformly. For each
         worker, spawns a dedicated thread that reads output batches and pushes
         them to a shared output queue.
+
+        Args:
+            batch_metadata_callback: Optional callback invoked once per yielded
+                batch, before it's yielded, with that batch's `custom_metadata`
+                (`None` if it carried none) — e.g. `vgi.cache.*` cacheability
+                metadata (`vgi/cache_control.py`), otherwise unreachable through
+                this generator's plain `pa.RecordBatch` yields.
 
         Yields:
             Output `RecordBatch`es from all workers in non-deterministic order.
@@ -2443,8 +2483,10 @@ class Client(CatalogClientMixin, AggregateClientMixin):
 
         _logger.debug("starting_parallel_table_function num_workers=%s", num_workers)
 
-        # Queue for collecting output from all workers
-        output_queue: Queue[pa.RecordBatch | BaseException | None] = Queue()
+        # Queue for collecting output from all workers. Carries the full
+        # AnnotatedBatch (not just .batch) so custom_metadata survives the
+        # cross-thread handoff for batch_metadata_callback below.
+        output_queue: Queue[AnnotatedBatch | BaseException | None] = Queue()
 
         def read_worker_output(worker: WorkerConnection) -> None:
             """Thread function that reads all output from a single worker."""
@@ -2460,7 +2502,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                         output.batch.num_rows,
                     )
                     if output.batch.num_rows > 0:
-                        output_queue.put(output.batch)
+                        output_queue.put(output)
 
                 output_queue.put(None)  # Signal completion
             except StopIteration:
@@ -2501,7 +2543,9 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 )
                 continue
 
-            yield result
+            if batch_metadata_callback is not None:
+                batch_metadata_callback(result.custom_metadata)
+            yield result.batch
 
         self._join_threads(threads)
         _logger.debug("all_table_function_workers_complete")
