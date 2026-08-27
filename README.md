@@ -1,15 +1,19 @@
-# VGI (Vector Gateway Interface)
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Query-farm/vgi-python/main/docs/vgi-logo.png?v=2" alt="Vector Gateway Interface logo" width="320">
+</p>
+
+<h1 align="center">VGI</h1>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Query-farm/vgi-python/main/docs/vgi-logo.png" alt="VGI Logo" width="480">
+  Apache Arrow-based protocol for extending DuckDB using any language — the Python reference implementation.<br>
+  Built by <a href="https://query.farm">🚜 Query.Farm</a>
 </p>
 
 <p align="center">
-  <strong>Apache Arrow-based protocol for extending DuckDB using any language.</strong>
-</p>
-
-<p align="center">
-  Created by <a href="https://query.farm">Query.Farm</a>
+  <a href="https://github.com/Query-farm/vgi-python/actions/workflows/ci.yml"><img src="https://github.com/Query-farm/vgi-python/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://pypi.org/project/vgi-python/"><img src="https://img.shields.io/pypi/v/vgi-python" alt="PyPI"></a>
+  <a href="https://pypi.org/project/vgi-python/"><img src="https://img.shields.io/pypi/pyversions/vgi-python" alt="Python versions"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/pypi/l/vgi-python" alt="License"></a>
 </p>
 
 ---
