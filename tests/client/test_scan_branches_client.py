@@ -60,8 +60,11 @@ def test_single_branch_table_falls_back_to_legacy_rpc(client: Any) -> None:
         name="numbers",
     )
     assert len(result.branches) == 1
-    assert result.branches[0].function_name == client.table_scan_function_get(
-        attach_opaque_data=_attach_opaque(client),
-        schema_name=DATA,
-        name="numbers",
-    ).function_name
+    assert (
+        result.branches[0].function_name
+        == client.table_scan_function_get(
+            attach_opaque_data=_attach_opaque(client),
+            schema_name=DATA,
+            name="numbers",
+        ).function_name
+    )

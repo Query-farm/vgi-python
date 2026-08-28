@@ -513,7 +513,7 @@ def main() -> None:
         "--exception-include",
         default='"duckdb/common/exception.hpp"',
         help=(
-            "#include directive (with its own <> or \"\") for the exception "
+            '#include directive (with its own <> or "") for the exception '
             "type named by --exception-type (default: "
             '"duckdb/common/exception.hpp"). E.g. <stdexcept> for '
             "std::runtime_error."
