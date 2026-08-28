@@ -69,7 +69,7 @@ def test_callback_sees_none_for_a_batch_without_custom_metadata(client: Any) -> 
         client.table_function(
             function_name="sequence",
             schema_name="main",
-            arguments=Arguments(positional=[pa.scalar(4)]),
+            arguments=Arguments(positional=(pa.scalar(4),)),
             batch_metadata_callback=metas.append,
         )
     )

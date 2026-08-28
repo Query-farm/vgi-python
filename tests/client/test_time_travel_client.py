@@ -79,7 +79,7 @@ def test_table_function_with_no_at_clause_is_unaffected(client: Any) -> None:
     """The new `at_unit`/`at_value` params default to `None` — unchanged behavior without them."""
     batches = list(
         client.table_function(
-            function_name="sequence", schema_name="main", arguments=Arguments(positional=[pa.scalar(5)])
+            function_name="sequence", schema_name="main", arguments=Arguments(positional=(pa.scalar(5),))
         )
     )
     assert sum(b.num_rows for b in batches) == 5
