@@ -424,6 +424,11 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         tcp_host: str | None = None,
         tcp_port: int | None = None,
         bearer_token: str | None = None,
+        oauth: bool = False,
+        oauth_refresh_token: str | None = None,
+        oauth_flow: Literal["auto", "device_code", "pkce"] = "auto",
+        oauth_timeout_seconds: float = 120.0,
+        oauth_prompt: Literal["none", "login", "select_account", "consent"] = "none",
         httpx_client: Any | None = None,
         external_location: Any | None = None,
         launch_argv: Sequence[str] | None = None,
@@ -472,12 +477,38 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 ``"http://127.0.0.1:8765"``.
             tcp_host: TCP-only. Hostname or IP of the running worker.
             tcp_port: TCP-only. Port of the running worker.
-            bearer_token: HTTP-only. When set, every request carries an
-                ``Authorization: Bearer <token>`` header. Static token
-                support only — no JWT / OAuth flows.
+            bearer_token: HTTP-only. When set, every request carries a
+                static ``Authorization: Bearer <token>`` header. Mutually
+                exclusive with ``oauth``/``oauth_refresh_token`` — for a
+                token that expires or needs a login flow, use those instead.
+            oauth: HTTP-only. When True, obtain and refresh bearer tokens
+                automatically via OAuth (device-code today; PKCE is not yet
+                implemented — see ``oauth_flow``) whenever the worker
+                answers 401 with an RFC 9728 challenge. Implied by passing
+                ``oauth_refresh_token``. The first call blocks and prints a
+                "Visit: ... Enter code: ..." prompt until login completes;
+                later calls reuse the cached token and refresh it silently.
+                See ``vgi_rpc.http.VgiOAuthAuth`` for the full mechanism
+                (RFC 8628 device-code polling, RFC 8414/9728 discovery,
+                silent refresh, the secret-less-proxy ``token_endpoint``
+                override).
+            oauth_refresh_token: HTTP-only. Pre-obtained refresh token,
+                seeded so the first request can silently refresh instead of
+                running an interactive login. Implies ``oauth=True``.
+                Mutually exclusive with ``bearer_token``.
+            oauth_flow: HTTP-only, OAuth-only. ``"auto"`` (default) picks
+                device-code when the server offers it; ``"device_code"``
+                forces it; ``"pkce"`` is not yet implemented and raises
+                ``NotImplementedError`` when actually needed.
+            oauth_timeout_seconds: HTTP-only, OAuth-only. How long an
+                interactive login may take before giving up (further capped
+                by the authorization server's own device-code expiry).
+            oauth_prompt: HTTP-only, OAuth-only. Reserved for the PKCE flow
+                (not yet implemented); has no effect on device-code logins.
             httpx_client: HTTP-only escape hatch. When provided, overrides
-                ``bearer_token`` and is used verbatim; supply this when you
-                need mTLS or a custom auth scheme. Not the canonical path.
+                ``bearer_token``/``oauth``/``oauth_refresh_token`` and is
+                used verbatim; supply this when you need mTLS or a custom
+                auth scheme. Not the canonical path.
             external_location: HTTP-only. ``ExternalLocationConfig`` that
                 controls how the client fetches pointer batches (workers
                 that externalize large outputs via demo storage / S3 return
@@ -535,12 +566,36 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         else:
             raise ValueError(f"unknown transport {transport!r}")
 
+        use_oauth = oauth or oauth_refresh_token is not None
+        if use_oauth and bearer_token is not None:
+            raise ValueError("bearer_token is mutually exclusive with oauth/oauth_refresh_token")
+        if use_oauth and httpx_client is not None:
+            raise ValueError(
+                "oauth/oauth_refresh_token is mutually exclusive with httpx_client "
+                "(the escape hatch is verbatim-or-nothing — build your own VgiOAuthAuth "
+                "and pass it as httpx_client=httpx2.Client(auth=...) instead)"
+            )
+        if oauth_flow not in ("auto", "device_code", "pkce"):
+            raise ValueError(f"oauth_flow must be 'auto', 'device_code', or 'pkce', got {oauth_flow!r}")
+        if oauth_prompt not in ("none", "login", "select_account", "consent"):
+            raise ValueError(
+                f"oauth_prompt must be 'none', 'login', 'select_account', or 'consent', got {oauth_prompt!r}"
+            )
+
         self.server_path: str | Sequence[str] = server_path if server_path is not None else ""
         self._transport = transport
         self._base_url = base_url
         self._tcp_host = tcp_host
         self._tcp_port = tcp_port
         self._bearer_token = bearer_token
+        self._use_oauth = use_oauth
+        self._oauth_refresh_token = oauth_refresh_token
+        self._oauth_flow = oauth_flow
+        self._oauth_timeout_seconds = oauth_timeout_seconds
+        self._oauth_prompt = oauth_prompt
+        # Built lazily by _get_or_create_httpx_client when self._use_oauth; None otherwise
+        # (including when the caller supplied httpx_client= directly, which owns its own auth).
+        self._oauth_auth: Any | None = None
         self._httpx_client = httpx_client
         self._launch_argv = tuple(launch_argv) if launch_argv is not None else None
         self._launch_idle_timeout = launch_idle_timeout
@@ -581,6 +636,11 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         base_url: str,
         *,
         bearer_token: str | None = None,
+        oauth: bool = False,
+        oauth_refresh_token: str | None = None,
+        oauth_flow: Literal["auto", "device_code", "pkce"] = "auto",
+        oauth_timeout_seconds: float = 120.0,
+        oauth_prompt: Literal["none", "login", "select_account", "consent"] = "none",
         httpx_client: Any | None = None,
         external_location: Any | None = None,
         worker_limit: int | None = None,
@@ -590,12 +650,18 @@ class Client(CatalogClientMixin, AggregateClientMixin):
 
         Canonical entry point for non-DuckDB callers (e.g. a TypeScript port
         browsing catalog contents). Subprocess-specific kwargs are not
-        accepted; pool/stderr semantics do not apply.
+        accepted; pool/stderr semantics do not apply. See `[`Client.__init__`][]`
+        for what ``oauth``/``oauth_refresh_token``/``oauth_flow`` do.
         """
         return cls(
             transport="http",
             base_url=base_url,
             bearer_token=bearer_token,
+            oauth=oauth,
+            oauth_refresh_token=oauth_refresh_token,
+            oauth_flow=oauth_flow,
+            oauth_timeout_seconds=oauth_timeout_seconds,
+            oauth_prompt=oauth_prompt,
             httpx_client=httpx_client,
             external_location=external_location,
             worker_limit=worker_limit,
@@ -882,29 +948,58 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         """Return the shared httpx2.Client for this Client's HTTP transport.
 
         Lazily constructs one bound to ``self._base_url`` (so RPC requests
-        resolve against the remote worker) with an ``Authorization: Bearer
-        <token>`` header when ``bearer_token`` was supplied. When the
-        caller passes ``httpx_client=`` directly, they're responsible for
-        configuring ``base_url`` and auth on it — we use it verbatim.
+        resolve against the remote worker) with either a static
+        ``Authorization: Bearer <token>`` header (``bearer_token``) or a
+        ``VgiOAuthAuth`` (``oauth``/``oauth_refresh_token``) that obtains and
+        refreshes tokens on demand — never both, enforced at construction.
+        When the caller passes ``httpx_client=`` directly, they're
+        responsible for configuring ``base_url`` and auth on it — we use it
+        verbatim.
         """
         if self._httpx_client is not None:
             return self._httpx_client
 
         import httpx2
 
+        auth = None
         headers: dict[str, str] = {}
-        if self._bearer_token is not None:
+        if self._use_oauth:
+            from vgi_rpc.http import VgiOAuthAuth
+
+            self._oauth_auth = VgiOAuthAuth(
+                base_url=self._base_url or "",
+                flow=self._oauth_flow,
+                refresh_token=self._oauth_refresh_token,
+                timeout_seconds=self._oauth_timeout_seconds,
+                prompt=self._oauth_prompt,
+            )
+            auth = self._oauth_auth
+        elif self._bearer_token is not None:
             headers["Authorization"] = f"Bearer {self._bearer_token}"
         self._httpx_client = httpx2.Client(
             base_url=self._base_url or "",
             follow_redirects=True,
             headers=headers,
+            auth=auth,
             # httpx2's 5s default read timeout is too aggressive for RPC
             # calls that do real server-side work (scans, cold workers).
             timeout=httpx2.Timeout(60.0, connect=10.0),
         )
         self._httpx_client_owned = True
         return self._httpx_client
+
+    def oauth_identity(self) -> Any | None:
+        """Return the signed-in OAuth identity's parsed id_token claims.
+
+        Returns ``None`` when this client isn't using OAuth, or hasn't
+        completed a login yet (the identity is only known once a real
+        exchange has happened — calling this before the first request
+        never triggers one). See ``vgi_rpc.http.OAuthIdentity`` for the
+        fields (``sub``/``email``/``name``/``issuer``/``claims``).
+        """
+        if self._oauth_auth is None:
+            return None
+        return self._oauth_auth.identity()
 
     def _spawn_subprocess_connection(self, worker_index: int) -> WorkerConnection:
         """Spawn or borrow a subprocess worker and wrap it in an RPC proxy.
@@ -1214,6 +1309,12 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             finally:
                 self._httpx_client = None
                 self._httpx_client_owned = False
+        # Close VgiOAuthAuth's own internal (unauthenticated) flow client, if one was built.
+        if self._oauth_auth is not None:
+            try:
+                self._oauth_auth.close()
+            finally:
+                self._oauth_auth = None
 
         return returncode
 
