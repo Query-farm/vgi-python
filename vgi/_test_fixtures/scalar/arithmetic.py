@@ -37,6 +37,10 @@ class MultiplyFunction(ScalarFunction):
 
         name = "multiply"
         description = "Multiplies a value by a constant factor"
+        # Meta.comment fixture: a short operator-facing note distinct from
+        # `description` — exercised by test_multiply_function_comment and
+        # the C++ integration test function_arguments.test.
+        comment = "fixture function for scalar bind-parameter tests"
         examples = [
             FunctionExample(
                 sql="SELECT multiply(price, 2) FROM products",

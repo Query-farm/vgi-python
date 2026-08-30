@@ -64,6 +64,32 @@ class TestResolveMetadata:
         assert meta.categories == ["transform", "utility"]
         assert meta.max_workers == 4
 
+    def test_comment_defaults_to_none(self) -> None:
+        """Meta.comment is unset by default -- unlike description, no docstring fallback."""
+
+        class UndocumentedCommentFunction(TableInOutFunction):  # type: ignore[type-arg]
+            """A function with only a docstring, no Meta.comment."""
+
+            data: TableInput = Arg[TableInput](0, doc="Input table")  # type: ignore[assignment]
+
+        meta = UndocumentedCommentFunction.get_metadata()
+        assert meta.comment is None
+
+    def test_function_with_comment(self) -> None:
+        """Meta.comment is a short operator-facing note, distinct from description."""
+
+        class DeprecatedFunction(TableInOutFunction):  # type: ignore[type-arg]
+            class Meta:
+                name = "deprecated_func"
+                description = "Does the thing"
+                comment = "deprecated, use deprecated_func_v2 instead"
+
+            data: TableInput = Arg[TableInput](0, doc="Input table")  # type: ignore[assignment]
+
+        meta = DeprecatedFunction.get_metadata()
+        assert meta.description == "Does the thing"
+        assert meta.comment == "deprecated, use deprecated_func_v2 instead"
+
     def test_name_auto_generation(self) -> None:
         """Function name is auto-generated from class name."""
 
@@ -727,3 +753,45 @@ class TestFunctionTags:
         }
         # Structured examples are carried separately from the tag-encoded ones.
         assert [ex.sql for ex in info.examples] == ["SELECT * FROM dynamic_table()"]
+
+    def test_comment_flows_into_function_info(self) -> None:
+        """Meta.comment reaches FunctionInfo.comment (the field every other catalog object already has)."""
+        from vgi.catalog.catalog_interface import (
+            FunctionInfo,
+            ReadOnlyCatalogInterface,
+        )
+        from vgi.table_function import ProcessParams, TableFunctionGenerator
+
+        class CommentedTable(TableFunctionGenerator):  # type: ignore[type-arg]
+            class Meta:
+                name = "commented_table"
+                comment = "internal — do not call directly"
+
+            FIXED_SCHEMA = pa.schema([pa.field("id", pa.int64())])
+
+            @classmethod
+            def process(cls, params: ProcessParams[Any], state: None, out: OutputCollector) -> None:
+                out.emit(pa.record_batch({"id": [1]}))
+                out.finish()
+
+        class UncommentedTable(TableFunctionGenerator):  # type: ignore[type-arg]
+            class Meta:
+                name = "uncommented_table"
+
+            FIXED_SCHEMA = pa.schema([pa.field("id", pa.int64())])
+
+            @classmethod
+            def process(cls, params: ProcessParams[Any], state: None, out: OutputCollector) -> None:
+                out.emit(pa.record_batch({"id": [1]}))
+                out.finish()
+
+        class Cat(ReadOnlyCatalogInterface):
+            catalog_name = "functions"
+            functions = [CommentedTable, UncommentedTable]
+
+        commented_info = Cat()._function_to_info(CommentedTable, "main")
+        assert isinstance(commented_info, FunctionInfo)
+        assert commented_info.comment == "internal — do not call directly"
+
+        uncommented_info = Cat()._function_to_info(UncommentedTable, "main")
+        assert uncommented_info.comment is None

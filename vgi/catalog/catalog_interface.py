@@ -649,8 +649,11 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
         null_handling: Scalar function behavior field (None for non-scalar
             functions).
         description: Intrinsic documentation from function metadata
-            (``Meta.description``). The user-settable ``comment`` (via COMMENT ON
-            FUNCTION) is inherited from the base object.
+            (``Meta.description``). ``comment`` (inherited from the base
+            object) is a separate, shorter operator-facing note from
+            ``Meta.comment`` — e.g. "deprecated, use v2". Both are static:
+            there is no ``COMMENT ON FUNCTION`` RPC, unlike tables/views,
+            whose ``comment`` is dynamically settable.
         examples: Usage examples for the function.
         categories: Category labels for the function.
         projection_pushdown: Table-function capability (None for scalar
@@ -3389,7 +3392,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             function_type=func_type,
             arguments=args_bytes,
             output_schema=output_bytes,
-            comment=None,  # Functions don't use comment; use description instead
+            comment=meta.comment,  # Static, Meta-declared only — see Meta.comment
             tags=meta.tags,
             # Scalar/aggregate function behavior fields
             stability=meta.stability if is_scalar else None,

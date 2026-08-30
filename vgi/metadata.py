@@ -360,6 +360,12 @@ class ResolvedMetadata:
         function_type: The [`CatalogFunctionType`][] (scalar, table, aggregate,
             or table-buffering).
         description: Human-readable description of the function.
+        comment: Short operator-facing note (e.g. "deprecated, use v2" or
+            "internal — do not call directly"), distinct from `description`'s
+            intrinsic documentation. Mirrors the `comment` every other catalog
+            object (table/view/schema) already carries — functions only had
+            `description` until now. Static (Meta-declared) only; there is no
+            `COMMENT ON FUNCTION` RPC to change it at runtime.
         examples: SQL usage examples for the function.
         categories: Classification/category labels.
         tags: Free-form key/value metadata tags.
@@ -430,6 +436,7 @@ class ResolvedMetadata:
 
     # Documentation
     description: str = ""
+    comment: str | None = None
     examples: list[FunctionExample] = field(default_factory=list)
     categories: list[str] = field(default_factory=list)
     tags: dict[str, str] = field(default_factory=dict)
@@ -518,6 +525,7 @@ class ResolvedMetadata:
             "class_name": self.class_name,
             "function_type": self.function_type.name,
             "description": self.description,
+            "comment": self.comment,
             "examples": [ex.to_dict() for ex in self.examples],
             "categories": self.categories,
             "tags": self.tags,
@@ -558,6 +566,7 @@ class ResolvedMetadata:
             class_name=d["class_name"],
             function_type=CatalogFunctionType[d["function_type"]],
             description=d.get("description", ""),
+            comment=d.get("comment"),
             examples=[FunctionExample.from_dict(ex) for ex in d.get("examples", [])],
             categories=d.get("categories", []),
             tags=dict(d.get("tags", {})),
@@ -962,6 +971,7 @@ _VALID_META_ATTRIBUTES: frozenset[str] = frozenset(
         # Common
         "name",
         "description",
+        "comment",
         "examples",
         "categories",
         "tags",
@@ -1135,6 +1145,10 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
     if not description and cls.__doc__:
         description = cls.__doc__.strip().split("\n")[0]
 
+    # comment has no docstring fallback (unlike description) — it's a
+    # deliberate operator-facing opt-in, not something to infer.
+    comment = attrs.get("comment")
+
     # Normalize examples
     examples = _normalize_examples(attrs.get("examples", []))
 
@@ -1223,6 +1237,7 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         class_name=class_name,
         function_type=function_type,
         description=description,
+        comment=comment,
         examples=examples,
         categories=attrs.get("categories", []),
         tags=dict(attrs.get("tags", {})),
@@ -1399,6 +1414,7 @@ _METADATA_SCHEMA = pa.schema(
         pa.field("class_name", pa.string()),
         pa.field("function_type", pa.string()),
         pa.field("description", pa.string()),
+        pa.field("comment", pa.string(), nullable=True),
         pa.field("examples", pa.list_(_EXAMPLE_STRUCT)),
         pa.field("categories", pa.list_(pa.string())),
         pa.field("tags", pa.map_(pa.string(), pa.string())),
