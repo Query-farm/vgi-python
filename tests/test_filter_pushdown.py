@@ -697,6 +697,73 @@ class TestEmptyAndOrEvaluate:
 
 
 # =============================================================================
+# TestKleeneLogicWithNulls
+# =============================================================================
+
+
+class TestKleeneLogicWithNulls:
+    """Regression: AND/OR must use Kleene (three-valued) logic, not pc.and_/pc.or_.
+
+    Confirmed live before this fix: ``pc.or_(NULL, True) == NULL``, and
+    ``pc.filter`` treats NULL the same as False, so a row genuinely matching
+    ``(x > 5) OR (y IS NULL)`` -- x IS NULL (making ``x > 5`` unknown/NULL)
+    and y IS NULL (making ``y IS NULL`` True) -- was silently dropped
+    (``NULL OR True`` evaluated to ``NULL``/dropped instead of the correct
+    ``True``/pass). There is no downstream re-check that can rescue a row a
+    server-side ``evaluate()`` call already excluded, so getting this right
+    here is load-bearing, not cosmetic.
+    """
+
+    def test_or_true_sibling_rescues_a_null_child(self) -> None:
+        """`(x > 5) OR (y IS NULL)`: NULL OR True must be True, not dropped."""
+        # row 0: x=None (x>5 -> NULL), y=None (y IS NULL -> True)  => NULL OR True  => True
+        # row 1: x=None (x>5 -> NULL), y=1    (y IS NULL -> False) => NULL OR False => NULL (still unknown)
+        # row 2: x=10   (x>5 -> True), y=1    (y IS NULL -> False) => True OR False => True
+        batch = _batch(("x", [None, None, 10]), ("y", [None, 1, 1]))
+        x_gt_5 = _const("x", 0, ComparisonOp.GT, 5)
+        y_is_null = IsNullFilter(column_name="y", column_index=1)
+        f = OrFilter(column_name="x", column_index=0, children=(x_gt_5, y_is_null))
+        assert f.evaluate(batch).to_pylist() == [True, None, True]
+
+    def test_or_two_unknown_children_stays_unknown(self) -> None:
+        """Both operands unknown (NULL) -- the result must stay unknown, not become True."""
+        batch = _batch(("x", pa.array([None], type=pa.int64())), ("y", pa.array([None], type=pa.int64())))
+        x_gt_5 = _const("x", 0, ComparisonOp.GT, 5)
+        y_gt_5 = _const("y", 1, ComparisonOp.GT, 5)
+        f = OrFilter(column_name="x", column_index=0, children=(x_gt_5, y_gt_5))
+        assert f.evaluate(batch).to_pylist() == [None]
+
+    def test_and_false_sibling_forces_false_despite_a_null_child(self) -> None:
+        """`FALSE AND NULL` must be False (Kleene), not NULL, even though pc.filter can't tell the difference."""
+        batch = _batch(("x", [1]), ("y", pa.array([None], type=pa.int64())))
+        x_eq_2 = _const("x", 0, ComparisonOp.EQ, 2)  # False for x=1
+        y_gt_5 = _const("y", 1, ComparisonOp.GT, 5)  # NULL for y=None
+        f = AndFilter(column_name="x", column_index=0, children=(x_eq_2, y_gt_5))
+        assert f.evaluate(batch).to_pylist() == [False]
+
+    def test_and_two_unknown_children_stays_unknown(self) -> None:
+        """Both operands unknown (NULL) -- the result must stay unknown, not become False."""
+        batch = _batch(("x", pa.array([None], type=pa.int64())), ("y", pa.array([None], type=pa.int64())))
+        x_gt_5 = _const("x", 0, ComparisonOp.GT, 5)
+        y_gt_5 = _const("y", 1, ComparisonOp.GT, 5)
+        f = AndFilter(column_name="x", column_index=0, children=(x_gt_5, y_gt_5))
+        assert f.evaluate(batch).to_pylist() == [None]
+
+    def test_nested_or_inside_and_with_nulls(self) -> None:
+        """`(a = 1) AND ((b > 5) OR (c IS NULL))` -- exercises the bug through real nesting."""
+        # row 0: a=1 (True); b=None (NULL), c=None (True)  => inner OR: NULL OR True  => True  => AND: True
+        # row 1: a=1 (True); b=None (NULL), c=1    (False) => inner OR: NULL OR False => NULL  => AND: NULL
+        # row 2: a=2 (False); b=10  (True), c=None (True)  => AND short-circuits on a  => False
+        batch = _batch(("a", [1, 1, 2]), ("b", [None, None, 10]), ("c", [None, 1, None]))
+        a_eq_1 = _const("a", 0, ComparisonOp.EQ, 1)
+        b_gt_5 = _const("b", 1, ComparisonOp.GT, 5)
+        c_is_null = IsNullFilter(column_name="c", column_index=2)
+        inner_or = OrFilter(column_name="b", column_index=1, children=(b_gt_5, c_is_null))
+        f = AndFilter(column_name="a", column_index=0, children=(a_eq_1, inner_or))
+        assert f.evaluate(batch).to_pylist() == [True, None, False]
+
+
+# =============================================================================
 # TestPushdownFiltersEvaluateAndApply
 # =============================================================================
 
