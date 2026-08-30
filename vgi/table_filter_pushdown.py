@@ -490,7 +490,15 @@ class AndFilter(Filter):
             return _make_bool_array(True, batch.num_rows)
         result = self.children[0].evaluate(batch)
         for child in self.children[1:]:
-            result = pc.and_(result, child.evaluate(batch))
+            # Kleene (three-valued) logic, not pc.and_: SQL's AND treats a
+            # NULL operand as "unknown", not as "poisons the whole result to
+            # NULL" -- FALSE AND NULL is FALSE, not NULL. Filter masking
+            # (pc.filter treats NULL the same as False) makes this specific
+            # operator's choice unobservable in practice, since NULL and
+            # False both drop the row either way -- but OrFilter right below
+            # does NOT have that property, and getting AND right here too
+            # keeps the pair consistent rather than correct by accident.
+            result = pc.and_kleene(result, child.evaluate(batch))
         return result
 
     def __repr__(self) -> str:
@@ -531,7 +539,17 @@ class OrFilter(Filter):
             return _make_bool_array(False, batch.num_rows)
         result = self.children[0].evaluate(batch)
         for child in self.children[1:]:
-            result = pc.or_(result, child.evaluate(batch))
+            # Kleene (three-valued) logic, not pc.or_: confirmed live that
+            # pc.or_(NULL, True) == NULL, which pc.filter then treats the
+            # same as False and drops the row -- a real wrong-answer bug for
+            # `(x > 5) OR (y IS NULL)` against a row where x IS NULL and y IS
+            # NULL: true SQL semantics is `y IS NULL` = TRUE, so
+            # `NULL OR TRUE` = TRUE and the row should pass, but the old
+            # pc.or_ evaluation silently dropped it before it ever reached a
+            # downstream consumer's own re-check (there is no way to recover
+            # a row this evaluate() call already excluded). pc.or_kleene(NULL,
+            # True) == True, matching SQL.
+            result = pc.or_kleene(result, child.evaluate(batch))
         return result
 
     def __repr__(self) -> str:

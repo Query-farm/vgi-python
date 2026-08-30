@@ -2657,8 +2657,58 @@ class Worker:
         attach_plaintext = self._unwrap_attach_full(getattr(request, "attach_opaque_data", None))
         func_cls = self._resolve_function(request)
         self._validate_required_settings(func_cls, request)
+        self._validate_bind_shape(func_cls, request)
         instance = func_cls(logger=_logger)
         return instance.bind(request, ctx=ctx, attach_plaintext=attach_plaintext)  # type: ignore[attr-defined, no-any-return]
+
+    def _validate_bind_shape(self, func_cls: type[Function], request: BindRequest) -> None:
+        """Reject a bind() call whose input_schema doesn't match the function's shape.
+
+        Checked once, here, before any user ``on_bind()`` override runs — the
+        single point every call path funnels through — so a caller that drove
+        a function via the wrong `Client` method (`table_function()` vs.
+        `table_in_out_function()`) fails immediately with a clear message,
+        rather than reaching a user's `on_bind()` (which may assert, mishandle,
+        or simply not check `input_schema is None`) or a worse failure
+        downstream. Confirmed live: a hand-rolled client that called a blended
+        row-transform function via `table_function()` produced a
+        non-terminating continuation loop on one worker SDK, not an error —
+        both sides were correctly, independently waiting on the other to stop.
+        See `init()`'s dispatch for the mirror-image guard on `request.phase`,
+        which covers the same confusion for a call that got past bind() (e.g.
+        a custom `on_bind()` override that doesn't itself check `input_schema`).
+
+        Scoped to the one confusion that reaches every language SDK the same
+        way: plain table function vs. table-in-out (classic or blended
+        row-transform). Scalar and table-buffering functions have their own
+        existing shape checks (`ScalarFunctionGenerator.bind`'s own assert;
+        `TableBufferingFunction`'s phase dispatch in `init()`) and are left
+        alone here.
+
+        ``None`` vs. a present-but-zero-field ``input_schema`` (``pa.schema([])``)
+        are NOT the same thing and must not be conflated: a blended/varargs
+        row-transform function legitimately gets called with zero real
+        columns (e.g. a childless ``row_sum()`` call — the "all-names-empty"
+        scan-mode signal), which is a present, zero-field schema, not a
+        missing one. Only ``None`` means "no input schema was negotiated at
+        all", i.e. the caller used the wrong `Client` method entirely.
+        """
+        if issubclass(func_cls, TableInOutGenerator) and request.input_schema is None:
+            raise ValueError(
+                f"'{request.function_name}' is a table-in-out function (it requires an input row "
+                "stream) but no input schema was supplied — use "
+                "Client.table_in_out_function(input=...), not Client.table_function()."
+            )
+        if (
+            issubclass(func_cls, TableFunctionGenerator)
+            and not issubclass(func_cls, TableInOutGenerator)
+            and request.input_schema is not None
+        ):
+            raise ValueError(
+                f"'{request.function_name}' is a plain table function (it takes no input row "
+                "stream) but an input schema was supplied — use Client.table_function(), not "
+                "Client.table_in_out_function()."
+            )
 
     def table_function_cardinality(
         self, request: TableFunctionCardinalityRequest, ctx: CallContext
@@ -4206,10 +4256,42 @@ class Worker:
                     attach_opaque_data=attach_plaintext,
                 )
                 input_schema = None  # Producer — no input
+            elif request.phase is None:
+                # The single most common shape mismatch: a caller drove this
+                # function via table_function() (or the bare producer path),
+                # which always sends phase=None — but this function is a
+                # table-in-out function (classic or blended row-transform) and
+                # can only be invoked with an input stream. Left unguarded,
+                # this doesn't fail here — it fails *silently* downstream, or
+                # not at all: a mismatched call can leave both sides waiting
+                # on each other forever (confirmed live against a real
+                # blended-row-transform worker: the client polls for more
+                # output, the server polls for more input, neither ever
+                # arrives). Name the mismatch immediately instead.
+                raise ValueError(
+                    f"'{request.bind_call.function_name}' is a table-in-out function "
+                    "(it requires an input row stream) but was called with no input "
+                    "phase — use Client.table_in_out_function(input=...), not "
+                    "Client.table_function()."
+                )
             else:
                 raise ValueError(f"Unknown init phase for table-in-out function: {request.phase}")
 
         elif isinstance(instance, TableFunctionGenerator):
+            if request.phase is not None:
+                # Mirror image of the TableInOutGenerator guard above: this is
+                # a plain producer (no input stream), but the caller sent a
+                # table-in-out init phase — i.e. drove it via
+                # table_in_out_function() instead of table_function(). Reject
+                # immediately rather than silently ignoring the phase/input
+                # stream and running as an ordinary producer while the caller
+                # is left feeding batches nobody reads.
+                raise ValueError(
+                    f"'{request.bind_call.function_name}' is a plain table function "
+                    "(it takes no input row stream) but was called with init "
+                    f"phase={request.phase!r} — use Client.table_function(), not "
+                    "Client.table_in_out_function()."
+                )
             # Table function: producer state with per-tick process()
             params = ProcessParams(
                 args=type(instance)._parse_arguments(

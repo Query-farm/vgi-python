@@ -155,7 +155,7 @@ class TestCallStateCarriesNoPlaintextAttach:
             function_name="attach_probe",
             arguments=Arguments(positional=(pa.scalar(1),)),
             function_type=FunctionType.TABLE,
-            input_schema=pa.schema([]),
+            input_schema=None,
             attach_opaque_data=sealed,
         )
         call_state = VgiCallState(
@@ -207,7 +207,7 @@ class TestAttachSurvivesLaterTurns:
             function_name="attach_probe",
             arguments=Arguments(positional=(pa.scalar(4),)),
             function_type=FunctionType.TABLE,
-            input_schema=pa.schema([]),
+            input_schema=None,
             attach_opaque_data=sealed,
         )
         with http_connect(VgiProtocol, client=client, compression_level=None) as proxy:  # type: ignore[type-abstract]

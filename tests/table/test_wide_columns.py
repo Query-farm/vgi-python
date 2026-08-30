@@ -41,7 +41,7 @@ def _scan(columns: int, count: int, batch_size: int) -> list[pa.RecordBatch]:
                 named={"columns": pa.scalar(columns), "batch_size": pa.scalar(batch_size)},
             ),
             function_type=FunctionType.TABLE,
-            input_schema=pa.schema([]),
+            input_schema=None,
         )
         resp = proxy.bind(request=bind)
         assert len(resp.output_schema) == columns

@@ -1424,6 +1424,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         init_opaque_data: bytes | None = None,
         finalize_state_id: bytes | None = None,
         split_tokens: list[bytes] | None = None,
+        join_keys: list[pa.RecordBatch] | None = None,
     ) -> StreamSession:
         """Call init on a worker proxy and return a `StreamSession`.
 
@@ -1443,6 +1444,11 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             split_tokens: Split tokens (from a prior `table_function_plan()`
                 call) to redeem in this init, or `None` for an ordinary
                 whole-scan init.
+            join_keys: Serialized join-key batches pushed down for join
+                filtering (one single-column `RecordBatch` per key column,
+                looked up by column name — see
+                ``PushdownFilters.get_join_keys_column``), or `None` when not
+                applicable.
 
         Returns:
             `StreamSession` for data exchange or production.
@@ -1457,6 +1463,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             bind_opaque_data=bind_response.opaque_data,
             projection_ids=projection_ids,
             pushdown_filters=pushdown_filters_batch,
+            join_keys=join_keys,
             phase=phase,
             execution_id=execution_id,
             init_opaque_data=init_opaque_data,
@@ -1488,6 +1495,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         split_tokens: list[bytes] | None = None,
         split_execution_id: bytes | None = None,
         split_init_opaque_data: bytes | None = None,
+        join_keys: list[pa.RecordBatch] | None = None,
         at_unit: str | None = None,
         at_value: str | None = None,
     ) -> tuple[BindRequest, BindResponse, GlobalInitResponse]:
@@ -1526,6 +1534,11 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         BoundStorage exactly as it does elsewhere" — so a worker whose splits
         share cross-process state via ``BoundStorage`` can find it, even
         though this is a *first* (not secondary) init for this connection.
+
+        ``join_keys``, when given, is echoed verbatim on both the primary and
+        every secondary worker's init — the same way ``pushdown_filters_batch``
+        already is — so a semi-join pushdown applies consistently regardless
+        of which worker ends up producing which rows.
         """
         assert self._primary is not None, "primary worker not started"
 
@@ -1554,6 +1567,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             split_tokens=split_tokens,
             execution_id=split_execution_id,
             init_opaque_data=split_init_opaque_data,
+            join_keys=join_keys,
         )
         self._primary.stream = stream
 
@@ -1568,6 +1582,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             projection_ids=projection_ids,
             pushdown_filters_batch=pushdown_filters_batch,
             phase=phase,
+            join_keys=join_keys,
         )
 
         return bind_request, bind_response, init_response
@@ -1582,6 +1597,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         projection_ids: list[int] | None = None,
         pushdown_filters_batch: pa.RecordBatch | None = None,
         phase: TableInOutFunctionInitPhase | None = None,
+        join_keys: list[pa.RecordBatch] | None = None,
     ) -> None:
         """Spawn and initialize additional worker subprocesses in parallel.
 
@@ -1605,6 +1621,9 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             projection_ids: Optional column indices for projection.
             pushdown_filters_batch: Optional deserialized filter predicates.
             phase: Table-in-out function phase (INPUT or FINALIZE).
+            join_keys: Optional serialized join-key batches pushed down for
+                join filtering, echoed to every secondary worker exactly like
+                ``pushdown_filters_batch``.
 
         Raises:
             [`ClientError`][]: If any worker fails to initialize. The exception wraps
@@ -1633,6 +1652,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                     projection_ids=projection_ids,
                     pushdown_filters_batch=pushdown_filters_batch,
                     phase=phase,
+                    join_keys=join_keys,
                     execution_id=global_init_response.execution_id,
                     init_opaque_data=global_init_response.opaque_data,
                 )
@@ -2013,6 +2033,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         bind_result_callback: Callable[[BindResponse], None] | None = None,
         projection_ids: list[int] | None = None,
         pushdown_filters: bytes | None = None,
+        join_keys: list[pa.RecordBatch] | None = None,
         settings: dict[str, Any] | None = None,
         secrets: dict[str, Any] | None = None,
         transaction_opaque_data: bytes | None = None,
@@ -2042,6 +2063,10 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             projection_ids: Optional list of column indices for column projection.
             pushdown_filters: Optional byte string containing filter predicates
                 to push down to the function.
+            join_keys: Optional serialized join-key batches for semi-join
+                pushdown — one single-column `RecordBatch` per join-key
+                column, matched worker-side by column name. Same mechanism as
+                :meth:`table_function`'s `join_keys`.
             settings: Optional dictionary of settings/pragmas to
                 pass to the function.
             secrets: Optional dictionary of secret name to value pairs.
@@ -2117,6 +2142,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                     pushdown_filters_batch=pushdown_filters_batch,
                     phase=TableInOutFunctionInitPhase.INPUT,
                     bind_result_callback=bind_result_callback,
+                    join_keys=join_keys,
                 )
 
                 # Process input batches across all workers
@@ -2418,6 +2444,78 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         finally:
             finalize_stream.close()
 
+    def bind(
+        self,
+        *,
+        function_name: str,
+        schema_name: str,
+        arguments: Arguments | None = None,
+        function_type: FunctionType = FunctionType.TABLE,
+        settings: dict[str, Any] | None = None,
+        transaction_opaque_data: bytes | None = None,
+    ) -> BindResponse:
+        """Resolve a function's bind response without running init()/process().
+
+        Runs only the `bind()` RPC — no `init()`, no worker execution, no
+        data produced. This is the schema-discovery primitive `table_function()`/
+        `table_in_out_function()`/`scalar_function()` lack a standalone version
+        of: their own `bind_result_callback` only fires as a side effect of a
+        generator's first `next()`, which has already started `init()` and
+        real execution by the time it runs. Prefer the catalog RPCs
+        (`Client.table_get`, `Client.schema_contents(type=TABLE_FUNCTION)`)
+        when a catalog attach is available — those are equally zero-execution
+        and additionally expose pushdown-capability flags this method does
+        not. Use this method for a bare (non-catalog) function name, where no
+        attach exists to ask instead.
+
+        Args:
+            function_name: Name of the function to bind. Must exist in the
+                worker's registry.
+            schema_name: Name of the catalog schema that declares the
+                function. Required — a worker may register one name in
+                several schemas, so the (schema, name) pair is what
+                identifies the implementation.
+            arguments: Optional [`Arguments`][] container with positional and
+                named arguments to pass to the function. Defaults to empty
+                `Arguments()`.
+            function_type: Which kind of function to bind
+                (`FunctionType.TABLE`, `.SCALAR`, or `.TABLE_IN_OUT`).
+                Defaults to `TABLE`, the common case for schema discovery.
+            settings: Optional dictionary of settings/pragmas — some
+                functions' output schema depends on setting values (see
+                `Meta.required_settings`).
+            transaction_opaque_data: Optional unique identifier for the
+                DuckDB transaction.
+
+        Returns:
+            [`BindResponse`][] with `output_schema` and any opaque bind data —
+            no batches, no worker state beyond the bind itself.
+
+        Raises:
+            [`ClientError`][]: If the client is not started, communication
+                with the worker fails, or the worker returns an exception.
+
+        """
+        if arguments is None:
+            arguments = Arguments()
+
+        if self._primary is None:
+            raise ClientError("Client not started. Call start() or use context manager.")
+
+        try:
+            bind_request = self._make_bind_request(
+                function_name=function_name,
+                schema_name=schema_name,
+                arguments=arguments,
+                function_type=function_type,
+                settings=settings,
+                secrets=None,
+                transaction_opaque_data=transaction_opaque_data,
+            )
+            return self._do_bind(self._primary.proxy, bind_request, None)
+        except ClientError as e:
+            raise self._client_error_with_stderr(e) from e.__cause__
+
     def table_function_plan(
         self,
         *,
@@ -2426,6 +2524,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         arguments: Arguments | None = None,
         projection_ids: list[int] | None = None,
         pushdown_filters: bytes | None = None,
+        join_keys: list[pa.RecordBatch] | None = None,
         settings: dict[str, Any] | None = None,
         secrets: dict[str, Any] | None = None,
         transaction_opaque_data: bytes | None = None,
@@ -2465,6 +2564,10 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 threaded into the plan so split sizing can account for it.
             pushdown_filters: Optional byte string of filter predicates,
                 same wire format as :meth:`table_function`'s.
+            join_keys: Optional serialized join-key batches for semi-join
+                pushdown, threaded into split sizing/pruning the same way
+                `pushdown_filters` is — same wire mechanism as
+                :meth:`table_function`'s `join_keys`.
             settings: Optional dictionary of settings/pragmas.
             secrets: Optional dictionary of secret name to value pairs.
             transaction_opaque_data: Optional transaction identifier.
@@ -2516,6 +2619,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 bind_opaque_data=bind_response.opaque_data,
                 projection_ids=projection_ids,
                 pushdown_filters=pushdown_filters_batch,
+                join_keys=join_keys,
                 target_split_bytes=target_split_bytes,
                 min_splits=min_splits,
                 max_splits_per_response=max_splits_per_response,
@@ -2548,6 +2652,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         bind_result_callback: Callable[[BindResponse], None] | None = None,
         projection_ids: list[int] | None = None,
         pushdown_filters: bytes | None = None,
+        join_keys: list[pa.RecordBatch] | None = None,
         settings: dict[str, Any] | None = None,
         secrets: dict[str, Any] | None = None,
         transaction_opaque_data: bytes | None = None,
@@ -2583,6 +2688,12 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             projection_ids: Optional list of column indices for column projection.
             pushdown_filters: Optional byte string containing filter predicates
                 to push down to the function.
+            join_keys: Optional serialized join-key batches for semi-join
+                pushdown — one single-column `RecordBatch` per join-key
+                column, matched worker-side by column name (see
+                `PushdownFilters.get_join_keys_column`). Same wire mechanism
+                DuckDB's own join pushdown into VGI already exercises;
+                `Client` simply had no public way to set it before this.
             settings: Optional dictionary of settings/pragmas to
                 pass to the function.
             secrets: Optional dictionary of secret name to value pairs.
@@ -2659,6 +2770,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 split_tokens=split_tokens,
                 split_execution_id=split_execution_id,
                 split_init_opaque_data=split_init_opaque_data,
+                join_keys=join_keys,
                 at_unit=at_unit,
                 at_value=at_value,
             )

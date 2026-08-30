@@ -177,7 +177,18 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
             A BindResponse whose output schema equals the input schema.
 
         """
-        assert params.bind_call.input_schema is not None
+        if params.bind_call.input_schema is None:
+            # The most common cause: the caller drove this function via
+            # table_function() (no input stream sent at all) instead of
+            # table_in_out_function(input=...) — table-in-out functions
+            # require an input row stream to determine their schema (this
+            # default on_bind() just echoes it back). Name the mismatch
+            # instead of a bare, unhelpful AssertionError.
+            raise ValueError(
+                f"'{params.bind_call.function_name}' is a table-in-out function (it requires an "
+                "input row stream) but no input schema was supplied — use "
+                "Client.table_in_out_function(input=...), not Client.table_function()."
+            )
         return BindResponse(output_schema=params.bind_call.input_schema)
 
     # bind / on_init / global_init are defined on TableFunctionBase.
