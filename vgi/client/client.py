@@ -2014,6 +2014,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         projection_ids: list[int] | None = None,
         pushdown_filters: bytes | None = None,
         settings: dict[str, Any] | None = None,
+        secrets: dict[str, Any] | None = None,
         transaction_opaque_data: bytes | None = None,
         parent_row_callback: Callable[[list[int]], None] | None = None,
         has_finalize: bool = True,
@@ -2043,6 +2044,8 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 to push down to the function.
             settings: Optional dictionary of settings/pragmas to
                 pass to the function.
+            secrets: Optional dictionary of secret name to value pairs.
+                Values can be simple scalars or dicts (for struct-typed secrets).
             transaction_opaque_data: Optional unique identifier for the DuckDB transaction.
             parent_row_callback: Optional callback invoked once per yielded
                 output batch (before finalize), immediately before the yield,
@@ -2108,7 +2111,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                     function_type=FunctionType.TABLE,
                     input_schema=input_schema,
                     settings=settings,
-                    secrets=None,
+                    secrets=secrets,
                     transaction_opaque_data=transaction_opaque_data,
                     projection_ids=projection_ids,
                     pushdown_filters_batch=pushdown_filters_batch,
@@ -2173,6 +2176,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         projection_ids: list[int] | None = None,
         pushdown_filters: bytes | None = None,
         settings: dict[str, Any] | None = None,
+        secrets: dict[str, Any] | None = None,
         transaction_opaque_data: bytes | None = None,
         copy_to: CopyToContext | None = None,
         input_schema: pa.Schema | None = None,
@@ -2215,6 +2219,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             projection_ids: Optional column indices for projection.
             pushdown_filters: Optional serialized filter predicates.
             settings: Optional settings/pragmas to pass to the function.
+            secrets: Optional dictionary of secret name to value pairs.
             transaction_opaque_data: Optional DuckDB transaction identifier.
             copy_to: Optional [`CopyToContext`][] marking this sink as a
                 ``COPY ... TO`` write. A ``CopyToFunction`` returns no finalize
@@ -2261,7 +2266,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 function_type=FunctionType.TABLE_BUFFERING,
                 input_schema=input_schema,
                 settings=settings,
-                secrets=None,
+                secrets=secrets,
                 transaction_opaque_data=transaction_opaque_data,
                 copy_to=copy_to,
             )
@@ -2422,6 +2427,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         projection_ids: list[int] | None = None,
         pushdown_filters: bytes | None = None,
         settings: dict[str, Any] | None = None,
+        secrets: dict[str, Any] | None = None,
         transaction_opaque_data: bytes | None = None,
         target_split_bytes: int | None = None,
         min_splits: int | None = None,
@@ -2460,6 +2466,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             pushdown_filters: Optional byte string of filter predicates,
                 same wire format as :meth:`table_function`'s.
             settings: Optional dictionary of settings/pragmas.
+            secrets: Optional dictionary of secret name to value pairs.
             transaction_opaque_data: Optional transaction identifier.
             target_split_bytes: Requested split size — the primary sizing
                 lever; the client can't see per-split cost and will treat
@@ -2499,7 +2506,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 arguments=arguments,
                 function_type=FunctionType.TABLE,
                 settings=settings,
-                secrets=None,
+                secrets=secrets,
                 transaction_opaque_data=transaction_opaque_data,
             )
             bind_response = self._do_bind(self._primary.proxy, bind_request, None)
@@ -2542,6 +2549,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         projection_ids: list[int] | None = None,
         pushdown_filters: bytes | None = None,
         settings: dict[str, Any] | None = None,
+        secrets: dict[str, Any] | None = None,
         transaction_opaque_data: bytes | None = None,
         copy_from: CopyFromContext | None = None,
         split_tokens: list[bytes] | None = None,
@@ -2577,6 +2585,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 to push down to the function.
             settings: Optional dictionary of settings/pragmas to
                 pass to the function.
+            secrets: Optional dictionary of secret name to value pairs.
             transaction_opaque_data: Optional unique identifier for the DuckDB transaction.
             copy_from: Optional [`CopyFromContext`][] marking this scan as a
                 ``COPY ... FROM`` read. Prefer :meth:`copy_from`, which builds
@@ -2640,7 +2649,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 function_type=FunctionType.TABLE,
                 input_schema=None,
                 settings=settings,
-                secrets=None,
+                secrets=secrets,
                 transaction_opaque_data=transaction_opaque_data,
                 projection_ids=projection_ids,
                 pushdown_filters_batch=pushdown_filters_batch,
@@ -2678,6 +2687,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         projection_ids: list[int] | None = None,
         pushdown_filters: bytes | None = None,
         settings: dict[str, Any] | None = None,
+        secrets: dict[str, Any] | None = None,
         transaction_opaque_data: bytes | None = None,
         resume_token: bytes | None = None,
     ) -> ResumableTableScan:
@@ -2703,6 +2713,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 pushdown). ``None`` selects all columns.
             pushdown_filters: Optional serialized filter-pushdown payload.
             settings: Optional DuckDB settings to apply for the scan.
+            secrets: Optional dictionary of secret name to value pairs.
             transaction_opaque_data: Optional catalog transaction handle.
             resume_token: Continuation token from a prior batch to resume from;
                 must be paired with the same ``function_name``/projection/
@@ -2737,7 +2748,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 function_type=FunctionType.TABLE,
                 input_schema=None,
                 settings=settings,
-                secrets=None,
+                secrets=secrets,
                 transaction_opaque_data=transaction_opaque_data,
             )
             bind_response = self._do_bind(self._primary.proxy, bind_request, None)

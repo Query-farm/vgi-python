@@ -237,6 +237,68 @@ class TestTableFunctionSettingAnnotations:
         assert "details" in table.schema.names  # verbose mode adds details column
         assert table.column("greeting").to_pylist() == ["Hola", "Hola", "Hola"]
 
+    def test_secret_delivers_dict_of_scalars(self, fixture_worker: str) -> None:
+        """SecretDemoFunction (table function) receives a client-supplied secret.
+
+        Regression for `Client.table_function` hardcoding `secrets=None` on
+        the wire — the same `vgi_example` secret shape already proven to work
+        for `ReturnSecretValueFunction` (scalar) above, now exercised through
+        the table-function path instead.
+        """
+        from vgi.client import Client
+
+        # SecretDemoFunction resolves via `params.secrets.of_type("vgi_example")`
+        # (not the `Secret()`-annotation path `test_secret_delivers_dict_of_scalars`
+        # above uses), which filters on the secret payload's OWN `type` field —
+        # so, unlike that test's arbitrary `"type": "test"`, this one must be
+        # `"type": "vgi_example"` to match.
+        secret_value = {"type": "vgi_example", "provider": "config", "secret_string": "s3cr3t"}
+
+        with Client(fixture_worker) as client:
+            outputs = list(
+                client.table_function(
+                    function_name="secret_demo",
+                    schema_name="main",
+                    secrets={"vgi_example": secret_value},
+                )
+            )
+
+        table = pa.Table.from_batches(outputs)
+        assert dict(zip(table.column("key").to_pylist(), table.column("value").to_pylist(), strict=True)) == {
+            "type": "vgi_example",
+            "provider": "config",
+            "secret_string": "s3cr3t",
+        }
+
+    def test_secret_delivers_to_table_in_out_function(self, fixture_worker: str) -> None:
+        """SecretInOutFunction receives a client-supplied secret.
+
+        Regression for `Client.table_in_out_function` hardcoding `secrets=None`
+        on the wire — the fixture (`secret_in_out`) already existed but had no
+        test exercising it end to end, which is exactly how the bug went
+        unnoticed.
+        """
+        from vgi.client import Client
+
+        # Same `of_type("vgi_example")` resolution as SecretDemoFunction above —
+        # the payload's own `type` field must equal the requested secret_type.
+        secret_value = {"type": "vgi_example", "provider": "config", "secret_string": "s3cr3t"}
+        batch = pa.RecordBatch.from_pydict({"n": [1, 2]})
+
+        with Client(fixture_worker) as client:
+            outputs = list(
+                client.table_in_out_function(
+                    function_name="secret_in_out",
+                    schema_name="main",
+                    input=iter([batch]),
+                    secrets={"vgi_example": secret_value},
+                )
+            )
+
+        table = pa.Table.from_batches(outputs)
+        assert table.column("n").to_pylist() == [1, 2]
+        assert table.column("secret_string").to_pylist() == ["s3cr3t", "s3cr3t"]
+
 
 # ---------------------------------------------------------------------------
 # Tests for auto-population of Meta.required_settings/required_secrets
