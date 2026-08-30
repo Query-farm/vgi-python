@@ -853,6 +853,14 @@ class ScanFunctionResult:
         positional_arguments: Positional arguments as PyArrow scalars.
         named_arguments: Named arguments as PyArrow scalars.
         required_extensions: DuckDB extensions to load before calling.
+        schema_name: Catalog schema ``function_name`` is registered in. A
+            function name is unique only within a schema, so a client that
+            doesn't know this cannot tell which implementation a colliding
+            name refers to — set this whenever the resolving code already
+            knows the schema (added in protocol 1.5.0; ``None`` for a
+            pre-1.5.0 caller, or when the resolved function is a native
+            DuckDB function with no VGI-side schema of its own, e.g.
+            ``read_parquet``).
         ARROW_SCHEMA: Arrow IPC schema used to (de)serialize this result over the wire.
 
     """
@@ -861,12 +869,14 @@ class ScanFunctionResult:
     positional_arguments: list[pa.Scalar]  # type: ignore[type-arg]
     named_arguments: dict[str, pa.Scalar]  # type: ignore[type-arg]
     required_extensions: list[str] = field(default_factory=list)
+    schema_name: str | None = None
 
     ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
         [
             pa.field("function_name", pa.string(), nullable=False),
             pa.field("arguments", pa.binary(), nullable=False),
             pa.field("required_extensions", pa.list_(pa.string()), nullable=False),
+            pa.field("schema_name", pa.string(), nullable=True),
         ]  # type: ignore[arg-type]
     )
 
@@ -894,6 +904,7 @@ class ScanFunctionResult:
             "function_name": self.function_name,
             "arguments": serialize_record_batch_bytes(argument_batch),
             "required_extensions": list(self.required_extensions) if self.required_extensions is not None else None,
+            "schema_name": self.schema_name,
         }
 
     def serialize(self) -> bytes:
@@ -937,6 +948,10 @@ class ScanFunctionResult:
             positional_arguments=positional_arguments,
             named_arguments=named_arguments,
             required_extensions=list(cast("list[str]", row.get("required_extensions") or [])),
+            # Absent for a pre-1.5.0 peer (the column itself won't exist on
+            # the wire in that case — .get() covers both "column present but
+            # null" and "column entirely absent").
+            schema_name=cast("str | None", row.get("schema_name")),
         )
 
 
@@ -1094,6 +1109,12 @@ class ScanBranch:
             rejected at catalog-load.
         format_options: Format branch only — reader options, passed through as the
             reader's named arguments.
+        schema_name: Function branch only — catalog schema ``function_name`` is
+            registered in (``None`` for a catalog-table/format branch, which
+            has no VGI-side schema of its own; also ``None`` for a pre-1.5.0
+            caller or a native DuckDB function). Not to be confused with
+            ``source_schema``, which names the schema of a catalog-table
+            branch's *source table*, a different, older field.
         ARROW_SCHEMA: Arrow IPC schema used to (de)serialize this branch over the wire.
 
     """
@@ -1109,6 +1130,7 @@ class ScanBranch:
     format_name: str | None = None
     format_locations: list[str] = field(default_factory=list)
     format_options: dict[str, pa.Scalar] = field(default_factory=dict)  # type: ignore[type-arg]
+    schema_name: str | None = None
 
     ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
         [
@@ -1126,6 +1148,7 @@ class ScanBranch:
             # because an option value can be any Arrow type and no static schema
             # could express that.
             pa.field("format_options", pa.binary(), nullable=True),
+            pa.field("schema_name", pa.string(), nullable=True),
         ]  # type: ignore[arg-type]
     )
 
@@ -1158,6 +1181,7 @@ class ScanBranch:
             "source_catalog": self.source_catalog,
             "source_schema": self.source_schema,
             "source_table": self.source_table,
+            "schema_name": self.schema_name,
         }
 
     def serialize(self) -> bytes:
@@ -1209,6 +1233,8 @@ class ScanBranch:
             format_name=cast("str | None", row.get("format_name")),
             format_locations=list(cast("list[str] | None", row.get("format_locations")) or []),
             format_options=_deserialize_named_scalars(cast("bytes | None", row.get("format_options"))),
+            # Absent for a pre-1.5.0 peer, or a catalog-table/format branch.
+            schema_name=cast("str | None", row.get("schema_name")),
         )
 
 
@@ -2169,6 +2195,12 @@ class CatalogInterface(ABC):
                     positional_arguments=list(legacy.positional_arguments),
                     named_arguments=dict(legacy.named_arguments),
                     branch_filter=None,
+                    # Propagate whatever schema the table_scan_function_get
+                    # override above already resolved — this glue method has
+                    # no independent way to know the function's own schema
+                    # (which the table's own schema_name param above does NOT
+                    # necessarily match; see ScanBranch.schema_name's own doc).
+                    schema_name=legacy.schema_name,
                 ),
             ],
             required_extensions=list(legacy.required_extensions),
@@ -2691,6 +2723,23 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         # mutated).
         self._registries_built = True
 
+    def _schema_for_function(self, func_cls: type, name: str) -> str | None:
+        """Find which schema ``func_cls`` (registered as ``name``) actually lives in.
+
+        A table's backing function is NOT necessarily registered in the
+        table's own schema — a table declared in ``data`` may scan via a
+        function registered in ``main`` (a real, existing case in this
+        fixture set). Populating ``ScanFunctionResult.schema_name``/
+        ``ScanBranch.schema_name`` correctly needs this identity-based
+        reverse lookup, not the table's own ``schema_name`` parameter.
+        """
+        assert self._function_registry is not None
+        name_lower = name.lower()
+        for (schema_key, func_name), classes in self._function_registry.items():
+            if func_name == name_lower and func_cls in classes:
+                return schema_key
+        return None
+
     @property
     def _effective_catalog_name(self) -> str:
         """Get catalog name from Catalog object or class attribute."""
@@ -2961,6 +3010,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
                 positional_arguments=positional_arguments,
                 named_arguments=named_arguments,
                 required_extensions=[],
+                schema_name=self._schema_for_function(table.function, func_meta.name),
             )
 
         # No auto-implementation available - provide helpful error
@@ -3005,6 +3055,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             positional_arguments=[],
             named_arguments={},
             required_extensions=[],
+            schema_name=self._schema_for_function(write_func, func_meta.name),
         )
 
     def table_insert_function_get(

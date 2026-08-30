@@ -1008,6 +1008,33 @@ class TestScanFunctionResultSerialization:
 
         assert restored.required_extensions == ["iceberg", "parquet", "httpfs"]
 
+    def test_schema_name_round_trip(self) -> None:
+        """schema_name (protocol 1.5.0) round-trips when set."""
+        original = ScanFunctionResult(
+            function_name="rowid_sequence",
+            positional_arguments=[],
+            named_arguments={},
+            schema_name="main",
+        )
+        serialized = original.serialize()
+        batch, _ = deserialize_record_batch(serialized)
+        restored = ScanFunctionResult.deserialize(batch)
+
+        assert restored.schema_name == "main"
+
+    def test_schema_name_defaults_to_none(self) -> None:
+        """schema_name is None when the caller doesn't set it (e.g. a pre-1.5.0 peer)."""
+        original = ScanFunctionResult(
+            function_name="read_parquet",
+            positional_arguments=[],
+            named_arguments={},
+        )
+        serialized = original.serialize()
+        batch, _ = deserialize_record_batch(serialized)
+        restored = ScanFunctionResult.deserialize(batch)
+
+        assert restored.schema_name is None
+
 
 class TestSettingSpecSerialization:
     """Test SettingSpec serialization round-trip."""
@@ -1176,6 +1203,10 @@ class TestArrowSchemaCorrectness:
         assert schema.field("function_name").type == pa.string()
         assert schema.field("arguments").type == pa.binary()
         assert schema.field("required_extensions").type == pa.list_(pa.string())
+        # Added in protocol 1.5.0 — nullable so a pre-1.5.0 peer's payload
+        # still deserializes (the column is simply absent there).
+        assert schema.field("schema_name").type == pa.string()
+        assert schema.field("schema_name").nullable is True
 
 
 class TestScanBranchSerialization:
@@ -1192,6 +1223,10 @@ class TestScanBranchSerialization:
         assert schema.field("branch_filter").nullable is True
         assert schema.field("writable").type == pa.bool_()
         assert schema.field("writable").nullable is False
+        # Added in protocol 1.5.0 — function-branch only; None for a
+        # catalog-table/format branch or a pre-1.5.0 peer.
+        assert schema.field("schema_name").type == pa.string()
+        assert schema.field("schema_name").nullable is True
 
     def test_scan_branches_result_schema(self) -> None:
         """ScanBranchesResult Arrow schema: branches as list<binary>, required_extensions hoisted to top-level."""
@@ -1248,6 +1283,36 @@ class TestScanBranchSerialization:
         restored = ScanBranch.deserialize(batch)
         assert restored.branch_filter == "ts >= TIMESTAMP '2026-05-15 00:00:00'"
         assert len(restored.positional_arguments) == 2
+
+    def test_scan_branch_schema_name_round_trip(self) -> None:
+        """A function branch's schema_name (protocol 1.5.0) round-trips when set."""
+        from vgi.catalog import ScanBranch
+
+        original = ScanBranch(
+            function_name="rowid_sequence",
+            positional_arguments=[],
+            named_arguments={},
+            schema_name="main",
+        )
+        batch, _ = deserialize_record_batch(original.serialize())
+        restored = ScanBranch.deserialize(batch)
+        assert restored.schema_name == "main"
+
+    def test_scan_branch_schema_name_defaults_to_none(self) -> None:
+        """schema_name is None for a branch that doesn't set it (e.g. a catalog-table branch)."""
+        from vgi.catalog import ScanBranch
+
+        original = ScanBranch(
+            function_name="",
+            positional_arguments=[],
+            named_arguments={},
+            source_catalog="lakehouse",
+            source_schema="bronze",
+            source_table="orders",
+        )
+        batch, _ = deserialize_record_batch(original.serialize())
+        restored = ScanBranch.deserialize(batch)
+        assert restored.schema_name is None
 
     def test_scan_branches_result_round_trip(self) -> None:
         """ScanBranchesResult round-trips two heterogeneous branches + required_extensions."""

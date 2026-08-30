@@ -3010,7 +3010,7 @@ class VgiProtocol(Protocol):
             canonical semver (MAJOR.MINOR.PATCH) of the method-and-schema contract.
     """
 
-    protocol_version: ClassVar[str] = "1.4.0"
+    protocol_version: ClassVar[str] = "1.5.0"
 
     def bind(self, request: BindRequest) -> BindResponse:
         """Resolve output schema and validate arguments."""

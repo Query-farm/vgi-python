@@ -81,6 +81,7 @@ def _scan_function_result() -> ScanFunctionResult:
         positional_arguments=positional,
         named_arguments=named,
         required_extensions=["parquet"],
+        schema_name="main",
     )
 
 
@@ -98,6 +99,7 @@ def _scan_branch() -> ScanBranch:
         format_name="parquet",
         format_locations=["s3://bucket/a.parquet"],
         format_options={"delim": pa.scalar("|", pa.string())},
+        schema_name="main",
     )
 
 

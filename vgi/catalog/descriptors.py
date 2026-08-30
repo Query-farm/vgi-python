@@ -179,6 +179,7 @@ def _default_to_sql(value: DefaultValue) -> str:
 def _inline_function_result(
     func: type[Function] | None,
     arguments: Arguments | None = None,
+    schema_name: str | None = None,
 ) -> bytes | None:
     """Build inlined ``ScanFunctionResult`` IPC bytes for a function-backed table.
 
@@ -194,6 +195,15 @@ def _inline_function_result(
     ``arguments`` defaults to ``None`` (empty args) because only the *scan*
     function is parameterized by ``Table.arguments``; the insert/update/delete
     functions receive their rows via the streaming table input instead.
+
+    ``schema_name``: the table's own containing schema, passed through as
+    ``ScanFunctionResult.schema_name``. This descriptor object (unlike
+    ``ReadOnlyCatalogInterface``, which builds a full cross-schema function
+    registry at runtime) has no visibility into which schema the backing
+    function object is *actually* registered under if it differs from the
+    table's — so this is a best-effort default (right in the common case: a
+    table's declared backing function usually IS registered in the table's own
+    schema), not a guaranteed-correct cross-schema resolution.
     """
     if func is None:
         return None
@@ -204,6 +214,7 @@ def _inline_function_result(
         positional_arguments=positional_arguments,
         named_arguments=named_arguments,
         required_extensions=[],
+        schema_name=schema_name,
     ).serialize()
 
 
@@ -656,10 +667,10 @@ class Table:
             supports_column_statistics=bool(self.statistics),
             comment=self.comment,
             tags=dict(self.tags),
-            scan_function=_inline_function_result(self.function, self.arguments),
-            insert_function=_inline_function_result(self.insert_function),
-            update_function=_inline_function_result(self.update_function),
-            delete_function=_inline_function_result(self.delete_function),
+            scan_function=_inline_function_result(self.function, self.arguments, schema_name),
+            insert_function=_inline_function_result(self.insert_function, schema_name=schema_name),
+            update_function=_inline_function_result(self.update_function, schema_name=schema_name),
+            delete_function=_inline_function_result(self.delete_function, schema_name=schema_name),
             cardinality_estimate=self.cardinality_estimate,
             cardinality_max=self.cardinality_max,
             column_statistics=column_statistics_blob,

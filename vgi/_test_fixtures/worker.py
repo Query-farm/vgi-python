@@ -254,6 +254,10 @@ from vgi._test_fixtures.table.same_name_cached import (
     SameNameDataCached,
     SameNameMainCached,
 )
+from vgi._test_fixtures.table.same_name_schemas import (
+    SameNameTableDataScan,
+    SameNameTableMainScan,
+)
 from vgi._test_fixtures.table.tt_pushdown import (
     _TT_SCHEMA,
     TimeTravelPushdownFunction,
@@ -648,6 +652,7 @@ _EXAMPLE_CATALOG = Catalog(
                 SameNameMainBuffered,
                 SameNameMainAgg,
                 SameNameMainCached,
+                SameNameTableMainScan,
                 ScaleBySettingFunction,
                 SecretFieldFunction,
                 SmartFormatPrefixFunction,
@@ -733,6 +738,17 @@ _EXAMPLE_CATALOG = Catalog(
                     parameter_docs={"n": "Number of rows to generate"},
                 ),
             ],
+            tables=[
+                # Schema-disambiguation probe (table dispatch): same registered
+                # table name as the -schema table below, backed by this
+                # schema's own scan-function implementation — see
+                # same_name_schemas.py.
+                Table(
+                    name="test_same_name_table",
+                    function=SameNameTableMainScan,
+                    comment="Schema-disambiguation probe; the main-schema table",
+                ),
+            ],
         ),
         Schema(
             name="data",
@@ -747,8 +763,17 @@ _EXAMPLE_CATALOG = Catalog(
                 SameNameDataBuffered,
                 SameNameDataAgg,
                 SameNameDataCached,
+                SameNameTableDataScan,
             ],
             tables=[
+                # Schema-disambiguation probe (table dispatch): same registered
+                # table name as the main-schema table above, backed by this
+                # schema's own scan-function implementation.
+                Table(
+                    name="test_same_name_table",
+                    function=SameNameTableDataScan,
+                    comment="Schema-disambiguation probe; the data-schema table",
+                ),
                 # Function-backed table: schema derived via bind()
                 Table(
                     name="large_sequence",
@@ -1577,11 +1602,13 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                         function_name="sequence",
                         positional_arguments=[pa.scalar(50)],
                         named_arguments={},
+                        schema_name="main",
                     ),
                     ScanBranch(
                         function_name="sequence",
                         positional_arguments=[pa.scalar(50)],
                         named_arguments={},
+                        schema_name="main",
                     ),
                 ],
                 required_extensions=[],
@@ -1598,11 +1625,13 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                         function_name="split_sequence",
                         positional_arguments=[],
                         named_arguments={"n": pa.scalar(30), "splits": pa.scalar(6)},
+                        schema_name="main",
                     ),
                     ScanBranch(
                         function_name="sequence",
                         positional_arguments=[pa.scalar(20)],
                         named_arguments={},
+                        schema_name="main",
                     ),
                 ],
                 required_extensions=[],
@@ -1619,12 +1648,14 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                         positional_arguments=[pa.scalar(100)],
                         named_arguments={},
                         branch_filter="n < 50",
+                        schema_name="main",
                     ),
                     ScanBranch(
                         function_name="sequence",
                         positional_arguments=[pa.scalar(100)],
                         named_arguments={},
                         branch_filter="n >= 50",
+                        schema_name="main",
                     ),
                 ],
                 required_extensions=[],
@@ -1641,11 +1672,15 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                         function_name="sequence",
                         positional_arguments=[pa.scalar(50)],
                         named_arguments={},
+                        schema_name="main",
                     ),
                     ScanBranch(
                         function_name="read_parquet",
                         positional_arguments=[pa.scalar(f"{_BRANCH_DIR}/vgi_hetero_branch.parquet", pa.string())],
                         named_arguments={},
+                        # read_parquet is a native DuckDB function delegated straight
+                        # through — it has no VGI-side schema of its own to report.
+                        schema_name=None,
                     ),
                 ],
                 required_extensions=[],
@@ -1684,6 +1719,9 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                             # non-null count moves.
                             "nullstr": pa.scalar("row_2", pa.string()),
                         },
+                        # Format branch, not a function branch — schema_name is
+                        # function-branch-only and doesn't apply here.
+                        schema_name=None,
                     ),
                 ],
                 required_extensions=[],
@@ -1701,11 +1739,15 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                         function_name="sequence",
                         positional_arguments=[pa.scalar(50)],
                         named_arguments={},
+                        schema_name="main",
                     ),
                     ScanBranch(
                         function_name="iceberg_scan",
                         positional_arguments=[pa.scalar(f"{_BRANCH_DIR}/vgi_iceberg_branch", pa.string())],
                         named_arguments={},
+                        # iceberg_scan is a native DuckDB function delegated
+                        # straight through — no VGI-side schema of its own.
+                        schema_name=None,
                     ),
                 ],
                 required_extensions=["iceberg"],
@@ -1729,12 +1771,14 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                         positional_arguments=[pa.scalar(10)],
                         named_arguments={},
                         writable=True,
+                        schema_name="main",
                     ),
                     ScanBranch(
                         function_name="sequence",
                         positional_arguments=[pa.scalar(10)],
                         named_arguments={},
                         writable=True,
+                        schema_name="main",
                     ),
                 ],
                 required_extensions=[],
@@ -1751,11 +1795,15 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                         function_name="sequence",
                         positional_arguments=[pa.scalar(50)],
                         named_arguments={},
+                        schema_name="main",
                     ),
                     ScanBranch(
                         function_name="read_csv_auto",
                         positional_arguments=[pa.scalar(f"{_BRANCH_DIR}/vgi_nopushdown_branch.csv", pa.string())],
                         named_arguments={},
+                        # read_csv_auto is a native DuckDB function delegated
+                        # straight through — no VGI-side schema of its own.
+                        schema_name=None,
                     ),
                 ],
                 required_extensions=[],
@@ -1773,16 +1821,19 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                         function_name="read_parquet",
                         positional_arguments=[pa.scalar(f"{_BRANCH_DIR}/vgi_recon_a_b.parquet", pa.string())],
                         named_arguments={},
+                        schema_name=None,
                     ),
                     ScanBranch(
                         function_name="read_parquet",
                         positional_arguments=[pa.scalar(f"{_BRANCH_DIR}/vgi_recon_b_a.parquet", pa.string())],
                         named_arguments={},
+                        schema_name=None,
                     ),
                     ScanBranch(
                         function_name="read_parquet",
                         positional_arguments=[pa.scalar(f"{_BRANCH_DIR}/vgi_recon_a_only.parquet", pa.string())],
                         named_arguments={},
+                        schema_name=None,
                     ),
                 ],
                 required_extensions=[],
@@ -1823,6 +1874,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                 function_name="versioned_data_scan",
                 positional_arguments=[pa.scalar(version)],
                 named_arguments={},
+                schema_name="main",
             )
 
         # cache_versioned: AT → version arg, same as versioned_data but the scan
@@ -1833,6 +1885,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                 function_name="cache_versioned_scan",
                 positional_arguments=[pa.scalar(version)],
                 named_arguments={},
+                schema_name="main",
             )
 
         # Columns-based time-travel + pushdown: resolve AT → version and pass it
@@ -1843,6 +1896,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                 function_name="tt_pushdown_cols_scan",
                 positional_arguments=[pa.scalar(version)],
                 named_arguments={},
+                schema_name="main",
             )
 
         # Handle the versioned_constraints table with time travel
@@ -1852,6 +1906,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                 function_name="versioned_constraints_scan",
                 positional_arguments=[pa.scalar(version)],
                 named_arguments={},
+                schema_name="main",
             )
 
         # rff_parquet — single-branch native read_parquet delegation.
@@ -1860,6 +1915,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                 function_name="read_parquet",
                 positional_arguments=[pa.scalar(f"{_BRANCH_DIR}/rff_seg.parquet", pa.string())],
                 named_arguments={},
+                schema_name=None,
             )
 
         # rff_hive / rff_hive_mixed — native read_parquet over a Hive glob.
@@ -1868,6 +1924,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                 function_name="read_parquet",
                 positional_arguments=[pa.scalar(f"{_BRANCH_DIR}/rff_hive/*/*/*.parquet", pa.string())],
                 named_arguments={"hive_partitioning": pa.scalar(True)},
+                schema_name=None,
             )
 
         # Reject AT clause on tables that don't support time travel
@@ -1880,6 +1937,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                 function_name="sequence",
                 positional_arguments=[pa.scalar(10)],
                 named_arguments={},
+                schema_name="main",
             )
 
         # Handle "numbers" and "volatile_numbers" — both use sequence(100)
@@ -1888,6 +1946,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                 function_name="sequence",
                 positional_arguments=[pa.scalar(100)],
                 named_arguments={},
+                schema_name="main",
             )
 
         # funny_numbers — 123456 rows from sequence; statistics deliberately NOT set on
@@ -1897,6 +1956,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                 function_name="sequence",
                 positional_arguments=[pa.scalar(123456)],
                 named_arguments={},
+                schema_name="main",
             )
 
         # Constraint example tables — simple static scan functions
@@ -1923,6 +1983,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                 function_name=_static_scan_tables[name.lower()],
                 positional_arguments=[],
                 named_arguments={},
+                schema_name="main",
             )
 
         # Row ID test tables
@@ -1942,6 +2003,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                     "layout": pa.scalar(opts["layout"]),
                     "row_id_type": pa.scalar(opts["row_id_type"]),
                 },
+                schema_name="main",
             )
 
         # Late-materialization tables → late_materialization scan function.
@@ -1957,6 +2019,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                 function_name="late_materialization",
                 positional_arguments=[pa.scalar(1000)],
                 named_arguments=late_mat_tables[name.lower()],
+                schema_name="main",
             )
 
         return super().table_scan_function_get(
