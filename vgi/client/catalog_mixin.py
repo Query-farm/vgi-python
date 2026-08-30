@@ -56,6 +56,7 @@ from vgi.catalog import (
     ColumnStatistics,
     CopyFromFormatInfo,
     FunctionInfo,
+    IndexInfo,
     MacroInfo,
     MacroType,
     OnConflict,
@@ -530,8 +531,18 @@ class CatalogClientMixin:
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
         name: str,
+        type: Literal[SchemaObjectType.INDEX],
+    ) -> Sequence[IndexInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+        name: str,
         type: SchemaObjectType,
-    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo]: ...
+    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo]: ...
 
     def schema_contents(
         self,
@@ -540,8 +551,8 @@ class CatalogClientMixin:
         transaction_opaque_data: TransactionOpaqueData | None = None,
         name: str,
         type: SchemaObjectType,
-    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo]:
-        """List contents of a schema (tables, views, functions, macros).
+    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo]:
+        """List contents of a schema (tables, views, functions, macros, indexes).
 
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
@@ -554,9 +565,11 @@ class CatalogClientMixin:
                 - `SchemaObjectType.TABLE_FUNCTION`: Return only table functions
                 - `SchemaObjectType.SCALAR_MACRO`: Return only scalar macros
                 - `SchemaObjectType.TABLE_MACRO`: Return only table macros
+                - `SchemaObjectType.INDEX`: Return only indexes
 
         Returns:
-            List of [`TableInfo`][], [`ViewInfo`][], [`FunctionInfo`][], or [`MacroInfo`][] depending on the type.
+            List of [`TableInfo`][], [`ViewInfo`][], [`FunctionInfo`][], [`MacroInfo`][],
+            or [`IndexInfo`][] depending on the type.
 
         """
         with self._catalog_connect() as proxy:
@@ -577,6 +590,17 @@ class CatalogClientMixin:
                     attach_opaque_data=attach_opaque_data,
                     name=name,
                     type=type,
+                    transaction_opaque_data=transaction_opaque_data,
+                ).to_infos()
+            elif type == SchemaObjectType.INDEX:
+                # Its own RPC, not a variant of catalog_schema_contents_functions
+                # (the `else` branch below) -- an index has no FunctionInfo-shaped
+                # representation at all. Before this branch existed, `type=INDEX`
+                # silently fell through to the functions RPC and returned
+                # nonsense (or an empty list) instead of raising or working.
+                return proxy.catalog_schema_contents_indexes(
+                    attach_opaque_data=attach_opaque_data,
+                    name=name,
                     transaction_opaque_data=transaction_opaque_data,
                 ).to_infos()
             else:

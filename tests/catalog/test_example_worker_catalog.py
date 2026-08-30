@@ -13,6 +13,7 @@ from vgi.catalog import (
     AttachOpaqueData,
     FunctionInfo,
     FunctionType,
+    IndexInfo,
     MacroInfo,
     MacroType,
     SchemaObjectType,
@@ -392,6 +393,37 @@ class TestExampleWorkerViews:
         assert view.name == "first_ten"
         assert "sequence(10)" in view.definition
         assert view.comment is not None
+
+
+class TestExampleWorkerIndexes:
+    """Test ExampleWorker's index catalog entries."""
+
+    def test_schema_contents_returns_indexes_in_data(self) -> None:
+        """`data` has 2 real indexes on `numbers`.
+
+        Regression: `type=SchemaObjectType.INDEX` used to silently fall
+        through to the functions RPC (`catalog_schema_contents_functions`)
+        instead of the real `catalog_schema_contents_indexes` one.
+        """
+        client = Client(EXAMPLE_WORKER)
+        attach_result = client.catalog_attach(
+            name="example", options={}, data_version_spec=None, implementation_version=None
+        )
+
+        indexes = list(
+            client.schema_contents(
+                attach_opaque_data=attach_result.attach_opaque_data,
+                name="data",
+                type=SchemaObjectType.INDEX,
+            )
+        )
+
+        index_names = {i.name for i in indexes}
+        assert index_names == {"idx_numbers_value", "idx_numbers_value_unique"}
+        for index in indexes:
+            assert isinstance(index, IndexInfo)
+            assert index.table_name == "numbers"
+            assert index.expressions == ["value"]
 
 
 class TestExampleWorkerMacros:
