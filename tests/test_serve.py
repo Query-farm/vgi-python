@@ -10,12 +10,22 @@ import subprocess
 import sys
 import textwrap
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated, Any
 
 import pyarrow as pa
 import pytest
+from vgi_rpc import (
+    IdentityAssurance,
+    PeerIdentity,
+    PeerIdentityResult,
+    SubjectKind,
+    SubjectStability,
+)
+from vgi_rpc.rpc import AuthContext, PeerResolutionContext, peer_identity_primary
 
+from vgi.arguments import Arguments, Auth, Param, Returns
 from vgi.auth import TokenIdentity
+from vgi.client import Client
 from vgi.scalar_function import ScalarFunction
 from vgi.serve import (
     _resolve_describe,
@@ -52,6 +62,53 @@ class _AnotherWorker(Worker):
     """Second worker in same module — for multiple-workers error test."""
 
     functions = [_DoubleFunc]
+
+
+class _PeerAuthEchoFunc(ScalarFunction):
+    """Return the principal produced by peer authentication."""
+
+    class Meta:
+        name = "peer_auth_echo"
+
+    @classmethod
+    def compute(
+        cls,
+        value: Annotated[pa.Int64Array, Param(doc="input")],
+        auth: Annotated[AuthContext, Auth()],
+    ) -> Annotated[pa.StringArray, Returns()]:
+        del cls
+        return pa.array([auth.principal or "anonymous"] * len(value))
+
+
+class _PeerAuthWorker(Worker):
+    """Worker used to prove transport identity reaches function code."""
+
+    functions = [_PeerAuthEchoFunc]
+
+
+class _StaticTailnetProvider:
+    """Deterministic provider standing in for LocalAPI in unit tests."""
+
+    provider = "tailscale"
+
+    def __init__(self) -> None:
+        self.contexts: list[PeerResolutionContext] = []
+
+    def __call__(self, context: PeerResolutionContext) -> PeerIdentityResult:
+        self.contexts.append(context)
+        return PeerIdentityResult.available(
+            PeerIdentity(
+                provider="tailscale",
+                evidence_source="localapi",
+                assurance=IdentityAssurance.LOCAL_DAEMON,
+                issuer="tailnet:test",
+                transport=context.transport,
+                subject_kind=SubjectKind.TAGGED_NODE,
+                subject_key="node:123",
+                subject_stability=SubjectStability.STABLE,
+                subject_verified=True,
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +330,76 @@ class TestCreateApp:
         import falcon
 
         assert isinstance(app, falcon.App)
+
+    def test_peer_identity_authenticates_high_level_worker(self) -> None:
+        """Provider evidence becomes AuthContext inside a real VGI function call."""
+        from vgi_rpc.http._testing import _SyncTestClient
+
+        provider = _StaticTailnetProvider()
+        app = create_app(
+            _PeerAuthWorker,
+            describe=False,
+            signing_key=b"peer-auth-test-key",
+            peer_identity_providers=(provider,),
+            peer_authentication_policy=peer_identity_primary("tailscale"),
+            peer_service_name="svc:vgi-test",
+        )
+        transport = _SyncTestClient(app)
+        batch = pa.record_batch({"value": pa.array([1, 2], type=pa.int64())})
+
+        with Client.from_http("http://vgi.test", httpx_client=transport) as client:
+            output = list(
+                client.scalar_function(
+                    function_name="peer_auth_echo",
+                    schema_name="main",
+                    arguments=Arguments(positional=(pa.scalar("value"),)),
+                    input=iter((batch,)),
+                )
+            )
+
+        principals = [value for result in output for value in result.column("result").to_pylist()]
+        assert principals == [
+            "peer/tailscale/tailnet%3Atest/node%3A123",
+            "peer/tailscale/tailnet%3Atest/node%3A123",
+        ]
+        assert provider.contexts
+        assert all(context.service_name == "svc:vgi-test" for context in provider.contexts)
+
+
+class TestWorkerServeTcp:
+    """Tests for the high-level stateful TCP server entry point."""
+
+    def test_forwards_transport_identity_configuration(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Worker.serve_tcp keeps every trust-boundary option intact."""
+        seen: dict[str, Any] = {}
+        provider = _StaticTailnetProvider()
+        policy = peer_identity_primary("tailscale")
+
+        def fake_serve_tcp(server: object, host: str, port: int, **kwargs: Any) -> None:
+            seen.update(server=server, host=host, port=port, **kwargs)
+
+        monkeypatch.setattr("vgi_rpc.rpc.serve_tcp", fake_serve_tcp)
+        _PeerAuthWorker(quiet=True).serve_tcp(
+            "127.0.0.2",
+            9400,
+            proxy_protocol="required",
+            trusted_proxy_addresses=("127.0.0.1",),
+            service_name="svc:vgi-test",
+            peer_identity_providers=(provider,),
+            peer_authentication_policy=policy,
+            peer_resolution_timeout=2.5,
+            peer_provider_concurrency=3,
+        )
+
+        assert seen["host"] == "127.0.0.2"
+        assert seen["port"] == 9400
+        assert seen["proxy_protocol"] == "required"
+        assert seen["trusted_proxy_addresses"] == ("127.0.0.1",)
+        assert seen["service_name"] == "svc:vgi-test"
+        assert seen["peer_identity_providers"] == (provider,)
+        assert seen["peer_authentication_policy"] is policy
+        assert seen["peer_resolution_timeout"] == 2.5
+        assert seen["peer_provider_concurrency"] == 3
 
 
 def _capability_headers(app: falcon.App) -> dict[str, str]:

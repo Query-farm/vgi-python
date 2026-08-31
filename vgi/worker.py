@@ -169,8 +169,10 @@ from vgi.table_in_out_function import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from ssl import SSLContext
 
     from vgi_rpc.http.server._introspect import TokenIdentity
+    from vgi_rpc.rpc import PeerAuthenticationPolicy, PeerIdentityProvider
 
     from vgi.catalog.descriptors import Catalog
     from vgi.protocol import (
@@ -1677,8 +1679,6 @@ class Worker:
                 # TCP:<host>:<port> on stdout (mirrors run_server's
                 # cross-language discovery contract), idle-shutdown after
                 # idle_timeout seconds.
-                from vgi_rpc.rpc import serve_tcp
-
                 from vgi.serve import _maybe_init_sentry, _resolve_otel_config
 
                 if ":" in tcp:
@@ -1694,25 +1694,19 @@ class Worker:
                 _maybe_init_sentry()
                 otel_config = _resolve_otel_config()
                 worker = cls(quiet=quiet, log_level=effective_level)
-                server = RpcServer(cls.protocol_class, worker, server_version=_get_vgi_version())
-                if otel_config is not None:
-                    from vgi_rpc.otel import instrument_server
-
-                    instrument_server(server, otel_config)
-                    worker._vgi_tracer = VgiTracer.create(otel_config)
                 effective_idle = idle_timeout if idle_timeout > 0 else None
 
                 def _emit_tcp(bound_host: str, bound_port: int) -> None:
                     print(f"TCP:{bound_host}:{bound_port}", flush=True)
 
-                serve_tcp(
-                    server,
+                worker.serve_tcp(
                     tcp_host,
                     tcp_port,
                     threaded=True,
                     max_connections=max_connections,
                     idle_timeout=effective_idle,
                     on_bound=_emit_tcp,
+                    otel_config=otel_config,
                 )
             else:
                 from vgi.serve import _maybe_init_sentry, _resolve_otel_config
@@ -1734,6 +1728,11 @@ class Worker:
         cors_origins: str,
         describe: bool,
         authenticate: Any = None,
+        peer_identity_providers: Sequence[PeerIdentityProvider] = (),
+        peer_authentication_policy: PeerAuthenticationPolicy | None = None,
+        peer_service_name: str | None = None,
+        peer_resolution_timeout: float = 5.0,
+        peer_provider_concurrency: int = 64,
         oauth_resource_metadata: Any = None,
         otel_config: Any = None,
         port_file: str | None = None,
@@ -1769,6 +1768,11 @@ class Worker:
             signing_key=signing_key,
             log_level=effective_level,
             authenticate=authenticate,
+            peer_identity_providers=peer_identity_providers,
+            peer_authentication_policy=peer_authentication_policy,
+            peer_service_name=peer_service_name,
+            peer_resolution_timeout=peer_resolution_timeout,
+            peer_provider_concurrency=peer_provider_concurrency,
             oauth_resource_metadata=oauth_resource_metadata,
             otel_config=otel_config,
             max_externalized_response_bytes=max_externalized_response_bytes,
@@ -5430,3 +5434,99 @@ class Worker:
         except KeyboardInterrupt:
             _logger.debug("worker_interrupted")
             sys.exit(130)
+
+    def serve_tcp(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 0,
+        *,
+        threaded: bool = False,
+        max_connections: int | None = None,
+        idle_timeout: float | None = None,
+        on_bound: Callable[[str, int], None] | None = None,
+        proxy_protocol: str = "off",
+        trusted_proxy_addresses: tuple[str, ...] = (),
+        proxy_preamble_timeout: float = 1.0,
+        maximum_proxy_preamble_bytes: int = 4096,
+        service_name: str | None = None,
+        peer_identity_providers: tuple[PeerIdentityProvider, ...] = (),
+        peer_authentication_policy: PeerAuthenticationPolicy | None = None,
+        peer_resolution_timeout: float = 5.0,
+        peer_provider_concurrency: int = 64,
+        tls_context: SSLContext | None = None,
+        tls_handshake_timeout: float = 5.0,
+        spiffe_trust_domains: tuple[str, ...] = (),
+        otel_config: Any = None,
+    ) -> None:
+        """Serve this worker over a stateful TCP connection.
+
+        This is the high-level Worker counterpart to
+        :func:`vgi_rpc.rpc.serve_tcp`. It exposes the provider-neutral peer
+        identity and authentication hooks without requiring callers to build
+        a `RpcServer` or import the VGI wire protocol themselves.
+
+        Raw TCP does not add encryption by itself. Bind only to a trusted
+        network unless ``tls_context`` provides authenticated TLS or another
+        trusted transport such as a Tailnet protects the listener.
+
+        Args:
+            host: Interface to bind.
+            port: TCP port, or zero to let the operating system choose one.
+            threaded: Serve accepted connections concurrently.
+            max_connections: Maximum concurrent connections when threaded.
+            idle_timeout: Stop after this many seconds with no connections.
+            on_bound: Callback receiving the actual bound host and port.
+            proxy_protocol: ``"required"`` to accept trusted PROXY v2 only.
+            trusted_proxy_addresses: Exact peers trusted to assert PROXY v2
+                source addresses.
+            proxy_preamble_timeout: Independent PROXY preamble deadline.
+            maximum_proxy_preamble_bytes: PROXY preamble allocation bound.
+            service_name: Logical destination supplied to identity providers.
+            peer_identity_providers: Evidence providers resolved once per
+                accepted connection.
+            peer_authentication_policy: Policy that converts the evidence
+                snapshot into connection authentication or rejects it.
+            peer_resolution_timeout: Total provider-resolution deadline.
+            peer_provider_concurrency: Maximum active provider callbacks.
+            tls_context: Optional server-side TLS context.
+            tls_handshake_timeout: Independent TLS handshake deadline.
+            spiffe_trust_domains: Allowed direct client X.509-SVID domains.
+            otel_config: Optional OpenTelemetry configuration.
+
+        Note:
+            With ``threaded=True``, every connection shares this Worker
+            instance. Mutable subclass state must therefore be thread-safe and
+            must not carry one caller's authentication or request state into
+            another connection. Per-connection RPC stream state remains
+            isolated by `vgi-rpc`.
+
+        """
+        from vgi_rpc.rpc import serve_tcp as rpc_serve_tcp
+
+        server = RpcServer(self.protocol_class, self, server_version=_get_vgi_version())
+        if otel_config is not None:
+            from vgi_rpc.otel import instrument_server
+
+            instrument_server(server, otel_config)
+            self._vgi_tracer = VgiTracer.create(otel_config)
+        rpc_serve_tcp(
+            server,
+            host,
+            port,
+            threaded=threaded,
+            max_connections=max_connections,
+            idle_timeout=idle_timeout,
+            on_bound=on_bound,
+            proxy_protocol=proxy_protocol,
+            trusted_proxy_addresses=trusted_proxy_addresses,
+            proxy_preamble_timeout=proxy_preamble_timeout,
+            maximum_proxy_preamble_bytes=maximum_proxy_preamble_bytes,
+            service_name=service_name,
+            peer_identity_providers=peer_identity_providers,
+            peer_authentication_policy=peer_authentication_policy,
+            peer_resolution_timeout=peer_resolution_timeout,
+            peer_provider_concurrency=peer_provider_concurrency,
+            tls_context=tls_context,
+            tls_handshake_timeout=tls_handshake_timeout,
+            spiffe_trust_domains=spiffe_trust_domains,
+        )

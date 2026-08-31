@@ -32,7 +32,7 @@ import logging
 import os
 import secrets
 import sys
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -42,7 +42,7 @@ from vgi.profiling import maybe_start_profile
 if TYPE_CHECKING:
     import falcon
     from vgi_rpc.otel import OtelConfig
-    from vgi_rpc.rpc import AuthContext
+    from vgi_rpc.rpc import AuthContext, PeerAuthenticationPolicy, PeerIdentityProvider
 
     from vgi.worker import Worker
 
@@ -205,6 +205,11 @@ def create_app(
     signing_key: bytes | None = None,
     log_level: int = logging.INFO,
     authenticate: Callable[[falcon.Request], AuthContext] | None = None,
+    peer_identity_providers: Sequence[PeerIdentityProvider] = (),
+    peer_authentication_policy: PeerAuthenticationPolicy | None = None,
+    peer_service_name: str | None = None,
+    peer_resolution_timeout: float = 5.0,
+    peer_provider_concurrency: int = 64,
     proxy_proof_required: bool | None = None,
     oauth_resource_metadata: Any = None,
     otel_config: OtelConfig | None = None,
@@ -231,6 +236,18 @@ def create_app(
         authenticate: Optional callback that validates each HTTP request
             and returns an `AuthContext`. When ``None``, all requests are
             anonymous.
+        peer_identity_providers: Transport identity evidence providers. Their
+            immutable results are exposed on each call context independently
+            of application authentication.
+        peer_authentication_policy: Optional policy that composes peer
+            evidence with the result of ``authenticate``. A policy may
+            preserve, replace, or reject the request authentication.
+        peer_service_name: Logical destination supplied to providers for
+            destination-scoped identity or capability evidence.
+        peer_resolution_timeout: Total provider-resolution deadline per HTTP
+            request, in seconds.
+        peer_provider_concurrency: Maximum active provider callbacks for this
+            application, including callbacks that ignore cancellation.
         proxy_proof_required: Whether to advertise ``VGI-Proxy-Proof-Required``
             so a proxy can confirm this worker actually enforces the proof it
             mints. ``None`` (the default) derives it from
@@ -315,6 +332,11 @@ def create_app(
         cors_origins=cors_origins,
         token_key=signing_key,
         authenticate=authenticate,
+        peer_identity_providers=peer_identity_providers,
+        peer_authentication_policy=peer_authentication_policy,
+        peer_service_name=peer_service_name,
+        peer_resolution_timeout=peer_resolution_timeout,
+        peer_provider_concurrency=peer_provider_concurrency,
         proxy_proof_required=proxy_proof_required,
         oauth_resource_metadata=oauth_resource_metadata,
         otel_config=otel_config,
