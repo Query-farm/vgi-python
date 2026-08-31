@@ -15,6 +15,8 @@ require_variable() {
 }
 
 for name in \
+  TS_SERVER_OAUTH_CLIENT_ID \
+  TS_SERVER_OAUTH_SECRET \
   TS_OAUTH_CLIENT_ID \
   TS_OAUTH_SECRET \
   TAILNET_ISSUER \
@@ -22,6 +24,11 @@ for name in \
   TAILNET_EXPECTED_CLIENT_TAG; do
   require_variable "$name"
 done
+
+if [[ "$TS_SERVER_OAUTH_CLIENT_ID" == "$TS_OAUTH_CLIENT_ID" ]]; then
+  echo "server and client Tailnet roles must use different OAuth clients" >&2
+  exit 2
+fi
 
 export TAILNET_SERVER_HOSTNAME="${TAILNET_SERVER_HOSTNAME:-vgi-python-ci-server-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}}"
 export TAILNET_CLIENT_HOSTNAME="${TAILNET_CLIENT_HOSTNAME:-vgi-python-ci-client-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}}"
