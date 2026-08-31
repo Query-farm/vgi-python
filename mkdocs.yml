@@ -125,6 +125,7 @@ nav:
     - Expose a catalog: how-to/catalogs.md
     - Persist state across workers: how-to/state-storage.md
     - Serve over HTTP with auth: how-to/http-auth.md
+    - Connect through a Tailnet: how-to/tailnet.md
     - Integrate with the optimizer: how-to/pushdown-and-statistics.md
     - Function Metadata: metadata.md
     - CLI: cli.md

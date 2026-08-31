@@ -423,6 +423,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         base_url: str | None = None,
         tcp_host: str | None = None,
         tcp_port: int | None = None,
+        tcp_proxy: str | None = None,
         bearer_token: str | None = None,
         oauth: bool = False,
         oauth_refresh_token: str | None = None,
@@ -477,6 +478,9 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 ``"http://127.0.0.1:8765"``.
             tcp_host: TCP-only. Hostname or IP of the running worker.
             tcp_port: TCP-only. Port of the running worker.
+            tcp_proxy: TCP-only explicit SOCKS5h proxy URI, for example
+                ``"socks5h://127.0.0.1:1055"``. Hostname resolution happens
+                at the proxy. Proxy failure never falls back to direct TCP.
             bearer_token: HTTP-only. When set, every request carries a
                 static ``Authorization: Bearer <token>`` header. Mutually
                 exclusive with ``oauth``/``oauth_refresh_token`` — for a
@@ -566,6 +570,9 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         else:
             raise ValueError(f"unknown transport {transport!r}")
 
+        if transport != "tcp" and tcp_proxy is not None:
+            raise ValueError("tcp_proxy is only meaningful for transport='tcp'")
+
         use_oauth = oauth or oauth_refresh_token is not None
         if use_oauth and bearer_token is not None:
             raise ValueError("bearer_token is mutually exclusive with oauth/oauth_refresh_token")
@@ -587,6 +594,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         self._base_url = base_url
         self._tcp_host = tcp_host
         self._tcp_port = tcp_port
+        self._tcp_proxy = tcp_proxy
         self._bearer_token = bearer_token
         self._use_oauth = use_oauth
         self._oauth_refresh_token = oauth_refresh_token
@@ -675,6 +683,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         host: str,
         port: int,
         *,
+        proxy: str | None = None,
         external_location: Any | None = None,
         worker_limit: int | None = None,
         attach_opaque_data: bytes | None = None,
@@ -686,11 +695,16 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         trusted endpoints on loopback or a trusted network; use
         ``Client.from_http(...)`` for untrusted networks. Spin up a matching
         worker with ``vgi-fixture-worker --tcp [HOST:]PORT``.
+
+        Set ``proxy`` to an explicit ``socks5h://HOST:PORT`` URI for
+        userspace networking. Target hostnames are resolved by the proxy;
+        proxy errors never fall back to a direct connection.
         """
         return cls(
             transport="tcp",
             tcp_host=host,
             tcp_port=port,
+            tcp_proxy=proxy,
             external_location=external_location,
             worker_limit=worker_limit,
             attach_opaque_data=attach_opaque_data,
@@ -863,12 +877,16 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         from vgi_rpc.rpc import tcp_connect
 
         assert self._tcp_host is not None and self._tcp_port is not None  # enforced in __init__
+        proxy_options: dict[str, Any] = {}
+        if self._tcp_proxy is not None:
+            proxy_options["proxy"] = self._tcp_proxy
         ctx: AbstractContextManager[VgiProtocol] = tcp_connect(
             VgiProtocol,  # type: ignore[type-abstract]
             self._tcp_host,
             self._tcp_port,
             on_log=self._on_worker_log,
             external_location=self._external_location,
+            **proxy_options,
         )
         proxy = ctx.__enter__()
         _logger.debug(

@@ -118,6 +118,7 @@ class CatalogClientMixin:
     _base_url: str | None
     _tcp_host: str | None
     _tcp_port: int | None
+    _tcp_proxy: str | None
     _launch_argv: tuple[str, ...] | None
     _launch_idle_timeout: float
     _launch_state_dir: str | None
@@ -178,11 +179,15 @@ class CatalogClientMixin:
                 from vgi_rpc.rpc import tcp_connect
 
                 assert self._tcp_host is not None and self._tcp_port is not None
+                proxy_options: dict[str, Any] = {}
+                if self._tcp_proxy is not None:
+                    proxy_options["proxy"] = self._tcp_proxy
                 with tcp_connect(
                     VgiProtocol,  # type: ignore[type-abstract]
                     self._tcp_host,
                     self._tcp_port,
                     external_location=getattr(self, "_external_location", None),
+                    **proxy_options,
                 ) as proxy:
                     yield proxy
             elif transport == "launch":

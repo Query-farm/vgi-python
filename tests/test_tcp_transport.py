@@ -12,6 +12,7 @@ discovery line it prints on stdout, then drives it through
 from __future__ import annotations
 
 import queue
+import socket
 import subprocess
 import sys
 import threading
@@ -121,3 +122,77 @@ class TestTcpConstructorValidation:
         """base_url is http-only."""
         with pytest.raises(ValueError, match="base_url is only meaningful"):
             Client(transport="tcp", tcp_host="127.0.0.1", tcp_port=1, base_url="http://x", pool=None)
+
+    def test_rejects_tcp_proxy_on_other_transports(self) -> None:
+        """TCP_PROXY is consumed by TCP dialing, never treated as a worker option."""
+        with pytest.raises(ValueError, match="tcp_proxy is only meaningful"):
+            Client("worker", tcp_proxy="socks5h://127.0.0.1:1055", pool=None)
+
+
+def test_from_tcp_passes_explicit_proxy_without_local_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The high-level client delegates the untouched target name to SOCKS5h dialing."""
+    seen: dict[str, object] = {}
+
+    class FakeContext:
+        def __enter__(self) -> object:
+            return object()
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_tcp_connect(_protocol: object, host: str, port: int, **kwargs: object) -> FakeContext:
+        seen.update(host=host, port=port, **kwargs)
+        return FakeContext()
+
+    def forbidden_resolution(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("the high-level client must not resolve the SOCKS target locally")
+
+    monkeypatch.setattr("vgi_rpc.rpc.tcp_connect", fake_tcp_connect)
+    monkeypatch.setattr(socket, "getaddrinfo", forbidden_resolution)
+    client = Client.from_tcp(
+        "must-not-resolve.invalid",
+        9400,
+        proxy="socks5h://127.0.0.1:1055",
+    )
+    connection = client._spawn_tcp_connection(0)
+    try:
+        assert seen["host"] == "must-not-resolve.invalid"
+        assert seen["port"] == 9400
+        assert seen["proxy"] == "socks5h://127.0.0.1:1055"
+    finally:
+        assert connection._tcp_ctx is not None
+        connection._tcp_ctx.__exit__(None, None, None)
+
+
+def test_tcp_catalog_passes_explicit_proxy_without_local_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Catalog calls use the same SOCKS5h path as ordinary exchange calls."""
+    seen: dict[str, object] = {}
+    sentinel = object()
+
+    class FakeContext:
+        def __enter__(self) -> object:
+            return sentinel
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_tcp_connect(_protocol: object, host: str, port: int, **kwargs: object) -> FakeContext:
+        seen.update(host=host, port=port, **kwargs)
+        return FakeContext()
+
+    def forbidden_resolution(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("catalog discovery must not resolve the SOCKS target locally")
+
+    monkeypatch.setattr("vgi_rpc.rpc.tcp_connect", fake_tcp_connect)
+    monkeypatch.setattr(socket, "getaddrinfo", forbidden_resolution)
+    client = Client.from_tcp(
+        "must-not-resolve.invalid",
+        9400,
+        proxy="socks5h://127.0.0.1:1055",
+    )
+    with client._catalog_connect() as proxy:
+        assert proxy is sentinel
+
+    assert seen["host"] == "must-not-resolve.invalid"
+    assert seen["port"] == 9400
+    assert seen["proxy"] == "socks5h://127.0.0.1:1055"
