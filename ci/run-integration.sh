@@ -86,6 +86,10 @@ if [ "$TRANSPORT" = "http" ]; then
   #   * buffer_input/sizes.test — input buffering semantics differ over HTTP
   #     (same known limitation). (scale.test_slow is a .test_slow file and is
   #     never staged below, which only finds *.test.)
+  #   * database_worker/package.test — the packaged fixture is deliberately an
+  #     executable wrapper around VGI_TEST_WORKER. An HTTP URL is not an
+  #     executable artifact; the direct-exec lifecycle is covered by all three
+  #     process/socket lanes.
   # cache/revalidate.test now runs on http too: HTTP conditional revalidation is
   # implemented (C++ /init-request validators + vgi-rpc >=0.24.0 surfacing them to
   # the producer's first process()). It needs a community vgi extension carrying
@@ -96,6 +100,7 @@ if [ "$TRANSPORT" = "http" ]; then
     -not -name 'dynamic_filter.test'
     -not -name 'partitioned_sequence.test'
     -not -path './table_in_out/buffer_input/sizes.test'
+    -not -path './database_worker/package.test'
   )
 fi
 
