@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import pyarrow as pa
 import pytest
@@ -40,7 +41,7 @@ from vgi.table_filter_pushdown import (
 # =============================================================================
 
 
-def _batch(*columns: tuple[str, list[object]]) -> pa.RecordBatch:
+def _batch(*columns: tuple[str, list[object] | pa.Array[Any]]) -> pa.RecordBatch:
     """Create a RecordBatch from (name, values) pairs."""
     return pa.RecordBatch.from_pydict({name: vals for name, vals in columns})
 

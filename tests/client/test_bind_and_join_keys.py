@@ -26,7 +26,7 @@ SQL-like text in its `pushed_filters` column — the same fixture the
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 
 import pyarrow as pa
 import pytest
@@ -93,7 +93,7 @@ class TestBind:
         )
         table = pa.Table.from_batches(batches)
         assert table.num_rows == 5
-        assert sorted(table.column("n").to_pylist()) == [0, 1, 2, 3, 4]
+        assert sorted(cast("list[int]", table.column("n").to_pylist())) == [0, 1, 2, 3, 4]
 
 
 class TestJoinKeys:
@@ -112,11 +112,11 @@ class TestJoinKeys:
         )
         table = pa.Table.from_batches(batches)
 
-        assert sorted(table.column("n").to_pylist()) == [3, 7]
+        assert sorted(cast("list[int]", table.column("n").to_pylist())) == [3, 7]
         # auto_apply_filters=True means the worker itself filtered — the
         # echoed pushed_filters text is the proof it's a real server-side
         # InFilter, not us post-filtering client-side.
-        for value in table.column("pushed_filters").to_pylist():
+        for value in cast("list[str]", table.column("pushed_filters").to_pylist()):
             assert "n IN" in value
             assert "3" in value and "7" in value
 

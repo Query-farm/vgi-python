@@ -14,7 +14,7 @@ MagicDNS name to the normal client factory.
 On a host using Tailscale's normal network interface, connect to a worker
 published with Tailscale Serve exactly like any other HTTPS worker:
 
-```python
+```python test="lint"
 from vgi.client import Client
 
 with Client.from_http("https://worker.example-tailnet.ts.net") as client:
@@ -29,7 +29,7 @@ headers. Do not send `Tailscale-*` headers from application code.
 For userspace networking, inject an HTTP client configured for Tailscale's
 SOCKS5 server. Install SOCKS support with `pip install 'httpx2[socks]'`:
 
-```python
+```python test="lint"
 import httpx2
 
 from vgi.client import Client
@@ -40,9 +40,8 @@ with httpx2.Client(
     proxy="socks5h://127.0.0.1:1055",
     trust_env=False,
     timeout=httpx2.Timeout(60.0, connect=15.0),
-) as http_client:
-    with Client.from_http(url, httpx_client=http_client) as client:
-        catalogs = client.catalogs()
+) as http_client, Client.from_http(url, httpx_client=http_client) as client:
+    catalogs = client.catalogs()
 ```
 
 Using `socks5h` keeps MagicDNS resolution inside the Tailscale sidecar. A proxy
@@ -53,7 +52,7 @@ failure is an error; this configuration does not fall back to a direct route.
 Direct TCP works with a MagicDNS name when the client host has Tailscale's
 normal network interface:
 
-```python
+```python test="lint"
 from vgi.client import Client
 
 with Client.from_tcp("worker.example-tailnet.ts.net", 9400) as client:
@@ -62,7 +61,7 @@ with Client.from_tcp("worker.example-tailnet.ts.net", 9400) as client:
 
 For a userspace Tailscale sidecar, use the explicit SOCKS5h option:
 
-```python
+```python test="lint"
 with Client.from_tcp(
     "worker.example-tailnet.ts.net",
     9400,
