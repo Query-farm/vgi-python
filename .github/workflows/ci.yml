@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v9.0.0
+        uses: astral-sh/setup-uv@v10.0.1
 
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
@@ -48,7 +48,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v9.0.0
+        uses: astral-sh/setup-uv@v10.0.1
 
       - name: Install dependencies
         run: uv sync --all-extras
@@ -84,7 +84,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v9.0.0
+        uses: astral-sh/setup-uv@v10.0.1
 
       - name: Set up Python 3.14
         run: uv python install 3.14
@@ -107,7 +107,7 @@ jobs:
       # fail_on_error to true (and drop continue-on-error) once the vocab in
       # .github/styles/config/vocabularies/VGI/accept.txt is settled.
       - name: Prose lint (Vale)
-        uses: errata-ai/vale-action@v2
+        uses: errata-ai/vale-action@v3
         continue-on-error: true
         with:
           files: docs
@@ -142,7 +142,7 @@ jobs:
           path: vgi-rpc
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v9.0.0
+        uses: astral-sh/setup-uv@v10.0.1
 
       - name: Set up Python 3.14
         run: uv python install 3.14
