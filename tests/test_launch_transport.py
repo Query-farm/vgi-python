@@ -12,6 +12,7 @@ way it participates in the TCP path (``--tcp HOST:PORT``).
 from __future__ import annotations
 
 import shutil
+import socket
 import sys
 import tempfile
 import uuid
@@ -24,6 +25,8 @@ from vgi_rpc.launcher import status_rows
 
 from vgi.arguments import Arguments
 from vgi.client import Client
+
+pytestmark = pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="launch transport requires AF_UNIX")
 
 _WORKER_ARGV = (sys.executable, "-m", "vgi._test_fixtures.worker")
 
