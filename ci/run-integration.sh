@@ -120,6 +120,16 @@ mkdir -p "$STAGE/test/sql/integration"
     awk -v http="$AWK_HTTP" -f "$HERE/preprocess-require.awk" "$f" > "$STAGE/test/sql/integration/$f"
   done )
 
+# Some integration cases package an executable from the upstream support tree.
+# The staged suite runs with ``$STAGE`` as its working directory, so preserve
+# the relative path used by those SQL fixtures instead of making it depend on
+# the checkout layout outside the stage.
+if [ -f "$VGI_SRC/test/support/database_worker_fixture.sh" ]; then
+  mkdir -p "$STAGE/test/support"
+  cp "$VGI_SRC/test/support/database_worker_fixture.sh" "$STAGE/test/support/"
+  chmod +x "$STAGE/test/support/database_worker_fixture.sh"
+fi
+
 # Empty VGI_RPC_SHM_SIZE_BYTES must not reach the C++ client (it would try to
 # attach a zero-size segment); only a real value enables the shm side channel.
 [ -n "${VGI_RPC_SHM_SIZE_BYTES:-}" ] || unset VGI_RPC_SHM_SIZE_BYTES
