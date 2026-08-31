@@ -1,0 +1,49 @@
+name: Real Tailnet authentication
+
+on:
+  workflow_dispatch:
+    inputs:
+      tailscale_channel:
+        description: Official Tailscale container channel
+        required: true
+        default: stable
+        type: choice
+        options: [stable, unstable]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vgi-python-real-tailnet
+  cancel-in-progress: false
+
+jobs:
+  tailnet:
+    name: high-level worker / ${{ inputs.tailscale_channel }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: tailnet-integration
+    env:
+      TAILSCALE_IMAGE: tailscale/tailscale:${{ inputs.tailscale_channel }}
+      TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+      TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+      TAILNET_ISSUER: ${{ vars.TAILNET_ISSUER }}
+      TAILNET_EXPECTED_CAPABILITY: ${{ vars.TAILNET_EXPECTED_CAPABILITY }}
+      TAILNET_EXPECTED_CLIENT_TAG: ${{ vars.TAILNET_EXPECTED_CLIENT_TAG }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Checkout unreleased vgi-rpc identity layer
+        uses: actions/checkout@v7
+        with:
+          repository: Query-farm/vgi-rpc-python
+          path: .tailnet/vgi-rpc
+          ref: 04f19147625b4f643b38a687151d8233daa8997c
+
+      - name: Check kernel networking support
+        run: |
+          test -c /dev/net/tun
+          docker compose version
+
+      - name: Run high-level Tailnet authentication matrix
+        run: tests/tailnet/run.sh
