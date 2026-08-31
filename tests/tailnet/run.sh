@@ -73,16 +73,16 @@ common_tcp=(
   --expect-authenticated
 )
 
-"${COMPOSE[@]}" run --rm probe-direct python -m tests.tailnet.probe tcp \
+timeout 45s "${COMPOSE[@]}" run --rm probe-direct python -m tests.tailnet.probe tcp \
   --host "$SERVER_DNS" --port 19400 "${common_tcp[@]}"
 
-"${COMPOSE[@]}" run --rm probe-socks python -m tests.tailnet.probe tcp \
+timeout 45s "${COMPOSE[@]}" run --rm probe-socks python -m tests.tailnet.probe tcp \
   --host "$SERVER_DNS" --port 19400 \
   --proxy socks5h://tailscale-socks:1055 \
   --require-local-dns-failure \
   "${common_tcp[@]}"
 
-"${COMPOSE[@]}" run --rm probe-direct python -m tests.tailnet.probe http \
+timeout 45s "${COMPOSE[@]}" run --rm probe-direct python -m tests.tailnet.probe http \
   --url "http://$SERVER_DNS:18081" \
   --expected-issuer "$TAILNET_ISSUER" \
   --expected-evidence-source localapi \
@@ -92,7 +92,7 @@ common_tcp=(
   --expected-tag "$TAILNET_EXPECTED_CLIENT_TAG" \
   --expect-authenticated
 
-"${COMPOSE[@]}" run --rm probe-direct python -m tests.tailnet.probe http \
+timeout 45s "${COMPOSE[@]}" run --rm probe-direct python -m tests.tailnet.probe http \
   --url "https://$SERVER_DNS" \
   --spoof-login attacker@example.invalid \
   --expected-issuer "$TAILNET_ISSUER" \

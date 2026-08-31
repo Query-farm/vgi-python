@@ -162,6 +162,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         TailnetWorker(quiet=True).serve_tcp(
             args.host,
             args.port,
+            threaded=True,
+            max_connections=16,
             peer_identity_providers=(provider,),
             peer_authentication_policy=_localapi_policy(
                 capability=args.required_capability,
