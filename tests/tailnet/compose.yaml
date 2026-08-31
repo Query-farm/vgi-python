@@ -151,11 +151,11 @@ services:
       - --host
       - 0.0.0.0
       - --port
-      - "18081"
+      - "19400"
       - --localapi-socket
       - /var/run/tailscale/tailscaled.sock
     healthcheck:
-      test: [CMD, python, -c, "import socket; socket.create_connection(('127.0.0.1', 18081), 1).close()"]
+      test: [CMD, python, -c, "import socket; socket.create_connection(('127.0.0.1', 19400), 1).close()"]
       interval: 2s
       timeout: 2s
       retries: 30

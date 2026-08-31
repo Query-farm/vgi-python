@@ -45,7 +45,7 @@ docker build \
   "$TAILNET_ROOT"
 
 "${COMPOSE[@]}" up --detach --wait --wait-timeout 120 \
-  tailscale-server tailscale-client tailscale-socks worker-direct worker-http worker-http-direct
+  tailscale-server tailscale-client tailscale-socks worker-direct worker-http
 
 SERVER_DNS="$("${COMPOSE[@]}" exec -T tailscale-server \
   tailscale --socket=/var/run/tailscale/tailscaled.sock status --json | \
@@ -82,8 +82,12 @@ timeout 45s "${COMPOSE[@]}" run --rm probe-socks python -m tests.tailnet.probe t
   --require-local-dns-failure \
   "${common_tcp[@]}"
 
+# Reuse the policy-approved direct port for HTTP after the stateful TCP probes.
+"${COMPOSE[@]}" stop worker-direct
+"${COMPOSE[@]}" up --detach --wait --wait-timeout 30 worker-http-direct
+
 timeout 45s "${COMPOSE[@]}" run --rm probe-direct python -m tests.tailnet.probe http \
-  --url "http://$SERVER_DNS:18081" \
+  --url "http://$SERVER_DNS:19400" \
   --expected-issuer "$TAILNET_ISSUER" \
   --expected-evidence-source localapi \
   --expected-assurance local_daemon \
