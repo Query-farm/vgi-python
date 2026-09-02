@@ -267,7 +267,7 @@ vgi-fixtures = { workspace = true }
 # Peer-identity support is on vgi-rpc main while 0.45.0 awaits publication.
 # The built wheel still declares the normal PyPI requirement above; this pin
 # only makes source-checkout development and CI reproducible in the interim.
-vgi-rpc = { git = "https://github.com/Query-farm/vgi-rpc-python.git", rev = "de5e950cb5472dd9391375d98630581a471c0716" }
+vgi-rpc = { git = "https://github.com/Query-farm/vgi-rpc-python.git", rev = "ab3108e242ed3fa35ee684c882f74813c35ad7ab" }
 
 [dependency-groups]
 dev = ["lxml>=6.0.2", "pytest-timeout>=2.4.0", "vgi-fixtures"]
