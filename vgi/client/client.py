@@ -182,6 +182,24 @@ _default_pool = WorkerPool(max_idle=8, idle_timeout=30.0)
 # whether to skip the HTTP leg of the matrix.
 _HTTP_TRANSPORT_READY = True
 
+_DEFAULT_ACCEPTED_MAX_RESPONSE_BYTES = 256 * 1024 * 1024
+_MIN_ACCEPTED_MAX_RESPONSE_BYTES = 65536
+_MAX_SAFE_HTTP_BYTES = (1 << 53) - 1
+
+
+def _validate_accepted_max_response_bytes(value: int | None) -> int | None:
+    """Validate the cross-SDK HTTP response-budget range."""
+    if value is not None and (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not _MIN_ACCEPTED_MAX_RESPONSE_BYTES <= value <= _MAX_SAFE_HTTP_BYTES
+    ):
+        raise ValueError(
+            "accepted_max_response_bytes must be an integer from "
+            f"{_MIN_ACCEPTED_MAX_RESPONSE_BYTES} through {_MAX_SAFE_HTTP_BYTES}, or None"
+        )
+    return value
+
 
 @dataclass
 class WorkerConnection:
@@ -432,6 +450,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         oauth_prompt: Literal["none", "login", "select_account", "consent"] = "none",
         httpx_client: Any | None = None,
         external_location: Any | None = None,
+        accepted_max_response_bytes: int | None = _DEFAULT_ACCEPTED_MAX_RESPONSE_BYTES,
         launch_argv: Sequence[str] | None = None,
         launch_idle_timeout: float = 300.0,
         launch_state_dir: str | None = None,
@@ -521,6 +540,10 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 transport so pointer batches are resolved automatically.
                 Subprocess transport ignores this — subprocess workers
                 don't return pointer batches.
+            accepted_max_response_bytes: HTTP-only hard limit for decoded
+                response bodies, advertised to the worker on every RPC request.
+                Defaults to 256 MiB. Pass ``None`` to omit the negotiation
+                header for legacy unbounded behavior.
             launch_argv: Launch-only. The worker command and arguments (an
                 argv sequence, not a shell string — matches
                 ``vgi_rpc.launcher.LaunchConfig.worker_argv``). Requires the
@@ -605,6 +628,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         # (including when the caller supplied httpx_client= directly, which owns its own auth).
         self._oauth_auth: Any | None = None
         self._httpx_client = httpx_client
+        self._accepted_max_response_bytes = _validate_accepted_max_response_bytes(accepted_max_response_bytes)
         self._launch_argv = tuple(launch_argv) if launch_argv is not None else None
         self._launch_idle_timeout = launch_idle_timeout
         self._launch_state_dir = launch_state_dir
@@ -651,6 +675,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         oauth_prompt: Literal["none", "login", "select_account", "consent"] = "none",
         httpx_client: Any | None = None,
         external_location: Any | None = None,
+        accepted_max_response_bytes: int | None = _DEFAULT_ACCEPTED_MAX_RESPONSE_BYTES,
         worker_limit: int | None = None,
         attach_opaque_data: bytes | None = None,
     ) -> Client:
@@ -672,6 +697,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             oauth_prompt=oauth_prompt,
             httpx_client=httpx_client,
             external_location=external_location,
+            accepted_max_response_bytes=accepted_max_response_bytes,
             worker_limit=worker_limit,
             attach_opaque_data=attach_opaque_data,
             pool=None,
@@ -953,6 +979,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             client=httpx_client,
             on_log=self._on_worker_log,
             external_location=self._external_location,
+            accepted_max_response_bytes=self._accepted_max_response_bytes,
         )
         proxy = ctx.__enter__()
         _logger.debug("http_connection_opened worker_index=%s base_url=%s", worker_index, self._base_url)
@@ -1340,10 +1367,11 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         """Return the HTTP server's advertised capabilities.
 
         Only valid for HTTP-mode clients. The returned
-        ``HttpServerCapabilities`` carries ``max_request_bytes``,
-        ``upload_url_support``, and ``max_upload_bytes`` — the fields the
-        client consults before deciding to externalize large input batches
-        via upload URLs (see Phase 4 of the whimsical-mccarthy plan).
+        ``HttpServerCapabilities`` includes the effective request/response
+        limits, upload/externalization support, and whether the server honors
+        ``VGI-Accept-Max-Response-Bytes``. The accepted-response setting is an
+        RPC response-body limit, so it is not applied to this bodyless OPTIONS
+        discovery request.
         """
         if self._transport != "http":
             raise ClientError("server_capabilities() is only available for HTTP transport")

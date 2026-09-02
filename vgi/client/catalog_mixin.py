@@ -124,6 +124,7 @@ class CatalogClientMixin:
     _launch_state_dir: str | None
     _launch_socket_path: str | None
     _external_location: Any | None
+    _accepted_max_response_bytes: int | None
 
     def _worker_argv(self) -> list[str]:
         """The worker command as an argv list, however ``server_path`` was given.
@@ -173,6 +174,7 @@ class CatalogClientMixin:
                     base_url=self._base_url,
                     client=httpx_client,
                     external_location=getattr(self, "_external_location", None),
+                    accepted_max_response_bytes=self._accepted_max_response_bytes,
                 ) as proxy:
                     yield proxy
             elif transport == "tcp":

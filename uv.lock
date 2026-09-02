@@ -2686,14 +2686,14 @@ requires-dist = [
     { name = "vgi-python", extras = ["test-fixtures"], marker = "extra == 'test-fixtures-writable'" },
     { name = "vgi-python", extras = ["test-fixtures", "test-fixtures-writable", "http", "launch", "oauth", "otel", "sentry", "azure"], marker = "extra == 'dev'" },
     { name = "vgi-python", extras = ["transactor"], marker = "extra == 'test-fixtures-writable'" },
-    { name = "vgi-rpc", git = "https://github.com/Query-farm/vgi-rpc-python.git?rev=04f19147625b4f643b38a687151d8233daa8997c" },
-    { name = "vgi-rpc", extras = ["cli"], marker = "extra == 'launch'", git = "https://github.com/Query-farm/vgi-rpc-python.git?rev=04f19147625b4f643b38a687151d8233daa8997c" },
-    { name = "vgi-rpc", extras = ["cli", "conformance", "external", "http", "oauth", "otel", "sentry"], marker = "extra == 'dev'", git = "https://github.com/Query-farm/vgi-rpc-python.git?rev=04f19147625b4f643b38a687151d8233daa8997c" },
-    { name = "vgi-rpc", extras = ["http"], marker = "extra == 'granian'", git = "https://github.com/Query-farm/vgi-rpc-python.git?rev=04f19147625b4f643b38a687151d8233daa8997c" },
-    { name = "vgi-rpc", extras = ["http"], marker = "extra == 'http'", git = "https://github.com/Query-farm/vgi-rpc-python.git?rev=04f19147625b4f643b38a687151d8233daa8997c" },
-    { name = "vgi-rpc", extras = ["oauth"], marker = "extra == 'oauth'", git = "https://github.com/Query-farm/vgi-rpc-python.git?rev=04f19147625b4f643b38a687151d8233daa8997c" },
-    { name = "vgi-rpc", extras = ["otel"], marker = "extra == 'otel'", git = "https://github.com/Query-farm/vgi-rpc-python.git?rev=04f19147625b4f643b38a687151d8233daa8997c" },
-    { name = "vgi-rpc", extras = ["sentry"], marker = "extra == 'sentry'", git = "https://github.com/Query-farm/vgi-rpc-python.git?rev=04f19147625b4f643b38a687151d8233daa8997c" },
+    { name = "vgi-rpc", git = "https://github.com/Query-farm/vgi-rpc-python.git?rev=de5e950cb5472dd9391375d98630581a471c0716" },
+    { name = "vgi-rpc", extras = ["cli"], marker = "extra == 'launch'", git = "https://github.com/Query-farm/vgi-rpc-python.git?rev=de5e950cb5472dd9391375d98630581a471c0716" },
+    { name = "vgi-rpc", extras = ["cli", "conformance", "external", "http", "oauth", "otel", "sentry"], marker = "extra == 'dev'", git = "https://github.com/Query-farm/vgi-rpc-python.git?rev=de5e950cb5472dd9391375d98630581a471c0716" },
+    { name = "vgi-rpc", extras = ["http"], marker = "extra == 'granian'", git = "https://github.com/Query-farm/vgi-rpc-python.git?rev=de5e950cb5472dd9391375d98630581a471c0716" },
+    { name = "vgi-rpc", extras = ["http"], marker = "extra == 'http'", git = "https://github.com/Query-farm/vgi-rpc-python.git?rev=de5e950cb5472dd9391375d98630581a471c0716" },
+    { name = "vgi-rpc", extras = ["oauth"], marker = "extra == 'oauth'", git = "https://github.com/Query-farm/vgi-rpc-python.git?rev=de5e950cb5472dd9391375d98630581a471c0716" },
+    { name = "vgi-rpc", extras = ["otel"], marker = "extra == 'otel'", git = "https://github.com/Query-farm/vgi-rpc-python.git?rev=de5e950cb5472dd9391375d98630581a471c0716" },
+    { name = "vgi-rpc", extras = ["sentry"], marker = "extra == 'sentry'", git = "https://github.com/Query-farm/vgi-rpc-python.git?rev=de5e950cb5472dd9391375d98630581a471c0716" },
 ]
 provides-extras = ["haybarn", "duckdb", "http", "launch", "granian", "oauth", "otel", "sentry", "azure", "test-fixtures", "transactor", "fixtures", "test-fixtures-writable", "dev"]
 
@@ -2717,7 +2717,7 @@ docs = [
 [[package]]
 name = "vgi-rpc"
 version = "0.45.0"
-source = { git = "https://github.com/Query-farm/vgi-rpc-python.git?rev=04f19147625b4f643b38a687151d8233daa8997c#04f19147625b4f643b38a687151d8233daa8997c" }
+source = { git = "https://github.com/Query-farm/vgi-rpc-python.git?rev=de5e950cb5472dd9391375d98630581a471c0716#de5e950cb5472dd9391375d98630581a471c0716" }
 dependencies = [
     { name = "docstring-parser" },
     { name = "pyarrow" },

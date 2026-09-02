@@ -35,6 +35,25 @@ with Client(transport="http", base_url="http://localhost:8080", bearer_token="to
     ...  # same .scalar_function() / .table_function() calls as the subprocess transport
 ```
 
+The native client advertises a 256 MiB decoded-response limit on every RPC,
+including the short-lived connections used for catalog operations. Override it
+when the application has a smaller memory budget:
+
+```python
+with Client.from_http(
+    "http://localhost:8080",
+    accepted_max_response_bytes=32 * 1024 * 1024,
+) as client:
+    ...
+```
+
+The value must be an integer from 65536 through `2^53 - 1`. Configured clients
+discover server support before the first RPC and fail closed if it is absent.
+Passing `None` omits negotiation for compatibility with a legacy unbounded server;
+doing so is not recommended for externally reachable workers. Capability
+discovery reports the server's own effective response cap and whether it
+honors the client limit.
+
 ## Add authentication
 
 The quickest setup is static bearer tokens via an environment variable — comma-separated
