@@ -205,7 +205,8 @@ def _validate_accepted_max_response_bytes(value: int | None) -> int | None:
 class WorkerConnection:
     """Holds state for a single worker connection (subprocess, HTTP, TCP, or launch).
 
-    Exactly one of {proc+connection, _pool_ctx, _http_ctx, _tcp_ctx, _launch_ctx}
+    Exactly one of {proc+connection, _pool_ctx, _http_ctx, _tcp_ctx,
+    _iroh_ctx, _launch_ctx}
     is active per connection — transport-specific teardown inspects these fields.
 
     Attributes:
@@ -228,6 +229,8 @@ class WorkerConnection:
     _http_ctx: AbstractContextManager[Any] | None = field(default=None, repr=False)
     # TCP transport: context manager from vgi_rpc.rpc.tcp_connect.
     _tcp_ctx: AbstractContextManager[Any] | None = field(default=None, repr=False)
+    # Native raw Iroh transport: context manager from vgi_rpc.iroh.iroh_connect.
+    _iroh_ctx: AbstractContextManager[Any] | None = field(default=None, repr=False)
     # Launch transport: context manager from vgi_rpc.launcher.resolve_and_connect.
     _launch_ctx: AbstractContextManager[Any] | None = field(default=None, repr=False)
 
@@ -437,11 +440,19 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         attach_opaque_data: bytes | None = None,
         pool: WorkerPool | None = _default_pool,
         *,
-        transport: Literal["subprocess", "http", "tcp", "launch"] = "subprocess",
+        transport: Literal["subprocess", "http", "tcp", "iroh", "httpi", "launch"] = "subprocess",
         base_url: str | None = None,
         tcp_host: str | None = None,
         tcp_port: int | None = None,
         tcp_proxy: str | None = None,
+        iroh_endpoint: str | None = None,
+        iroh_secret_key: bytes | str | None = None,
+        iroh_relay_urls: Sequence[str] | None = None,
+        iroh_no_relay: bool = False,
+        iroh_direct_addresses: Sequence[str] = (),
+        iroh_remote_relay_url: str | None = None,
+        iroh_connect_timeout: float | None = 30.0,
+        iroh_io_timeout: float | None = 300.0,
         bearer_token: str | None = None,
         oauth: bool = False,
         oauth_refresh_token: str | None = None,
@@ -500,6 +511,15 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             tcp_proxy: TCP-only explicit SOCKS5h proxy URI, for example
                 ``"socks5h://127.0.0.1:1055"``. Hostname resolution happens
                 at the proxy. Proxy failure never falls back to direct TCP.
+            iroh_endpoint: Iroh-only canonical ``iroh://`` or ``httpi://`` URI.
+            iroh_secret_key: Optional persistent client identity as bytes,
+                lowercase hexadecimal text, or z-base-32 text.
+            iroh_relay_urls: Optional replacement relay set.
+            iroh_no_relay: Disable relays and require a direct path.
+            iroh_direct_addresses: Already-discovered remote socket addresses.
+            iroh_remote_relay_url: Already-discovered relay hint for the remote.
+            iroh_connect_timeout: Total endpoint bind/connect deadline.
+            iroh_io_timeout: Per-I/O deadline after connection establishment.
             bearer_token: HTTP-only. When set, every request carries a
                 static ``Authorization: Bearer <token>`` header. Mutually
                 exclusive with ``oauth``/``oauth_refresh_token`` — for a
@@ -581,6 +601,18 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 raise ValueError("server_path is only meaningful for transport='subprocess'")
             if base_url is not None:
                 raise ValueError("base_url is only meaningful for transport='http'")
+        elif transport in ("iroh", "httpi"):
+            if iroh_endpoint is None:
+                raise ValueError(f"transport={transport!r} requires iroh_endpoint")
+            expected_scheme = f"{transport}://"
+            if not iroh_endpoint.startswith(expected_scheme):
+                raise ValueError(f"transport={transport!r} requires a {expected_scheme} endpoint")
+            if server_path is not None:
+                raise ValueError("server_path is only meaningful for transport='subprocess'")
+            if base_url is not None:
+                raise ValueError("base_url is only meaningful for transport='http'")
+            if tcp_host is not None or tcp_port is not None:
+                raise ValueError("tcp_host/tcp_port are only meaningful for transport='tcp'")
         elif transport == "launch":
             if not launch_argv:
                 raise ValueError("transport='launch' requires a non-empty launch_argv")
@@ -615,6 +647,23 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         self.server_path: str | Sequence[str] = server_path if server_path is not None else ""
         self._transport = transport
         self._base_url = base_url
+        self._http_prefix = ""
+        self._iroh_endpoint = iroh_endpoint
+        if transport == "httpi" and iroh_endpoint is not None:
+            from vgi_rpc.iroh import parse_iroh_uri
+
+            parsed_iroh = parse_iroh_uri(iroh_endpoint)
+            self._base_url = f"http://{parsed_iroh.endpoint_hex}"
+            self._http_prefix = parsed_iroh.base_path
+        self._iroh_options: dict[str, Any] = {
+            "secret_key": iroh_secret_key,
+            "relay_urls": tuple(iroh_relay_urls) if iroh_relay_urls is not None else None,
+            "no_relay": iroh_no_relay,
+            "direct_addresses": tuple(iroh_direct_addresses),
+            "remote_relay_url": iroh_remote_relay_url,
+            "connect_timeout": iroh_connect_timeout,
+            "io_timeout": iroh_io_timeout,
+        }
         self._tcp_host = tcp_host
         self._tcp_port = tcp_port
         self._tcp_proxy = tcp_proxy
@@ -641,7 +690,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         # caller asked for something different — all three are ordinary RPC
         # transports a worker can externalize batches over, unlike subprocess
         # (which never returns pointer batches). See ``external_location`` docs above.
-        if transport in ("http", "tcp", "launch") and external_location is None:
+        if transport in ("http", "tcp", "iroh", "httpi", "launch") and external_location is None:
             from vgi_rpc.external import ExternalLocationConfig
 
             external_location = ExternalLocationConfig()
@@ -732,6 +781,51 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             tcp_port=port,
             tcp_proxy=proxy,
             external_location=external_location,
+            worker_limit=worker_limit,
+            attach_opaque_data=attach_opaque_data,
+            pool=None,
+        )
+
+    @classmethod
+    def from_iroh(
+        cls,
+        endpoint: str,
+        *,
+        secret_key: bytes | str | None = None,
+        relay_urls: Sequence[str] | None = None,
+        no_relay: bool = False,
+        direct_addresses: Sequence[str] = (),
+        remote_relay_url: str | None = None,
+        connect_timeout: float | None = 30.0,
+        io_timeout: float | None = 300.0,
+        bearer_token: str | None = None,
+        external_location: Any | None = None,
+        accepted_max_response_bytes: int | None = _DEFAULT_ACCEPTED_MAX_RESPONSE_BYTES,
+        worker_limit: int | None = None,
+        attach_opaque_data: bytes | None = None,
+    ) -> Client:
+        """Create a client for a native ``iroh://`` or ``httpi://`` endpoint.
+
+        ``iroh://`` retains connection-local stream state. ``httpi://`` uses
+        VGI's HTTP continuation, request/response budget, authentication-header,
+        and externalized-batch behavior over an authenticated Iroh connection.
+        """
+        from vgi_rpc.iroh import parse_iroh_uri
+
+        target = parse_iroh_uri(endpoint)
+        return cls(
+            transport=cast('Literal["iroh", "httpi"]', target.scheme),
+            iroh_endpoint=endpoint,
+            iroh_secret_key=secret_key,
+            iroh_relay_urls=relay_urls,
+            iroh_no_relay=no_relay,
+            iroh_direct_addresses=direct_addresses,
+            iroh_remote_relay_url=remote_relay_url,
+            iroh_connect_timeout=connect_timeout,
+            iroh_io_timeout=io_timeout,
+            bearer_token=bearer_token,
+            external_location=external_location,
+            accepted_max_response_bytes=accepted_max_response_bytes,
             worker_limit=worker_limit,
             attach_opaque_data=attach_opaque_data,
             pool=None,
@@ -887,8 +981,12 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         """
         if self._transport == "http":
             return self._spawn_http_connection(worker_index)
+        if self._transport == "httpi":
+            return self._spawn_http_connection(worker_index)
         if self._transport == "tcp":
             return self._spawn_tcp_connection(worker_index)
+        if self._transport == "iroh":
+            return self._spawn_iroh_connection(worker_index)
         if self._transport == "launch":
             return self._spawn_launch_connection(worker_index)
         return self._spawn_subprocess_connection(worker_index)
@@ -926,6 +1024,22 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             worker_index=worker_index,
             _tcp_ctx=ctx,
         )
+
+    def _spawn_iroh_connection(self, worker_index: int) -> WorkerConnection:
+        """Open one stateful native Iroh VGI stream."""
+        from vgi_rpc.iroh import iroh_connect
+
+        assert self._iroh_endpoint is not None
+        ctx: AbstractContextManager[VgiProtocol] = iroh_connect(
+            VgiProtocol,  # type: ignore[type-abstract]
+            self._iroh_endpoint,
+            on_log=self._on_worker_log,
+            external_location=self._external_location,
+            **self._iroh_options,
+        )
+        proxy = ctx.__enter__()
+        _logger.debug("iroh_connection_opened worker_index=%s endpoint=%s", worker_index, self._iroh_endpoint)
+        return WorkerConnection(proxy=proxy, worker_index=worker_index, _iroh_ctx=ctx)
 
     def _spawn_launch_connection(self, worker_index: int) -> WorkerConnection:
         """Connect to a launcher-managed worker via ``vgi_rpc.launcher.resolve_and_connect``.
@@ -973,14 +1087,25 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         from vgi_rpc.http import http_connect
 
         httpx_client = self._get_or_create_httpx_client()
-        ctx: AbstractContextManager[VgiProtocol] = http_connect(
-            VgiProtocol,  # type: ignore[type-abstract]
-            base_url=self._base_url,
-            client=httpx_client,
-            on_log=self._on_worker_log,
-            external_location=self._external_location,
-            accepted_max_response_bytes=self._accepted_max_response_bytes,
-        )
+        if self._transport == "httpi":
+            ctx = http_connect(
+                VgiProtocol,  # type: ignore[type-abstract]
+                base_url=self._base_url,
+                client=httpx_client,
+                prefix=self._http_prefix,
+                on_log=self._on_worker_log,
+                external_location=self._external_location,
+                accepted_max_response_bytes=self._accepted_max_response_bytes,
+            )
+        else:
+            ctx = http_connect(
+                VgiProtocol,  # type: ignore[type-abstract]
+                base_url=self._base_url,
+                client=httpx_client,
+                on_log=self._on_worker_log,
+                external_location=self._external_location,
+                accepted_max_response_bytes=self._accepted_max_response_bytes,
+            )
         proxy = ctx.__enter__()
         _logger.debug("http_connection_opened worker_index=%s base_url=%s", worker_index, self._base_url)
         return WorkerConnection(
@@ -1005,6 +1130,25 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             return self._httpx_client
 
         import httpx2
+
+        if self._transport == "httpi":
+            from vgi_rpc.iroh import IrohHttpTransport, parse_iroh_uri
+
+            assert self._iroh_endpoint is not None
+            target = parse_iroh_uri(self._iroh_endpoint)
+            native_transport = IrohHttpTransport(self._iroh_endpoint, **self._iroh_options)
+            iroh_headers = (
+                {"Authorization": f"Bearer {self._bearer_token}"}
+                if self._bearer_token is not None
+                else None
+            )
+            self._httpx_client = httpx2.Client(
+                base_url=f"http://{target.endpoint_hex}",
+                transport=cast("Any", native_transport),
+                headers=iroh_headers,
+            )
+            self._httpx_client_owned = True
+            return self._httpx_client
 
         auth = None
         headers: dict[str, str] = {}
@@ -1161,6 +1305,11 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             # TCP transport — close the RPC proxy (and its socket).
             worker._tcp_ctx.__exit__(None, None, None)
             _logger.debug("tcp_connection_closed worker_index=%s", worker.worker_index)
+            return 0
+
+        if worker._iroh_ctx is not None:
+            worker._iroh_ctx.__exit__(None, None, None)
+            _logger.debug("iroh_connection_closed worker_index=%s", worker.worker_index)
             return 0
 
         if worker._launch_ctx is not None:
@@ -1373,11 +1522,13 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         RPC response-body limit, so it is not applied to this bodyless OPTIONS
         discovery request.
         """
-        if self._transport != "http":
-            raise ClientError("server_capabilities() is only available for HTTP transport")
+        if self._transport not in ("http", "httpi"):
+            raise ClientError("server_capabilities() is only available for HTTP or HTTP-over-Iroh transport")
         from vgi_rpc.http import http_capabilities
 
         httpx_client = self._get_or_create_httpx_client()
+        if self._transport == "httpi":
+            return http_capabilities(base_url=self._base_url, prefix=self._http_prefix, client=httpx_client)
         return http_capabilities(base_url=self._base_url, client=httpx_client)
 
     def __enter__(self) -> Client:
@@ -1749,7 +1900,14 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         from vgi_rpc.http import http_capabilities
 
         httpx_client = self._get_or_create_httpx_client()
-        self._http_capabilities = http_capabilities(base_url=self._base_url, client=httpx_client)
+        if self._transport == "httpi":
+            self._http_capabilities = http_capabilities(
+                base_url=self._base_url,
+                prefix=self._http_prefix,
+                client=httpx_client,
+            )
+        else:
+            self._http_capabilities = http_capabilities(base_url=self._base_url, client=httpx_client)
         return self._http_capabilities
 
     @staticmethod
@@ -1768,7 +1926,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         the original batch (no externalization needed) or a pointer batch
         carrying ``vgi_rpc.location`` metadata.
         """
-        if self._transport != "http":
+        if self._transport not in ("http", "httpi"):
             return AnnotatedBatch(batch=batch)
 
         caps = self._get_http_capabilities()
@@ -1786,7 +1944,10 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         from vgi_rpc.metadata import LOCATION_KEY
 
         httpx_client = self._get_or_create_httpx_client()
-        urls = request_upload_urls(base_url=self._base_url, count=1, client=httpx_client)
+        upload_options: dict[str, Any] = {}
+        if self._transport == "httpi":
+            upload_options["prefix"] = self._http_prefix
+        urls = request_upload_urls(base_url=self._base_url, count=1, client=httpx_client, **upload_options)
         if not urls:
             # Server claimed support but vended no URLs — surface the raw
             # request rather than silently sending too-large bytes.
@@ -2834,7 +2995,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         continuation tokens. The pipe/subprocess transport holds a live stream
         with no serializable resume point.
         """
-        return self._transport == "http"
+        return self._transport in ("http", "httpi")
 
     def table_scan_resumable(
         self,

@@ -217,6 +217,9 @@ def create_app(
     max_externalized_response_bytes: int | None = None,
     introspect_principals: Iterable[str] | None = None,
     introspect_rate_limit: int | None = None,
+    iroh_bridge_issuer: str | None = None,
+    iroh_trusted_proxy_addresses: Iterable[str] = (),
+    iroh_authenticate: bool = True,
 ) -> falcon.App[Any, Any]:
     """Create a WSGI app for a VGI worker.
 
@@ -278,6 +281,12 @@ def create_app(
         introspect_rate_limit: Introspection requests allowed per caller per
             second.  ``None`` reads ``VGI_INTROSPECT_RATE_LIMIT``, defaulting
             to 20.
+        iroh_bridge_issuer: Operator-controlled identity namespace for an
+            ``iroh-http/2`` bridge. ``None`` disables Iroh header trust.
+        iroh_trusted_proxy_addresses: Exact immediate bridge addresses.
+            Defaults to ``127.0.0.1`` after ``iroh_bridge_issuer`` is configured.
+        iroh_authenticate: Promote the verified EndpointId to primary
+            authentication. False exposes evidence without promoting it.
 
     Returns:
         A Falcon WSGI application.
@@ -326,6 +335,23 @@ def create_app(
             "introspect_rate_limit": _resolve_introspect_rate_limit(introspect_rate_limit),
         }
 
+    peer_identity_providers: tuple[Any, ...] = ()
+    peer_authentication_policy: Any = None
+    if iroh_bridge_issuer is not None:
+        from vgi_rpc.http import iroh_forwarded_header_provider
+        from vgi_rpc.rpc import observe_peer_identity, peer_identity_primary
+
+        trusted_iroh_addresses = tuple(iroh_trusted_proxy_addresses) or ("127.0.0.1",)
+        peer_identity_providers = (
+            iroh_forwarded_header_provider(
+                issuer=iroh_bridge_issuer,
+                trusted_proxy_addresses=trusted_iroh_addresses,
+            ),
+        )
+        peer_authentication_policy = (
+            peer_identity_primary("iroh") if iroh_authenticate else observe_peer_identity
+        )
+
     wsgi_app = make_wsgi_app(
         server,
         prefix=prefix,
@@ -342,6 +368,8 @@ def create_app(
         otel_config=otel_config,
         max_stream_response_bytes=max_stream_response_bytes,
         max_externalized_response_bytes=max_externalized_response_bytes,
+        peer_identity_providers=peer_identity_providers,
+        peer_authentication_policy=peer_authentication_policy,
         enable_landing_page=False,
         **introspect_kwargs,
     )
@@ -385,6 +413,26 @@ def main() -> None:
         worker_ref: str = typer.Argument(help="Worker reference: module:Class, module, or ./file.py"),
         # Transport
         http: bool = typer.Option(False, "--http", help="Serve over HTTP instead of stdin/stdout"),
+        iroh_raw_upstream: str | None = typer.Option(
+            None,
+            "--iroh-raw-upstream",
+            help="Serve a loopback TCP upstream for vgi-iroh-bridge at [HOST:]PORT.",
+        ),
+        iroh_issuer: str | None = typer.Option(
+            None,
+            "--iroh-issuer",
+            help="Identity namespace; enables trusted Iroh bridge identity for HTTP or raw upstream.",
+        ),
+        iroh_trusted_proxy: list[str] | None = typer.Option(  # noqa: B008
+            None,
+            "--iroh-trusted-proxy",
+            help="Exact bridge IP to trust; repeatable. Defaults to 127.0.0.1 when Iroh is enabled.",
+        ),
+        iroh_authenticate: bool = typer.Option(
+            True,
+            "--iroh-authenticate/--iroh-observe",
+            help="Authenticate from the verified EndpointId, or only expose its identity evidence.",
+        ),
         server: str = typer.Option(
             "waitress",
             "--server",
@@ -521,6 +569,12 @@ def main() -> None:
 
         worker_cls = load_worker_class(worker_ref)
 
+        if http and iroh_raw_upstream is not None:
+            sys.exit("--http and --iroh-raw-upstream are mutually exclusive")
+        if (iroh_raw_upstream is not None or iroh_trusted_proxy) and iroh_issuer is None:
+            sys.exit("Iroh bridge options require --iroh-issuer")
+        trusted_iroh_proxies = tuple(iroh_trusted_proxy or ["127.0.0.1"])
+
         if http:
             authenticate = _resolve_authenticate()
             oauth_metadata = _resolve_oauth_resource_metadata()
@@ -549,6 +603,56 @@ def main() -> None:
                 worker_ref=worker_ref,
                 http_workers=http_workers,
                 http_threads=http_threads,
+                iroh_bridge_issuer=iroh_issuer,
+                iroh_trusted_proxy_addresses=trusted_iroh_proxies,
+                iroh_authenticate=iroh_authenticate,
+            )
+        elif iroh_raw_upstream is not None:
+            from vgi_rpc.rpc import RpcServer, observe_peer_identity, peer_identity_primary, serve_tcp
+
+            from vgi.protocol import VgiProtocol
+            from vgi.worker import _get_vgi_version
+
+            if ":" in iroh_raw_upstream:
+                raw_host, _, raw_port_text = iroh_raw_upstream.rpartition(":")
+                raw_host = raw_host or "127.0.0.1"
+            else:
+                raw_host, raw_port_text = "127.0.0.1", iroh_raw_upstream
+            if raw_host not in ("127.0.0.1", "::1", "localhost"):
+                sys.exit("--iroh-raw-upstream must bind loopback; put the bridge beside the worker")
+            try:
+                raw_port = int(raw_port_text)
+            except ValueError:
+                raise SystemExit(
+                    f"--iroh-raw-upstream expects [HOST:]PORT, got {iroh_raw_upstream!r}"
+                ) from None
+
+            worker = worker_cls(quiet=quiet, log_level=effective_level)
+            # Iroh is also a directly addressable RPC endpoint, so advertise
+            # the standard method description just like the HTTP surface. This
+            # lets standalone clients in other languages connect without a
+            # framework-specific schema bootstrap.
+            rpc_server = RpcServer(
+                VgiProtocol,
+                worker,
+                enable_describe=True,
+                server_version=_get_vgi_version(),
+            )
+            policy = peer_identity_primary("iroh") if iroh_authenticate else observe_peer_identity
+
+            def _emit_iroh_upstream(bound_host: str, bound_port: int) -> None:
+                print(f"TCP:{bound_host}:{bound_port}", flush=True)
+
+            serve_tcp(
+                rpc_server,
+                raw_host,
+                raw_port,
+                threaded=True,
+                on_bound=_emit_iroh_upstream,
+                proxy_protocol="required",
+                trusted_proxy_addresses=trusted_iroh_proxies,
+                iroh_proxy_issuer=iroh_issuer,
+                peer_authentication_policy=policy,
             )
         else:
             otel_config = _resolve_otel_config()
@@ -1131,6 +1235,9 @@ def export_serve_config(
     log_level: int,
     max_stream_response_bytes: int | None,
     max_externalized_response_bytes: int | None,
+    iroh_bridge_issuer: str | None = None,
+    iroh_trusted_proxy_addresses: tuple[str, ...] = (),
+    iroh_authenticate: bool = True,
 ) -> None:
     """Publish the parent's serve configuration for worker processes to read.
 
@@ -1144,6 +1251,9 @@ def export_serve_config(
         log_level: Logging level for the worker instance.
         max_stream_response_bytes: Producer-stream response budget, or None.
         max_externalized_response_bytes: Externalized-response cap, or None.
+        iroh_bridge_issuer: Identity namespace for forwarded Iroh EndpointIds.
+        iroh_trusted_proxy_addresses: Exact immediate bridge addresses.
+        iroh_authenticate: Whether verified EndpointIds become primary auth.
 
     """
     os.environ[SERVE_CONFIG_ENV] = json.dumps(
@@ -1155,6 +1265,9 @@ def export_serve_config(
             "log_level": log_level,
             "max_stream_response_bytes": max_stream_response_bytes,
             "max_externalized_response_bytes": max_externalized_response_bytes,
+            "iroh_bridge_issuer": iroh_bridge_issuer,
+            "iroh_trusted_proxy_addresses": iroh_trusted_proxy_addresses,
+            "iroh_authenticate": iroh_authenticate,
         }
     )
 
@@ -1199,6 +1312,9 @@ def wsgi_app_factory() -> Any:
         otel_config=_resolve_otel_config(),
         max_stream_response_bytes=config["max_stream_response_bytes"],
         max_externalized_response_bytes=config["max_externalized_response_bytes"],
+        iroh_bridge_issuer=config.get("iroh_bridge_issuer"),
+        iroh_trusted_proxy_addresses=config.get("iroh_trusted_proxy_addresses", ()),
+        iroh_authenticate=config.get("iroh_authenticate", True),
     )
 
 
@@ -1234,6 +1350,9 @@ def _serve_http_granian(
     worker_ref: str | None,
     http_workers: int | None,
     http_threads: int | None,
+    iroh_bridge_issuer: str | None = None,
+    iroh_trusted_proxy_addresses: tuple[str, ...] = (),
+    iroh_authenticate: bool = True,
 ) -> None:
     """Serve via granian, which forks workers that import the app themselves.
 
@@ -1267,6 +1386,9 @@ def _serve_http_granian(
         http_workers: Number of worker processes; ``None`` means 1. These are
             separate interpreters, so memory scales with the count.
         http_threads: Python threads per worker; ``None`` means 1.
+        iroh_bridge_issuer: Identity namespace for forwarded Iroh EndpointIds.
+        iroh_trusted_proxy_addresses: Exact immediate bridge addresses.
+        iroh_authenticate: Whether verified EndpointIds become primary auth.
 
     """
     try:
@@ -1296,6 +1418,9 @@ def _serve_http_granian(
         log_level=effective_level,
         max_stream_response_bytes=max_stream_response_bytes,
         max_externalized_response_bytes=max_externalized_response_bytes,
+        iroh_bridge_issuer=iroh_bridge_issuer,
+        iroh_trusted_proxy_addresses=iroh_trusted_proxy_addresses,
+        iroh_authenticate=iroh_authenticate,
     )
 
     print(f"PORT:{port}", flush=True)
@@ -1348,6 +1473,9 @@ def _serve_http(
     worker_ref: str | None = None,
     http_workers: int | None = None,
     http_threads: int | None = None,
+    iroh_bridge_issuer: str | None = None,
+    iroh_trusted_proxy_addresses: tuple[str, ...] = (),
+    iroh_authenticate: bool = True,
 ) -> None:
     """Start the worker as an HTTP server."""
     port = _resolve_http_port(host, port)
@@ -1375,6 +1503,9 @@ def _serve_http(
             worker_ref=worker_ref,
             http_workers=http_workers,
             http_threads=http_threads,
+            iroh_bridge_issuer=iroh_bridge_issuer,
+            iroh_trusted_proxy_addresses=iroh_trusted_proxy_addresses,
+            iroh_authenticate=iroh_authenticate,
         )
         return
 
@@ -1398,6 +1529,9 @@ def _serve_http(
         otel_config=otel_config,
         max_stream_response_bytes=max_stream_response_bytes,
         max_externalized_response_bytes=max_externalized_response_bytes,
+        iroh_bridge_issuer=iroh_bridge_issuer,
+        iroh_trusted_proxy_addresses=iroh_trusted_proxy_addresses,
+        iroh_authenticate=iroh_authenticate,
     )
 
     # Machine-readable port for process managers and test harnesses

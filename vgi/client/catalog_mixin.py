@@ -114,7 +114,9 @@ class CatalogClientMixin:
 
     # Type hints for attributes expected from Client
     server_path: str | Sequence[str]
-    _transport: Literal["subprocess", "http", "tcp", "launch"]
+    _transport: Literal["subprocess", "http", "tcp", "iroh", "httpi", "launch"]
+    _iroh_endpoint: str | None
+    _iroh_options: dict[str, Any]
     _base_url: str | None
     _tcp_host: str | None
     _tcp_port: int | None
@@ -165,16 +167,38 @@ class CatalogClientMixin:
         """
         try:
             transport = getattr(self, "_transport", "subprocess")
-            if transport == "http":
+            if transport in ("http", "httpi"):
                 from vgi_rpc.http import http_connect
 
                 httpx_client = self._get_or_create_httpx_client()
-                with http_connect(
+                if transport == "httpi":
+                    connection = http_connect(
+                        VgiProtocol,  # type: ignore[type-abstract]
+                        base_url=self._base_url,
+                        client=httpx_client,
+                        prefix=getattr(self, "_http_prefix", ""),
+                        external_location=getattr(self, "_external_location", None),
+                        accepted_max_response_bytes=self._accepted_max_response_bytes,
+                    )
+                else:
+                    connection = http_connect(
+                        VgiProtocol,  # type: ignore[type-abstract]
+                        base_url=self._base_url,
+                        client=httpx_client,
+                        external_location=getattr(self, "_external_location", None),
+                        accepted_max_response_bytes=self._accepted_max_response_bytes,
+                    )
+                with connection as proxy:
+                    yield proxy
+            elif transport == "iroh":
+                from vgi_rpc.iroh import iroh_connect
+
+                assert self._iroh_endpoint is not None
+                with iroh_connect(
                     VgiProtocol,  # type: ignore[type-abstract]
-                    base_url=self._base_url,
-                    client=httpx_client,
+                    self._iroh_endpoint,
                     external_location=getattr(self, "_external_location", None),
-                    accepted_max_response_bytes=self._accepted_max_response_bytes,
+                    **self._iroh_options,
                 ) as proxy:
                     yield proxy
             elif transport == "tcp":

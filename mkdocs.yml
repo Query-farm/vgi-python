@@ -126,6 +126,7 @@ nav:
     - Persist state across workers: how-to/state-storage.md
     - Serve over HTTP with auth: how-to/http-auth.md
     - Connect through a Tailnet: how-to/tailnet.md
+    - Serve and connect over Iroh: how-to/iroh.md
     - Integrate with the optimizer: how-to/pushdown-and-statistics.md
     - Function Metadata: metadata.md
     - CLI: cli.md

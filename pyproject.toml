@@ -52,6 +52,7 @@ dependencies = [
 haybarn = ["haybarn>=1.5.5rc1"]
 duckdb = ["duckdb>=1.5.3"]
 http = ["vgi-rpc[http]"]
+iroh = ["vgi-rpc[iroh]"]
 # transport="launch": vgi_rpc.launcher imports filelock unconditionally at
 # module level, which lives behind vgi-rpc's own `cli` extra (alongside
 # typer, already a core dependency here, and httpx2, ditto) rather than in

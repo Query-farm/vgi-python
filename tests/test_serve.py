@@ -253,6 +253,17 @@ class TestCreateApp:
         app = create_app(_SingleWorker)
         assert isinstance(app, falcon.App)
 
+    def test_accepts_trusted_iroh_bridge_identity(self) -> None:
+        """Iroh HTTP identity no longer requires a hand-built WSGI app."""
+        import falcon
+
+        app = create_app(
+            _SingleWorker,
+            iroh_bridge_issuer="test-mesh",
+            iroh_trusted_proxy_addresses=("127.0.0.1",),
+        )
+        assert isinstance(app, falcon.App)
+
     def test_custom_prefix(self) -> None:
         """Custom prefix is used in the app."""
         app = create_app(_SingleWorker, prefix="/api")
