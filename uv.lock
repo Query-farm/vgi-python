@@ -971,6 +971,17 @@ wheels = [
 ]
 
 [[package]]
+name = "iroh"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/94/2a/f9f1cee7b0d3c71b95c06304b4e60381a7107dbccff7183ed9ff58b38141/iroh-1.1.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:b1c920f14323badc451e45b747da02d07a6e40ea2c1c97eeed5539e3ebc2b8b7", size = 6317758, upload-time = "2026-07-16T13:54:08.111Z" },
+    { url = "https://files.pythonhosted.org/packages/3e/dd/2f0a2bc113ced26981fb141cecc75e0682996ec1f49a4398c97b351c2196/iroh-1.1.0-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:abdf089cad4420e2e474a0fe8694aa32f91d7a49f569b559e18edd247a29af03", size = 7281850, upload-time = "2026-07-16T13:54:10.326Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/ed/bcc0599f186ca75936b883299596b88871075a4c4312255a7c2b752b6783/iroh-1.1.0-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:4989c7b8f6ab2ebe7afc0c2cf55b7608f7fd05f02bffee1af8d937e05de0e768", size = 7507226, upload-time = "2026-07-16T13:54:12.663Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/44/4b53f0dbc6ea161ed560b1a4b4cc317e2be77a32b00fa86cfab9fd6e5cb9/iroh-1.1.0-py3-none-win_amd64.whl", hash = "sha256:45f95b56651d32163628449727f7f3c3e311870e83599c74bc88725541ca1829", size = 6548858, upload-time = "2026-07-16T13:54:14.554Z" },
+]
+
+[[package]]
 name = "jinja2"
 version = "3.1.6"
 source = { registry = "https://pypi.org/simple" }
@@ -2618,6 +2629,9 @@ haybarn = [
 http = [
     { name = "vgi-rpc", extra = ["http"] },
 ]
+iroh = [
+    { name = "vgi-rpc", extra = ["iroh"] },
+]
 launch = [
     { name = "vgi-rpc", extra = ["cli"] },
 ]
@@ -2686,16 +2700,17 @@ requires-dist = [
     { name = "vgi-python", extras = ["test-fixtures"], marker = "extra == 'test-fixtures-writable'" },
     { name = "vgi-python", extras = ["test-fixtures", "test-fixtures-writable", "http", "launch", "oauth", "otel", "sentry", "azure"], marker = "extra == 'dev'" },
     { name = "vgi-python", extras = ["transactor"], marker = "extra == 'test-fixtures-writable'" },
-    { name = "vgi-rpc", specifier = ">=0.44.1" },
+    { name = "vgi-rpc", specifier = ">=0.45.0" },
     { name = "vgi-rpc", extras = ["cli"], marker = "extra == 'launch'" },
     { name = "vgi-rpc", extras = ["cli", "conformance", "external", "http", "oauth", "otel", "sentry"], marker = "extra == 'dev'" },
     { name = "vgi-rpc", extras = ["http"], marker = "extra == 'granian'" },
     { name = "vgi-rpc", extras = ["http"], marker = "extra == 'http'" },
+    { name = "vgi-rpc", extras = ["iroh"], marker = "extra == 'iroh'" },
     { name = "vgi-rpc", extras = ["oauth"], marker = "extra == 'oauth'" },
     { name = "vgi-rpc", extras = ["otel"], marker = "extra == 'otel'" },
     { name = "vgi-rpc", extras = ["sentry"], marker = "extra == 'sentry'" },
 ]
-provides-extras = ["haybarn", "duckdb", "http", "launch", "granian", "oauth", "otel", "sentry", "azure", "test-fixtures", "transactor", "fixtures", "test-fixtures-writable", "dev"]
+provides-extras = ["haybarn", "duckdb", "http", "iroh", "launch", "granian", "oauth", "otel", "sentry", "azure", "test-fixtures", "transactor", "fixtures", "test-fixtures-writable", "dev"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -2716,7 +2731,7 @@ docs = [
 
 [[package]]
 name = "vgi-rpc"
-version = "0.44.1"
+version = "0.45.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "docstring-parser" },
@@ -2724,9 +2739,9 @@ dependencies = [
     { name = "pywin32", marker = "sys_platform == 'win32'" },
     { name = "tzdata", marker = "sys_platform == 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1a/16/5a78053080117cac00a8945b70298d636a63d57801a33528bb63b14cdd95/vgi_rpc-0.44.1.tar.gz", hash = "sha256:37a54ae2cb7e5a7a2603aad69ece92c3c99a96906c96d2196806202ee4b70825", size = 1170809, upload-time = "2026-08-28T15:03:07.221Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f5/84/6b264ba7ff211ef200e0efa34d180702e03db5c5ff2949f6ca138a67f10d/vgi_rpc-0.45.0.tar.gz", hash = "sha256:6d7556e8d0ac5b59316bf13508eed8e976e8395652158c781c609979c92fd357", size = 1286047, upload-time = "2026-09-05T01:31:51.163Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8f/d6/3bfff42bd723ffcd0c2550d932e766aa65d39a886017cb9c002174e68196/vgi_rpc-0.44.1-py3-none-any.whl", hash = "sha256:e9785753bdb30e3f07f2bdbeafcddd09533cc014baa310e093a94fdeda6ad517", size = 545257, upload-time = "2026-08-28T15:03:05.268Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/4a/8cfd88b214f3f2dc9bfdadb10837eb80e0519508e9988b05173d824461fb/vgi_rpc-0.45.0-py3-none-any.whl", hash = "sha256:b44d73bbfc4faa0b96cfce7d9756ea0d8094efa532a273e8e343592830506b6d", size = 602221, upload-time = "2026-09-05T01:31:49.498Z" },
 ]
 
 [package.optional-dependencies]
@@ -2752,6 +2767,10 @@ http = [
     { name = "pynacl", marker = "sys_platform == 'linux'" },
     { name = "waitress" },
     { name = "zstandard" },
+]
+iroh = [
+    { name = "httpx2", extra = ["zstd"] },
+    { name = "iroh" },
 ]
 oauth = [
     { name = "joserfc" },
