@@ -264,6 +264,32 @@ class TestCreateApp:
         )
         assert isinstance(app, falcon.App)
 
+    def test_iroh_identity_composes_with_explicit_peer_authentication(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Adding Iroh evidence preserves existing providers and policy."""
+        import falcon
+
+        seen: dict[str, Any] = {}
+        provider = _StaticTailnetProvider()
+        policy = peer_identity_primary("tailscale")
+
+        def fake_make_wsgi_app(server: object, **kwargs: Any) -> falcon.App:
+            seen.update(server=server, **kwargs)
+            return falcon.App()
+
+        monkeypatch.setattr("vgi_rpc.http.make_wsgi_app", fake_make_wsgi_app)
+        create_app(
+            _SingleWorker,
+            describe=False,
+            peer_identity_providers=(provider,),
+            peer_authentication_policy=policy,
+            iroh_bridge_issuer="test-mesh",
+        )
+
+        providers = seen["peer_identity_providers"]
+        assert providers[0] is provider
+        assert len(providers) == 2
+        assert seen["peer_authentication_policy"] is policy
+
     def test_custom_prefix(self) -> None:
         """Custom prefix is used in the app."""
         app = create_app(_SingleWorker, prefix="/api")

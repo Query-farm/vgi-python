@@ -1137,11 +1137,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             assert self._iroh_endpoint is not None
             target = parse_iroh_uri(self._iroh_endpoint)
             native_transport = IrohHttpTransport(self._iroh_endpoint, **self._iroh_options)
-            iroh_headers = (
-                {"Authorization": f"Bearer {self._bearer_token}"}
-                if self._bearer_token is not None
-                else None
-            )
+            iroh_headers = {"Authorization": f"Bearer {self._bearer_token}"} if self._bearer_token is not None else None
             self._httpx_client = httpx2.Client(
                 base_url=f"http://{target.endpoint_hex}",
                 transport=cast("Any", native_transport),

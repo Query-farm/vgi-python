@@ -335,22 +335,23 @@ def create_app(
             "introspect_rate_limit": _resolve_introspect_rate_limit(introspect_rate_limit),
         }
 
-    peer_identity_providers: tuple[Any, ...] = ()
-    peer_authentication_policy: Any = None
+    effective_peer_identity_providers = tuple(peer_identity_providers)
+    effective_peer_authentication_policy = peer_authentication_policy
     if iroh_bridge_issuer is not None:
         from vgi_rpc.http import iroh_forwarded_header_provider
         from vgi_rpc.rpc import observe_peer_identity, peer_identity_primary
 
         trusted_iroh_addresses = tuple(iroh_trusted_proxy_addresses) or ("127.0.0.1",)
-        peer_identity_providers = (
+        effective_peer_identity_providers += (
             iroh_forwarded_header_provider(
                 issuer=iroh_bridge_issuer,
                 trusted_proxy_addresses=trusted_iroh_addresses,
             ),
         )
-        peer_authentication_policy = (
-            peer_identity_primary("iroh") if iroh_authenticate else observe_peer_identity
-        )
+        if effective_peer_authentication_policy is None:
+            effective_peer_authentication_policy = (
+                peer_identity_primary("iroh") if iroh_authenticate else observe_peer_identity
+            )
 
     wsgi_app = make_wsgi_app(
         server,
@@ -358,8 +359,8 @@ def create_app(
         cors_origins=cors_origins,
         token_key=signing_key,
         authenticate=authenticate,
-        peer_identity_providers=peer_identity_providers,
-        peer_authentication_policy=peer_authentication_policy,
+        peer_identity_providers=effective_peer_identity_providers,
+        peer_authentication_policy=effective_peer_authentication_policy,
         peer_service_name=peer_service_name,
         peer_resolution_timeout=peer_resolution_timeout,
         peer_provider_concurrency=peer_provider_concurrency,
@@ -368,8 +369,6 @@ def create_app(
         otel_config=otel_config,
         max_stream_response_bytes=max_stream_response_bytes,
         max_externalized_response_bytes=max_externalized_response_bytes,
-        peer_identity_providers=peer_identity_providers,
-        peer_authentication_policy=peer_authentication_policy,
         enable_landing_page=False,
         **introspect_kwargs,
     )
@@ -623,9 +622,7 @@ def main() -> None:
             try:
                 raw_port = int(raw_port_text)
             except ValueError:
-                raise SystemExit(
-                    f"--iroh-raw-upstream expects [HOST:]PORT, got {iroh_raw_upstream!r}"
-                ) from None
+                raise SystemExit(f"--iroh-raw-upstream expects [HOST:]PORT, got {iroh_raw_upstream!r}") from None
 
             worker = worker_cls(quiet=quiet, log_level=effective_level)
             # Iroh is also a directly addressable RPC endpoint, so advertise
