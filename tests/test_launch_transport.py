@@ -27,6 +27,12 @@ from vgi.client import Client
 
 _WORKER_ARGV = (sys.executable, "-m", "vgi._test_fixtures.worker")
 
+# The launch transport is AF_UNIX end to end: ``vgi_rpc.launcher`` probes and
+# serves on a Unix domain socket, which CPython does not expose on Windows
+# (``socket.AF_UNIX`` is simply absent). Mirrors the same guard vgi-rpc puts
+# on its own ``tests/test_launcher.py``.
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="launch transport is AF_UNIX-only (POSIX)")
+
 
 @pytest.fixture
 def state_dir() -> Iterator[str]:
