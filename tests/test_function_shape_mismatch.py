@@ -39,7 +39,7 @@ class TestTableFunctionOnTableInOut:
             list(
                 client.table_function(
                     function_name="echo",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(),
                 )
             )
@@ -53,7 +53,7 @@ class TestTableFunctionOnTableInOut:
             list(
                 client.table_function(
                     function_name="row_sum",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(1.0), pa.scalar(2.0))),
                 )
             )
@@ -74,7 +74,7 @@ class TestTableInOutFunctionOnPlainTableFunction:
             list(
                 client.table_in_out_function(
                     function_name="sequence",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar(5),)),
                 )

@@ -116,7 +116,7 @@ class CacheWorker(Worker):
 
     catalog = Catalog(
         name="rates",
-        schemas=[Schema(name="main", functions=[Rates])],
+        schemas=[Schema(path=["main"], functions=[Rates])],
     )
 
 

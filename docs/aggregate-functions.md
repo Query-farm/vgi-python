@@ -349,7 +349,7 @@ batch = pa.RecordBatch.from_pydict({"cat": ["a", "b", "a"], "value": [1, 10, 2]}
 with Client("vgi-fixture-worker") as client:
     result = client.aggregate_function(
         function_name="vgi_sum",
-        schema_name="main",
+        schema_path=["main"],
         input=[batch],
         group_by=["cat"],
     )
@@ -364,7 +364,7 @@ For the raw protocol — caller-allocated group ids, `combine`, and the optional
 with Client("vgi-fixture-worker") as client:
     with client.aggregate_session(
         function_name="vgi_sum",
-        schema_name="main",
+        schema_path=["main"],
         input_schema=pa.schema([pa.field("value", pa.int64())]),
     ) as session:
         session.update(
@@ -440,7 +440,7 @@ schema = pa.schema(
 with Client("vgi-fixture-worker") as client:
     with client.aggregate_streaming(
         function_name="vgi_streaming_sum",
-        schema_name="main",
+        schema_path=["main"],
         input_schema=schema,
         partition_key_count=1,
         order_key_count=1,

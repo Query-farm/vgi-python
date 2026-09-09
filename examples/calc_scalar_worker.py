@@ -37,7 +37,7 @@ class CalcWorker(Worker):
 
     catalog = Catalog(
         name="calc",
-        schemas=[Schema(name="main", functions=[Double])],
+        schemas=[Schema(path=["main"], functions=[Double])],
     )
 
 

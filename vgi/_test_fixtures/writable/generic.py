@@ -110,7 +110,7 @@ class GenericTableScan(TableFunctionGenerator[None, WritableScanState]):
             proxy.scan(
                 attach_opaque_data=attach_opaque_data,
                 tx_id=tx_id,
-                schema_name="",
+                schema_path=[""],
                 table_name=table_name,
                 columns=columns,
                 pushdown_filters=_get_pushdown_filters(params),

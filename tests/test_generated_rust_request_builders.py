@@ -92,6 +92,7 @@ def test_nullability_is_carried_by_option() -> None:
     body = block.group(1)
     assert "pub at_unit: Option<String>," in body, body
     assert "pub name: String," in body, body
+    assert "pub schema_path: Vec<String>," in body, body
 
 
 def test_every_emitted_struct_derives_vgi_arrow() -> None:

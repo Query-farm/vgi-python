@@ -18,7 +18,7 @@ class TestProjectedDataFunctionViaClient:
             outputs = list(
                 client.table_function(
                     function_name="projected_data",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(5),)),
                     projection_ids=[0, 2],  # id and value only
                 )
@@ -40,7 +40,7 @@ class TestProjectedDataFunctionViaClient:
             outputs = list(
                 client.table_function(
                     function_name="projected_data",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(3),)),
                 )
             )

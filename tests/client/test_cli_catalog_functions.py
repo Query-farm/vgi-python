@@ -293,8 +293,8 @@ class TestCLISchemaContents:
         # Check expected fields
         assert first_func["type"] == "function"
         assert "name" in first_func
-        assert "schema_name" in first_func
-        assert first_func["schema_name"] == "main"
+        assert "schema_path" in first_func
+        assert first_func["schema_path"] == ["main"]
         assert "function_type" in first_func
         assert first_func["function_type"] == "table"
 
@@ -457,7 +457,7 @@ class TestCLISchemaList:
         # Get the first schema which should be "main"
         lines = list_result.output.strip().split("\n")
         schema_info = json.loads(lines[0])
-        assert schema_info["name"] == "main"
+        assert schema_info["path"] == ["main"]
 
     def test_schema_list_with_catalog_option(self, fixture_worker: str) -> None:
         """Schema list works with --catalog option."""
@@ -482,7 +482,7 @@ class TestCLISchemaList:
         # Get the first schema which should be "main"
         lines = list_result.output.strip().split("\n")
         schema_info = json.loads(lines[0])
-        assert schema_info["name"] == "main"
+        assert schema_info["path"] == ["main"]
 
 
 class TestCLIAttachOpaqueDataCatalogOptions:

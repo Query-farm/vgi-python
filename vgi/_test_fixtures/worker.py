@@ -422,7 +422,7 @@ _EXAMPLE_CATALOG = Catalog(
     ],
     schemas=[
         Schema(
-            name="main",
+            path=["main"],
             comment="Example functions for testing VGI",
             functions=[
                 # TableInOutGenerator - transform input batches
@@ -466,7 +466,7 @@ _EXAMPLE_CATALOG = Catalog(
                 SlowCancellableBufferingFunction,
                 # Global-registration probes — also listed in the catalog's
                 # global_functions (a global function must be schema-resident,
-                # since bind dispatch is keyed on (schema_name, name)).
+                # since bind dispatch is keyed on (schema_path, name)).
                 GlobalScalarFunction,
                 GlobalTableFunction,
                 GlobalAggFunction,
@@ -751,7 +751,7 @@ _EXAMPLE_CATALOG = Catalog(
             ],
         ),
         Schema(
-            name="data",
+            path=["data"],
             comment="Example tables backed by functions",
             functions=[
                 # Schema-disambiguation probes: same registered names as the
@@ -1478,19 +1478,23 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
     ) -> TableInfo | None:
         """Return version-specific schema for time-travel tables."""
         _validate_at_params(at_unit, at_value)
-        if schema_name.lower() == "data" and name.lower() == "versioned_data" and at_unit:
+        if (
+            [component.lower() for component in schema_path] == ["data"]
+            and name.lower() == "versioned_data"
+            and at_unit
+        ):
             version = resolve_version(at_unit, at_value)
             cols = _VERSIONED_SCHEMAS[version]
             return TableInfo(
                 name=name,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 columns=SerializedSchema(cols.serialize().to_pybytes()),
                 not_null_constraints=[],
                 unique_constraints=[],
@@ -1498,7 +1502,11 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                 comment="Versioned data table demonstrating time travel with schema evolution",
                 tags={},
             )
-        if schema_name.lower() == "data" and name.lower() == "versioned_constraints" and at_unit:
+        if (
+            [component.lower() for component in schema_path] == ["data"]
+            and name.lower() == "versioned_constraints"
+            and at_unit
+        ):
             version = resolve_versioned_constraints_version(at_unit, at_value)
             cols = _VERSIONED_CONSTRAINTS_SCHEMAS[version]
             # Constraints evolve with version:
@@ -1524,21 +1532,21 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                         "fk_columns": [["department_id"]],
                         "pk_columns": [["id"]],
                         "referenced_table": ["departments"],
-                        "referenced_schema": [schema_name],
+                        "referenced_schema_path": [schema_path],
                     },
                     schema=pa.schema(
                         [
                             ("fk_columns", pa.list_(pa.utf8())),
                             ("pk_columns", pa.list_(pa.utf8())),
                             ("referenced_table", pa.utf8()),
-                            ("referenced_schema", pa.utf8()),
+                            ("referenced_schema_path", pa.list_(pa.utf8())),
                         ]
                     ),
                 )
                 fk.append(serialize_record_batch_bytes(fk_batch))
             return TableInfo(
                 name=name,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 columns=SerializedSchema(cols.serialize().to_pybytes()),
                 not_null_constraints=not_null,
                 unique_constraints=unique,
@@ -1554,7 +1562,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         # and throws BinderException before any scan-function-get RPC fires.
         # Returning TableInfo here lets the C++ binding flow proceed far enough
         # to hit that guard with the documented error message.
-        if schema_name.lower() == "data" and name.lower() in (
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() in (
             "multi_branch_numbers",
             "multi_branch_filtered_numbers",
             "multi_branch_split",
@@ -1562,7 +1570,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
             return super().table_get(
                 attach_opaque_data=attach_opaque_data,
                 transaction_opaque_data=transaction_opaque_data,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 name=name,
                 at_unit=None,
                 at_value=None,
@@ -1570,7 +1578,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         return super().table_get(
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=transaction_opaque_data,
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             at_unit=at_unit,
             at_value=at_value,
@@ -1581,7 +1589,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None,
         at_value: str | None,
@@ -1595,20 +1603,20 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         _validate_at_params(at_unit, at_value)
 
         # multi_branch_numbers: two arms, each sequence(50). Union size = 100.
-        if schema_name.lower() == "data" and name.lower() == "multi_branch_numbers":
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() == "multi_branch_numbers":
             return ScanBranchesResult(
                 branches=[
                     ScanBranch(
                         function_name="sequence",
                         positional_arguments=[pa.scalar(50)],
                         named_arguments={},
-                        schema_name="main",
+                        schema_path=["main"],
                     ),
                     ScanBranch(
                         function_name="sequence",
                         positional_arguments=[pa.scalar(50)],
                         named_arguments={},
-                        schema_name="main",
+                        schema_path=["main"],
                     ),
                 ],
                 required_extensions=[],
@@ -1618,20 +1626,20 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         # one ordinary arm (20 rows). Union size = 50. The split arm is planned
         # and claimed exactly as a standalone split scan would be; the plain arm
         # never sees a plan call at all.
-        if schema_name.lower() == "data" and name.lower() == "multi_branch_split":
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() == "multi_branch_split":
             return ScanBranchesResult(
                 branches=[
                     ScanBranch(
                         function_name="split_sequence",
                         positional_arguments=[],
                         named_arguments={"n": pa.scalar(30), "splits": pa.scalar(6)},
-                        schema_name="main",
+                        schema_path=["main"],
                     ),
                     ScanBranch(
                         function_name="sequence",
                         positional_arguments=[pa.scalar(20)],
                         named_arguments={},
-                        schema_name="main",
+                        schema_path=["main"],
                     ),
                 ],
                 required_extensions=[],
@@ -1640,7 +1648,9 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         # multi_branch_filtered_numbers: two arms each sequence(100) with
         # complementary branch_filters carving the value range in half.
         # Total rows = 100 (50 from each arm after filtering).
-        if schema_name.lower() == "data" and name.lower() == "multi_branch_filtered_numbers":
+        if [component.lower() for component in schema_path] == [
+            "data"
+        ] and name.lower() == "multi_branch_filtered_numbers":
             return ScanBranchesResult(
                 branches=[
                     ScanBranch(
@@ -1648,14 +1658,14 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                         positional_arguments=[pa.scalar(100)],
                         named_arguments={},
                         branch_filter="n < 50",
-                        schema_name="main",
+                        schema_path=["main"],
                     ),
                     ScanBranch(
                         function_name="sequence",
                         positional_arguments=[pa.scalar(100)],
                         named_arguments={},
                         branch_filter="n >= 50",
-                        schema_name="main",
+                        schema_path=["main"],
                     ),
                 ],
                 required_extensions=[],
@@ -1665,14 +1675,14 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         # read_parquet arm pointing at a well-known path the test creates
         # before querying. The parquet file has a single column "n" holding
         # values 50..99. Total rows = 100.
-        if schema_name.lower() == "data" and name.lower() == "multi_branch_hetero":
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() == "multi_branch_hetero":
             return ScanBranchesResult(
                 branches=[
                     ScanBranch(
                         function_name="sequence",
                         positional_arguments=[pa.scalar(50)],
                         named_arguments={},
-                        schema_name="main",
+                        schema_path=["main"],
                     ),
                     ScanBranch(
                         function_name="read_parquet",
@@ -1680,7 +1690,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                         named_arguments={},
                         # read_parquet is a native DuckDB function delegated straight
                         # through — it has no VGI-side schema of its own to report.
-                        schema_name=None,
+                        schema_path=None,
                     ),
                 ],
                 required_extensions=[],
@@ -1698,7 +1708,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         # the options discarded. So it also sends `nullstr`, which cannot be
         # inferred from the data: exactly one label becomes NULL, and nothing
         # else about the result changes.
-        if schema_name.lower() == "data" and name.lower() == "multi_branch_format":
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() == "multi_branch_format":
             return ScanBranchesResult(
                 branches=[
                     ScanBranch(
@@ -1719,9 +1729,9 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                             # non-null count moves.
                             "nullstr": pa.scalar("row_2", pa.string()),
                         },
-                        # Format branch, not a function branch — schema_name is
+                        # Format branch, not a function branch — schema_path is
                         # function-branch-only and doesn't apply here.
-                        schema_name=None,
+                        schema_path=None,
                     ),
                 ],
                 required_extensions=[],
@@ -1732,14 +1742,14 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         # creates via COPY … TO (FORMAT iceberg) before querying. The iceberg
         # table has a single column "n" holding values 50..99. Total rows = 100.
         # required_extensions=["iceberg"] so the rewriter auto-loads it.
-        if schema_name.lower() == "data" and name.lower() == "multi_branch_iceberg":
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() == "multi_branch_iceberg":
             return ScanBranchesResult(
                 branches=[
                     ScanBranch(
                         function_name="sequence",
                         positional_arguments=[pa.scalar(50)],
                         named_arguments={},
-                        schema_name="main",
+                        schema_path=["main"],
                     ),
                     ScanBranch(
                         function_name="iceberg_scan",
@@ -1747,7 +1757,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                         named_arguments={},
                         # iceberg_scan is a native DuckDB function delegated
                         # straight through — no VGI-side schema of its own.
-                        schema_name=None,
+                        schema_path=None,
                     ),
                 ],
                 required_extensions=["iceberg"],
@@ -1756,14 +1766,14 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         # multi_branch_empty: worker deliberately returns branches=[] to
         # exercise the C++ side's BinderException loud-fail. ParseScanBranchesResult
         # must reject this at the wire layer.
-        if schema_name.lower() == "data" and name.lower() == "multi_branch_empty":
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() == "multi_branch_empty":
             return ScanBranchesResult(branches=[], required_extensions=[])
 
         # multi_branch_two_writable: two ScanBranch entries both with
         # writable=True. ParseScanBranchesResult must reject loudly with
         # BinderException — DuckDB's single-writable-catalog-per-transaction
         # rule means at most one branch may be writable.
-        if schema_name.lower() == "data" and name.lower() == "multi_branch_two_writable":
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() == "multi_branch_two_writable":
             return ScanBranchesResult(
                 branches=[
                     ScanBranch(
@@ -1771,14 +1781,14 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                         positional_arguments=[pa.scalar(10)],
                         named_arguments={},
                         writable=True,
-                        schema_name="main",
+                        schema_path=["main"],
                     ),
                     ScanBranch(
                         function_name="sequence",
                         positional_arguments=[pa.scalar(10)],
                         named_arguments={},
                         writable=True,
-                        schema_name="main",
+                        schema_path=["main"],
                     ),
                 ],
                 required_extensions=[],
@@ -1788,14 +1798,14 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         # has filter_pushdown=false in DuckDB, so any user WHERE clause stays
         # as a LogicalFilter above the csv arm — the rewriter must not assume
         # pushdown always succeeds.
-        if schema_name.lower() == "data" and name.lower() == "multi_branch_nopushdown":
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() == "multi_branch_nopushdown":
             return ScanBranchesResult(
                 branches=[
                     ScanBranch(
                         function_name="sequence",
                         positional_arguments=[pa.scalar(50)],
                         named_arguments={},
-                        schema_name="main",
+                        schema_path=["main"],
                     ),
                     ScanBranch(
                         function_name="read_csv_auto",
@@ -1803,7 +1813,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                         named_arguments={},
                         # read_csv_auto is a native DuckDB function delegated
                         # straight through — no VGI-side schema of its own.
-                        schema_name=None,
+                        schema_path=None,
                     ),
                 ],
                 required_extensions=[],
@@ -1814,26 +1824,26 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         # by NAME with NULL-fill for missing canonicals. Canonical schema
         # is (a int64, b int64). The test creates the parquet files at the
         # paths below before querying.
-        if schema_name.lower() == "data" and name.lower() == "multi_branch_recon":
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() == "multi_branch_recon":
             return ScanBranchesResult(
                 branches=[
                     ScanBranch(
                         function_name="read_parquet",
                         positional_arguments=[pa.scalar(f"{_BRANCH_DIR}/vgi_recon_a_b.parquet", pa.string())],
                         named_arguments={},
-                        schema_name=None,
+                        schema_path=None,
                     ),
                     ScanBranch(
                         function_name="read_parquet",
                         positional_arguments=[pa.scalar(f"{_BRANCH_DIR}/vgi_recon_b_a.parquet", pa.string())],
                         named_arguments={},
-                        schema_name=None,
+                        schema_path=None,
                     ),
                     ScanBranch(
                         function_name="read_parquet",
                         positional_arguments=[pa.scalar(f"{_BRANCH_DIR}/vgi_recon_a_only.parquet", pa.string())],
                         named_arguments={},
-                        schema_name=None,
+                        schema_path=None,
                     ),
                 ],
                 required_extensions=[],
@@ -1844,7 +1854,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         return super().table_scan_branches_get(
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=transaction_opaque_data,
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             at_unit=at_unit,
             at_value=at_value,
@@ -1859,7 +1869,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None,
         at_value: str | None,
@@ -1868,95 +1878,101 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         _validate_at_params(at_unit, at_value)
 
         # Handle the "versioned_data" table with time travel
-        if schema_name.lower() == "data" and name.lower() == "versioned_data":
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() == "versioned_data":
             version = resolve_version(at_unit, at_value)
             return ScanFunctionResult(
                 function_name="versioned_data_scan",
                 positional_arguments=[pa.scalar(version)],
                 named_arguments={},
-                schema_name="main",
+                schema_path=["main"],
             )
 
         # cache_versioned: AT → version arg, same as versioned_data but the scan
         # function advertises cache metadata (for the AT cache-isolation test).
-        if schema_name.lower() == "data" and name.lower() == "cache_versioned":
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() == "cache_versioned":
             version = resolve_version(at_unit, at_value)
             return ScanFunctionResult(
                 function_name="cache_versioned_scan",
                 positional_arguments=[pa.scalar(version)],
                 named_arguments={},
-                schema_name="main",
+                schema_path=["main"],
             )
 
         # Columns-based time-travel + pushdown: resolve AT → version and pass it
         # as a scan-function argument (the native columns-based AT mechanism).
-        if schema_name.lower() == "data" and name.lower() == "tt_pushdown_cols":
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() == "tt_pushdown_cols":
             version = resolve_tt_version(at_unit, at_value)
             return ScanFunctionResult(
                 function_name="tt_pushdown_cols_scan",
                 positional_arguments=[pa.scalar(version)],
                 named_arguments={},
-                schema_name="main",
+                schema_path=["main"],
             )
 
         # Handle the versioned_constraints table with time travel
-        if schema_name.lower() == "data" and name.lower() == "versioned_constraints":
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() == "versioned_constraints":
             version = resolve_versioned_constraints_version(at_unit, at_value)
             return ScanFunctionResult(
                 function_name="versioned_constraints_scan",
                 positional_arguments=[pa.scalar(version)],
                 named_arguments={},
-                schema_name="main",
+                schema_path=["main"],
             )
 
         # rff_parquet — single-branch native read_parquet delegation.
-        if schema_name.lower() == "data" and name.lower() == "rff_parquet":
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() == "rff_parquet":
             return ScanFunctionResult(
                 function_name="read_parquet",
                 positional_arguments=[pa.scalar(f"{_BRANCH_DIR}/rff_seg.parquet", pa.string())],
                 named_arguments={},
-                schema_name=None,
+                schema_path=None,
             )
 
         # rff_hive / rff_hive_mixed — native read_parquet over a Hive glob.
-        if schema_name.lower() == "data" and name.lower() in ("rff_hive", "rff_hive_mixed"):
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() in (
+            "rff_hive",
+            "rff_hive_mixed",
+        ):
             return ScanFunctionResult(
                 function_name="read_parquet",
                 positional_arguments=[pa.scalar(f"{_BRANCH_DIR}/rff_hive/*/*/*.parquet", pa.string())],
                 named_arguments={"hive_partitioning": pa.scalar(True)},
-                schema_name=None,
+                schema_path=None,
             )
 
         # Reject AT clause on tables that don't support time travel
         if at_unit:
-            raise ValueError(f"Table '{schema_name}.{name}' does not support time travel queries")
+            raise ValueError(f"Table '{schema_path}.{name}' does not support time travel queries")
 
         # Handle the "generated_sequence" table (generated columns, backed by sequence)
-        if schema_name.lower() == "data" and name.lower() == "generated_sequence":
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() == "generated_sequence":
             return ScanFunctionResult(
                 function_name="sequence",
                 positional_arguments=[pa.scalar(10)],
                 named_arguments={},
-                schema_name="main",
+                schema_path=["main"],
             )
 
         # Handle "numbers" and "volatile_numbers" — both use sequence(100)
-        if schema_name.lower() == "data" and name.lower() in ("numbers", "volatile_numbers"):
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() in (
+            "numbers",
+            "volatile_numbers",
+        ):
             return ScanFunctionResult(
                 function_name="sequence",
                 positional_arguments=[pa.scalar(100)],
                 named_arguments={},
-                schema_name="main",
+                schema_path=["main"],
             )
 
         # funny_numbers — 123456 rows from sequence; statistics deliberately NOT set on
         # the table so SequenceFunction.statistics() provides them via table_function_statistics.
-        if schema_name.lower() == "data" and name.lower() == "funny_numbers":
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() == "funny_numbers":
             return ScanFunctionResult(
                 function_name="sequence",
                 positional_arguments=[pa.scalar(123456)],
                 named_arguments={},
-                schema_name="main",
+                schema_path=["main"],
             )
 
         # Constraint example tables — simple static scan functions
@@ -1978,12 +1994,12 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
             # rff_or reuses the rff_simple (a, b) scan — no new function needed.
             "rff_or": "rff_simple_scan",
         }
-        if schema_name.lower() == "data" and name.lower() in _static_scan_tables:
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() in _static_scan_tables:
             return ScanFunctionResult(
                 function_name=_static_scan_tables[name.lower()],
                 positional_arguments=[],
                 named_arguments={},
-                schema_name="main",
+                schema_path=["main"],
             )
 
         # Row ID test tables
@@ -1994,7 +2010,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
             "rowid_string": {"layout": "first", "row_id_type": "string"},
             "rowid_struct": {"layout": "first", "row_id_type": "struct"},
         }
-        if schema_name.lower() == "data" and name.lower() in rowid_tables:
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() in rowid_tables:
             opts = rowid_tables[name.lower()]
             return ScanFunctionResult(
                 function_name="rowid_sequence",
@@ -2003,7 +2019,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                     "layout": pa.scalar(opts["layout"]),
                     "row_id_type": pa.scalar(opts["row_id_type"]),
                 },
-                schema_name="main",
+                schema_path=["main"],
             )
 
         # Late-materialization tables → late_materialization scan function.
@@ -2014,18 +2030,18 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
             "late_mat_dup": {"dup_row_id": pa.scalar(True)},
             "late_mat_nulls": {"null_ord_stride": pa.scalar(7)},
         }
-        if schema_name.lower() == "data" and name.lower() in late_mat_tables:
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() in late_mat_tables:
             return ScanFunctionResult(
                 function_name="late_materialization",
                 positional_arguments=[pa.scalar(1000)],
                 named_arguments=late_mat_tables[name.lower()],
-                schema_name="main",
+                schema_path=["main"],
             )
 
         return super().table_scan_function_get(
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=transaction_opaque_data,
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             at_unit=at_unit,
             at_value=at_value,

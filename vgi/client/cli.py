@@ -48,6 +48,7 @@ import pyarrow as pa
 from pyarrow import ipc
 
 from vgi.arguments import Arguments
+from vgi.client.cli_utils import SCHEMA_PATH
 from vgi.client.client import Client, ClientError
 
 _logger = logging.getLogger("vgi.client.cli")
@@ -275,11 +276,11 @@ def _create_cli() -> Any:
     )
     @click.option(
         "--schema",
-        "schema_name",
+        "schema_path",
         default="main",
         show_default=True,
-        type=str,
-        help="Catalog schema declaring the function. A worker may register one name in several schemas.",
+        type=SCHEMA_PATH,
+        help="Catalog schema path declaring the function (bare root name or JSON string array).",
     )
     @click.option(
         "--args",
@@ -380,7 +381,7 @@ def _create_cli() -> Any:
         output_file: str | None,
         output_format: str,
         function_name: str | None,
-        schema_name: str,
+        schema_path: list[str],
         arguments: str,
         worker_path: str,
         worker_stderr: bool,
@@ -511,7 +512,7 @@ def _create_cli() -> Any:
                     _logger.info("invoking_table_function function=%s", function_name)
                     output_iterator = client.table_function(
                         function_name=function_name,
-                        schema_name=schema_name,
+                        schema_path=schema_path,
                         arguments=func_args,
                         projection_ids=list(projection_ids) if projection_ids else None,
                         pushdown_filters=pushdown_filters_bytes,
@@ -527,7 +528,7 @@ def _create_cli() -> Any:
 
                     output_iterator = client.scalar_function(
                         function_name=function_name,
-                        schema_name=schema_name,
+                        schema_path=schema_path,
                         arguments=func_args,
                         input=pf.iter_batches(),
                         transaction_opaque_data=transaction_opaque_data_bytes,
@@ -554,7 +555,7 @@ def _create_cli() -> Any:
 
                     output_iterator = client.table_in_out_function(
                         function_name=function_name,
-                        schema_name=schema_name,
+                        schema_path=schema_path,
                         arguments=func_args,
                         input=pf.iter_batches(),
                         projection_ids=list(projection_ids) if projection_ids else None,

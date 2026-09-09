@@ -31,8 +31,8 @@ class OrchardCatalog(InMemoryCatalog):
         tags = {"vgi_secret_service_url": url} if url else {}
         catalog = CatalogData(name="orchard", tags=tags)
         placeholder = AttachOpaqueData(b"\x00" * 16)
-        catalog.schemas["main"] = SchemaData(
-            info=SchemaInfo(attach_opaque_data=placeholder, name="main", comment=None, tags={})
+        catalog.schemas[("main",)] = SchemaData(
+            info=SchemaInfo(attach_opaque_data=placeholder, path=["main"], comment=None, tags={})
         )
         self._catalogs["orchard"] = catalog
 

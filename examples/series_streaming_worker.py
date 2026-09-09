@@ -78,7 +78,7 @@ class CalcWorker(Worker):
 
     catalog = Catalog(
         name="calc",
-        schemas=[Schema(name="main", functions=[Series])],
+        schemas=[Schema(path=["main"], functions=[Series])],
     )
 
 

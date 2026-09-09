@@ -170,6 +170,8 @@ vgi-client catalog version --catalog <name> --worker <worker>
 
 Manage schemas within a catalog.
 
+Schema-path arguments accept a bare token for a root schema, such as `main`, or a JSON array for a nested path, such as `'["tenant", "analytics", "daily"]'`. A dot is never treated as a separator: `tenant.analytics` names one component containing a dot. Use the JSON-array form for nesting.
+
 ### schema list
 
 List all schemas in a catalog.
@@ -183,7 +185,7 @@ vgi-client catalog schema list --catalog <name> --worker <worker>
 Get schema details.
 
 ```bash
-vgi-client catalog schema get <schema_name> --catalog <name> --worker <worker>
+vgi-client catalog schema get <schema_path> --catalog <name> --worker <worker>
 ```
 
 ### schema create
@@ -191,7 +193,7 @@ vgi-client catalog schema get <schema_name> --catalog <name> --worker <worker>
 Create a new schema.
 
 ```bash
-vgi-client catalog schema create <schema_name> \
+vgi-client catalog schema create <schema_path> \
     --catalog <name> --worker <worker> \
     [--comment "Description"] \
     [--tags '{"key": "value"}']
@@ -202,7 +204,7 @@ vgi-client catalog schema create <schema_name> \
 Drop a schema.
 
 ```bash
-vgi-client catalog schema drop <schema_name> \
+vgi-client catalog schema drop <schema_path> \
     --catalog <name> --worker <worker> \
     [--ignore-not-found] [--cascade]
 ```
@@ -212,7 +214,7 @@ vgi-client catalog schema drop <schema_name> \
 List all objects in a schema.
 
 ```bash
-vgi-client catalog schema contents <schema_name> --catalog <name> --worker <worker>
+vgi-client catalog schema contents <schema_path> --catalog <name> --worker <worker>
 ```
 
 ---
@@ -226,7 +228,7 @@ Manage tables within a schema.
 Get table details.
 
 ```bash
-vgi-client catalog table get <schema> <table> --catalog <name> --worker <worker>
+vgi-client catalog table get <schema_path> <table> --catalog <name> --worker <worker>
 ```
 
 ### table create
@@ -234,7 +236,7 @@ vgi-client catalog table get <schema> <table> --catalog <name> --worker <worker>
 Create a new table.
 
 ```bash
-vgi-client catalog table create <schema> <table> \
+vgi-client catalog table create <schema_path> <table> \
     --catalog <name> --worker <worker> \
     --columns '[{"name": "id", "type": "int64"}, {"name": "name", "type": "string"}]' \
     [--not-null 0] \
@@ -261,7 +263,7 @@ vgi-client catalog table create <schema> <table> \
 Drop a table.
 
 ```bash
-vgi-client catalog table drop <schema> <table> \
+vgi-client catalog table drop <schema_path> <table> \
     --catalog <name> --worker <worker> \
     [--ignore-not-found]
 ```
@@ -271,7 +273,7 @@ vgi-client catalog table drop <schema> <table> \
 Rename a table.
 
 ```bash
-vgi-client catalog table rename <schema> <old_name> <new_name> \
+vgi-client catalog table rename <schema_path> <old_name> <new_name> \
     --catalog <name> --worker <worker>
 ```
 
@@ -281,12 +283,12 @@ Set or clear table comment.
 
 ```bash
 # Set comment
-vgi-client catalog table comment <schema> <table> \
+vgi-client catalog table comment <schema_path> <table> \
     --catalog <name> --worker <worker> \
     --set "Table description"
 
 # Clear comment
-vgi-client catalog table comment <schema> <table> \
+vgi-client catalog table comment <schema_path> <table> \
     --catalog <name> --worker <worker> \
     --clear
 ```
@@ -296,7 +298,7 @@ vgi-client catalog table comment <schema> <table> \
 Get the scan function for a table.
 
 ```bash
-vgi-client catalog table scan-function <schema> <table> \
+vgi-client catalog table scan-function <schema_path> <table> \
     --catalog <name> --worker <worker>
 ```
 
@@ -311,7 +313,7 @@ Modify table columns.
 Add a column to a table.
 
 ```bash
-vgi-client catalog table column add <schema> <table> \
+vgi-client catalog table column add <schema_path> <table> \
     --catalog <name> --worker <worker> \
     --column '{"name": "email", "type": "string"}' \
     [--if-not-exists]
@@ -322,7 +324,7 @@ vgi-client catalog table column add <schema> <table> \
 Drop a column from a table.
 
 ```bash
-vgi-client catalog table column drop <schema> <table> <column> \
+vgi-client catalog table column drop <schema_path> <table> <column> \
     --catalog <name> --worker <worker> \
     [--if-exists] [--cascade]
 ```
@@ -332,7 +334,7 @@ vgi-client catalog table column drop <schema> <table> <column> \
 Rename a column.
 
 ```bash
-vgi-client catalog table column rename <schema> <table> <old_name> <new_name> \
+vgi-client catalog table column rename <schema_path> <table> <old_name> <new_name> \
     --catalog <name> --worker <worker>
 ```
 
@@ -341,7 +343,7 @@ vgi-client catalog table column rename <schema> <table> <old_name> <new_name> \
 Set column default value.
 
 ```bash
-vgi-client catalog table column set-default <schema> <table> <column> "0" \
+vgi-client catalog table column set-default <schema_path> <table> <column> "0" \
     --catalog <name> --worker <worker>
 ```
 
@@ -350,7 +352,7 @@ vgi-client catalog table column set-default <schema> <table> <column> "0" \
 Remove column default value.
 
 ```bash
-vgi-client catalog table column drop-default <schema> <table> <column> \
+vgi-client catalog table column drop-default <schema_path> <table> <column> \
     --catalog <name> --worker <worker>
 ```
 
@@ -359,7 +361,7 @@ vgi-client catalog table column drop-default <schema> <table> <column> \
 Change column type.
 
 ```bash
-vgi-client catalog table column set-type <schema> <table> \
+vgi-client catalog table column set-type <schema_path> <table> \
     --catalog <name> --worker <worker> \
     --column '{"name": "count", "type": "int64"}' \
     [--using "CAST(count AS int64)"]
@@ -370,10 +372,10 @@ vgi-client catalog table column set-type <schema> <table> \
 Set or remove NOT NULL constraint.
 
 ```bash
-vgi-client catalog table column set-not-null <schema> <table> <column> \
+vgi-client catalog table column set-not-null <schema_path> <table> <column> \
     --catalog <name> --worker <worker>
 
-vgi-client catalog table column drop-not-null <schema> <table> <column> \
+vgi-client catalog table column drop-not-null <schema_path> <table> <column> \
     --catalog <name> --worker <worker>
 ```
 
@@ -388,7 +390,7 @@ Manage views within a schema.
 Get view details.
 
 ```bash
-vgi-client catalog view get <schema> <view> --catalog <name> --worker <worker>
+vgi-client catalog view get <schema_path> <view> --catalog <name> --worker <worker>
 ```
 
 ### view create
@@ -396,7 +398,7 @@ vgi-client catalog view get <schema> <view> --catalog <name> --worker <worker>
 Create a view.
 
 ```bash
-vgi-client catalog view create <schema> <view> \
+vgi-client catalog view create <schema_path> <view> \
     --catalog <name> --worker <worker> \
     --definition "SELECT id, name FROM users WHERE active = true" \
     [--on-conflict {error|ignore|replace}]
@@ -407,7 +409,7 @@ vgi-client catalog view create <schema> <view> \
 Drop a view.
 
 ```bash
-vgi-client catalog view drop <schema> <view> \
+vgi-client catalog view drop <schema_path> <view> \
     --catalog <name> --worker <worker> \
     [--ignore-not-found]
 ```
@@ -417,7 +419,7 @@ vgi-client catalog view drop <schema> <view> \
 Rename a view.
 
 ```bash
-vgi-client catalog view rename <schema> <old_name> <new_name> \
+vgi-client catalog view rename <schema_path> <old_name> <new_name> \
     --catalog <name> --worker <worker>
 ```
 
@@ -426,7 +428,7 @@ vgi-client catalog view rename <schema> <old_name> <new_name> \
 Set or clear view comment.
 
 ```bash
-vgi-client catalog view comment <schema> <view> \
+vgi-client catalog view comment <schema_path> <view> \
     --catalog <name> --worker <worker> \
     --set "View description"
 ```

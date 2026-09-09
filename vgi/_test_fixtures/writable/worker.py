@@ -48,6 +48,7 @@ from vgi.catalog import (
     TransactionOpaqueData,
     ViewInfo,
 )
+from vgi.schema_path import sql_qualified_name
 from vgi.worker import Worker
 
 logger = logging.getLogger("vgi.writable_worker")
@@ -58,9 +59,9 @@ def _qi(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
-def _qn(schema_name: str, name: str) -> str:
+def _qn(schema_path: list[str], name: str) -> str:
     """Build a schema-qualified, quoted identifier."""
-    return f"{_qi(schema_name)}.{_qi(name)}"
+    return ".".join(_qi(component) for component in [*schema_path, name])
 
 
 def _comment_sql(target: str, comment: str | None) -> str:
@@ -151,7 +152,7 @@ def _arrow_type_to_sql(arrow_type: pa.DataType) -> str:
 def _deserialize_fk(fk_bytes: bytes) -> dict[str, Any]:
     """Deserialize a foreign key constraint from IPC bytes.
 
-    Returns a dict with keys: fk_columns, pk_columns, referenced_table, referenced_schema.
+    Returns a dict with keys: fk_columns, pk_columns, referenced_table, referenced_schema_path.
     """
     reader = pa.ipc.open_stream(fk_bytes)
     batch = reader.read_next_batch()
@@ -159,7 +160,7 @@ def _deserialize_fk(fk_bytes: bytes) -> dict[str, Any]:
         "fk_columns": batch.column("fk_columns")[0].as_py(),
         "pk_columns": batch.column("pk_columns")[0].as_py(),
         "referenced_table": batch.column("referenced_table")[0].as_py(),
-        "referenced_schema": batch.column("referenced_schema")[0].as_py(),
+        "referenced_schema_path": batch.column("referenced_schema_path")[0].as_py(),
     }
 
 
@@ -173,7 +174,7 @@ _WRITABLE_CATALOG = Catalog(
     default_schema="main",
     schemas=[
         Schema(
-            name="main",
+            path=["main"],
             functions=[
                 GenericTableScan,
                 GenericTableInsert,
@@ -279,7 +280,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         columns: SerializedSchema,
         on_conflict: OnConflict,
@@ -342,7 +343,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         # Combine into CREATE TABLE
         all_parts = col_defs + constraints
         columns_sql = ",\n  ".join(all_parts)
-        ddl = f"CREATE TABLE{if_not_exists} {_qn(schema_name, name)} (\n  {columns_sql}\n);"
+        ddl = f"CREATE TABLE{if_not_exists} {_qn(schema_path, name)} (\n  {columns_sql}\n);"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
         logger.info("table_create: %s (on_conflict=%s)", name, on_conflict.value)
 
@@ -351,7 +352,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         ignore_not_found: bool,
         cascade: bool = False,
@@ -360,7 +361,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         if_exists = " IF EXISTS" if ignore_not_found else ""
         cascade_sql = " CASCADE" if cascade else ""
         self._execute_ddl(
-            attach_opaque_data, transaction_opaque_data, f"DROP TABLE{if_exists} {_qn(schema_name, name)}{cascade_sql};"
+            attach_opaque_data, transaction_opaque_data, f"DROP TABLE{if_exists} {_qn(schema_path, name)}{cascade_sql};"
         )
         logger.info("table_drop: %s", name)
 
@@ -369,7 +370,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         new_name: str,
         ignore_not_found: bool,
@@ -378,7 +379,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         self._execute_ddl(
             attach_opaque_data,
             transaction_opaque_data,
-            f"ALTER TABLE {_qn(schema_name, name)} RENAME TO {_qi(new_name)};",
+            f"ALTER TABLE {_qn(schema_path, name)} RENAME TO {_qi(new_name)};",
         )
         logger.info("table_rename: %s -> %s", name, new_name)
 
@@ -387,7 +388,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_definition: SerializedSchema,
         ignore_not_found: bool,
@@ -398,7 +399,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         field = col_schema.field(0)
         if_not_exists = " IF NOT EXISTS" if if_column_not_exists else ""
         col_sql = f"{_qi(field.name)} {_arrow_type_to_sql(field.type)}"
-        ddl = f"ALTER TABLE {_qn(schema_name, name)} ADD COLUMN{if_not_exists} {col_sql};"
+        ddl = f"ALTER TABLE {_qn(schema_path, name)} ADD COLUMN{if_not_exists} {col_sql};"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
         logger.info("table_column_add: %s.%s", name, field.name)
 
@@ -407,7 +408,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_name: str,
         ignore_not_found: bool,
@@ -417,7 +418,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         """Drop a column from a table."""
         if_exists = " IF EXISTS" if if_column_exists else ""
         cascade_sql = " CASCADE" if cascade else ""
-        ddl = f"ALTER TABLE {_qn(schema_name, name)} DROP COLUMN{if_exists} {_qi(column_name)}{cascade_sql};"
+        ddl = f"ALTER TABLE {_qn(schema_path, name)} DROP COLUMN{if_exists} {_qi(column_name)}{cascade_sql};"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
         logger.info("table_column_drop: %s.%s", name, column_name)
 
@@ -426,14 +427,14 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_name: str,
         new_column_name: str,
         ignore_not_found: bool,
     ) -> None:
         """Rename a column in a table."""
-        ddl = f"ALTER TABLE {_qn(schema_name, name)} RENAME COLUMN {_qi(column_name)} TO {_qi(new_column_name)};"
+        ddl = f"ALTER TABLE {_qn(schema_path, name)} RENAME COLUMN {_qi(column_name)} TO {_qi(new_column_name)};"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
         logger.info("table_column_rename: %s.%s -> %s", name, column_name, new_column_name)
 
@@ -442,14 +443,14 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         comment: str | None,
         ignore_not_found: bool,
     ) -> None:
         """Set or clear the comment on a table."""
         self._execute_ddl(
-            attach_opaque_data, transaction_opaque_data, _comment_sql(f"TABLE {_qn(schema_name, name)}", comment)
+            attach_opaque_data, transaction_opaque_data, _comment_sql(f"TABLE {_qn(schema_path, name)}", comment)
         )
 
     def table_column_comment_set(
@@ -457,14 +458,14 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_name: str,
         comment: str | None,
         ignore_not_found: bool,
     ) -> None:
         """Set or clear the comment on a table column."""
-        target = f"COLUMN {_qn(schema_name, name)}.{_qi(column_name)}"
+        target = f"COLUMN {_qn(schema_path, name)}.{_qi(column_name)}"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, _comment_sql(target, comment))
 
     def table_column_type_change(
@@ -472,7 +473,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_definition: SerializedSchema,
         expression: str | None,
@@ -482,7 +483,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         col_schema = pa.ipc.read_schema(pa.BufferReader(column_definition))  # type: ignore[arg-type]
         field = col_schema.field(0)
         col_type = _arrow_type_to_sql(field.type)
-        sql = f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(field.name)} TYPE {col_type}"
+        sql = f"ALTER TABLE {_qn(schema_path, name)} ALTER COLUMN {_qi(field.name)} TYPE {col_type}"
         if expression:
             # expression comes from DuckDB's binder (serialized AST), not raw user input
             sql += f" USING {expression}"
@@ -493,14 +494,14 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_name: str,
         expression: str,
         ignore_not_found: bool,
     ) -> None:
         """Set the default expression for a column."""
-        ddl = f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(column_name)} SET DEFAULT {expression};"
+        ddl = f"ALTER TABLE {_qn(schema_path, name)} ALTER COLUMN {_qi(column_name)} SET DEFAULT {expression};"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
 
     def table_column_default_drop(
@@ -508,13 +509,13 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_name: str,
         ignore_not_found: bool,
     ) -> None:
         """Drop the default expression for a column."""
-        ddl = f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(column_name)} DROP DEFAULT;"
+        ddl = f"ALTER TABLE {_qn(schema_path, name)} ALTER COLUMN {_qi(column_name)} DROP DEFAULT;"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
 
     def table_not_null_set(
@@ -522,13 +523,13 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_name: str,
         ignore_not_found: bool,
     ) -> None:
         """Set NOT NULL constraint on a column."""
-        ddl = f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(column_name)} SET NOT NULL;"
+        ddl = f"ALTER TABLE {_qn(schema_path, name)} ALTER COLUMN {_qi(column_name)} SET NOT NULL;"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
 
     def table_not_null_drop(
@@ -536,13 +537,13 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_name: str,
         ignore_not_found: bool,
     ) -> None:
         """Drop NOT NULL constraint from a column."""
-        ddl = f"ALTER TABLE {_qn(schema_name, name)} ALTER COLUMN {_qi(column_name)} DROP NOT NULL;"
+        ddl = f"ALTER TABLE {_qn(schema_path, name)} ALTER COLUMN {_qi(column_name)} DROP NOT NULL;"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
 
     # ========== Schema discovery (merge static + dynamic) ==========
@@ -566,14 +567,14 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         static_schemas = [
             SchemaInfo(
                 attach_opaque_data=s.attach_opaque_data,
-                name=s.name,
+                path=list(s.path),
                 comment=s.comment,
                 tags=s.tags,
                 estimated_object_count=None,
             )
             for s in static_schemas
         ]
-        static_names = {s.name.lower() for s in static_schemas}
+        static_paths = {tuple(component.lower() for component in s.path) for s in static_schemas}
 
         if not transaction_opaque_data:
             return static_schemas
@@ -586,12 +587,12 @@ class WritableCatalog(ReadOnlyCatalogInterface):
             return static_schemas
 
         result = list(static_schemas)
-        for name in dynamic_names:
-            if name.lower() not in static_names:
+        for path in dynamic_names:
+            if tuple(component.lower() for component in path) not in static_paths:
                 result.append(
                     SchemaInfo(
                         attach_opaque_data=attach_opaque_data,
-                        name=name,
+                        path=list(path),
                         comment=None,
                         tags={},
                     )
@@ -603,11 +604,11 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
     ) -> SchemaInfo | None:
         """Get schema info — check static first, then transactor."""
         result = super().schema_get(
-            attach_opaque_data=attach_opaque_data, transaction_opaque_data=transaction_opaque_data, name=name
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=transaction_opaque_data, path=path
         )
         if result is not None:
             return result
@@ -617,14 +618,15 @@ class WritableCatalog(ReadOnlyCatalogInterface):
 
         try:
             proxy = transactor_proxy._get_proxy()
-            schema_names = proxy.list_schemas(attach_opaque_data=attach_opaque_data, tx_id=transaction_opaque_data)
+            schema_paths = proxy.list_schemas(attach_opaque_data=attach_opaque_data, tx_id=transaction_opaque_data)
         except Exception:
             return None
 
-        if name.lower() in {n.lower() for n in schema_names}:
+        normalized_path = tuple(component.lower() for component in path)
+        if normalized_path in {tuple(component.lower() for component in candidate) for candidate in schema_paths}:
             return SchemaInfo(
                 attach_opaque_data=attach_opaque_data,
-                name=name,
+                path=list(path),
                 comment=None,
                 tags={},
             )
@@ -637,29 +639,33 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         on_conflict: OnConflict = OnConflict.ERROR,
         comment: str | None,
         tags: dict[str, str] | None,
     ) -> None:
         """Create a new schema in the transactor's DuckDB database."""
         if_not_exists = " IF NOT EXISTS" if on_conflict == OnConflict.IGNORE else ""
-        self._execute_ddl(attach_opaque_data, transaction_opaque_data, f"CREATE SCHEMA{if_not_exists} {_qi(name)};")
+        qualified_path = ".".join(_qi(component) for component in path)
+        self._execute_ddl(
+            attach_opaque_data, transaction_opaque_data, f"CREATE SCHEMA{if_not_exists} {qualified_path};"
+        )
 
     def schema_drop(
         self,
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         ignore_not_found: bool,
         cascade: bool,
     ) -> None:
         """Drop a schema from the transactor's DuckDB database."""
         if_exists = " IF EXISTS" if ignore_not_found else ""
         cascade_sql = " CASCADE" if cascade else ""
+        qualified_path = ".".join(_qi(component) for component in path)
         self._execute_ddl(
-            attach_opaque_data, transaction_opaque_data, f"DROP SCHEMA{if_exists} {_qi(name)}{cascade_sql};"
+            attach_opaque_data, transaction_opaque_data, f"DROP SCHEMA{if_exists} {qualified_path}{cascade_sql};"
         )
 
     # ========== DDL: View operations ==========
@@ -669,7 +675,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         definition: str,
         on_conflict: OnConflict,
@@ -677,7 +683,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         """Create a new view in the transactor's DuckDB database."""
         if_replace = " OR REPLACE" if on_conflict == OnConflict.REPLACE else ""
         if_not_exists = " IF NOT EXISTS" if on_conflict == OnConflict.IGNORE else ""
-        sql = f"CREATE{if_replace} VIEW{if_not_exists} {_qn(schema_name, name)} AS {definition};"
+        sql = f"CREATE{if_replace} VIEW{if_not_exists} {_qn(schema_path, name)} AS {definition};"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, sql)
 
     def view_drop(
@@ -685,7 +691,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         ignore_not_found: bool,
         cascade: bool = False,
@@ -694,7 +700,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         if_exists = " IF EXISTS" if ignore_not_found else ""
         cascade_sql = " CASCADE" if cascade else ""
         self._execute_ddl(
-            attach_opaque_data, transaction_opaque_data, f"DROP VIEW{if_exists} {_qn(schema_name, name)}{cascade_sql};"
+            attach_opaque_data, transaction_opaque_data, f"DROP VIEW{if_exists} {_qn(schema_path, name)}{cascade_sql};"
         )
 
     def view_rename(
@@ -702,7 +708,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         new_name: str,
         ignore_not_found: bool,
@@ -711,7 +717,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         self._execute_ddl(
             attach_opaque_data,
             transaction_opaque_data,
-            f"ALTER VIEW {_qn(schema_name, name)} RENAME TO {_qi(new_name)};",
+            f"ALTER VIEW {_qn(schema_path, name)} RENAME TO {_qi(new_name)};",
         )
 
     def view_comment_set(
@@ -719,14 +725,14 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         comment: str | None,
         ignore_not_found: bool,
     ) -> None:
         """Set or clear the comment on a view."""
         self._execute_ddl(
-            attach_opaque_data, transaction_opaque_data, _comment_sql(f"VIEW {_qn(schema_name, name)}", comment)
+            attach_opaque_data, transaction_opaque_data, _comment_sql(f"VIEW {_qn(schema_path, name)}", comment)
         )
 
     # ========== Dynamic view discovery ==========
@@ -736,14 +742,14 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
     ) -> ViewInfo | None:
         """Get view info — check static catalog first, then transactor."""
         result = super().view_get(
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=transaction_opaque_data,
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
         )
         if result is not None:
@@ -769,7 +775,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
 
         return ViewInfo(
             name=name,
-            schema_name=schema_name,
+            schema_path=schema_path,
             definition=info["definition"],
             comment=info.get("comment"),
             tags={},
@@ -782,7 +788,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
@@ -792,7 +798,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         result = super().table_get(
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=transaction_opaque_data,
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             at_unit=at_unit,
             at_value=at_value,
@@ -807,7 +813,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
             proxy = transactor_proxy._get_proxy()
             # Use schema-qualified name for non-default schemas
             # Don't quote — the transactor handles its own quoting internally
-            tx_table_name = f"{schema_name}.{name}" if schema_name else name
+            tx_table_name = sql_qualified_name(schema_path, name)
             schema_bytes = proxy.table_schema(
                 attach_opaque_data=attach_opaque_data,
                 table_name=tx_table_name,
@@ -871,14 +877,14 @@ class WritableCatalog(ReadOnlyCatalogInterface):
                                 "fk_columns": [list(cols)],
                                 "pk_columns": [list(ref_cols)],
                                 "referenced_table": [ref_table],
-                                "referenced_schema": [schema_name],
+                                "referenced_schema_path": [schema_path],
                             },
                             schema=pa.schema(
                                 [
                                     ("fk_columns", pa.list_(pa.utf8())),
                                     ("pk_columns", pa.list_(pa.utf8())),
                                     ("referenced_table", pa.utf8()),
-                                    ("referenced_schema", pa.utf8()),
+                                    ("referenced_schema_path", pa.list_(pa.utf8())),
                                 ]
                             ),
                         )
@@ -894,7 +900,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
 
         return TableInfo(
             name=name,
-            schema_name=schema_name,
+            schema_path=schema_path,
             columns=serialized,
             not_null_constraints=not_null_constraints,
             unique_constraints=unique_constraints,
@@ -914,7 +920,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         type: SchemaObjectType,
         info_type: type,
         list_method: str,
@@ -925,7 +931,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
             super().schema_contents(  # type: ignore[call-overload]
                 attach_opaque_data=attach_opaque_data,
                 transaction_opaque_data=transaction_opaque_data,
-                name=schema_name,
+                path=schema_path,
                 type=type,
             )
         )
@@ -940,7 +946,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
                 dynamic_names = getattr(proxy, list_method)(
                     attach_opaque_data=attach_opaque_data,
                     tx_id=transaction_opaque_data,
-                    schema_name=schema_name,
+                    schema_path=schema_path,
                 )
             else:
                 dynamic_names = []
@@ -954,7 +960,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
                 item = getattr(self, get_method)(
                     attach_opaque_data=attach_opaque_data,
                     transaction_opaque_data=transaction_opaque_data,
-                    schema_name=schema_name,
+                    schema_path=schema_path,
                     name=item_name,
                 )
                 if item is not None:
@@ -967,7 +973,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         type: Literal[SchemaObjectType.TABLE],
     ) -> Sequence[TableInfo]: ...
 
@@ -977,7 +983,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         type: Literal[SchemaObjectType.VIEW],
     ) -> Sequence[ViewInfo]: ...
 
@@ -987,7 +993,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         type: Literal[
             SchemaObjectType.SCALAR_FUNCTION,
             SchemaObjectType.TABLE_FUNCTION,
@@ -1001,7 +1007,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         type: Literal[SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO],
     ) -> Sequence[MacroInfo]: ...
 
@@ -1011,7 +1017,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         type: Literal[SchemaObjectType.INDEX],
     ) -> Sequence[IndexInfo]: ...
 
@@ -1020,7 +1026,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         type: SchemaObjectType,
     ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo]:
         """List schema contents, merging static + dynamic entries."""
@@ -1030,7 +1036,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
             return self._merge_dynamic_contents(
                 attach_opaque_data=attach_opaque_data,
                 transaction_opaque_data=transaction_opaque_data,
-                schema_name=name,
+                schema_path=path,
                 type=type,
                 info_type=TableInfo,
                 list_method="list_user_tables",
@@ -1040,7 +1046,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
             return self._merge_dynamic_contents(
                 attach_opaque_data=attach_opaque_data,
                 transaction_opaque_data=transaction_opaque_data,
-                schema_name=name,
+                schema_path=path,
                 type=type,
                 info_type=ViewInfo,
                 list_method="list_user_views",
@@ -1049,15 +1055,15 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         return super().schema_contents(  # type: ignore[call-overload, no-any-return]
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=transaction_opaque_data,
-            name=name,
+            path=path,
             type=type,
         )
 
     # ========== Dynamic scan/write function dispatch ==========
 
-    def _function_get(self, kind: str, *, schema_name: str, name: str, **kwargs: Any) -> ScanFunctionResult:
+    def _function_get(self, kind: str, *, schema_path: list[str], name: str, **kwargs: Any) -> ScanFunctionResult:
         """Dispatch all tables to generic functions."""
-        qualified = f"{schema_name}.{name}" if schema_name else name
+        qualified = sql_qualified_name(schema_path, name)
         return ScanFunctionResult(
             function_name=f"generic_writable_{kind}",
             positional_arguments=[pa.scalar(qualified)],
@@ -1069,20 +1075,20 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None,
         at_value: str | None,
     ) -> ScanFunctionResult:
         """Return the generic scan function for a table."""
-        return self._function_get("scan", schema_name=schema_name, name=name)
+        return self._function_get("scan", schema_path=schema_path, name=name)
 
     def table_insert_function_get(
         self,
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         writable_branch_function_name: str | None = None,
     ) -> ScanFunctionResult:
@@ -1090,29 +1096,29 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         # writable_branch_function_name is unused — the WritableCatalog is
         # single-branch only.
         del writable_branch_function_name
-        return self._function_get("insert", schema_name=schema_name, name=name)
+        return self._function_get("insert", schema_path=schema_path, name=name)
 
     def table_update_function_get(
         self,
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
     ) -> ScanFunctionResult:
         """Return the generic update function for a table."""
-        return self._function_get("update", schema_name=schema_name, name=name)
+        return self._function_get("update", schema_path=schema_path, name=name)
 
     def table_delete_function_get(
         self,
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
     ) -> ScanFunctionResult:
         """Return the generic delete function for a table."""
-        return self._function_get("delete", schema_name=schema_name, name=name)
+        return self._function_get("delete", schema_path=schema_path, name=name)
 
 
 class WritableWorker(Worker):

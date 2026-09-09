@@ -32,7 +32,7 @@ catalog = Catalog(
     name="mydb",
     schemas=[
         Schema(
-            name="data",
+            path=["data"],
             tables=[
                 Table(
                     name="products",
@@ -128,11 +128,11 @@ from vgi.catalog.duckdb_statistics import column_statistics_from_duckdb
 
 class MyCatalog(CatalogInterface):
     def table_column_statistics_get(
-        self, *, attach_opaque_data, transaction_opaque_data, schema_name, name,
+        self, *, attach_opaque_data, transaction_opaque_data, schema_path, name,
     ) -> TableColumnStatisticsResult | None:
         conn = self._get_connection(attach_opaque_data)
         return TableColumnStatisticsResult(
-            statistics=column_statistics_from_duckdb(conn, name, schema_name=schema_name),
+            statistics=column_statistics_from_duckdb(conn, name, schema_path=schema_path),
             cache_max_age_seconds=60,  # Re-fetch every minute
         )
 ```
@@ -163,7 +163,7 @@ Notes:
 
 Statistics are transmitted via the `catalog_table_column_statistics_get` RPC method:
 
-**Request**: standard catalog params (`attach_opaque_data`, `schema_name`, `name`, `transaction_opaque_data`)
+**Request**: standard catalog params (`attach_opaque_data`, `schema_path`, `name`, `transaction_opaque_data`)
 
 **Response**: single RecordBatch with N rows (one per column):
 
@@ -188,7 +188,7 @@ DuckDB is not the only caller. A pure-Python [`Client`][vgi.client.Client] reads
 ```python test="skip"
 stats = client.table_column_statistics(
     attach_opaque_data=attach.attach_opaque_data,
-    schema_name="main",
+    schema_path=["main"],
     name="events",
 )
 for column in stats:

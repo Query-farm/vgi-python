@@ -3,7 +3,7 @@
 """A function name may be registered in more than one catalog schema.
 
 The bare name is therefore not a unique key: the worker resolves the pair
-``(BindRequest.schema_name, BindRequest.function_name)``. These tests pin that
+``(BindRequest.schema_path, BindRequest.function_name)``. These tests pin that
 behaviour on the Python side; ``vgi/test/sql/integration/scalar/
 same_name_schemas.test`` covers the same ground end-to-end through DuckDB.
 """
@@ -30,13 +30,13 @@ from vgi.worker import Worker
 _INPUT_SCHEMA = pa.schema([pa.field("value", pa.int64())])
 
 
-def _bind_request(schema_name: str | None) -> BindRequest:
+def _bind_request(schema_path: list[str] | None) -> BindRequest:
     return BindRequest(
         function_name="test_same_name_bind",
         arguments=Arguments(positional=()),
         function_type=FunctionType.SCALAR,
         input_schema=_INPUT_SCHEMA,
-        schema_name=schema_name,
+        schema_path=schema_path,
     )
 
 
@@ -46,17 +46,17 @@ class TestSchemaScopedResolution:
     def test_main_schema_resolves_to_main_implementation(self) -> None:
         """A `main`-qualified bind reaches the `main` class."""
         worker = ExampleWorker()
-        assert worker._resolve_function(_bind_request("main")) is SameNameMainFunction
+        assert worker._resolve_function(_bind_request(["main"])) is SameNameMainFunction
 
     def test_data_schema_resolves_to_data_implementation(self) -> None:
         """A `data`-qualified bind reaches the `data` class."""
         worker = ExampleWorker()
-        assert worker._resolve_function(_bind_request("data")) is SameNameDataFunction
+        assert worker._resolve_function(_bind_request(["data"])) is SameNameDataFunction
 
     def test_schema_lookup_is_case_insensitive(self) -> None:
         """DuckDB lowercases unquoted identifiers; a quoted "Main" must still match."""
         worker = ExampleWorker()
-        assert worker._resolve_function(_bind_request("MAIN")) is SameNameMainFunction
+        assert worker._resolve_function(_bind_request(["MAIN"])) is SameNameMainFunction
 
     def test_unqualified_call_reports_the_cross_schema_ambiguity(self) -> None:
         """Without a schema the name is genuinely ambiguous — say so, actionably."""
@@ -70,15 +70,16 @@ class TestSchemaScopedResolution:
     def test_naming_a_schema_without_the_function_lists_where_it_lives(self) -> None:
         """A wrong schema names the schemas that do hold the function."""
         worker = ExampleWorker()
-        with pytest.raises(ValueError, match="not registered in schema 'nope'") as exc_info:
-            worker._resolve_function(_bind_request("nope"))
-        assert "['data', 'main']" in str(exc_info.value)
+        with pytest.raises(ValueError, match=r"not registered in schema \['nope'\]") as exc_info:
+            worker._resolve_function(_bind_request(["nope"]))
+        assert "['data']" in str(exc_info.value)
+        assert "['main']" in str(exc_info.value)
 
     def test_registry_keeps_one_bucket_per_schema(self) -> None:
         """The (schema, name) index does not merge the two declarations."""
         registry = ExampleWorker._build_schema_registry()
-        assert registry[("main", "test_same_name_bind")] == [SameNameMainFunction]
-        assert registry[("data", "test_same_name_bind")] == [SameNameDataFunction]
+        assert registry[(("main",), "test_same_name_bind")] == [SameNameMainFunction]
+        assert registry[(("data",), "test_same_name_bind")] == [SameNameDataFunction]
 
 
 class _Uncontested(ScalarFunction):
@@ -100,7 +101,7 @@ class _Uncontested(ScalarFunction):
 class _OnlyHereWorker(Worker):
     """Declares its single function in a schema that isn't named `main`."""
 
-    catalog = Catalog(name="probe", default_schema="side", schemas=[Schema(name="side", functions=[_Uncontested])])
+    catalog = Catalog(name="probe", default_schema="side", schemas=[Schema(path=["side"], functions=[_Uncontested])])
 
 
 class TestUnambiguousNames:
@@ -125,7 +126,7 @@ class TestUnambiguousNames:
             arguments=Arguments(positional=()),
             function_type=FunctionType.SCALAR,
             input_schema=_INPUT_SCHEMA,
-            schema_name="side",
+            schema_path=["side"],
         )
         assert worker._resolve_function(request) is _Uncontested
 
@@ -148,7 +149,7 @@ class TestLegacyFunctionsList:
             arguments=Arguments(positional=()),
             function_type=FunctionType.SCALAR,
             input_schema=_INPUT_SCHEMA,
-            schema_name="main",
+            schema_path=["main"],
         )
         assert worker._resolve_function(request) is _Uncontested
 
@@ -173,7 +174,7 @@ class TestCrossCatalogResolution:
             arguments=Arguments(positional=()),
             function_type=FunctionType.SCALAR,
             input_schema=_INPUT_SCHEMA,
-            schema_name="main",
+            schema_path=["main"],
             attach_opaque_data=attach_opaque_data,
         )
 
@@ -204,7 +205,7 @@ class TestCrossCatalogResolution:
 
     def test_both_catalogs_declare_the_same_schema_and_name(self) -> None:
         """The fixture is only meaningful if the collision is total."""
-        key = ("main", "test_same_name_catalog")
+        key = (("main",), "test_same_name_catalog")
         assert TwinAWorker._build_schema_registry()[key] == [TwinAFunction]
         assert TwinBWorker._build_schema_registry()[key] == [TwinBFunction]
 

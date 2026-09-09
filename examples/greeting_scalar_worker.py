@@ -37,7 +37,7 @@ class GreetingWorker(Worker):
 
     catalog = Catalog(
         name="greetings",
-        schemas=[Schema(name="main", functions=[Greeting])],
+        schemas=[Schema(path=["main"], functions=[Greeting])],
     )
 
 

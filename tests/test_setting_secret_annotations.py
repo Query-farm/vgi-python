@@ -171,7 +171,7 @@ class TestScalarFunctionSettingTypes:
             outputs = list(
                 client.scalar_function(
                     function_name="multiply_by_setting",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     settings={"multiplier": 5},
                 )
@@ -194,7 +194,7 @@ class TestScalarFunctionSettingTypes:
             outputs = list(
                 client.scalar_function(
                     function_name="return_secret_value",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     secrets={"vgi_example": secret_value},
                 )
@@ -222,7 +222,7 @@ class TestTableFunctionSettingAnnotations:
             outputs = list(
                 client.table_function(
                     function_name="settings_aware",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(3),)),
                     settings={
                         "vgi_verbose_mode": "true",
@@ -258,7 +258,7 @@ class TestTableFunctionSettingAnnotations:
             outputs = list(
                 client.table_function(
                     function_name="secret_demo",
-                    schema_name="main",
+                    schema_path=["main"],
                     secrets={"vgi_example": secret_value},
                 )
             )
@@ -289,7 +289,7 @@ class TestTableFunctionSettingAnnotations:
             outputs = list(
                 client.table_in_out_function(
                     function_name="secret_in_out",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     secrets={"vgi_example": secret_value},
                 )
@@ -404,7 +404,7 @@ class TestSecretsTypeInParams:
             outputs = list(
                 client.table_function(
                     function_name="settings_aware",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(1),)),
                     settings={
                         "vgi_verbose_mode": "false",

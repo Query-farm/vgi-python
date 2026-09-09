@@ -694,7 +694,7 @@ _ACCUMULATE_CATALOG = Catalog(
     default_schema="main",
     schemas=[
         Schema(
-            name="main",
+            path=["main"],
             comment="Row accumulation keyed by name, persisted via FunctionStorage and scoped per ATTACH",
             functions=[
                 AccumulateFunction,

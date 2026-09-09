@@ -30,7 +30,7 @@ import pytest
 
 from vgi.arguments import Arguments
 
-DATA = "data"
+DATA = ["data"]
 
 
 @pytest.fixture
@@ -48,9 +48,9 @@ def _attach_opaque(client: Any) -> Any:
 def test_table_get_at_unit_returns_the_versioned_schema(client: Any) -> None:
     opaque = _attach_opaque(client)
     v1 = client.table_get(
-        attach_opaque_data=opaque, schema_name=DATA, name="versioned_data", at_unit="VERSION", at_value="1"
+        attach_opaque_data=opaque, schema_path=DATA, name="versioned_data", at_unit="VERSION", at_value="1"
     )
-    live = client.table_get(attach_opaque_data=opaque, schema_name=DATA, name="versioned_data")
+    live = client.table_get(attach_opaque_data=opaque, schema_path=DATA, name="versioned_data")
 
     v1_schema = pa.ipc.read_schema(pa.py_buffer(v1.columns))
     live_schema = pa.ipc.read_schema(pa.py_buffer(live.columns))
@@ -60,16 +60,16 @@ def test_table_get_at_unit_returns_the_versioned_schema(client: Any) -> None:
 
 def test_table_get_with_no_at_clause_is_unaffected(client: Any) -> None:
     """The new `at_unit`/`at_value` params default to `None` — unchanged behavior without them."""
-    info = client.table_get(attach_opaque_data=_attach_opaque(client), schema_name=DATA, name="numbers")
+    info = client.table_get(attach_opaque_data=_attach_opaque(client), schema_path=DATA, name="numbers")
     assert info is not None
 
 
 def test_table_function_at_unit_reaches_a_worker_that_reads_it_from_init(client: Any) -> None:
     """`tt_pushdown_scan` reads `at_unit`/`at_value` off the init request, not a resolved bind arg."""
     v1_batches = list(
-        client.table_function(function_name="tt_pushdown_scan", schema_name=DATA, at_unit="VERSION", at_value="1")
+        client.table_function(function_name="tt_pushdown_scan", schema_path=DATA, at_unit="VERSION", at_value="1")
     )
-    live_batches = list(client.table_function(function_name="tt_pushdown_scan", schema_name=DATA))
+    live_batches = list(client.table_function(function_name="tt_pushdown_scan", schema_path=DATA))
 
     assert sum(b.num_rows for b in v1_batches) == 5
     assert sum(b.num_rows for b in live_batches) == 10
@@ -79,7 +79,7 @@ def test_table_function_with_no_at_clause_is_unaffected(client: Any) -> None:
     """The new `at_unit`/`at_value` params default to `None` — unchanged behavior without them."""
     batches = list(
         client.table_function(
-            function_name="sequence", schema_name="main", arguments=Arguments(positional=(pa.scalar(5),))
+            function_name="sequence", schema_path=["main"], arguments=Arguments(positional=(pa.scalar(5),))
         )
     )
     assert sum(b.num_rows for b in batches) == 5

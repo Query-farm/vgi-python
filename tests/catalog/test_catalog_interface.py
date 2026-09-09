@@ -99,13 +99,13 @@ class MinimalCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
     ) -> SchemaInfo | None:
         """Get schema info."""
-        if name == "main":
+        if path == ["main"]:
             return SchemaInfo(
                 attach_opaque_data=attach_opaque_data,
-                name="main",
+                path=["main"],
                 comment=None,
                 tags={},
             )
@@ -116,7 +116,7 @@ class MinimalCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
@@ -129,7 +129,7 @@ class MinimalCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
     ) -> ViewInfo | None:
         """Get view info."""
@@ -140,7 +140,7 @@ class MinimalCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
     ) -> MacroInfo | None:
         """Get macro info."""
@@ -171,7 +171,7 @@ class TestCatalogInterfaceDefaults:
         schemas = list(catalog.schemas(attach_opaque_data=attach_opaque_data, transaction_opaque_data=None))
 
         assert len(schemas) == 1
-        assert schemas[0].name == "main"
+        assert schemas[0].path == ["main"]
         assert schemas[0].comment is None
         assert schemas[0].tags == {}
 
@@ -231,7 +231,7 @@ def _not_implemented_test_cases() -> list[tuple[str, str, Callable[[MinimalCatal
             lambda c: c.schema_create(
                 attach_opaque_data=TEST_ATTACH_ID,
                 transaction_opaque_data=None,
-                name="new_schema",
+                path=["new_schema"],
                 comment=None,
                 tags={},
             ),
@@ -242,7 +242,7 @@ def _not_implemented_test_cases() -> list[tuple[str, str, Callable[[MinimalCatal
             lambda c: c.schema_drop(
                 attach_opaque_data=TEST_ATTACH_ID,
                 transaction_opaque_data=None,
-                name="schema",
+                path=["schema"],
                 ignore_not_found=False,
                 cascade=False,
             ),
@@ -253,7 +253,7 @@ def _not_implemented_test_cases() -> list[tuple[str, str, Callable[[MinimalCatal
             lambda c: c.schema_contents(
                 attach_opaque_data=TEST_ATTACH_ID,
                 transaction_opaque_data=None,
-                name="main",
+                path=["main"],
                 type=SchemaObjectType.TABLE,
             ),
         ),
@@ -263,7 +263,7 @@ def _not_implemented_test_cases() -> list[tuple[str, str, Callable[[MinimalCatal
             lambda c: c.table_create(
                 attach_opaque_data=TEST_ATTACH_ID,
                 transaction_opaque_data=None,
-                schema_name="main",
+                schema_path=["main"],
                 name="table",
                 columns=SerializedSchema(b""),
                 on_conflict=OnConflict.ERROR,
@@ -278,7 +278,7 @@ def _not_implemented_test_cases() -> list[tuple[str, str, Callable[[MinimalCatal
             lambda c: c.view_create(
                 attach_opaque_data=TEST_ATTACH_ID,
                 transaction_opaque_data=None,
-                schema_name="main",
+                schema_path=["main"],
                 name="view",
                 definition="SELECT 1",
                 on_conflict=OnConflict.ERROR,
@@ -290,7 +290,7 @@ def _not_implemented_test_cases() -> list[tuple[str, str, Callable[[MinimalCatal
             lambda c: c.macro_create(
                 attach_opaque_data=TEST_ATTACH_ID,
                 transaction_opaque_data=None,
-                schema_name="main",
+                schema_path=["main"],
                 name="my_macro",
                 macro_type=MacroType.SCALAR,
                 parameters=["x"],
@@ -304,7 +304,7 @@ def _not_implemented_test_cases() -> list[tuple[str, str, Callable[[MinimalCatal
             lambda c: c.macro_drop(
                 attach_opaque_data=TEST_ATTACH_ID,
                 transaction_opaque_data=None,
-                schema_name="main",
+                schema_path=["main"],
                 name="my_macro",
                 ignore_not_found=False,
             ),
@@ -365,7 +365,7 @@ class MinimalReadOnlyCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
     ) -> SchemaInfo | None:
         """Get schema info."""
         return None
@@ -375,7 +375,7 @@ class MinimalReadOnlyCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
@@ -388,7 +388,7 @@ class MinimalReadOnlyCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
     ) -> ViewInfo | None:
         """Get view info."""
@@ -399,7 +399,7 @@ class MinimalReadOnlyCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
     ) -> MacroInfo | None:
         """Get macro info."""
@@ -435,7 +435,7 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
             lambda c: c.schema_create(
                 attach_opaque_data=TEST_ATTACH_ID,
                 transaction_opaque_data=None,
-                name="new",
+                path=["new"],
                 comment=None,
                 tags={},
             ),
@@ -445,7 +445,7 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
             lambda c: c.schema_drop(
                 attach_opaque_data=TEST_ATTACH_ID,
                 transaction_opaque_data=None,
-                name="main",
+                path=["main"],
                 ignore_not_found=False,
                 cascade=False,
             ),
@@ -455,7 +455,7 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
             lambda c: c.table_create(
                 attach_opaque_data=TEST_ATTACH_ID,
                 transaction_opaque_data=None,
-                schema_name="main",
+                schema_path=["main"],
                 name="table",
                 columns=SerializedSchema(b""),
                 on_conflict=OnConflict.ERROR,
@@ -469,7 +469,7 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
             lambda c: c.table_drop(
                 attach_opaque_data=TEST_ATTACH_ID,
                 transaction_opaque_data=None,
-                schema_name="main",
+                schema_path=["main"],
                 name="table",
                 ignore_not_found=False,
             ),
@@ -479,7 +479,7 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
             lambda c: c.table_rename(
                 attach_opaque_data=TEST_ATTACH_ID,
                 transaction_opaque_data=None,
-                schema_name="main",
+                schema_path=["main"],
                 name="old",
                 new_name="new",
                 ignore_not_found=False,
@@ -490,7 +490,7 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
             lambda c: c.view_create(
                 attach_opaque_data=TEST_ATTACH_ID,
                 transaction_opaque_data=None,
-                schema_name="main",
+                schema_path=["main"],
                 name="view",
                 definition="SELECT 1",
                 on_conflict=OnConflict.ERROR,
@@ -501,7 +501,7 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
             lambda c: c.view_drop(
                 attach_opaque_data=TEST_ATTACH_ID,
                 transaction_opaque_data=None,
-                schema_name="main",
+                schema_path=["main"],
                 name="view",
                 ignore_not_found=False,
             ),
@@ -511,7 +511,7 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
             lambda c: c.macro_create(
                 attach_opaque_data=TEST_ATTACH_ID,
                 transaction_opaque_data=None,
-                schema_name="main",
+                schema_path=["main"],
                 name="my_macro",
                 macro_type=MacroType.SCALAR,
                 parameters=["x"],
@@ -524,7 +524,7 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
             lambda c: c.macro_drop(
                 attach_opaque_data=TEST_ATTACH_ID,
                 transaction_opaque_data=None,
-                schema_name="main",
+                schema_path=["main"],
                 name="my_macro",
                 ignore_not_found=False,
             ),
@@ -564,7 +564,7 @@ class TestFunctionInfoNewFields:
         schema_bytes = empty_schema_bytes()
         info = FunctionInfo(
             name="test_func",
-            schema_name="main",
+            schema_path=["main"],
             function_type=FunctionType.SCALAR,
             arguments=schema_bytes,
             output_schema=schema_bytes,
@@ -598,7 +598,7 @@ class TestFunctionInfoNewFields:
         schema_bytes = empty_schema_bytes()
         info = FunctionInfo(
             name="test_func",
-            schema_name="main",
+            schema_path=["main"],
             function_type=FunctionType.SCALAR,
             arguments=schema_bytes,
             output_schema=schema_bytes,
@@ -624,7 +624,7 @@ class TestFunctionInfoNewFields:
 
         # Verify all fields match
         assert restored.name == info.name
-        assert restored.schema_name == info.schema_name
+        assert restored.schema_path == info.schema_path
         assert restored.function_type == info.function_type
         assert restored.arguments == info.arguments
         assert restored.output_schema == info.output_schema
@@ -652,7 +652,7 @@ class TestFunctionInfoNewFields:
         schema_bytes = empty_schema_bytes()
         info = FunctionInfo(
             name="test_func",
-            schema_name="main",
+            schema_path=["main"],
             function_type=FunctionType.SCALAR,
             arguments=schema_bytes,
             output_schema=schema_bytes,
@@ -684,46 +684,45 @@ class TestFunctionInfoNewFields:
         assert restored.order_dependent == OrderDependence.ORDER_DEPENDENT
         assert restored.distinct_dependent == DistinctDependence.DISTINCT_DEPENDENT
 
-    def test_backward_compatibility_without_new_fields(self) -> None:
-        """Deserialize data that was serialized without new fields (legacy data)."""
-        # Create legacy schema without new fields
+    def test_v2_record_without_optional_fields(self) -> None:
+        """Deserialize a protocol-v2 record that omits optional fields."""
+        # Create a minimal protocol-v2 schema without optional fields.
         legacy_schema_bytes = pa.schema([]).serialize().to_pybytes()
 
-        legacy_fields: list[pa.Field[pa.DataType]] = [
+        minimal_fields: list[pa.Field[pa.DataType]] = [
             pa.field("name", pa.string(), nullable=False),
-            pa.field("schema_name", pa.string(), nullable=False),
+            pa.field("schema_path", pa.list_(pa.string()), nullable=False),
             pa.field("function_type", pa.string(), nullable=False),
             pa.field("arguments", pa.binary(), nullable=False),
             pa.field("output_schema", pa.binary(), nullable=False),
             pa.field("comment", pa.string(), nullable=True),
             pa.field("tags", pa.map_(pa.string(), pa.string()), nullable=False),
         ]
-        legacy_schema = pa.schema(legacy_fields)
+        minimal_schema = pa.schema(minimal_fields)
 
-        # Create legacy batch (without new fields)
-        legacy_batch = pa.RecordBatch.from_pylist(
+        minimal_batch = pa.RecordBatch.from_pylist(
             [
                 {
-                    "name": "legacy_func",
-                    "schema_name": "main",
+                    "name": "minimal_func",
+                    "schema_path": ["main"],
                     "function_type": "scalar",
                     "arguments": legacy_schema_bytes,
                     "output_schema": legacy_schema_bytes,
-                    "comment": "A legacy function",
+                    "comment": "A minimal function",
                     "tags": [("version", "1.0")],
                 }
             ],
-            schema=legacy_schema,
+            schema=minimal_schema,
         )
 
         # Deserialize - should use defaults for missing fields
-        restored = FunctionInfo.deserialize_from_batch(legacy_batch)
+        restored = FunctionInfo.deserialize_from_batch(minimal_batch)
 
         # Core fields should be preserved
-        assert restored.name == "legacy_func"
-        assert restored.schema_name == "main"
+        assert restored.name == "minimal_func"
+        assert restored.schema_path == ["main"]
         assert restored.function_type == FunctionType.SCALAR
-        assert restored.comment == "A legacy function"  # Comment is preserved
+        assert restored.comment == "A minimal function"
         assert restored.tags == {"version": "1.0"}
 
         # Optional fields should be None/default when not in legacy data
@@ -746,7 +745,7 @@ class TestFunctionInfoNewFields:
         schema_bytes = empty_schema_bytes()
         info = FunctionInfo(
             name="test_func",
-            schema_name="main",
+            schema_path=["main"],
             function_type=FunctionType.SCALAR,
             arguments=schema_bytes,
             output_schema=schema_bytes,
@@ -764,7 +763,7 @@ class TestFunctionInfoNewFields:
         schema_bytes = empty_schema_bytes()
         info = FunctionInfo(
             name="test_func",
-            schema_name="main",
+            schema_path=["main"],
             function_type=FunctionType.SCALAR,
             arguments=schema_bytes,
             output_schema=schema_bytes,
@@ -795,7 +794,7 @@ class TestFunctionInfoNewFields:
         schema_bytes = empty_schema_bytes()
         info = FunctionInfo(
             name="test_func",
-            schema_name="main",
+            schema_path=["main"],
             function_type=FunctionType.SCALAR,
             arguments=schema_bytes,
             output_schema=schema_bytes,
@@ -983,7 +982,7 @@ class TestSchemaContentsTypeFilter:
             catalog_with_functions.schema_contents(
                 attach_opaque_data=attach_result.attach_opaque_data,
                 transaction_opaque_data=None,
-                name="main",
+                path=["main"],
                 type=SchemaObjectType.SCALAR_FUNCTION,
             )
         )
@@ -993,7 +992,7 @@ class TestSchemaContentsTypeFilter:
             catalog_with_functions.schema_contents(
                 attach_opaque_data=attach_result.attach_opaque_data,
                 transaction_opaque_data=None,
-                name="main",
+                path=["main"],
                 type=SchemaObjectType.TABLE_FUNCTION,
             )
         )
@@ -1015,7 +1014,7 @@ class TestSchemaContentsTypeFilter:
             catalog_with_functions.schema_contents(
                 attach_opaque_data=attach_result.attach_opaque_data,
                 transaction_opaque_data=None,
-                name="main",
+                path=["main"],
                 type=SchemaObjectType.SCALAR_FUNCTION,
             )
         )
@@ -1034,7 +1033,7 @@ class TestSchemaContentsTypeFilter:
             catalog_with_functions.schema_contents(
                 attach_opaque_data=attach_result.attach_opaque_data,
                 transaction_opaque_data=None,
-                name="main",
+                path=["main"],
                 type=SchemaObjectType.TABLE_FUNCTION,
             )
         )
@@ -1053,7 +1052,7 @@ class TestSchemaContentsTypeFilter:
             catalog_with_functions.schema_contents(
                 attach_opaque_data=attach_result.attach_opaque_data,
                 transaction_opaque_data=None,
-                name="main",
+                path=["main"],
                 type=SchemaObjectType.TABLE,
             )
         )
@@ -1068,7 +1067,7 @@ class TestSchemaContentsTypeFilter:
             catalog_with_functions.schema_contents(
                 attach_opaque_data=attach_result.attach_opaque_data,
                 transaction_opaque_data=None,
-                name="main",
+                path=["main"],
                 type=SchemaObjectType.VIEW,
             )
         )
@@ -1083,7 +1082,7 @@ class TestSchemaContentsTypeFilter:
             catalog_with_functions.schema_contents(
                 attach_opaque_data=attach_result.attach_opaque_data,
                 transaction_opaque_data=None,
-                name="nonexistent",
+                path=["nonexistent"],
                 type=SchemaObjectType.TABLE_FUNCTION,
             )
         )

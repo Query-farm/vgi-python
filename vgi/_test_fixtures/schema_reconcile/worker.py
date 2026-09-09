@@ -503,7 +503,7 @@ _CATALOG = Catalog(
     default_schema=_SCHEMA_NAME,
     schemas=[
         Schema(
-            name=_SCHEMA_NAME,
+            path=[_SCHEMA_NAME],
             comment="Schema-reconcile fixture catalog",
             functions=list(_FUNCTIONS),
             tables=[],
@@ -523,7 +523,7 @@ class SchemaReconcileCatalog(ReadOnlyCatalogInterface):
             comment=f"Schema-reconcile {spec.name} (rowid type {spec.rowid_field.type})",
             tags={},
             name=spec.name,
-            schema_name=_SCHEMA_NAME,
+            schema_path=[_SCHEMA_NAME],
             columns=SerializedSchema(_serialize_schema(spec.table_schema)),
             not_null_constraints=[],
             unique_constraints=[],
@@ -544,10 +544,10 @@ class SchemaReconcileCatalog(ReadOnlyCatalogInterface):
         # Override at the catalog level to report the real population.
         infos = super().schemas(attach_opaque_data=attach_opaque_data, transaction_opaque_data=transaction_opaque_data)
         for i, info in enumerate(infos):
-            if info.name == _SCHEMA_NAME:
+            if info.path == [_SCHEMA_NAME]:
                 infos[i] = SchemaInfo(
                     attach_opaque_data=info.attach_opaque_data,
-                    name=info.name,
+                    path=list(info.path),
                     comment=info.comment,
                     tags=info.tags,
                     estimated_object_count={
@@ -562,13 +562,13 @@ class SchemaReconcileCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         type: Any,
     ) -> Any:
-        if name.lower() == _SCHEMA_NAME and type == SchemaObjectType.TABLE:
+        if [component.lower() for component in path] == [_SCHEMA_NAME] and type == SchemaObjectType.TABLE:
             return [self._table_info(spec) for spec in TABLES.values()]
         return super().schema_contents(
-            attach_opaque_data=attach_opaque_data, transaction_opaque_data=transaction_opaque_data, name=name, type=type
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=transaction_opaque_data, path=path, type=type
         )
 
     def table_get(
@@ -576,17 +576,17 @@ class SchemaReconcileCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
     ) -> TableInfo | None:
-        if schema_name.lower() != _SCHEMA_NAME:
+        if [component.lower() for component in schema_path] != [_SCHEMA_NAME]:
             return None
         spec = TABLES.get(name.lower())
         return self._table_info(spec) if spec else None
 
-    def _route(self, fn_name: str, schema_name: str, name: str) -> ScanFunctionResult:
+    def _route(self, fn_name: str, schema_path: list[str], name: str) -> ScanFunctionResult:
         return ScanFunctionResult(
             function_name=fn_name,
             positional_arguments=[pa.scalar(name, type=pa.string())],
@@ -599,44 +599,44 @@ class SchemaReconcileCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None,
         at_value: str | None,
     ) -> ScanFunctionResult:
-        return self._route("schema_reconcile_scan", schema_name, name)
+        return self._route("schema_reconcile_scan", schema_path, name)
 
     def table_insert_function_get(
         self,
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         writable_branch_function_name: str | None = None,
     ) -> ScanFunctionResult:
         del writable_branch_function_name
-        return self._route("schema_reconcile_insert", schema_name, name)
+        return self._route("schema_reconcile_insert", schema_path, name)
 
     def table_update_function_get(
         self,
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
     ) -> ScanFunctionResult:
-        return self._route("schema_reconcile_update", schema_name, name)
+        return self._route("schema_reconcile_update", schema_path, name)
 
     def table_delete_function_get(
         self,
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
     ) -> ScanFunctionResult:
-        return self._route("schema_reconcile_delete", schema_name, name)
+        return self._route("schema_reconcile_delete", schema_path, name)
 
 
 # ---------------------------------------------------------------------------

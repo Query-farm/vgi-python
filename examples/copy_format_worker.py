@@ -170,7 +170,7 @@ class TsvWorker(Worker):
 
     catalog = Catalog(
         name="tsv",
-        schemas=[Schema(name="main", functions=[ReadTsvLite, WriteTsvLite])],
+        schemas=[Schema(path=["main"], functions=[ReadTsvLite, WriteTsvLite])],
     )
 
 

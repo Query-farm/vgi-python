@@ -49,8 +49,8 @@ class _BogusNullHandling(Enum):
 class BadEnumCatalog(ExampleCatalog):
     """ExampleCatalog that advertises a bogus null_handling for one function."""
 
-    def _function_to_info(self, func_cls: type, schema_name: str) -> FunctionInfo:
-        info = super()._function_to_info(func_cls, schema_name)
+    def _function_to_info(self, func_cls: type, schema_path: list[str]) -> FunctionInfo:
+        info = super()._function_to_info(func_cls, schema_path)
         if info.name == BAD_ENUM_FUNCTION and info.null_handling is not None:
             # FunctionInfo is frozen; replace() returns a corrupted copy.
             return replace(info, null_handling=_BogusNullHandling.WEIRD)  # type: ignore[arg-type]

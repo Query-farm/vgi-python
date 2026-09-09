@@ -81,7 +81,7 @@ def _scan_function_result() -> ScanFunctionResult:
         positional_arguments=positional,
         named_arguments=named,
         required_extensions=["parquet"],
-        schema_name="main",
+        schema_path=["main"],
     )
 
 
@@ -94,12 +94,12 @@ def _scan_branch() -> ScanBranch:
         branch_filter="ts >= '2026-01-01'",
         writable=True,
         source_catalog="lake",
-        source_schema="main",
+        source_schema_path=["main"],
         source_table="events",
         format_name="parquet",
         format_locations=["s3://bucket/a.parquet"],
         format_options={"delim": pa.scalar("|", pa.string())},
-        schema_name="main",
+        schema_path=["main"],
     )
 
 

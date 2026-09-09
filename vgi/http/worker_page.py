@@ -29,6 +29,7 @@ from vgi.metadata import (
     ResolvedMetadata,
     resolve_metadata,
 )
+from vgi.schema_path import schema_path_display
 
 if TYPE_CHECKING:
     from vgi.catalog.attach_option import AttachOptionSpec
@@ -49,6 +50,11 @@ __all__ = [
 ]
 
 _logger = logging.getLogger(__name__)
+
+
+def _schema_path_heading(path: list[str]) -> str:
+    """Keep root-schema headings compact while showing nested boundaries."""
+    return path[0] if len(path) == 1 else schema_path_display(path)
 
 
 # ---------------------------------------------------------------------------
@@ -524,43 +530,43 @@ def _render_dynamic_schemas(iface: CatalogInterface, attach_opaque_data: AttachO
         _logger.debug("iface.schemas() failed", exc_info=True)
         return []
 
-    def _safe_contents(name: str, kind: SchemaObjectType) -> list[Any]:
+    def _safe_contents(path: list[str], kind: SchemaObjectType) -> list[Any]:
         # The overloads on schema_contents key off Literal[...] values;
         # passing a runtime variable defeats the dispatch, so we cast to
         # Any to fall through to the implementation method.
         contents: Any = iface.schema_contents
         try:
-            result = contents(attach_opaque_data=attach_opaque_data, transaction_opaque_data=None, name=name, type=kind)
+            result = contents(attach_opaque_data=attach_opaque_data, transaction_opaque_data=None, path=path, type=kind)
         except Exception:  # noqa: BLE001
-            _logger.debug("schema_contents(%s) failed for %s", kind, name, exc_info=True)
+            _logger.debug("schema_contents(%s) failed for %s", kind, path, exc_info=True)
             return []
         return list(result)
 
     out: list[str] = []
     for schema_info in schemas:
-        out.append(f'<h2 class="schema-heading">{_esc(schema_info.name)}</h2>')
+        out.append(f'<h2 class="schema-heading">{_esc(_schema_path_heading(schema_info.path))}</h2>')
         if schema_info.comment:
             out.append(f'<p class="schema-comment">{_esc(schema_info.comment)}</p>')
 
         # Functions (scalar / table / aggregate, sorted by type then name).
         funcs: list[FunctionInfo] = []
-        funcs.extend(_safe_contents(schema_info.name, SchemaObjectType.SCALAR_FUNCTION))
-        funcs.extend(_safe_contents(schema_info.name, SchemaObjectType.TABLE_FUNCTION))
-        funcs.extend(_safe_contents(schema_info.name, SchemaObjectType.AGGREGATE_FUNCTION))
+        funcs.extend(_safe_contents(schema_info.path, SchemaObjectType.SCALAR_FUNCTION))
+        funcs.extend(_safe_contents(schema_info.path, SchemaObjectType.TABLE_FUNCTION))
+        funcs.extend(_safe_contents(schema_info.path, SchemaObjectType.AGGREGATE_FUNCTION))
         if funcs:
             out.append('<div class="section-label">Functions</div>')
             for fn in sorted(funcs, key=lambda f: (f.function_type.value, f.name)):
                 out.append(_build_dynamic_function_card(fn))
 
         # Tables.
-        tables = list(_safe_contents(schema_info.name, SchemaObjectType.TABLE))
+        tables = list(_safe_contents(schema_info.path, SchemaObjectType.TABLE))
         if tables:
             out.append('<div class="section-label">Tables</div>')
             for t in tables:
                 out.append(_build_dynamic_table_card(t))
 
         # Views.
-        views = list(_safe_contents(schema_info.name, SchemaObjectType.VIEW))
+        views = list(_safe_contents(schema_info.path, SchemaObjectType.VIEW))
         if views:
             out.append('<div class="section-label">Views</div>')
             for v in views:
@@ -971,7 +977,7 @@ def build_worker_page(
         body_parts.extend(_render_dynamic_schemas(attach_iface, attach_opaque_data))
     elif (catalog := getattr(worker_cls, "catalog", None)) is not None:
         for schema in catalog.schemas:
-            body_parts.append(f'<h2 class="schema-heading">{_esc(schema.name)}</h2>')
+            body_parts.append(f'<h2 class="schema-heading">{_esc(_schema_path_heading(schema.path))}</h2>')
             if schema.comment:
                 body_parts.append(f'<p class="schema-comment">{_esc(schema.comment)}</p>')
 

@@ -68,7 +68,7 @@ class TestProjReproStrictDirect:
             outputs = list(
                 client.table_function(
                     function_name="proj_repro_strict",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(5),)),
                 )
             )
@@ -88,7 +88,7 @@ class TestProjReproStrictDirect:
             outputs = list(
                 client.table_function(
                     function_name="proj_repro_strict",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(5),)),
                     projection_ids=projection_ids,
                 )
@@ -111,7 +111,7 @@ class TestProjReproStrictDirect:
             outputs = list(
                 client.table_function(
                     function_name="proj_repro_strict",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(5),)),
                     projection_ids=_EMPTY_PROJECTION,
                 )
@@ -137,7 +137,7 @@ class TestProjReproStrictDirect:
             outputs = list(
                 client.table_function(
                     function_name="proj_repro_strict",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(5),)),
                     projection_ids=[0, 2],
                 )
@@ -152,7 +152,7 @@ class TestProjReproStrictDirect:
             outputs = list(
                 client.table_function(
                     function_name="proj_repro_strict",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(5),)),
                     projection_ids=_ALL_INDICES,
                 )
@@ -200,7 +200,7 @@ class TestProjReproFullSchema:
             outputs = list(
                 client.table_function(
                     function_name="proj_repro_full_schema",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(8),)),
                     projection_ids=[value_schema_id_idx],
                 )
@@ -230,7 +230,7 @@ class TestProjReproFullSchema:
                 outputs = list(
                     client.table_function(
                         function_name="proj_repro_full_schema",
-                        schema_name="main",
+                        schema_path=["main"],
                         arguments=Arguments(positional=(pa.scalar(5),)),
                         projection_ids=[0],  # single col
                     )

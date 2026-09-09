@@ -60,7 +60,7 @@ def test_force_returns_promptly_mid_stream(tmp_path: Any) -> None:
     client = _started_client(pool=None)
     gen = client.table_function(
         function_name="slow_cancellable",
-        schema_name="main",
+        schema_path=["main"],
         arguments=Arguments(positional=(pa.scalar(str(probe)),), named={"sleep_ms": pa.scalar(_SLEEP_MS)}),
     )
     next(gen)  # worker is now mid-stream, sleeping between batches

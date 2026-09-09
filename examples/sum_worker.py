@@ -93,7 +93,7 @@ class AggregateWorker(Worker):
 
     catalog = Catalog(
         name="aggregates",
-        schemas=[Schema(name="main", functions=[Sum])],
+        schemas=[Schema(path=["main"], functions=[Sum])],
     )
 
 

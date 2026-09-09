@@ -538,7 +538,7 @@ _CATALOG = Catalog(
     default_schema="main",
     schemas=[
         Schema(
-            name="main",
+            path=["main"],
             functions=[SimpleScan, SimpleInsert, SimpleUpdate, SimpleDelete, BrokenReturningInsert],
             tables=[],
         ),
@@ -589,17 +589,21 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
         self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None
     ) -> list[SchemaInfo]:
         del transaction_opaque_data
-        return [SchemaInfo(attach_opaque_data=attach_opaque_data, name="main", comment=None, tags={})]
+        return [SchemaInfo(attach_opaque_data=attach_opaque_data, path=["main"], comment=None, tags={})]
 
     def schema_get(
-        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None, name: str
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: list[str],
     ) -> SchemaInfo | None:
         del transaction_opaque_data
-        if name.lower() != "main":
+        if [component.lower() for component in path] != ["main"]:
             return None
-        return SchemaInfo(attach_opaque_data=attach_opaque_data, name="main", comment=None, tags={})
+        return SchemaInfo(attach_opaque_data=attach_opaque_data, path=["main"], comment=None, tags={})
 
-    def _build_table_info(self, *, name: str, schema_name: str) -> TableInfo:
+    def _build_table_info(self, *, name: str, schema_path: list[str]) -> TableInfo:
         user_schema = _table_specs()[name]
         # Embed rowid at the end, with is_row_id metadata.
         full = pa.schema(list(user_schema) + [_ROWID_FIELD])
@@ -608,7 +612,7 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
             comment=None,
             tags={},
             name=name,
-            schema_name=schema_name,
+            schema_path=schema_path,
             columns=SerializedSchema(full.serialize().to_pybytes()),
             not_null_constraints=[],
             unique_constraints=[],
@@ -626,17 +630,17 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
     ) -> TableInfo | None:
         del attach_opaque_data, transaction_opaque_data, at_unit, at_value
-        if schema_name.lower() != "main":
+        if [component.lower() for component in schema_path] != ["main"]:
             return None
         if name.lower() not in _table_specs():
             return None
-        return self._build_table_info(name=name.lower(), schema_name="main")
+        return self._build_table_info(name=name.lower(), schema_path=["main"])
 
     def view_get(self, **kwargs: Any) -> None:
         return None
@@ -647,7 +651,7 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         type: Literal[SchemaObjectType.TABLE],
     ) -> Sequence[TableInfo]: ...
     @overload
@@ -656,7 +660,7 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         type: Literal[SchemaObjectType.VIEW],
     ) -> Sequence[ViewInfo]: ...
     @overload
@@ -665,7 +669,7 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         type: Literal[
             SchemaObjectType.SCALAR_FUNCTION,
             SchemaObjectType.TABLE_FUNCTION,
@@ -678,7 +682,7 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         type: Literal[SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO],
     ) -> Sequence[MacroInfo]: ...
     @overload
@@ -687,7 +691,7 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         type: Literal[SchemaObjectType.INDEX],
     ) -> Sequence[IndexInfo]: ...
 
@@ -696,26 +700,26 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         type: SchemaObjectType,
     ) -> Sequence[Any]:
         type_enum = type if isinstance(type, SchemaObjectType) else SchemaObjectType(type)
-        if name.lower() != "main":
+        if [component.lower() for component in path] != ["main"]:
             return []
         if type_enum == SchemaObjectType.TABLE:
-            return [self._build_table_info(name=tn, schema_name="main") for tn in sorted(_table_specs())]
+            return [self._build_table_info(name=tn, schema_path=["main"]) for tn in sorted(_table_specs())]
         # Functions, views, etc. — fall through to base which uses the static catalog.
         return super().schema_contents(  # type: ignore[call-overload, no-any-return]
-            attach_opaque_data=attach_opaque_data, transaction_opaque_data=transaction_opaque_data, name=name, type=type
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=transaction_opaque_data, path=path, type=type
         )
 
     # --------- function dispatch ---------
 
-    def _function_get(self, kind: str, *, schema_name: str, name: str) -> ScanFunctionResult:
-        qualified = f"{schema_name}.{name}" if schema_name else name
+    def _function_get(self, kind: str, *, schema_path: list[str], name: str) -> ScanFunctionResult:
+        del schema_path
         return ScanFunctionResult(
             function_name=f"simple_writable_{kind}",
-            positional_arguments=[pa.scalar(qualified)],
+            positional_arguments=[pa.scalar(name)],
             named_arguments={},
         )
 
@@ -724,20 +728,20 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None,
         at_value: str | None,
     ) -> ScanFunctionResult:
         del attach_opaque_data, transaction_opaque_data, at_unit, at_value
-        return self._function_get("scan", schema_name=schema_name, name=name)
+        return self._function_get("scan", schema_path=schema_path, name=name)
 
     def table_insert_function_get(
         self,
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         writable_branch_function_name: str | None = None,
     ) -> ScanFunctionResult:
@@ -746,35 +750,34 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
         # on this lying about RETURNING shape so the C++ runtime validator
         # gets exercised.
         if name.lower() == "items_broken_returning":
-            qualified = f"{schema_name}.{name}" if schema_name else name
             return ScanFunctionResult(
                 function_name="simple_writable_broken_returning_insert",
-                positional_arguments=[pa.scalar(qualified)],
+                positional_arguments=[pa.scalar(name)],
                 named_arguments={},
             )
-        return self._function_get("insert", schema_name=schema_name, name=name)
+        return self._function_get("insert", schema_path=schema_path, name=name)
 
     def table_update_function_get(
         self,
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
     ) -> ScanFunctionResult:
         del attach_opaque_data, transaction_opaque_data
-        return self._function_get("update", schema_name=schema_name, name=name)
+        return self._function_get("update", schema_path=schema_path, name=name)
 
     def table_delete_function_get(
         self,
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
     ) -> ScanFunctionResult:
         del attach_opaque_data, transaction_opaque_data
-        return self._function_get("delete", schema_name=schema_name, name=name)
+        return self._function_get("delete", schema_path=schema_path, name=name)
 
 
 class SimpleWritableWorker(Worker):

@@ -43,6 +43,7 @@ import pyarrow as pa
 
 from vgi.catalog.catalog_interface import ColumnStatistics
 from vgi.catalog.descriptors import ColumnStatisticsInput
+from vgi.schema_path import sql_qualified_name
 
 if TYPE_CHECKING:
     import duckdb
@@ -207,7 +208,7 @@ def statistics_from_duckdb(
     conn: duckdb.DuckDBPyConnection,
     table_name: str,
     *,
-    schema_name: str | None = None,
+    schema_path: list[str] | None = None,
 ) -> dict[str, ColumnStatisticsInput]:
     """Extract column statistics from a DuckDB table.
 
@@ -230,15 +231,14 @@ def statistics_from_duckdb(
     Args:
         conn: An open DuckDB connection.
         table_name: Name of the table to query.
-        schema_name: Optional schema name. If provided, the table is referenced
-            as ``schema_name.table_name``.
+        schema_path: Optional raw schema identifier components.
 
     Returns:
         Dict mapping column names to ``ColumnStatisticsInput``, suitable for
         passing directly to ``Table(statistics=...)``.
 
     """
-    qualified = f'"{schema_name}"."{table_name}"' if schema_name else f'"{table_name}"'
+    qualified = sql_qualified_name(schema_path or [], table_name)
 
     # Get the table schema via a zero-row Arrow query
     schema: pa.Schema = conn.execute(f"SELECT * FROM {qualified} LIMIT 0").to_arrow_table(_RESULT_BATCH_SIZE).schema
@@ -371,7 +371,7 @@ def column_statistics_from_duckdb(
     conn: duckdb.DuckDBPyConnection,
     table_name: str,
     *,
-    schema_name: str | None = None,
+    schema_path: list[str] | None = None,
 ) -> list[ColumnStatistics]:
     """Extract resolved column statistics from a DuckDB table.
 
@@ -382,23 +382,23 @@ def column_statistics_from_duckdb(
 
     Example usage in a dynamic catalog::
 
-        def table_column_statistics_get(self, *, attach_opaque_data, transaction_opaque_data, schema_name, name):
+        def table_column_statistics_get(self, *, attach_opaque_data, transaction_opaque_data, schema_path, name):
             conn = self._get_connection(attach_opaque_data)
             return TableColumnStatisticsResult(
-                statistics=column_statistics_from_duckdb(conn, name, schema_name=schema_name),
+                statistics=column_statistics_from_duckdb(conn, name, schema_path=schema_path),
                 cache_max_age_seconds=60,
             )
 
     Args:
         conn: An open DuckDB connection.
         table_name: Name of the table to query.
-        schema_name: Optional schema name.
+        schema_path: Optional raw schema identifier components.
 
     Returns:
         List of resolved ``ColumnStatistics`` objects.
 
     """
-    qualified = f'"{schema_name}"."{table_name}"' if schema_name else f'"{table_name}"'
+    qualified = sql_qualified_name(schema_path or [], table_name)
     schema: pa.Schema = conn.execute(f"SELECT * FROM {qualified} LIMIT 0").to_arrow_table(_RESULT_BATCH_SIZE).schema
-    stats_dict = statistics_from_duckdb(conn, table_name, schema_name=schema_name)
+    stats_dict = statistics_from_duckdb(conn, table_name, schema_path=schema_path)
     return [stats_dict[field.name].resolve(field.name, field.type) for field in schema if field.name in stats_dict]

@@ -456,7 +456,7 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
             comment=None,
             tags={},
             name=name,
-            schema_name="main",
+            schema_path=["main"],
             columns=SerializedSchema(table.columns.serialize().to_pybytes()),
             not_null_constraints=[],
             unique_constraints=[],
@@ -470,32 +470,32 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
     ) -> list[SchemaInfo]:
         """Single ``main`` schema, regardless of version."""
         del transaction_opaque_data
-        return [SchemaInfo(attach_opaque_data=attach_opaque_data, name="main", comment=None, tags={})]
+        return [SchemaInfo(attach_opaque_data=attach_opaque_data, path=["main"], comment=None, tags={})]
 
     def schema_get(
         self,
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
     ) -> SchemaInfo | None:
         """Return the ``main`` schema only."""
         del transaction_opaque_data
-        if name.lower() != "main":
+        if [component.lower() for component in path] != ["main"]:
             return None
-        return SchemaInfo(attach_opaque_data=attach_opaque_data, name="main", comment=None, tags={})
+        return SchemaInfo(attach_opaque_data=attach_opaque_data, path=["main"], comment=None, tags={})
 
     def schema_contents(  # type: ignore[override]
         self,
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         type: SchemaObjectType,
     ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo]:
         """List objects in the schema — tables filtered by attach's resolved version."""
         del transaction_opaque_data
-        if name.lower() != "main":
+        if [component.lower() for component in path] != ["main"]:
             return []
         if type == SchemaObjectType.TABLE:
             return [self._make_table_info(n, t) for n, t in sorted(self._tables_for(attach_opaque_data).items())]
@@ -506,14 +506,14 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
     ) -> TableInfo | None:
         """Return table info only if it exists at this attach's resolved version."""
         del transaction_opaque_data, at_unit, at_value
-        if schema_name.lower() != "main":
+        if [component.lower() for component in schema_path] != ["main"]:
             return None
         table = self._tables_for(attach_opaque_data).get(name.lower())
         if table is None:
@@ -525,11 +525,11 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
     ) -> None:
         """No views exposed."""
-        del attach_opaque_data, transaction_opaque_data, schema_name, name
+        del attach_opaque_data, transaction_opaque_data, schema_path, name
         return None
 
     def table_scan_function_get(
@@ -537,18 +537,18 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None,
         at_value: str | None,
     ) -> ScanFunctionResult:
         """Dispatch to the function backing this table at the attach's version."""
         del transaction_opaque_data, at_unit, at_value
-        if schema_name.lower() != "main":
-            raise ValueError(f"Unknown schema: {schema_name}")
+        if [component.lower() for component in schema_path] != ["main"]:
+            raise ValueError(f"Unknown schema: {schema_path}")
         table = self._tables_for(attach_opaque_data).get(name.lower())
         if table is None:
-            raise ValueError(f"Table {schema_name}.{name} not visible at this data version")
+            raise ValueError(f"Table {schema_path}.{name} not visible at this data version")
         return ScanFunctionResult(
             function_name=table.function_name,
             positional_arguments=[],

@@ -287,7 +287,7 @@ class TestTableWithFunction:
         from vgi_rpc.utils import deserialize_record_batch
 
         table = Table(name="users", function=UsersFunction)
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         assert info.scan_function is not None
         batch, _ = deserialize_record_batch(info.scan_function)
         sfr = ScanFunctionResult.deserialize(batch)
@@ -319,7 +319,7 @@ class TestTableWithFunction:
             function=CountedRowsFunction,
             arguments=Arguments(positional=(pa.scalar(7),)),
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         assert info.scan_function is not None
         batch, _ = deserialize_record_batch(info.scan_function)
         sfr = ScanFunctionResult.deserialize(batch)
@@ -339,7 +339,7 @@ class TestTableWithFunction:
                 named={"label": pa.scalar("widgets")},
             ),
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         assert info.scan_function is not None
         batch, _ = deserialize_record_batch(info.scan_function)
         sfr = ScanFunctionResult.deserialize(batch)
@@ -360,7 +360,7 @@ class TestTableWithFunction:
             arguments=Arguments(positional=(pa.scalar(7),)),
             insert_function=CountedRowsInsert,
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         assert info.insert_function is not None
         batch, _ = deserialize_record_batch(info.insert_function)
         sfr = ScanFunctionResult.deserialize(batch)
@@ -397,7 +397,7 @@ class TestTableWithFunction:
             cardinality_estimate=42,
             cardinality_max=100,
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         assert info.cardinality_estimate == 42
         assert info.cardinality_max == 100
 
@@ -408,14 +408,14 @@ class TestTableWithFunction:
         existing per-bind ``table_function_cardinality`` RPC path.
         """
         table = Table(name="users", function=UsersFunction)
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         assert info.cardinality_estimate is None
         assert info.cardinality_max is None
 
     def test_table_cardinality_estimate_only(self) -> None:
         """Estimate-only is a valid configuration — DuckDB gets a point estimate."""
         table = Table(name="users", function=UsersFunction, cardinality_estimate=500)
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         assert info.cardinality_estimate == 500
         assert info.cardinality_max is None
 
@@ -428,7 +428,7 @@ class TestTableWithFunction:
         """
         cols = pa.schema([pa.field("id", pa.int64())])
         table = Table(name="t", columns=cols)
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         assert info.scan_function is None
         assert info.insert_function is None
         assert info.update_function is None
@@ -452,7 +452,7 @@ class TestTableWithFunction:
                 "id": ColumnStatisticsInput(min=0, max=999_999, has_null=False, distinct_count=1_000_000),
             },
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         assert info.supports_column_statistics is True
         assert info.column_statistics is not None
         # The blob is an Arrow IPC RecordBatch; confirm it deserializes and
@@ -468,7 +468,7 @@ class TestTableWithFunction:
         no regression.
         """
         table = Table(name="users", function=UsersFunction)
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         assert info.supports_column_statistics is False
         assert info.column_statistics is None
 
@@ -480,7 +480,7 @@ class TestTableWithFunction:
         """
         table = Table(name="users", function=UsersFunction)
         assert table.inline_bind is False
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         assert info.bind_result is None
 
     def test_table_inline_bind_requires_function(self) -> None:
@@ -526,7 +526,7 @@ class TestTableWithFunction:
         """
         table = Table(name="users", function=UsersFunction, inline_bind=True)
         assert table.inline_bind is True
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         assert info.bind_result is None  # pre-bind is the framework's job
 
 
@@ -673,37 +673,37 @@ class TestTableForeignKeyConstraints:
                 foreign_key=(ForeignKeyDef(columns=("a", "b"), referenced_table="other", referenced_columns=("id",)),),
             )
 
-    def test_foreign_key_def_referenced_schema_default(self) -> None:
-        """ForeignKeyDef defaults referenced_schema to None."""
+    def test_foreign_key_def_referenced_schema_path_default(self) -> None:
+        """ForeignKeyDef defaults referenced_schema_path to None."""
         fk = ForeignKeyDef(columns=("a",), referenced_table="b", referenced_columns=("c",))
-        assert fk.referenced_schema is None
+        assert fk.referenced_schema_path is None
 
-    def test_foreign_key_def_referenced_schema_explicit(self) -> None:
-        """ForeignKeyDef accepts explicit referenced_schema."""
+    def test_foreign_key_def_referenced_schema_path_explicit(self) -> None:
+        """ForeignKeyDef accepts explicit referenced_schema_path."""
         fk = ForeignKeyDef(
             columns=("a",),
             referenced_table="b",
             referenced_columns=("c",),
-            referenced_schema="other_schema",
+            referenced_schema_path=["other_schema"],
         )
-        assert fk.referenced_schema == "other_schema"
+        assert fk.referenced_schema_path == ["other_schema"]
 
     def test_serialize_foreign_keys_uses_current_schema_by_default(self) -> None:
-        """_serialize_foreign_keys fills referenced_schema from current schema when None."""
+        """_serialize_foreign_keys fills referenced_schema_path from current schema when None."""
         table = Table(
             name="test",
             columns=pa.schema([("id", pa.int64()), ("ref_id", pa.int64())]),
             foreign_key=(ForeignKeyDef(columns=("ref_id",), referenced_table="other", referenced_columns=("id",)),),
         )
-        fk_bytes = table._serialize_foreign_keys("my_schema")
+        fk_bytes = table._serialize_foreign_keys(["my_schema"])
         assert len(fk_bytes) == 1
         from vgi_rpc.utils import deserialize_record_batch
 
         batch, _ = deserialize_record_batch(fk_bytes[0])
-        assert batch.column("referenced_schema")[0].as_py() == "my_schema"
+        assert batch.column("referenced_schema_path")[0].as_py() == ["my_schema"]
 
     def test_serialize_foreign_keys_uses_explicit_schema(self) -> None:
-        """_serialize_foreign_keys uses ForeignKeyDef.referenced_schema when set."""
+        """_serialize_foreign_keys uses ForeignKeyDef.referenced_schema_path when set."""
         table = Table(
             name="test",
             columns=pa.schema([("id", pa.int64()), ("ref_id", pa.int64())]),
@@ -712,15 +712,15 @@ class TestTableForeignKeyConstraints:
                     columns=("ref_id",),
                     referenced_table="other",
                     referenced_columns=("id",),
-                    referenced_schema="alt_schema",
+                    referenced_schema_path=["alt_schema"],
                 ),
             ),
         )
-        fk_bytes = table._serialize_foreign_keys("my_schema")
+        fk_bytes = table._serialize_foreign_keys(["my_schema"])
         from vgi_rpc.utils import deserialize_record_batch
 
         batch, _ = deserialize_record_batch(fk_bytes[0])
-        assert batch.column("referenced_schema")[0].as_py() == "alt_schema"
+        assert batch.column("referenced_schema_path")[0].as_py() == ["alt_schema"]
 
 
 class TestTableToTableInfoConstraints:
@@ -735,7 +735,7 @@ class TestTableToTableInfoConstraints:
             ),
             primary_key=(("id",),),
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         assert info.primary_key_constraints == [[0]]
 
     def test_to_table_info_with_composite_pk(self) -> None:
@@ -747,7 +747,7 @@ class TestTableToTableInfoConstraints:
             ),
             primary_key=(("dept_id", "code"),),
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         assert info.primary_key_constraints == [[0, 1]]
 
     def test_to_table_info_with_foreign_key(self) -> None:
@@ -759,7 +759,7 @@ class TestTableToTableInfoConstraints:
                 ForeignKeyDef(columns=("dept_id",), referenced_table="departments", referenced_columns=("id",)),
             ),
         )
-        info = table.to_table_info("data")
+        info = table.to_table_info(["data"])
         assert len(info.foreign_key_constraints) == 1
         assert isinstance(info.foreign_key_constraints[0], bytes)
 
@@ -769,7 +769,7 @@ class TestTableToTableInfoConstraints:
             name="simple",
             columns=pa.schema([("id", pa.int64())]),
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         assert info.primary_key_constraints == []
         assert info.foreign_key_constraints == []
 
@@ -786,7 +786,7 @@ class TestTableToTableInfoConstraints:
             primary_key=(("id",),),
             foreign_key=(ForeignKeyDef(columns=("ref_id",), referenced_table="other", referenced_columns=("id",)),),
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         assert info.not_null_constraints == [0, 1]
         assert info.unique_constraints == [[1]]
         assert info.check_constraints == ["id > 0"]
@@ -807,10 +807,10 @@ class TestTableToTableInfo:
             comment="User table",
             tags={"type": "core"},
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         assert isinstance(info, TableInfo)
         assert info.name == "users"
-        assert info.schema_name == "main"
+        assert info.schema_path == ["main"]
         assert info.comment == "User table"
         assert info.tags == {"type": "core"}
 
@@ -825,7 +825,7 @@ class TestTableToTableInfo:
             unique=(("id",), ("email",)),
             check=("id > 0",),
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         # Column indices: id=0, email=1
         assert info.not_null_constraints == [0, 1]
         assert info.unique_constraints == [[0], [1]]
@@ -867,7 +867,7 @@ class TestTableDefaults:
             columns=pa.schema([("id", pa.int64())]),
             defaults={},
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
         assert schema.field("id").metadata is None
 
@@ -880,7 +880,7 @@ class TestTableDefaults:
             ),
             defaults={"name": "unknown"},
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
         assert schema.field("name").metadata == {b"default": b"'unknown'"}
 
@@ -893,7 +893,7 @@ class TestTableDefaults:
             ),
             defaults={"name": "it's"},
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
         assert schema.field("name").metadata == {b"default": b"'it''s'"}
 
@@ -904,7 +904,7 @@ class TestTableDefaults:
             columns=pa.schema([("qty", pa.int64())]),
             defaults={"qty": 42},
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
         assert schema.field("qty").metadata == {b"default": b"42"}
 
@@ -915,7 +915,7 @@ class TestTableDefaults:
             columns=pa.schema([("price", pa.float64())]),
             defaults={"price": 9.99},
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
         assert schema.field("price").metadata == {b"default": b"9.99"}
 
@@ -926,7 +926,7 @@ class TestTableDefaults:
             columns=pa.schema([("a", pa.bool_()), ("b", pa.bool_())]),
             defaults={"a": True, "b": False},
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
         assert schema.field("a").metadata == {b"default": b"true"}
         assert schema.field("b").metadata == {b"default": b"false"}
@@ -938,7 +938,7 @@ class TestTableDefaults:
             columns=pa.schema([("val", pa.string())]),
             defaults={"val": None},
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
         assert schema.field("val").metadata == {b"default": b"NULL"}
 
@@ -949,7 +949,7 @@ class TestTableDefaults:
             columns=pa.schema([("ts", pa.string())]),
             defaults={"ts": Sql("current_timestamp")},
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
         assert schema.field("ts").metadata == {b"default": b"current_timestamp"}
 
@@ -966,7 +966,7 @@ class TestTableDefaults:
             ),
             defaults={"qty": 0, "name": "unknown"},
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
         assert schema.field("qty").metadata == {b"default": b"0"}
         assert schema.field("name").metadata == {b"default": b"'unknown'"}
@@ -984,7 +984,7 @@ class TestTableDefaults:
             ),
             defaults={"row_id": 0},
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
         metadata = schema.field("row_id").metadata
         assert metadata is not None
@@ -1028,10 +1028,10 @@ class TestViewDescriptor:
             comment="Active",
             tags={"type": "view"},
         )
-        info = view.to_view_info("main")
+        info = view.to_view_info(["main"])
         assert isinstance(info, ViewInfo)
         assert info.name == "active_users"
-        assert info.schema_name == "main"
+        assert info.schema_path == ["main"]
         assert info.definition == "SELECT * FROM users WHERE active = true"
         assert info.comment == "Active"
         assert info.tags == {"type": "view"}
@@ -1117,10 +1117,10 @@ class TestMacroDescriptor:
             comment="Add two values",
             tags={"type": "math"},
         )
-        info = macro.to_macro_info("main")
+        info = macro.to_macro_info(["main"])
         assert isinstance(info, MacroInfo)
         assert info.name == "add"
-        assert info.schema_name == "main"
+        assert info.schema_path == ["main"]
         assert info.macro_type == MacroType.SCALAR
         assert info.parameters == ["x", "y"]
         assert info.parameter_default_values is not None
@@ -1164,13 +1164,13 @@ class TestSchemaWithMacros:
             parameters=["x", "y"],
             definition="x * y",
         )
-        s = Schema(name="main", macros=[macro])
+        s = Schema(path=["main"], macros=[macro])
         assert len(s.macros) == 1
         assert s.macros[0].name == "multiply"
 
     def test_schema_default_empty_macros(self) -> None:
         """Schema defaults to empty macros."""
-        s = Schema(name="main")
+        s = Schema(path=["main"])
         assert s.macros == ()
 
 
@@ -1183,9 +1183,9 @@ class TestSchemaDescriptor:
     """Tests for Schema descriptor."""
 
     def test_schema_basic(self) -> None:
-        """Schema stores name."""
-        schema = Schema(name="main")
-        assert schema.name == "main"
+        """Schema stores its qualified path."""
+        schema = Schema(path=["main"])
+        assert schema.path == ["main"]
         assert schema.tables == ()
         assert schema.views == ()
         assert schema.functions == ()
@@ -1193,27 +1193,27 @@ class TestSchemaDescriptor:
     def test_schema_with_tables(self) -> None:
         """Schema can contain tables."""
         users = Table(name="users", columns=pa.schema([("id", pa.int64())]))
-        schema = Schema(name="main", tables=[users])
+        schema = Schema(path=["main"], tables=[users])
         assert len(schema.tables) == 1
         assert schema.tables[0].name == "users"
 
     def test_schema_with_views(self) -> None:
         """Schema can contain views."""
         view = View(name="active_users", definition="SELECT * FROM users")
-        schema = Schema(name="main", views=[view])
+        schema = Schema(path=["main"], views=[view])
         assert len(schema.views) == 1
         assert schema.views[0].name == "active_users"
 
     def test_schema_with_functions(self) -> None:
         """Schema can contain functions."""
-        schema = Schema(name="main", functions=[UsersFunction])
+        schema = Schema(path=["main"], functions=[UsersFunction])
         assert len(schema.functions) == 1
         assert schema.functions[0] is UsersFunction
 
     def test_schema_with_metadata(self) -> None:
         """Schema stores optional comment and tags."""
         schema = Schema(
-            name="analytics",
+            path=["analytics"],
             comment="Analytics data",
             tags={"team": "data"},
         )
@@ -1223,14 +1223,14 @@ class TestSchemaDescriptor:
     def test_schema_to_schema_info(self) -> None:
         """Schema converts to SchemaInfo correctly."""
         schema = Schema(
-            name="main",
+            path=["main"],
             comment="Main schema",
             tags={"type": "core"},
         )
         attach_opaque_data = AttachOpaqueData(b"test-attach-opaque-data")
         info = schema.to_schema_info(attach_opaque_data)
         assert isinstance(info, SchemaInfo)
-        assert info.name == "main"
+        assert info.path == ["main"]
         assert info.attach_opaque_data == attach_opaque_data
         assert info.comment == "Main schema"
         assert info.tags == {"type": "core"}
@@ -1256,7 +1256,7 @@ class TestSchemaDescriptor:
                 return pa.compute.utf8_upper(x)
 
         schema = Schema(
-            name="main",
+            path=["main"],
             functions=[UsersFunction, EventsFunction, _Upper],  # 2 table + 1 scalar
         )
         info = schema.to_schema_info(AttachOpaqueData(b"x"))
@@ -1277,7 +1277,7 @@ class TestSchemaDescriptor:
         both the bulk listing and per-name lookups; absence reads as
         "unknown / eager-load" instead.
         """
-        schema = Schema(name="main", functions=[UsersFunction])  # only table fn
+        schema = Schema(path=["main"], functions=[UsersFunction])  # only table fn
         info = schema.to_schema_info(AttachOpaqueData(b"x"))
         counts = info.estimated_object_count
         assert counts is not None
@@ -1332,7 +1332,7 @@ class TestLegacyFunctionsListSchemaInfo:
         contents = ci.schema_contents(
             attach_opaque_data=AttachOpaqueData(b"x"),
             transaction_opaque_data=None,
-            name="main",
+            path=["main"],
             type=SchemaObjectType.SCALAR_FUNCTION,
         )
         assert [c.name for c in contents] == ["greeting"]
@@ -1348,7 +1348,7 @@ class TestCatalogDescriptor:
 
     def test_catalog_basic(self) -> None:
         """Catalog requires at least default_schema to exist."""
-        schema = Schema(name="main")
+        schema = Schema(path=["main"])
         catalog = Catalog(name="myapp", schemas=[schema])
         assert catalog.name == "myapp"
         assert catalog.default_schema == "main"
@@ -1356,27 +1356,27 @@ class TestCatalogDescriptor:
 
     def test_catalog_custom_default_schema(self) -> None:
         """Catalog can use non-main default schema."""
-        schema = Schema(name="analytics")
+        schema = Schema(path=["analytics"])
         catalog = Catalog(name="myapp", default_schema="analytics", schemas=[schema])
         assert catalog.default_schema == "analytics"
 
     def test_catalog_multiple_schemas(self) -> None:
         """Catalog can contain multiple schemas."""
-        main = Schema(name="main")
-        analytics = Schema(name="analytics")
+        main = Schema(path=["main"])
+        analytics = Schema(path=["analytics"])
         catalog = Catalog(name="myapp", schemas=[main, analytics])
         assert len(catalog.schemas) == 2
 
     def test_catalog_source_url_defaults_to_none(self) -> None:
         """Catalog source_url is None unless set."""
-        catalog = Catalog(name="myapp", schemas=[Schema(name="main")])
+        catalog = Catalog(name="myapp", schemas=[Schema(path=["main"])])
         assert catalog.source_url is None
 
     def test_catalog_source_url_settable(self) -> None:
         """Catalog source_url can advertise the repo/docs homepage."""
         catalog = Catalog(
             name="myapp",
-            schemas=[Schema(name="main")],
+            schemas=[Schema(path=["main"])],
             source_url="https://github.com/example/myapp",
         )
         assert catalog.source_url == "https://github.com/example/myapp"
@@ -1387,15 +1387,15 @@ class TestCatalogValidation:
 
     def test_catalog_rejects_missing_default_schema(self) -> None:
         """Catalog raises ValueError if default_schema not in schemas."""
-        schema = Schema(name="analytics")
+        schema = Schema(path=["analytics"])
         with pytest.raises(ValueError, match="default_schema 'main' not found"):
             Catalog(name="myapp", schemas=[schema])
 
-    def test_catalog_rejects_duplicate_schema_names(self) -> None:
-        """Catalog raises ValueError for duplicate schema names."""
-        s1 = Schema(name="main")
-        s2 = Schema(name="Main")  # Case-insensitive duplicate
-        with pytest.raises(ValueError, match="duplicate schema name"):
+    def test_catalog_rejects_duplicate_schema_paths(self) -> None:
+        """Catalog raises ValueError for duplicate schema paths."""
+        s1 = Schema(path=["main"])
+        s2 = Schema(path=["Main"])  # Case-insensitive duplicate
+        with pytest.raises(ValueError, match="duplicate schema path"):
             Catalog(name="myapp", schemas=[s1, s2])
 
 
@@ -1404,7 +1404,7 @@ class TestGlobalFunctionsValidation:
 
     def test_defaults_are_empty(self) -> None:
         """A catalog publishes nothing globally unless it asks to."""
-        catalog = Catalog(name="myapp", schemas=[Schema(name="main")])
+        catalog = Catalog(name="myapp", schemas=[Schema(path=["main"])])
         assert catalog.global_functions == ()
         assert catalog.global_function_prefix is None
 
@@ -1412,7 +1412,7 @@ class TestGlobalFunctionsValidation:
         """The happy path: listed once globally, resident in exactly one schema."""
         catalog = Catalog(
             name="myapp",
-            schemas=[Schema(name="main", functions=[UsersFunction])],
+            schemas=[Schema(path=["main"], functions=[UsersFunction])],
             global_functions=[UsersFunction],
             global_function_prefix="myapp",
         )
@@ -1424,7 +1424,7 @@ class TestGlobalFunctionsValidation:
         with pytest.raises(ValueError, match="does not appear in any Schema.functions"):
             Catalog(
                 name="myapp",
-                schemas=[Schema(name="main")],
+                schemas=[Schema(path=["main"])],
                 global_functions=[UsersFunction],
             )
 
@@ -1434,8 +1434,8 @@ class TestGlobalFunctionsValidation:
             Catalog(
                 name="myapp",
                 schemas=[
-                    Schema(name="main", functions=[UsersFunction]),
-                    Schema(name="other", functions=[UsersFunction]),
+                    Schema(path=["main"], functions=[UsersFunction]),
+                    Schema(path=["other"], functions=[UsersFunction]),
                 ],
                 global_functions=[UsersFunction],
             )
@@ -1445,7 +1445,7 @@ class TestGlobalFunctionsValidation:
         with pytest.raises(ValueError, match="duplicate entry UsersFunction"):
             Catalog(
                 name="myapp",
-                schemas=[Schema(name="main", functions=[UsersFunction])],
+                schemas=[Schema(path=["main"], functions=[UsersFunction])],
                 global_functions=[UsersFunction, UsersFunction],
             )
 
@@ -1455,7 +1455,7 @@ class TestGlobalFunctionsValidation:
         with pytest.raises(ValueError, match="not a valid SQL identifier prefix"):
             Catalog(
                 name="myapp",
-                schemas=[Schema(name="main", functions=[UsersFunction])],
+                schemas=[Schema(path=["main"], functions=[UsersFunction])],
                 global_functions=[UsersFunction],
                 global_function_prefix=prefix,
             )
@@ -1463,7 +1463,7 @@ class TestGlobalFunctionsValidation:
     def test_prefix_validated_even_without_global_functions(self) -> None:
         """A bad prefix is a bug worth reporting even if nothing uses it yet."""
         with pytest.raises(ValueError, match="not a valid SQL identifier prefix"):
-            Catalog(name="myapp", schemas=[Schema(name="main")], global_function_prefix="Bad")
+            Catalog(name="myapp", schemas=[Schema(path=["main"])], global_function_prefix="Bad")
 
 
 class TestGlobalFunctionsAttachResult:
@@ -1483,20 +1483,20 @@ class TestGlobalFunctionsAttachResult:
 
     def test_absent_when_not_declared(self) -> None:
         """Catalogs that declare nothing advertise an empty list and no prefix."""
-        result = self._attach(Catalog(name="myapp", schemas=[Schema(name="main", functions=[UsersFunction])]))
+        result = self._attach(Catalog(name="myapp", schemas=[Schema(path=["main"], functions=[UsersFunction])]))
         assert result.global_functions == []
         assert result.global_function_prefix == ""
 
     def test_carries_serialized_function_info(self) -> None:
         """Each global arrives as a FunctionInfo with real dispatch coordinates.
 
-        ``name``/``schema_name`` must stay the values bind dispatches on — the
+        ``name``/``schema_path`` must stay the values bind dispatches on — the
         prefix is applied client-side, not baked into the name here.
         """
         result = self._attach(
             Catalog(
                 name="myapp",
-                schemas=[Schema(name="analytics", functions=[UsersFunction])],
+                schemas=[Schema(path=["analytics"], functions=[UsersFunction])],
                 default_schema="analytics",
                 global_functions=[UsersFunction],
                 global_function_prefix="myapp",
@@ -1507,7 +1507,7 @@ class TestGlobalFunctionsAttachResult:
 
         info = FunctionInfo.deserialize_from_bytes(result.global_functions[0])
         assert info.name == "users"
-        assert info.schema_name == "analytics"
+        assert info.schema_path == ["analytics"]
         assert info.function_type == CatalogInterfaceFunctionType.TABLE
 
     def test_prefix_empty_string_when_unset(self) -> None:
@@ -1515,7 +1515,7 @@ class TestGlobalFunctionsAttachResult:
         result = self._attach(
             Catalog(
                 name="myapp",
-                schemas=[Schema(name="main", functions=[UsersFunction])],
+                schemas=[Schema(path=["main"], functions=[UsersFunction])],
                 global_functions=[UsersFunction],
             )
         )
@@ -1542,7 +1542,7 @@ class TestGlobalFunctionsAttachResult:
         }
         # Every advertised global must be schema-resident, or it could never
         # be dispatched after the client registers it.
-        assert all(i.schema_name == "main" for i in infos)
+        assert all(i.schema_path == ["main"] for i in infos)
 
 
 # =============================================================================
@@ -1606,7 +1606,7 @@ class TestReadOnlyCatalogWithCatalog:
                 default_schema="main",
                 schemas=[
                     Schema(
-                        name="main",
+                        path=["main"],
                         tables=[users_table],
                         views=[active_users_view],
                         functions=[UsersFunction],
@@ -1622,7 +1622,7 @@ class TestReadOnlyCatalogWithCatalog:
         """Catalog name comes from Catalog object."""
         assert catalog_interface._effective_catalog_name == "testapp"
 
-    def test_default_schema_name(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
+    def test_default_schema_path(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """Default schema name comes from Catalog object."""
         assert catalog_interface._default_schema_name == "main"
 
@@ -1643,7 +1643,7 @@ class TestReadOnlyCatalogWithCatalog:
             catalog = Catalog(
                 name="sourced",
                 default_schema="main",
-                schemas=[Schema(name="main", tables=[users_table])],
+                schemas=[Schema(path=["main"], tables=[users_table])],
                 source_url="https://github.com/example/sourced",
             )
 
@@ -1663,32 +1663,32 @@ class TestReadOnlyCatalogWithCatalog:
         attach_opaque_data = AttachOpaqueData(b"test")
         schemas = catalog_interface.schemas(attach_opaque_data=attach_opaque_data, transaction_opaque_data=None)
         assert len(schemas) == 1
-        assert schemas[0].name == "main"
+        assert schemas[0].path == ["main"]
 
     def test_schema_get_found(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """schema_get() finds schema by name."""
         attach_opaque_data = AttachOpaqueData(b"test")
         info = catalog_interface.schema_get(
-            attach_opaque_data=attach_opaque_data, transaction_opaque_data=None, name="main"
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=None, path=["main"]
         )
         assert info is not None
-        assert info.name == "main"
+        assert info.path == ["main"]
         assert info.comment == "Main schema"
 
     def test_schema_get_case_insensitive(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """schema_get() is case-insensitive."""
         attach_opaque_data = AttachOpaqueData(b"test")
         info = catalog_interface.schema_get(
-            attach_opaque_data=attach_opaque_data, transaction_opaque_data=None, name="MAIN"
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=None, path=["MAIN"]
         )
         assert info is not None
-        assert info.name == "main"  # Original case preserved
+        assert info.path == ["main"]  # Original case preserved
 
     def test_schema_get_not_found(self, catalog_interface: ReadOnlyCatalogInterface) -> None:
         """schema_get() returns None for unknown schema."""
         attach_opaque_data = AttachOpaqueData(b"test")
         info = catalog_interface.schema_get(
-            attach_opaque_data=attach_opaque_data, transaction_opaque_data=None, name="unknown"
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=None, path=["unknown"]
         )
         assert info is None
 
@@ -1696,7 +1696,7 @@ class TestReadOnlyCatalogWithCatalog:
         """table_get() finds table by schema and name."""
         attach_opaque_data = AttachOpaqueData(b"test")
         info = catalog_interface.table_get(
-            attach_opaque_data=attach_opaque_data, transaction_opaque_data=None, schema_name="main", name="users"
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=None, schema_path=["main"], name="users"
         )
         assert info is not None
         assert info.name == "users"
@@ -1706,7 +1706,7 @@ class TestReadOnlyCatalogWithCatalog:
         """table_get() is case-insensitive for both schema and table."""
         attach_opaque_data = AttachOpaqueData(b"test")
         info = catalog_interface.table_get(
-            attach_opaque_data=attach_opaque_data, transaction_opaque_data=None, schema_name="MAIN", name="USERS"
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=None, schema_path=["MAIN"], name="USERS"
         )
         assert info is not None
         assert info.name == "users"
@@ -1715,7 +1715,7 @@ class TestReadOnlyCatalogWithCatalog:
         """table_get() returns None for unknown table."""
         attach_opaque_data = AttachOpaqueData(b"test")
         info = catalog_interface.table_get(
-            attach_opaque_data=attach_opaque_data, transaction_opaque_data=None, schema_name="main", name="unknown"
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=None, schema_path=["main"], name="unknown"
         )
         assert info is None
 
@@ -1725,7 +1725,7 @@ class TestReadOnlyCatalogWithCatalog:
         info = catalog_interface.view_get(
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=None,
-            schema_name="main",
+            schema_path=["main"],
             name="active_users",
         )
         assert info is not None
@@ -1738,7 +1738,7 @@ class TestReadOnlyCatalogWithCatalog:
         info = catalog_interface.view_get(
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=None,
-            schema_name="MAIN",
+            schema_path=["MAIN"],
             name="ACTIVE_USERS",
         )
         assert info is not None
@@ -1748,7 +1748,7 @@ class TestReadOnlyCatalogWithCatalog:
         """view_get() returns None for unknown view."""
         attach_opaque_data = AttachOpaqueData(b"test")
         info = catalog_interface.view_get(
-            attach_opaque_data=attach_opaque_data, transaction_opaque_data=None, schema_name="main", name="unknown"
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=None, schema_path=["main"], name="unknown"
         )
         assert info is None
 
@@ -1758,7 +1758,7 @@ class TestReadOnlyCatalogWithCatalog:
         info = catalog_interface.macro_get(
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=None,
-            schema_name="main",
+            schema_path=["main"],
             name="multiply",
         )
         assert info is not None
@@ -1772,7 +1772,7 @@ class TestReadOnlyCatalogWithCatalog:
         info = catalog_interface.macro_get(
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=None,
-            schema_name="MAIN",
+            schema_path=["MAIN"],
             name="MULTIPLY",
         )
         assert info is not None
@@ -1784,7 +1784,7 @@ class TestReadOnlyCatalogWithCatalog:
         info = catalog_interface.macro_get(
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=None,
-            schema_name="main",
+            schema_path=["main"],
             name="unknown",
         )
         assert info is None
@@ -1817,7 +1817,7 @@ class TestSchemaContentsWithCatalog:
                 name="test",
                 schemas=[
                     Schema(
-                        name="main",
+                        path=["main"],
                         tables=[users_table, events_table],
                         views=[users_view],
                         functions=[UsersFunction],
@@ -1834,7 +1834,7 @@ class TestSchemaContentsWithCatalog:
         contents = catalog_interface.schema_contents(
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=None,
-            name="main",
+            path=["main"],
             type=SchemaObjectType.TABLE,
         )
         assert len(contents) == 2
@@ -1856,7 +1856,7 @@ class TestSchemaContentsWithCatalog:
                 default_schema="main",
                 schemas=[
                     Schema(
-                        name="main",
+                        path=["main"],
                         tables=[
                             # Inline-bind opted in.
                             Table(name="u_inline", function=UsersFunction, inline_bind=True),
@@ -1871,7 +1871,7 @@ class TestSchemaContentsWithCatalog:
         contents = _InlineBindCatalog().schema_contents(
             attach_opaque_data=AttachOpaqueData(b"test"),
             transaction_opaque_data=None,
-            name="main",
+            path=["main"],
             type=SchemaObjectType.TABLE,
         )
         by_name = {c.name: c for c in contents}
@@ -1889,7 +1889,7 @@ class TestSchemaContentsWithCatalog:
         contents = catalog_interface.schema_contents(
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=None,
-            name="main",
+            path=["main"],
             type=SchemaObjectType.VIEW,
         )
         assert len(contents) == 1
@@ -1901,7 +1901,7 @@ class TestSchemaContentsWithCatalog:
         contents = catalog_interface.schema_contents(
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=None,
-            name="unknown",
+            path=["unknown"],
             type=SchemaObjectType.TABLE,
         )
         assert contents == []
@@ -1912,7 +1912,7 @@ class TestSchemaContentsWithCatalog:
         contents = catalog_interface.schema_contents(
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=None,
-            name="main",
+            path=["main"],
             type=SchemaObjectType.SCALAR_MACRO,
         )
         assert len(contents) == 1
@@ -1925,7 +1925,7 @@ class TestSchemaContentsWithCatalog:
         contents = catalog_interface.schema_contents(
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=None,
-            name="main",
+            path=["main"],
             type=SchemaObjectType.TABLE_MACRO,
         )
         assert len(contents) == 1
@@ -1944,7 +1944,7 @@ class TestTableScanFunctionGet:
         class TestCatalog(ReadOnlyCatalogInterface):
             catalog = Catalog(
                 name="test",
-                schemas=[Schema(name="main", tables=[users_table])],
+                schemas=[Schema(path=["main"], tables=[users_table])],
             )
 
         return TestCatalog()
@@ -1955,7 +1955,7 @@ class TestTableScanFunctionGet:
         result = catalog_interface.table_scan_function_get(
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=None,
-            schema_name="main",
+            schema_path=["main"],
             name="users",
             at_unit=None,
             at_value=None,
@@ -1984,13 +1984,13 @@ class TestTableScanFunctionGet:
         class TestCatalog(ReadOnlyCatalogInterface):
             catalog = Catalog(
                 name="test",
-                schemas=[Schema(name="main", tables=[counted])],
+                schemas=[Schema(path=["main"], tables=[counted])],
             )
 
         result = TestCatalog().table_scan_function_get(
             attach_opaque_data=AttachOpaqueData(b"test"),
             transaction_opaque_data=None,
-            schema_name="main",
+            schema_path=["main"],
             name="counted",
             at_unit=None,
             at_value=None,
@@ -2013,13 +2013,13 @@ class TestTableScanFunctionGet:
         class TestCatalog(ReadOnlyCatalogInterface):
             catalog = Catalog(
                 name="test",
-                schemas=[Schema(name="main", tables=[counted])],
+                schemas=[Schema(path=["main"], tables=[counted])],
             )
 
         result = TestCatalog().table_scan_branches_get(
             attach_opaque_data=AttachOpaqueData(b"test"),
             transaction_opaque_data=None,
-            schema_name="main",
+            schema_path=["main"],
             name="counted",
             at_unit=None,
             at_value=None,
@@ -2034,7 +2034,7 @@ class TestTableScanFunctionGet:
         class TestCatalog(ReadOnlyCatalogInterface):
             catalog = Catalog(
                 name="test",
-                schemas=[Schema(name="main", tables=[explicit_table])],
+                schemas=[Schema(path=["main"], tables=[explicit_table])],
             )
 
         interface = TestCatalog()
@@ -2043,7 +2043,7 @@ class TestTableScanFunctionGet:
             interface.table_scan_function_get(
                 attach_opaque_data=attach_opaque_data,
                 transaction_opaque_data=None,
-                schema_name="main",
+                schema_path=["main"],
                 name="orders",
                 at_unit=None,
                 at_value=None,
@@ -2065,7 +2065,7 @@ class TestWorkerWithCatalog:
         class MyWorker(Worker):
             catalog = Catalog(
                 name="myapp",
-                schemas=[Schema(name="main", tables=[users_table])],
+                schemas=[Schema(path=["main"], tables=[users_table])],
             )
 
         interface_cls = MyWorker._get_catalog_interface()
@@ -2079,7 +2079,7 @@ class TestWorkerWithCatalog:
         class MyWorker(Worker):
             catalog = Catalog(
                 name="myapp",
-                schemas=[Schema(name="main", tables=[users_table])],
+                schemas=[Schema(path=["main"], tables=[users_table])],
             )
 
         interface_cls = MyWorker._get_catalog_interface()
@@ -2094,7 +2094,7 @@ class TestWorkerWithCatalog:
         class MyCatalog(ReadOnlyCatalogInterface):
             catalog = Catalog(
                 name="myapp",
-                schemas=[Schema(name="main", tables=[explicit_table])],
+                schemas=[Schema(path=["main"], tables=[explicit_table])],
             )
 
             def table_scan_function_get(
@@ -2102,7 +2102,7 @@ class TestWorkerWithCatalog:
                 *,
                 attach_opaque_data: AttachOpaqueData,
                 transaction_opaque_data: TransactionOpaqueData | None,
-                schema_name: str,
+                schema_path: list[str],
                 name: str,
                 at_unit: str | None,
                 at_value: str | None,
@@ -2123,7 +2123,7 @@ class TestWorkerWithCatalog:
         result = interface.table_scan_function_get(
             attach_opaque_data=AttachOpaqueData(b"test"),
             transaction_opaque_data=None,
-            schema_name="main",
+            schema_path=["main"],
             name="orders",
             at_unit=None,
             at_value=None,
@@ -2176,12 +2176,12 @@ class TestMultiSchemaCatalog:
                 default_schema="analytics",
                 schemas=[
                     Schema(
-                        name="analytics",
+                        path=["analytics"],
                         tables=[users_table],
                         comment="Analytics data",
                     ),
                     Schema(
-                        name="raw",
+                        path=["raw"],
                         tables=[events_table],
                         comment="Raw ingested data",
                     ),
@@ -2194,8 +2194,8 @@ class TestMultiSchemaCatalog:
         """schemas() returns all schemas."""
         attach_opaque_data = AttachOpaqueData(b"test")
         schemas = multi_schema_interface.schemas(attach_opaque_data=attach_opaque_data, transaction_opaque_data=None)
-        names = {s.name for s in schemas}
-        assert names == {"analytics", "raw"}
+        paths = {tuple(s.path) for s in schemas}
+        assert paths == {("analytics",), ("raw",)}
 
     def test_table_in_correct_schema(self, multi_schema_interface: ReadOnlyCatalogInterface) -> None:
         """Tables are found in their correct schemas."""
@@ -2205,7 +2205,7 @@ class TestMultiSchemaCatalog:
         users = multi_schema_interface.table_get(
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=None,
-            schema_name="analytics",
+            schema_path=["analytics"],
             name="users",
         )
         assert users is not None
@@ -2214,7 +2214,7 @@ class TestMultiSchemaCatalog:
         users_raw = multi_schema_interface.table_get(
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=None,
-            schema_name="raw",
+            schema_path=["raw"],
             name="users",
         )
         assert users_raw is None
@@ -2223,7 +2223,7 @@ class TestMultiSchemaCatalog:
         events = multi_schema_interface.table_get(
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=None,
-            schema_name="raw",
+            schema_path=["raw"],
             name="events",
         )
         assert events is not None

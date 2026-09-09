@@ -74,7 +74,7 @@ class TestStderrInErrorMessages:
             list(
                 client.table_function(
                     function_name="nonexistent",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(),
                 )
             )
@@ -106,7 +106,7 @@ class TestStderrInErrorMessages:
         client = Client(_stderr_worker("Error: function not found"), pool=None)
         with pytest.raises(ClientError) as exc_info:
             client.start()
-            list(client.table_function(function_name="nonexistent", schema_name="main", arguments=Arguments()))
+            list(client.table_function(function_name="nonexistent", schema_path=["main"], arguments=Arguments()))
         client.stop()
 
         assert "Error: function not found" in str(exc_info.value)
@@ -132,7 +132,9 @@ class TestStderrInErrorMessages:
 
         with Client("vgi-fixture-worker", pool=None) as client:
             with pytest.raises(ClientError):
-                list(client.table_function(function_name="no_such_function", schema_name="main", arguments=Arguments()))
+                list(
+                    client.table_function(function_name="no_such_function", schema_path=["main"], arguments=Arguments())
+                )
             assert client._primary is not None  # noqa: SLF001 - a started client always has one
             proc = client._primary.proc  # noqa: SLF001 - the point is that it is still running
             assert proc is not None
@@ -154,7 +156,7 @@ class TestStderrInErrorMessages:
             list(
                 client.table_function(
                     function_name="nonexistent",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(),
                 )
             )
@@ -174,7 +176,7 @@ class TestStderrInErrorMessages:
             list(
                 client.table_in_out_function(
                     function_name="nonexistent",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                 )
             )
@@ -193,7 +195,7 @@ class TestStderrInErrorMessages:
             list(
                 client.scalar_function(
                     function_name="nonexistent",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                 )
             )

@@ -152,7 +152,7 @@ def test_fixture_worker_registers_at_least_one_per_category(
     client = Client("vgi-fixture-worker")
     infos = client.schema_contents(
         attach_opaque_data=attach_opaque_data,
-        name=EXAMPLE_SCHEMA_NAME,
+        path=[EXAMPLE_SCHEMA_NAME],
         type=schema_type,
     )
     assert len(infos) > 0, (
@@ -178,7 +178,7 @@ def test_scalar_function_end_to_end(attached_example: tuple[str, bytes]) -> None
         out_batches = list(
             client.scalar_function(
                 function_name="double",
-                schema_name="main",
+                schema_path=["main"],
                 arguments=Arguments(positional=(pa.scalar("x"),)),
                 input=iter([input_batch]),
             )
@@ -200,7 +200,7 @@ def test_table_function_end_to_end(attached_example: tuple[str, bytes]) -> None:
         out_batches = list(
             client.table_function(
                 function_name="sequence",
-                schema_name="main",
+                schema_path=["main"],
                 arguments=Arguments(positional=(pa.scalar(5),)),
             )
         )

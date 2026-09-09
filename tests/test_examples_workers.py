@@ -50,7 +50,7 @@ def test_calc_scalar_worker() -> None:
     """The stage-1 scalar-only tutorial worker doubles each input row."""
     with _spawn("calc_scalar_worker.py") as client:
         batch = pa.record_batch({"value": pa.array([21, 5], type=pa.int64())})
-        out = list(client.scalar_function(function_name="double", schema_name="main", input=iter([batch])))
+        out = list(client.scalar_function(function_name="double", schema_path=["main"], input=iter([batch])))
     assert [v for b in out for v in b.column(0).to_pylist()] == [42, 10]
 
 
@@ -58,7 +58,7 @@ def test_calc_worker_scalar_and_table() -> None:
     """The full tutorial worker serves both the scalar and the table function."""
     with _spawn("calc_worker.py") as client:
         values = pa.record_batch({"value": pa.array([21], type=pa.int64())})
-        scalar = list(client.scalar_function(function_name="double", schema_name="main", input=iter([values])))
+        scalar = list(client.scalar_function(function_name="double", schema_path=["main"], input=iter([values])))
         assert scalar[0].column(0).to_pylist() == [42]
 
     with _spawn("calc_worker.py") as client:
@@ -67,7 +67,7 @@ def test_calc_worker_scalar_and_table() -> None:
         rows = list(
             client.table_function(
                 function_name="series",
-                schema_name="main",
+                schema_path=["main"],
                 arguments=Arguments(positional=(pa.scalar(3),)),
             )
         )
@@ -82,7 +82,7 @@ def test_series_streaming_worker() -> None:
         rows = list(
             client.table_function(
                 function_name="series",
-                schema_name="main",
+                schema_path=["main"],
                 arguments=Arguments(positional=(pa.scalar(5),)),
             )
         )
@@ -96,7 +96,9 @@ def test_row_count_worker_buffering() -> None:
             pa.record_batch({"x": pa.array([1, 2, 3], type=pa.int64())}),
             pa.record_batch({"x": pa.array([4, 5], type=pa.int64())}),
         ]
-        out = list(client.table_buffering_function(function_name="row_count", schema_name="main", input=iter(batches)))
+        out = list(
+            client.table_buffering_function(function_name="row_count", schema_path=["main"], input=iter(batches))
+        )
     assert [v for b in out for v in b.column("count").to_pylist()] == [5]
 
 
@@ -109,7 +111,7 @@ def test_batch_index_worker_reports_input_order() -> None:
             pa.record_batch({"x": pa.array([6], type=pa.int64())}),
         ]
         out = list(
-            client.table_buffering_function(function_name="batch_indexes", schema_name="main", input=iter(batches))
+            client.table_buffering_function(function_name="batch_indexes", schema_path=["main"], input=iter(batches))
         )
     indexes = cast("list[int]", [v for b in out for v in b.column("batch_index").to_pylist()])
     rows = cast("list[int]", [v for b in out for v in b.column("rows").to_pylist()])
@@ -124,7 +126,7 @@ def test_greeting_scalar_worker_string_example() -> None:
     """The string-scalar example (used in the function-patterns guide) still serves."""
     with _spawn("greeting_scalar_worker.py") as client:
         batch = pa.record_batch({"name": pa.array(["Alice", "Bob"])})
-        out = list(client.scalar_function(function_name="greeting", schema_name="main", input=iter([batch])))
+        out = list(client.scalar_function(function_name="greeting", schema_path=["main"], input=iter([batch])))
     assert [v for b in out for v in b.column(0).to_pylist()] == ["Hello, Alice!", "Hello, Bob!"]
 
 
@@ -133,7 +135,7 @@ def test_filter_worker_table_in_out() -> None:
     with _spawn("filter_worker.py") as client:
         batch = pa.record_batch({"value": pa.array([-2, 5, 0, 9, -1], type=pa.int64())})
         out = list(
-            client.table_in_out_function(function_name="filter_positive", schema_name="main", input=iter([batch]))
+            client.table_in_out_function(function_name="filter_positive", schema_path=["main"], input=iter([batch]))
         )
     kept = [v for b in out for v in b.column("value").to_pylist()]
     assert kept == [5, 9]
@@ -178,7 +180,7 @@ def test_cache_worker_advertises_and_revalidates() -> None:
 
     with _spawn("cache_worker.py") as client:
         rows = list(
-            client.table_function(function_name="rates", schema_name="main", arguments=Arguments(positional=()))
+            client.table_function(function_name="rates", schema_path=["main"], arguments=Arguments(positional=()))
         )
     assert [v for b in rows for v in b.column("currency").to_pylist()] == ["EUR", "GBP", "JPY"]
 

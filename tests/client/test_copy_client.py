@@ -22,7 +22,7 @@ from vgi import schema
 from vgi.arguments import Arguments
 from vgi.client.client import Client, ClientError
 
-MAIN = "main"
+MAIN = ["main"]
 READER = "example_lines_copy_reader"
 READER_FORMAT = "example_lines"
 WRITER = "example_lines_writer"
@@ -51,7 +51,7 @@ def _write(client: Client, dest: str, **options: pa.Scalar[Any]) -> None:
     named.update(options)
     client.copy_to(
         function_name=WRITER,
-        schema_name=MAIN,
+        schema_path=MAIN,
         format=WRITER_FORMAT,
         file_path=dest,
         input=iter(_rows()),
@@ -83,7 +83,7 @@ class TestCopyTo:
         dest = str(tmp_path / "empty.txt")
         client.copy_to(
             function_name=WRITER,
-            schema_name=MAIN,
+            schema_path=MAIN,
             format=WRITER_FORMAT,
             file_path=dest,
             input=iter([]),
@@ -97,7 +97,7 @@ class TestCopyTo:
         dest = str(tmp_path / "ordered.txt")
         client.copy_to(
             function_name="example_lines_ordered_writer",
-            schema_name=MAIN,
+            schema_path=MAIN,
             format="example_lines_ordered_out",
             file_path=dest,
             input=iter(_rows()),
@@ -124,7 +124,7 @@ class TestCopyTo:
         with pytest.raises(ClientError):
             client.copy_to(
                 function_name=WRITER,
-                schema_name=MAIN,
+                schema_path=MAIN,
                 format=WRITER_FORMAT,
                 file_path=str(tmp_path / "no.txt"),
                 input=iter(_rows()),
@@ -145,7 +145,7 @@ class TestCopyFrom:
         batches = list(
             client.copy_from(
                 function_name=READER,
-                schema_name=MAIN,
+                schema_path=MAIN,
                 format=READER_FORMAT,
                 file_path=str(src),
                 expected_schema=SOURCE_SCHEMA,
@@ -162,7 +162,7 @@ class TestCopyFrom:
         batches = list(
             client.copy_from(
                 function_name=READER,
-                schema_name=MAIN,
+                schema_path=MAIN,
                 format=READER_FORMAT,
                 file_path=str(src),
                 expected_schema=SOURCE_SCHEMA,
@@ -185,7 +185,7 @@ class TestCopyFrom:
             list(
                 client.copy_from(
                     function_name=READER,
-                    schema_name=MAIN,
+                    schema_path=MAIN,
                     format=READER_FORMAT,
                     file_path=str(src),
                     expected_schema=SOURCE_SCHEMA,
@@ -199,7 +199,7 @@ class TestCopyFrom:
         batches = list(
             client.copy_from(
                 function_name=READER,
-                schema_name=MAIN,
+                schema_path=MAIN,
                 format=READER_FORMAT,
                 file_path=str(src),
                 expected_schema=SOURCE_SCHEMA,
@@ -214,7 +214,7 @@ class TestCopyFrom:
             list(
                 client.copy_from(
                     function_name=READER,
-                    schema_name=MAIN,
+                    schema_path=MAIN,
                     format=READER_FORMAT,
                     file_path=str(tmp_path / "absent.txt"),
                     expected_schema=SOURCE_SCHEMA,
@@ -235,7 +235,7 @@ def test_copy_to_then_copy_from_round_trips(client: Client, tmp_path: pathlib.Pa
     batches = list(
         client.copy_from(
             function_name=READER,
-            schema_name=MAIN,
+            schema_path=MAIN,
             format=READER_FORMAT,
             file_path=dest,
             expected_schema=SOURCE_SCHEMA,
@@ -278,7 +278,7 @@ def test_copy_to_rejects_a_non_copy_handler(client: Client, tmp_path: pathlib.Pa
     with pytest.raises(ClientError):
         client.copy_to(
             function_name="echo_buffering",
-            schema_name=MAIN,
+            schema_path=MAIN,
             format=WRITER_FORMAT,
             file_path=str(tmp_path / "nope.txt"),
             input=iter(_rows()),

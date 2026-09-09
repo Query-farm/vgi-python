@@ -329,7 +329,7 @@ _CATALOG = Catalog(
     default_schema="main",
     schemas=[
         Schema(
-            name="main",
+            path=["main"],
             comment="projection-pushdown reproducer catalog",
             functions=list(_FUNCTIONS),
             tables=[],
@@ -362,7 +362,7 @@ class ProjReproCatalog(ReadOnlyCatalogInterface):
             comment=f"reproducer table -> {_TABLE_NAMES[table_name]}",
             tags={},
             name=table_name,
-            schema_name="main",
+            schema_path=["main"],
             columns=SerializedSchema(_serialize_schema(WIDE_SCHEMA)),
             not_null_constraints=[],
             unique_constraints=[],
@@ -379,10 +379,10 @@ class ProjReproCatalog(ReadOnlyCatalogInterface):
         # every table this catalog publishes via the override below.
         infos = super().schemas(attach_opaque_data=attach_opaque_data, transaction_opaque_data=transaction_opaque_data)
         for i, info in enumerate(infos):
-            if info.name == "main":
+            if info.path == ["main"]:
                 infos[i] = SchemaInfo(
                     attach_opaque_data=info.attach_opaque_data,
-                    name=info.name,
+                    path=list(info.path),
                     comment=info.comment,
                     tags=info.tags,
                     estimated_object_count={
@@ -397,13 +397,13 @@ class ProjReproCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         type: Any,
     ) -> Any:
-        if name.lower() == "main" and type == SchemaObjectType.TABLE:
+        if [component.lower() for component in path] == ["main"] and type == SchemaObjectType.TABLE:
             return [self._info(table_name) for table_name in _TABLE_NAMES]
         return super().schema_contents(
-            attach_opaque_data=attach_opaque_data, transaction_opaque_data=transaction_opaque_data, name=name, type=type
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=transaction_opaque_data, path=path, type=type
         )
 
     def table_get(
@@ -411,12 +411,12 @@ class ProjReproCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
     ) -> TableInfo | None:
-        if schema_name.lower() != "main":
+        if [component.lower() for component in schema_path] != ["main"]:
             return None
         if name in _TABLE_NAMES:
             return self._info(name)
@@ -427,7 +427,7 @@ class ProjReproCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None,
         at_value: str | None,

@@ -23,7 +23,7 @@ from vgi import schema
 from vgi.arguments import Arguments
 from vgi.client.client import Client, ClientError
 
-MAIN = "main"
+MAIN = ["main"]
 
 
 @pytest.fixture
@@ -56,7 +56,7 @@ class TestAggregateFunction:
         """Groups are keyed client-side and accumulate across batch boundaries."""
         out = client.aggregate_function(
             function_name="vgi_sum",
-            schema_name=MAIN,
+            schema_path=MAIN,
             input=_grouped_batches(),
             group_by=["cat"],
         )
@@ -65,7 +65,7 @@ class TestAggregateFunction:
     def test_groups_are_ordered_first_seen(self, client: Client) -> None:
         """Group ids are minted in first-seen order, so the output row order is too."""
         batch = pa.RecordBatch.from_pydict({"cat": ["z", "m", "a", "m"], "value": [1, 2, 3, 4]})
-        out = client.aggregate_function(function_name="vgi_sum", schema_name=MAIN, input=[batch], group_by=["cat"])
+        out = client.aggregate_function(function_name="vgi_sum", schema_path=MAIN, input=[batch], group_by=["cat"])
         assert out.column("cat").to_pylist() == ["z", "m", "a"]
         assert out.column("result").to_pylist() == [1, 6, 3]
 
@@ -73,14 +73,14 @@ class TestAggregateFunction:
         """No ``group_by`` means one group, the SQL global-aggregate shape."""
         out = client.aggregate_function(
             function_name="vgi_sum",
-            schema_name=MAIN,
+            schema_path=MAIN,
             input=[_values(1, 2), _values(3, 4)],
         )
         assert out.to_pydict() == {"result": [10]}
 
     def test_global_over_empty_input_is_one_null_row(self, client: Client) -> None:
         """``SELECT vgi_sum(x) FROM empty_table`` is one NULL row, not zero rows."""
-        out = client.aggregate_function(function_name="vgi_sum", schema_name=MAIN, input=[])
+        out = client.aggregate_function(function_name="vgi_sum", schema_path=MAIN, input=[])
         assert out.num_rows == 1
         assert out.column("result").to_pylist() == [None]
 
@@ -88,7 +88,7 @@ class TestAggregateFunction:
         """With a GROUP BY there are no groups, so there are no rows."""
         out = client.aggregate_function(
             function_name="vgi_sum",
-            schema_name=MAIN,
+            schema_path=MAIN,
             input=[],
             group_by=["cat"],
             input_schema=schema(value=pa.int64()),
@@ -100,13 +100,13 @@ class TestAggregateFunction:
         """A zero-row batch contributes nothing but must not break the drive loop."""
         s = schema(value=pa.int64())
         empty = pa.RecordBatch.from_pydict({"value": pa.array([], type=pa.int64())}, schema=s)
-        out = client.aggregate_function(function_name="vgi_sum", schema_name=MAIN, input=[empty, _values(5), empty])
+        out = client.aggregate_function(function_name="vgi_sum", schema_path=MAIN, input=[empty, _values(5), empty])
         assert out.column("result").to_pylist() == [5]
 
     def test_nullary_aggregate(self, client: Client) -> None:
         """``vgi_count()`` takes no value columns — the row count rides the group ids."""
         batch = pa.RecordBatch.from_pydict({"cat": ["a", "b", "a", "a"]})
-        out = client.aggregate_function(function_name="vgi_count", schema_name=MAIN, input=[batch], group_by=["cat"])
+        out = client.aggregate_function(function_name="vgi_count", schema_path=MAIN, input=[batch], group_by=["cat"])
         assert out.to_pydict() == {"cat": ["a", "b"], "result": [3, 1]}
 
     def test_multi_column_aggregate(self, client: Client) -> None:
@@ -117,7 +117,7 @@ class TestAggregateFunction:
                 "weight": pa.array([10.0, 100.0, 1000.0], type=pa.float64()),
             }
         )
-        out = client.aggregate_function(function_name="vgi_weighted_sum", schema_name=MAIN, input=[batch])
+        out = client.aggregate_function(function_name="vgi_weighted_sum", schema_path=MAIN, input=[batch])
         assert out.column("result").to_pylist() == [pytest.approx(3210.0)]
 
     def test_varargs_aggregate(self, client: Client) -> None:
@@ -129,12 +129,12 @@ class TestAggregateFunction:
                 "c": pa.array([100, 200], type=pa.int64()),
             }
         )
-        out = client.aggregate_function(function_name="vgi_sum_all", schema_name=MAIN, input=[batch])
+        out = client.aggregate_function(function_name="vgi_sum_all", schema_path=MAIN, input=[batch])
         assert out.column("result").to_pylist() == [pytest.approx(333.0)]
 
     def test_float_output_schema(self, client: Client) -> None:
         """The result column's type comes from the worker's bind, not the input."""
-        out = client.aggregate_function(function_name="vgi_avg", schema_name=MAIN, input=[_values(1, 2, 3, 10)])
+        out = client.aggregate_function(function_name="vgi_avg", schema_path=MAIN, input=[_values(1, 2, 3, 10)])
         assert out.schema.field("result").type == pa.float64()
         assert out.column("result").to_pylist() == [pytest.approx(4.0)]
 
@@ -143,7 +143,7 @@ class TestAggregateFunction:
         batch = pa.RecordBatch.from_pydict({"value": pa.array([1.0, 2.0, 3.0, 4.0], type=pa.float64())})
         out = client.aggregate_function(
             function_name="vgi_percentile",
-            schema_name=MAIN,
+            schema_path=MAIN,
             input=[batch],
             arguments=Arguments(positional=(pa.scalar(0.0, type=pa.float64()),)),
         )
@@ -154,7 +154,7 @@ class TestAggregateFunction:
         batch = pa.RecordBatch.from_pydict({"cat": ["a", "b", "c", "d", "e"], "value": [1, 2, 3, 4, 5]})
         out = client.aggregate_function(
             function_name="vgi_sum",
-            schema_name=MAIN,
+            schema_path=MAIN,
             input=[batch],
             group_by=["cat"],
             finalize_chunk_size=2,
@@ -172,7 +172,7 @@ class TestAggregateFunction:
             }
         )
         out = client.aggregate_function(
-            function_name="vgi_sum", schema_name=MAIN, input=[batch], group_by=["region", "year"]
+            function_name="vgi_sum", schema_path=MAIN, input=[batch], group_by=["region", "year"]
         )
         assert out.to_pydict() == {
             "region": ["us", "us", "eu"],
@@ -183,26 +183,26 @@ class TestAggregateFunction:
     def test_null_group_key(self, client: Client) -> None:
         """NULL is a group key like any other, as it is in DuckDB's GROUP BY."""
         batch = pa.RecordBatch.from_pydict({"cat": ["a", None, None], "value": [1, 2, 3]})
-        out = client.aggregate_function(function_name="vgi_sum", schema_name=MAIN, input=[batch], group_by=["cat"])
+        out = client.aggregate_function(function_name="vgi_sum", schema_path=MAIN, input=[batch], group_by=["cat"])
         assert out.to_pydict() == {"cat": ["a", None], "result": [1, 5]}
 
     def test_missing_group_by_column_is_rejected(self, client: Client) -> None:
         with pytest.raises(ValueError, match="group_by columns not present"):
             client.aggregate_function(
                 function_name="vgi_sum",
-                schema_name=MAIN,
+                schema_path=MAIN,
                 input=[_values(1)],
                 group_by=["nope"],
             )
 
     def test_unknown_function_raises_client_error(self, client: Client) -> None:
         with pytest.raises(ClientError, match="no_such_aggregate"):
-            client.aggregate_function(function_name="no_such_aggregate", schema_name=MAIN, input=[_values(1)])
+            client.aggregate_function(function_name="no_such_aggregate", schema_path=MAIN, input=[_values(1)])
 
     def test_non_aggregate_function_raises_client_error(self, client: Client) -> None:
         """Binding a scalar through the aggregate path is a typed worker error."""
         with pytest.raises(ClientError):
-            client.aggregate_function(function_name="upper_case", schema_name=MAIN, input=[_values(1)])
+            client.aggregate_function(function_name="upper_case", schema_path=MAIN, input=[_values(1)])
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +214,7 @@ class TestAggregateSession:
     def test_bind_reports_execution_id_and_output_schema(self, client: Client) -> None:
         with client.aggregate_session(
             function_name="vgi_sum",
-            schema_name=MAIN,
+            schema_path=MAIN,
             input_schema=schema(value=pa.int64()),
         ) as session:
             assert session.execution_id
@@ -224,7 +224,7 @@ class TestAggregateSession:
         """Caller-allocated group ids accumulate exactly as DuckDB's do."""
         with client.aggregate_session(
             function_name="vgi_sum",
-            schema_name=MAIN,
+            schema_path=MAIN,
             input_schema=schema(value=pa.int64()),
         ) as session:
             session.update(group_ids=[0, 1, 0], batch=_values(1, 100, 2))
@@ -234,7 +234,7 @@ class TestAggregateSession:
     def test_finalize_order_follows_requested_group_ids(self, client: Client) -> None:
         with client.aggregate_session(
             function_name="vgi_sum",
-            schema_name=MAIN,
+            schema_path=MAIN,
             input_schema=schema(value=pa.int64()),
         ) as session:
             session.update(group_ids=[0, 1], batch=_values(7, 9))
@@ -244,7 +244,7 @@ class TestAggregateSession:
         """An absent state finalizes to whatever the function returns for None."""
         with client.aggregate_session(
             function_name="vgi_sum",
-            schema_name=MAIN,
+            schema_path=MAIN,
             input_schema=schema(value=pa.int64()),
         ) as session:
             assert session.finalize([42]).column("result").to_pylist() == [None]
@@ -253,7 +253,7 @@ class TestAggregateSession:
         """``combine`` is the thread-local-to-global merge; only the target moves."""
         with client.aggregate_session(
             function_name="vgi_sum",
-            schema_name=MAIN,
+            schema_path=MAIN,
             input_schema=schema(value=pa.int64()),
         ) as session:
             session.update(group_ids=[0, 0, 1], batch=_values(1, 2, 100))
@@ -264,7 +264,7 @@ class TestAggregateSession:
         with (
             client.aggregate_session(
                 function_name="vgi_sum",
-                schema_name=MAIN,
+                schema_path=MAIN,
                 input_schema=schema(value=pa.int64()),
             ) as session,
             pytest.raises(ValueError, match="group_ids has 2 entries but batch has 3 rows"),
@@ -275,7 +275,7 @@ class TestAggregateSession:
         with (
             client.aggregate_session(
                 function_name="vgi_sum",
-                schema_name=MAIN,
+                schema_path=MAIN,
                 input_schema=schema(value=pa.int64()),
             ) as session,
             pytest.raises(ValueError, match="source_group_ids has 2 entries"),
@@ -285,7 +285,7 @@ class TestAggregateSession:
     def test_group_ids_accept_arrow_arrays(self, client: Client) -> None:
         with client.aggregate_session(
             function_name="vgi_sum",
-            schema_name=MAIN,
+            schema_path=MAIN,
             input_schema=schema(value=pa.int64()),
         ) as session:
             session.update(group_ids=pa.array([5, 5], type=pa.int32()), batch=_values(4, 6))
@@ -295,7 +295,7 @@ class TestAggregateSession:
         """Teardown is best-effort, so a second destroy must not raise."""
         session = client.aggregate_bind(
             function_name="vgi_sum",
-            schema_name=MAIN,
+            schema_path=MAIN,
             input_schema=schema(value=pa.int64()),
         )
         session.destroy()
@@ -312,7 +312,7 @@ class TestAggregateWindow:
         """One partition shipped once, then queried per output row by frame."""
         with client.aggregate_session(
             function_name="vgi_window_sum",
-            schema_name=MAIN,
+            schema_path=MAIN,
             input_schema=schema(value=pa.int64()),
         ) as session:
             session.window_init(partition_id=0, partition=_values(1, 2, 3, 4))
@@ -324,7 +324,7 @@ class TestAggregateWindow:
     def test_window_batch_computes_many_rows_at_once(self, client: Client) -> None:
         with client.aggregate_session(
             function_name="vgi_window_sum_batch",
-            schema_name=MAIN,
+            schema_path=MAIN,
             input_schema=schema(value=pa.int64()),
         ) as session:
             session.window_init(partition_id=0, partition=_values(1, 2, 3, 4))
@@ -336,7 +336,7 @@ class TestAggregateWindow:
         """A ``FILTER (WHERE ...)`` mask arrives as Arrow's packed validity bitmap."""
         with client.aggregate_session(
             function_name="vgi_window_sum",
-            schema_name=MAIN,
+            schema_path=MAIN,
             input_schema=schema(value=pa.int64()),
         ) as session:
             session.window_init(
@@ -352,7 +352,7 @@ class TestAggregateWindow:
     def test_several_partitions_are_independent(self, client: Client) -> None:
         with client.aggregate_session(
             function_name="vgi_window_sum",
-            schema_name=MAIN,
+            schema_path=MAIN,
             input_schema=schema(value=pa.int64()),
         ) as session:
             session.window_init(partition_id=0, partition=_values(1, 1))
@@ -366,7 +366,7 @@ class TestAggregateWindow:
         with (
             client.aggregate_session(
                 function_name="vgi_window_sum",
-                schema_name=MAIN,
+                schema_path=MAIN,
                 input_schema=schema(value=pa.int64()),
             ) as session,
             pytest.raises(ClientError),
@@ -389,7 +389,7 @@ class TestAggregateStreaming:
         s = self._schema()
         with client.aggregate_streaming(
             function_name="vgi_streaming_sum",
-            schema_name=MAIN,
+            schema_path=MAIN,
             input_schema=s,
             partition_key_count=1,
             order_key_count=1,
@@ -403,7 +403,7 @@ class TestAggregateStreaming:
         s = self._schema()
         with client.aggregate_streaming(
             function_name="vgi_streaming_sum",
-            schema_name=MAIN,
+            schema_path=MAIN,
             input_schema=s,
             partition_key_count=1,
             order_key_count=1,
@@ -417,7 +417,7 @@ class TestAggregateStreaming:
         """Omitting ``output_schema`` resolves it exactly as the extension does."""
         with client.aggregate_streaming(
             function_name="vgi_streaming_sum",
-            schema_name=MAIN,
+            schema_path=MAIN,
             input_schema=self._schema(),
             partition_key_count=1,
             order_key_count=1,
@@ -429,7 +429,7 @@ class TestAggregateStreaming:
             pytest.raises(ValueError, match="exceeds"),
             client.aggregate_streaming(
                 function_name="vgi_streaming_sum",
-                schema_name=MAIN,
+                schema_path=MAIN,
                 input_schema=self._schema(),
                 partition_key_count=3,
                 order_key_count=2,
@@ -447,4 +447,4 @@ def test_aggregate_on_an_unstarted_client_raises(fixture_worker: str) -> None:
     """Aggregates run on the primary connection, so ``start()`` is required."""
     unstarted = Client(fixture_worker, pool=None)
     with pytest.raises(ClientError, match="Client not started"):
-        unstarted.aggregate_function(function_name="vgi_sum", schema_name=MAIN, input=[_values(1)])
+        unstarted.aggregate_function(function_name="vgi_sum", schema_path=MAIN, input=[_values(1)])

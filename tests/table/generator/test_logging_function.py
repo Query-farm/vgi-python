@@ -17,7 +17,7 @@ class TestLoggingGeneratorFunctionViaClient:
             outputs = list(
                 client.table_function(
                     function_name="logging_generator",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(5),)),
                 )
             )
@@ -35,7 +35,7 @@ class TestLoggingGeneratorFunctionViaClient:
             outputs = list(
                 client.table_function(
                     function_name="logging_generator",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(0),)),
                 )
             )
@@ -48,7 +48,7 @@ class TestLoggingGeneratorFunctionViaClient:
             outputs = list(
                 client.table_function(
                     function_name="logging_generator",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(100),)),
                 )
             )

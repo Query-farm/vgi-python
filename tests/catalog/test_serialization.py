@@ -133,7 +133,7 @@ class TestSchemaInfoSerialization:
         """Test basic serialization and deserialization."""
         original = SchemaInfo(
             attach_opaque_data=AttachOpaqueData(b"\x01\x02\x03\x04"),
-            name="main",
+            path=["main", "analytics"],
             comment="Test schema",
             tags={"env": "test", "owner": "alice"},
         )
@@ -142,7 +142,7 @@ class TestSchemaInfoSerialization:
         restored = SchemaInfo.deserialize_from_batch(batch)
 
         assert restored.attach_opaque_data == original.attach_opaque_data
-        assert restored.name == original.name
+        assert restored.path == original.path
         assert restored.comment == original.comment
         assert restored.tags == original.tags
 
@@ -150,7 +150,7 @@ class TestSchemaInfoSerialization:
         """Test with None comment."""
         original = SchemaInfo(
             attach_opaque_data=AttachOpaqueData(b"test"),
-            name="schema1",
+            path=["schema1"],
             comment=None,
             tags={},
         )
@@ -164,7 +164,7 @@ class TestSchemaInfoSerialization:
         """Test with empty tags dictionary."""
         original = SchemaInfo(
             attach_opaque_data=AttachOpaqueData(b"test"),
-            name="schema1",
+            path=["schema1"],
             comment="Comment",
             tags={},
         )
@@ -174,11 +174,11 @@ class TestSchemaInfoSerialization:
 
         assert restored.tags == {}
 
-    def test_empty_string_name(self) -> None:
-        """Test with empty string name."""
+    def test_component_containing_dot(self) -> None:
+        """A dot inside one component is not interpreted as nesting."""
         original = SchemaInfo(
             attach_opaque_data=AttachOpaqueData(b"test"),
-            name="",
+            path=["schema.with.dot"],
             comment=None,
             tags={},
         )
@@ -186,7 +186,7 @@ class TestSchemaInfoSerialization:
         batch, _ = deserialize_record_batch(serialized)
         restored = SchemaInfo.deserialize_from_batch(batch)
 
-        assert restored.name == ""
+        assert restored.path == ["schema.with.dot"]
 
 
 class TestTableInfoSerialization:
@@ -199,7 +199,7 @@ class TestTableInfoSerialization:
 
         original = TableInfo(
             name="users",
-            schema_name="main",
+            schema_path=["main"],
             columns=columns_bytes,
             not_null_constraints=[0],
             unique_constraints=[[0]],
@@ -212,7 +212,7 @@ class TestTableInfoSerialization:
         restored = TableInfo.deserialize_from_batch(batch)
 
         assert restored.name == original.name
-        assert restored.schema_name == original.schema_name
+        assert restored.schema_path == original.schema_path
         assert restored.columns == original.columns
         assert restored.not_null_constraints == original.not_null_constraints
         assert restored.unique_constraints == original.unique_constraints
@@ -227,7 +227,7 @@ class TestTableInfoSerialization:
 
         original = TableInfo(
             name="simple",
-            schema_name="main",
+            schema_path=["main"],
             columns=columns_bytes,
             not_null_constraints=[],
             unique_constraints=[],
@@ -250,7 +250,7 @@ class TestTableInfoSerialization:
 
         original = TableInfo(
             name="multi",
-            schema_name="main",
+            schema_path=["main"],
             columns=columns_bytes,
             not_null_constraints=[0, 1],
             unique_constraints=[[0], [1, 2]],
@@ -280,7 +280,7 @@ class TestTableInfoSerialization:
         )
         original = TableInfo(
             name="t",
-            schema_name="s",
+            schema_path=["s"],
             columns=columns_bytes,
             not_null_constraints=[],
             unique_constraints=[],
@@ -315,7 +315,7 @@ class TestTableInfoSerialization:
         columns_bytes = SerializedSchema(columns_schema.serialize().to_pybytes())
         original = TableInfo(
             name="t",
-            schema_name="s",
+            schema_path=["s"],
             columns=columns_bytes,
             not_null_constraints=[],
             unique_constraints=[],
@@ -338,7 +338,7 @@ class TestTableInfoSerialization:
         for estimate, max_ in [(1000, None), (None, 5000)]:
             original = TableInfo(
                 name="t",
-                schema_name="s",
+                schema_path=["s"],
                 columns=columns_bytes,
                 not_null_constraints=[],
                 unique_constraints=[],
@@ -363,7 +363,7 @@ class TestTableInfoSerialization:
         columns_schema = schema(id=pa.int64())
         original = TableInfo(
             name="t",
-            schema_name="s",
+            schema_path=["s"],
             columns=SerializedSchema(columns_schema.serialize().to_pybytes()),
             not_null_constraints=[],
             unique_constraints=[],
@@ -399,7 +399,7 @@ class TestTableInfoSerialization:
         bind_blob = BindResponse(output_schema=output_schema, opaque_data=None).serialize_to_bytes()
         original = TableInfo(
             name="t",
-            schema_name="s",
+            schema_path=["s"],
             columns=columns_bytes,
             not_null_constraints=[],
             unique_constraints=[],
@@ -443,7 +443,7 @@ class TestTableInfoSerialization:
         )
         original = TableInfo(
             name="t",
-            schema_name="s",
+            schema_path=["s"],
             columns=columns_bytes,
             not_null_constraints=[],
             unique_constraints=[],
@@ -470,7 +470,7 @@ class TestViewInfoSerialization:
         """Test basic serialization and deserialization."""
         original = ViewInfo(
             name="user_summary",
-            schema_name="main",
+            schema_path=["main"],
             definition="SELECT id, name FROM users",
             comment="Summary view",
             tags={"type": "summary"},
@@ -480,7 +480,7 @@ class TestViewInfoSerialization:
         restored = ViewInfo.deserialize_from_batch(batch)
 
         assert restored.name == original.name
-        assert restored.schema_name == original.schema_name
+        assert restored.schema_path == original.schema_path
         assert restored.definition == original.definition
         assert restored.comment == original.comment
         assert restored.tags == original.tags
@@ -489,7 +489,7 @@ class TestViewInfoSerialization:
         """Test with complex SQL definition."""
         original = ViewInfo(
             name="complex",
-            schema_name="analytics",
+            schema_path=["analytics"],
             definition="""
                 SELECT u.id, u.name, COUNT(o.id) as order_count
                 FROM users u
@@ -515,7 +515,7 @@ class TestMacroInfoSerialization:
         """Test round-trip with scalar macro and all fields."""
         original = MacroInfo(
             name="multiply",
-            schema_name="main",
+            schema_path=["main"],
             macro_type=MacroType.SCALAR,
             parameters=["x", "y"],
             definition="x * y",
@@ -527,7 +527,7 @@ class TestMacroInfoSerialization:
         restored = MacroInfo.deserialize_from_batch(batch)
 
         assert restored.name == original.name
-        assert restored.schema_name == original.schema_name
+        assert restored.schema_path == original.schema_path
         assert restored.macro_type == MacroType.SCALAR
         assert restored.parameters == ["x", "y"]
         assert restored.definition == "x * y"
@@ -538,7 +538,7 @@ class TestMacroInfoSerialization:
         """Test round-trip with table macro."""
         original = MacroInfo(
             name="my_range",
-            schema_name="main",
+            schema_path=["main"],
             macro_type=MacroType.TABLE,
             parameters=["n"],
             definition="SELECT * FROM range(n)",
@@ -560,7 +560,7 @@ class TestMacroInfoSerialization:
         )
         original = MacroInfo(
             name="clamp",
-            schema_name="main",
+            schema_path=["main"],
             macro_type=MacroType.SCALAR,
             parameters=["val", "lo", "hi"],
             parameter_default_values=defaults,
@@ -584,7 +584,7 @@ class TestMacroInfoSerialization:
         """Test with None parameter_default_values."""
         original = MacroInfo(
             name="simple",
-            schema_name="main",
+            schema_path=["main"],
             macro_type=MacroType.SCALAR,
             parameters=["x"],
             parameter_default_values=None,
@@ -603,7 +603,7 @@ class TestMacroInfoSerialization:
         for macro_type in MacroType:
             original = MacroInfo(
                 name="test",
-                schema_name="main",
+                schema_path=["main"],
                 macro_type=macro_type,
                 parameters=[],
                 definition="1",
@@ -627,7 +627,7 @@ class TestMacroInfoSerialization:
         )
         original = MacroInfo(
             name="clamp",
-            schema_name="main",
+            schema_path=["main"],
             macro_type=MacroType.SCALAR,
             parameters=["val", "lo", "hi"],
             parameter_default_values=defaults,
@@ -659,7 +659,7 @@ class TestMacroInfoSerialization:
         """arguments_schema defaults to None (older workers) and survives round-trip."""
         original = MacroInfo(
             name="simple",
-            schema_name="main",
+            schema_path=["main"],
             macro_type=MacroType.SCALAR,
             parameters=["x"],
             definition="x",
@@ -690,7 +690,7 @@ class TestMacroArgumentsSchemaWire:
             parameter_docs={"x": "value to clamp"},
             definition="GREATEST(lo, LEAST(hi, x))",
         )
-        info = m.to_macro_info("main")
+        info = m.to_macro_info(["main"])
         assert info.arguments_schema is not None
         assert info.arguments_schema.names == ["x", "lo", "hi"]
         assert macro_parameter_docs_from_schema(info.arguments_schema) == {"x": "value to clamp"}
@@ -720,7 +720,7 @@ class TestMacroArgumentsSchemaWire:
         )
         req = MacroCreateRequest(
             attach_opaque_data=b"attach",
-            schema_name="main",
+            schema_path=["main"],
             name="add",
             macro_type=MacroType.SCALAR,
             parameters=["x", "y"],
@@ -739,7 +739,7 @@ class TestMacroArgumentsSchemaWire:
 
         req = MacroCreateRequest(
             attach_opaque_data=b"attach",
-            schema_name="main",
+            schema_path=["main"],
             name="add",
             macro_type=MacroType.SCALAR,
             parameters=["x", "y"],
@@ -760,7 +760,7 @@ class TestFunctionInfoSerialization:
 
         original = FunctionInfo(
             name="double",
-            schema_name="main",
+            schema_path=["main"],
             function_type=FunctionType.SCALAR,
             arguments=SerializedSchema(args_schema.serialize().to_pybytes()),
             output_schema=SerializedSchema(output_schema.serialize().to_pybytes()),
@@ -783,7 +783,7 @@ class TestFunctionInfoSerialization:
 
         original = FunctionInfo(
             name="sequence",
-            schema_name="main",
+            schema_path=["main"],
             function_type=FunctionType.TABLE,
             arguments=SerializedSchema(args_schema.serialize().to_pybytes()),
             output_schema=SerializedSchema(output_schema.serialize().to_pybytes()),
@@ -805,7 +805,7 @@ class TestFunctionInfoSerialization:
 
         original = FunctionInfo(
             name="double",
-            schema_name="main",
+            schema_path=["main"],
             function_type=FunctionType.SCALAR,
             arguments=SerializedSchema(args_schema.serialize().to_pybytes()),
             output_schema=SerializedSchema(output_schema.serialize().to_pybytes()),
@@ -849,7 +849,7 @@ class TestFunctionInfoSerialization:
 
         original = FunctionInfo(
             name="echo",
-            schema_name="main",
+            schema_path=["main"],
             function_type=FunctionType.SCALAR,
             arguments=SerializedSchema(args_schema.serialize().to_pybytes()),
             output_schema=SerializedSchema(output_schema.serialize().to_pybytes()),
@@ -876,7 +876,7 @@ class TestFunctionInfoSerialization:
 
         original = FunctionInfo(
             name="test_func",
-            schema_name="main",
+            schema_path=["main"],
             function_type=FunctionType.SCALAR,
             arguments=SerializedSchema(args_schema.serialize().to_pybytes()),
             output_schema=SerializedSchema(output_schema.serialize().to_pybytes()),
@@ -897,7 +897,7 @@ class TestFunctionInfoSerialization:
 
         original = FunctionInfo(
             name="tagged_func",
-            schema_name="main",
+            schema_path=["main"],
             function_type=FunctionType.SCALAR,
             arguments=SerializedSchema(args_schema.serialize().to_pybytes()),
             output_schema=SerializedSchema(output_schema.serialize().to_pybytes()),
@@ -917,7 +917,7 @@ class TestFunctionInfoSerialization:
 
         original = FunctionInfo(
             name="no_tags_func",
-            schema_name="main",
+            schema_path=["main"],
             function_type=FunctionType.SCALAR,
             arguments=SerializedSchema(args_schema.serialize().to_pybytes()),
             output_schema=SerializedSchema(output_schema.serialize().to_pybytes()),
@@ -1008,22 +1008,22 @@ class TestScanFunctionResultSerialization:
 
         assert restored.required_extensions == ["iceberg", "parquet", "httpfs"]
 
-    def test_schema_name_round_trip(self) -> None:
-        """schema_name (protocol 1.5.0) round-trips when set."""
+    def test_schema_path_round_trip(self) -> None:
+        """schema_path (protocol 2.0.0) round-trips when set."""
         original = ScanFunctionResult(
             function_name="rowid_sequence",
             positional_arguments=[],
             named_arguments={},
-            schema_name="main",
+            schema_path=["main"],
         )
         serialized = original.serialize()
         batch, _ = deserialize_record_batch(serialized)
         restored = ScanFunctionResult.deserialize(batch)
 
-        assert restored.schema_name == "main"
+        assert restored.schema_path == ["main"]
 
-    def test_schema_name_defaults_to_none(self) -> None:
-        """schema_name is None when the caller doesn't set it (e.g. a pre-1.5.0 peer)."""
+    def test_schema_path_defaults_to_none(self) -> None:
+        """schema_path is None when the caller doesn't set it (e.g. a non-catalog function)."""
         original = ScanFunctionResult(
             function_name="read_parquet",
             positional_arguments=[],
@@ -1033,7 +1033,7 @@ class TestScanFunctionResultSerialization:
         batch, _ = deserialize_record_batch(serialized)
         restored = ScanFunctionResult.deserialize(batch)
 
-        assert restored.schema_name is None
+        assert restored.schema_path is None
 
 
 class TestSettingSpecSerialization:
@@ -1074,7 +1074,7 @@ class TestFunctionInfoRequiredSettings:
 
         original = FunctionInfo(
             name="echo",
-            schema_name="main",
+            schema_path=["main"],
             function_type=FunctionType.SCALAR,
             arguments=SerializedSchema(args_schema.serialize().to_pybytes()),
             output_schema=SerializedSchema(output_schema.serialize().to_pybytes()),
@@ -1095,7 +1095,7 @@ class TestFunctionInfoRequiredSettings:
 
         original = FunctionInfo(
             name="settings_aware",
-            schema_name="main",
+            schema_path=["main"],
             function_type=FunctionType.TABLE,
             arguments=SerializedSchema(args_schema.serialize().to_pybytes()),
             output_schema=SerializedSchema(output_schema.serialize().to_pybytes()),
@@ -1116,7 +1116,7 @@ class TestFunctionInfoRequiredSettings:
 
         original = FunctionInfo(
             name="logging_function",
-            schema_name="main",
+            schema_path=["main"],
             function_type=FunctionType.TABLE,
             arguments=SerializedSchema(args_schema.serialize().to_pybytes()),
             output_schema=SerializedSchema(output_schema.serialize().to_pybytes()),
@@ -1158,7 +1158,7 @@ class TestArrowSchemaCorrectness:
         schema = SchemaInfo.ARROW_SCHEMA
         assert len(schema) == 5
         assert schema.field("attach_opaque_data").type == pa.binary()
-        assert schema.field("name").type == pa.string()
+        assert schema.field("path").type == pa.list_(pa.string())
         assert schema.field("comment").type == pa.string()
         assert schema.field("comment").nullable is True
         assert schema.field("tags").type == pa.map_(pa.string(), pa.string())
@@ -1168,7 +1168,7 @@ class TestArrowSchemaCorrectness:
         """Verify TableInfo Arrow schema."""
         schema = TableInfo.ARROW_SCHEMA
         assert schema.field("name").type == pa.string()
-        assert schema.field("schema_name").type == pa.string()
+        assert schema.field("schema_path").type == pa.list_(pa.string())
         assert schema.field("columns").type == pa.binary()
         assert schema.field("not_null_constraints").type == pa.list_(pa.int32())
         assert schema.field("unique_constraints").type == pa.list_(pa.list_(pa.int32()))
@@ -1187,7 +1187,7 @@ class TestArrowSchemaCorrectness:
         """Verify ViewInfo Arrow schema."""
         schema = ViewInfo.ARROW_SCHEMA
         assert schema.field("name").type == pa.string()
-        assert schema.field("schema_name").type == pa.string()
+        assert schema.field("schema_path").type == pa.list_(pa.string())
         assert schema.field("definition").type == pa.string()
 
     def test_function_info_schema(self) -> None:
@@ -1203,10 +1203,10 @@ class TestArrowSchemaCorrectness:
         assert schema.field("function_name").type == pa.string()
         assert schema.field("arguments").type == pa.binary()
         assert schema.field("required_extensions").type == pa.list_(pa.string())
-        # Added in protocol 1.5.0 — nullable so a pre-1.5.0 peer's payload
+        # Added in protocol 2.0.0 — nullable so a non-catalog function's payload
         # still deserializes (the column is simply absent there).
-        assert schema.field("schema_name").type == pa.string()
-        assert schema.field("schema_name").nullable is True
+        assert schema.field("schema_path").type == pa.list_(pa.string())
+        assert schema.field("schema_path").nullable is True
 
 
 class TestScanBranchSerialization:
@@ -1223,10 +1223,10 @@ class TestScanBranchSerialization:
         assert schema.field("branch_filter").nullable is True
         assert schema.field("writable").type == pa.bool_()
         assert schema.field("writable").nullable is False
-        # Added in protocol 1.5.0 — function-branch only; None for a
-        # catalog-table/format branch or a pre-1.5.0 peer.
-        assert schema.field("schema_name").type == pa.string()
-        assert schema.field("schema_name").nullable is True
+        # Added in protocol 2.0.0 — function-branch only; None for a
+        # catalog-table/format branch or a non-catalog function.
+        assert schema.field("schema_path").type == pa.list_(pa.string())
+        assert schema.field("schema_path").nullable is True
 
     def test_scan_branches_result_schema(self) -> None:
         """ScanBranchesResult Arrow schema: branches as list<binary>, required_extensions hoisted to top-level."""
@@ -1284,22 +1284,22 @@ class TestScanBranchSerialization:
         assert restored.branch_filter == "ts >= TIMESTAMP '2026-05-15 00:00:00'"
         assert len(restored.positional_arguments) == 2
 
-    def test_scan_branch_schema_name_round_trip(self) -> None:
-        """A function branch's schema_name (protocol 1.5.0) round-trips when set."""
+    def test_scan_branch_schema_path_round_trip(self) -> None:
+        """A function branch's schema_path (protocol 2.0.0) round-trips when set."""
         from vgi.catalog import ScanBranch
 
         original = ScanBranch(
             function_name="rowid_sequence",
             positional_arguments=[],
             named_arguments={},
-            schema_name="main",
+            schema_path=["main"],
         )
         batch, _ = deserialize_record_batch(original.serialize())
         restored = ScanBranch.deserialize(batch)
-        assert restored.schema_name == "main"
+        assert restored.schema_path == ["main"]
 
-    def test_scan_branch_schema_name_defaults_to_none(self) -> None:
-        """schema_name is None for a branch that doesn't set it (e.g. a catalog-table branch)."""
+    def test_scan_branch_schema_path_defaults_to_none(self) -> None:
+        """schema_path is None for a branch that doesn't set it (e.g. a catalog-table branch)."""
         from vgi.catalog import ScanBranch
 
         original = ScanBranch(
@@ -1307,12 +1307,12 @@ class TestScanBranchSerialization:
             positional_arguments=[],
             named_arguments={},
             source_catalog="lakehouse",
-            source_schema="bronze",
+            source_schema_path=["bronze"],
             source_table="orders",
         )
         batch, _ = deserialize_record_batch(original.serialize())
         restored = ScanBranch.deserialize(batch)
-        assert restored.schema_name is None
+        assert restored.schema_path is None
 
     def test_scan_branches_result_round_trip(self) -> None:
         """ScanBranchesResult round-trips two heterogeneous branches + required_extensions."""

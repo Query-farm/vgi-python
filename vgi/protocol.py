@@ -68,6 +68,7 @@ from vgi.function_storage import BoundStorage, FrameworkNS, attach_catalog_bytes
 from vgi.invocation import BindResponse, FunctionType, GlobalInitResponse
 from vgi.otel import VgiTracer, _batch_bytes, _timed_exchange, get_noop_tracer
 from vgi.scalar_function import ScalarFunctionGenerator
+from vgi.schema_path import SchemaPath
 from vgi.table_function import (
     OrderByDirection,
     OrderByNullOrder,
@@ -205,7 +206,7 @@ class BindRequest(ArrowSerializableDataclass):
             unless this bind/init opens a COPY-FROM scan.
         copy_to: The ``COPY ... TO`` context (destination format + path); ``None``
             unless this bind/init opens a COPY-TO sink.
-        schema_name: Catalog schema that owns the function being bound. Set by the
+        schema_path: Catalog schema that owns the function being bound. Set by the
             DuckDB extension from the schema entry the function was registered
             into, so a name registered in two schemas resolves to the right
             implementation. ``None`` for non-catalog callers (the legacy
@@ -233,7 +234,7 @@ class BindRequest(ArrowSerializableDataclass):
 
     # Catalog schema owning the function; disambiguates a name registered in
     # more than one schema. None for non-catalog callers.
-    schema_name: str | None = None
+    schema_path: SchemaPath | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -747,7 +748,7 @@ class TableCreateRequest(ArrowSerializableDataclass):
     Attributes:
         attach_opaque_data: Opaque per-attach catalog session token (bytes) echoed
             back so the worker can scope catalog state to the attachment.
-        schema_name: Name of the catalog schema containing the object.
+        schema_path: Raw identifier components of the schema containing the object.
         name: Name of the target object/function.
         columns: The columns of the table as a PyArrow schema serialized as bytes.
         on_conflict: Behavior when the object already exists ([`OnConflict`][]:
@@ -762,7 +763,7 @@ class TableCreateRequest(ArrowSerializableDataclass):
     """
 
     attach_opaque_data: bytes
-    schema_name: str
+    schema_path: SchemaPath
     name: str
     columns: bytes  # SerializedSchema
     on_conflict: OnConflict
@@ -925,7 +926,7 @@ class MacroCreateRequest(ArrowSerializableDataclass):
     Attributes:
         attach_opaque_data: Opaque per-attach catalog session token (bytes) echoed
             back so the worker can scope catalog state to the attachment.
-        schema_name: Name of the catalog schema containing the object.
+        schema_path: Raw identifier components of the schema containing the object.
         name: Name of the target object/function.
         macro_type: Whether this is a scalar or table macro.
         parameters: Ordered list of parameter names.
@@ -946,7 +947,7 @@ class MacroCreateRequest(ArrowSerializableDataclass):
     """
 
     attach_opaque_data: bytes
-    schema_name: str
+    schema_path: SchemaPath
     name: str
     macro_type: MacroType
     parameters: list[str]
@@ -972,7 +973,7 @@ class IndexCreateRequest(ArrowSerializableDataclass):
     Attributes:
         attach_opaque_data: Opaque per-attach catalog session token (bytes) echoed
             back so the worker can scope catalog state to the attachment.
-        schema_name: Name of the catalog schema containing the object.
+        schema_path: Raw identifier components of the schema containing the object.
         name: Name of the target object/function.
         table_name: The name of the table this index is on.
         index_type: The index type string (e.g., "ART", or empty for default).
@@ -988,7 +989,7 @@ class IndexCreateRequest(ArrowSerializableDataclass):
     """
 
     attach_opaque_data: bytes
-    schema_name: str
+    schema_path: SchemaPath
     name: str
     table_name: str
     index_type: str = ""
@@ -2351,7 +2352,7 @@ class AggregateBindRequest(ArrowSerializableDataclass):
         secrets: Serialized resolved secret values the function declared it needs.
         attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
             outside a catalog context.
-        schema_name: Catalog schema that declares the function. A name is unique
+        schema_path: Catalog schema that declares the function. A name is unique
             only within a schema, so this is what lets the worker resolve
             (schema, name); ``None`` when the caller names no schema.
     """
@@ -2362,7 +2363,7 @@ class AggregateBindRequest(ArrowSerializableDataclass):
     settings: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
     secrets: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
     attach_opaque_data: bytes | None = None
-    schema_name: str | None = None
+    schema_path: SchemaPath | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2391,7 +2392,7 @@ class AggregateUpdateRequest(ArrowSerializableDataclass):
             stream bytes (schema + data + EOS).
         attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
             outside a catalog context.
-        schema_name: Catalog schema that declares the function. A name is unique
+        schema_path: Catalog schema that declares the function. A name is unique
             only within a schema, so this is what lets the worker resolve
             (schema, name); ``None`` when the caller names no schema.
     """
@@ -2400,7 +2401,7 @@ class AggregateUpdateRequest(ArrowSerializableDataclass):
     execution_id: bytes
     input_batch: bytes  # Full IPC stream bytes (schema + data + EOS)
     attach_opaque_data: bytes | None = None
-    schema_name: str | None = None
+    schema_path: SchemaPath | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2422,7 +2423,7 @@ class AggregateCombineRequest(ArrowSerializableDataclass):
             stream bytes.
         attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
             outside a catalog context.
-        schema_name: Catalog schema that declares the function. A name is unique
+        schema_path: Catalog schema that declares the function. A name is unique
             only within a schema, so this is what lets the worker resolve
             (schema, name); ``None`` when the caller names no schema.
     """
@@ -2431,7 +2432,7 @@ class AggregateCombineRequest(ArrowSerializableDataclass):
     execution_id: bytes
     merge_batch: bytes  # Full IPC stream bytes
     attach_opaque_data: bytes | None = None
-    schema_name: str | None = None
+    schema_path: SchemaPath | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2454,7 +2455,7 @@ class AggregateFinalizeRequest(ArrowSerializableDataclass):
         output_schema: Serialized Arrow schema of the rows the function produces.
         attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
             outside a catalog context.
-        schema_name: Catalog schema that declares the function. A name is unique
+        schema_path: Catalog schema that declares the function. A name is unique
             only within a schema, so this is what lets the worker resolve
             (schema, name); ``None`` when the caller names no schema.
     """
@@ -2464,7 +2465,7 @@ class AggregateFinalizeRequest(ArrowSerializableDataclass):
     group_ids_batch: bytes  # Full IPC stream bytes
     output_schema: Annotated[pa.Schema, ArrowType(pa.binary())]
     attach_opaque_data: bytes | None = None
-    schema_name: str | None = None
+    schema_path: SchemaPath | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2491,7 +2492,7 @@ class AggregateDestructorRequest(ArrowSerializableDataclass):
             be released, as full IPC stream bytes.
         attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
             outside a catalog context.
-        schema_name: Catalog schema that declares the function. A name is unique
+        schema_path: Catalog schema that declares the function. A name is unique
             only within a schema, so this is what lets the worker resolve
             (schema, name); ``None`` when the caller names no schema.
     """
@@ -2500,7 +2501,7 @@ class AggregateDestructorRequest(ArrowSerializableDataclass):
     execution_id: bytes
     group_ids_batch: bytes  # Full IPC stream bytes
     attach_opaque_data: bytes | None = None
-    schema_name: str | None = None
+    schema_path: SchemaPath | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2538,7 +2539,7 @@ class TableBufferingProcessRequest(ArrowSerializableDataclass):
             ``None`` otherwise.
         batch_index: Ordinal of this batch within the input stream when the function
             opts into batch-index tracking; ``None`` otherwise.
-        schema_name: Catalog schema that declares the function. A name is unique
+        schema_path: Catalog schema that declares the function. A name is unique
             only within a schema, so this is what lets the worker resolve
             (schema, name); ``None`` when the caller names no schema.
     """
@@ -2549,7 +2550,7 @@ class TableBufferingProcessRequest(ArrowSerializableDataclass):
     attach_opaque_data: bytes | None = None
     transaction_id: bytes | None = None
     batch_index: int | None = None
-    schema_name: str | None = None
+    schema_path: SchemaPath | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2578,7 +2579,7 @@ class TableBufferingCombineRequest(ArrowSerializableDataclass):
             outside a catalog context.
         transaction_id: Hex-encoded VGI transaction id when inside a transaction,
             ``None`` otherwise.
-        schema_name: Catalog schema that declares the function. A name is unique
+        schema_path: Catalog schema that declares the function. A name is unique
             only within a schema, so this is what lets the worker resolve
             (schema, name); ``None`` when the caller names no schema.
     """
@@ -2588,7 +2589,7 @@ class TableBufferingCombineRequest(ArrowSerializableDataclass):
     state_ids: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))]
     attach_opaque_data: bytes | None = None
     transaction_id: bytes | None = None
-    schema_name: str | None = None
+    schema_path: SchemaPath | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2615,7 +2616,7 @@ class TableBufferingDestructorRequest(ArrowSerializableDataclass):
             outside a catalog context.
         transaction_id: Hex-encoded VGI transaction id when inside a transaction,
             ``None`` otherwise.
-        schema_name: Catalog schema that declares the function. A name is unique
+        schema_path: Catalog schema that declares the function. A name is unique
             only within a schema, so this is what lets the worker resolve
             (schema, name); ``None`` when the caller names no schema.
     """
@@ -2624,7 +2625,7 @@ class TableBufferingDestructorRequest(ArrowSerializableDataclass):
     execution_id: bytes
     attach_opaque_data: bytes | None = None
     transaction_id: bytes | None = None
-    schema_name: str | None = None
+    schema_path: SchemaPath | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2664,7 +2665,7 @@ class AggregateWindowInitRequest(ArrowSerializableDataclass):
             nulls in the column).
         attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
             outside a catalog context.
-        schema_name: Catalog schema that declares the function. A name is unique
+        schema_path: Catalog schema that declares the function. A name is unique
             only within a schema, so this is what lets the worker resolve
             (schema, name); ``None`` when the caller names no schema.
     """
@@ -2679,7 +2680,7 @@ class AggregateWindowInitRequest(ArrowSerializableDataclass):
     frame_stats: bytes  # 4× int64: ((begin_delta,end_delta),(begin_delta,end_delta))
     all_valid: bytes  # 1 byte per input column
     attach_opaque_data: bytes | None = None
-    schema_name: str | None = None
+    schema_path: SchemaPath | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2708,7 +2709,7 @@ class AggregateWindowRequest(ArrowSerializableDataclass):
             to ``frame_starts``.
         attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
             outside a catalog context.
-        schema_name: Catalog schema that declares the function. A name is unique
+        schema_path: Catalog schema that declares the function. A name is unique
             only within a schema, so this is what lets the worker resolve
             (schema, name); ``None`` when the caller names no schema.
     """
@@ -2720,7 +2721,7 @@ class AggregateWindowRequest(ArrowSerializableDataclass):
     frame_starts: list[int]
     frame_ends: list[int]
     attach_opaque_data: bytes | None = None
-    schema_name: str | None = None
+    schema_path: SchemaPath | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2746,7 +2747,7 @@ class AggregateWindowDestructorRequest(ArrowSerializableDataclass):
         partition_id: Identifier of the window partition to evict from storage.
         attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
             outside a catalog context.
-        schema_name: Catalog schema that declares the function. A name is unique
+        schema_path: Catalog schema that declares the function. A name is unique
             only within a schema, so this is what lets the worker resolve
             (schema, name); ``None`` when the caller names no schema.
     """
@@ -2755,7 +2756,7 @@ class AggregateWindowDestructorRequest(ArrowSerializableDataclass):
     execution_id: bytes
     partition_id: int
     attach_opaque_data: bytes | None = None
-    schema_name: str | None = None
+    schema_path: SchemaPath | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2789,7 +2790,7 @@ class AggregateWindowBatchRequest(ArrowSerializableDataclass):
             ``frame_starts``.
         attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
             outside a catalog context.
-        schema_name: Catalog schema that declares the function. A name is unique
+        schema_path: Catalog schema that declares the function. A name is unique
             only within a schema, so this is what lets the worker resolve
             (schema, name); ``None`` when the caller names no schema.
     """
@@ -2803,7 +2804,7 @@ class AggregateWindowBatchRequest(ArrowSerializableDataclass):
     frame_starts: list[int]
     frame_ends: list[int]
     attach_opaque_data: bytes | None = None
-    schema_name: str | None = None
+    schema_path: SchemaPath | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2861,7 +2862,7 @@ class AggregateStreamingOpenRequest(ArrowSerializableDataclass):
         secrets: Serialized resolved secret values the function declared it needs.
         attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
             outside a catalog context.
-        schema_name: Catalog schema that declares the function. A name is unique
+        schema_path: Catalog schema that declares the function. A name is unique
             only within a schema, so this is what lets the worker resolve
             (schema, name); ``None`` when the caller names no schema.
     """
@@ -2875,7 +2876,7 @@ class AggregateStreamingOpenRequest(ArrowSerializableDataclass):
     settings: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
     secrets: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
     attach_opaque_data: bytes | None = None
-    schema_name: str | None = None
+    schema_path: SchemaPath | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2909,7 +2910,7 @@ class AggregateStreamingChunkRequest(ArrowSerializableDataclass):
             ``streaming_open``.
         attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
             outside a catalog context.
-        schema_name: Catalog schema that declares the function. A name is unique
+        schema_path: Catalog schema that declares the function. A name is unique
             only within a schema, so this is what lets the worker resolve
             (schema, name); ``None`` when the caller names no schema.
     """
@@ -2918,7 +2919,7 @@ class AggregateStreamingChunkRequest(ArrowSerializableDataclass):
     execution_id: bytes
     input_batch: bytes  # Full IPC stream bytes
     attach_opaque_data: bytes | None = None
-    schema_name: str | None = None
+    schema_path: SchemaPath | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2943,7 +2944,7 @@ class AggregateStreamingCloseRequest(ArrowSerializableDataclass):
             coordinator and any secondary workers; identifies the session to close.
         attach_opaque_data: Opaque per-attach catalog session token (bytes); ``None``
             outside a catalog context.
-        schema_name: Catalog schema that declares the function. A name is unique
+        schema_path: Catalog schema that declares the function. A name is unique
             only within a schema, so this is what lets the worker resolve
             (schema, name); ``None`` when the caller names no schema.
     """
@@ -2951,7 +2952,7 @@ class AggregateStreamingCloseRequest(ArrowSerializableDataclass):
     function_name: str
     execution_id: bytes
     attach_opaque_data: bytes | None = None
-    schema_name: str | None = None
+    schema_path: SchemaPath | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -3010,7 +3011,7 @@ class VgiProtocol(Protocol):
             canonical semver (MAJOR.MINOR.PATCH) of the method-and-schema contract.
     """
 
-    protocol_version: ClassVar[str] = "1.5.0"
+    protocol_version: ClassVar[str] = "2.0.0"
 
     def bind(self, request: BindRequest) -> BindResponse:
         """Resolve output schema and validate arguments."""
@@ -3188,7 +3189,7 @@ class VgiProtocol(Protocol):
         ...
 
     def catalog_schema_get(
-        self, attach_opaque_data: bytes, name: str, transaction_opaque_data: bytes | None = None
+        self, attach_opaque_data: bytes, path: SchemaPath, transaction_opaque_data: bytes | None = None
     ) -> SchemasResponse:
         """Get information about a schema. Returns 0 or 1 items."""
         ...
@@ -3196,7 +3197,7 @@ class VgiProtocol(Protocol):
     def catalog_schema_create(
         self,
         attach_opaque_data: bytes,
-        name: str,
+        path: SchemaPath,
         on_conflict: OnConflict = OnConflict.ERROR,
         comment: str | None = None,
         tags: dict[str, str] | None = None,
@@ -3208,7 +3209,7 @@ class VgiProtocol(Protocol):
     def catalog_schema_drop(
         self,
         attach_opaque_data: bytes,
-        name: str,
+        path: SchemaPath,
         ignore_not_found: bool = False,
         cascade: bool = False,
         transaction_opaque_data: bytes | None = None,
@@ -3219,7 +3220,7 @@ class VgiProtocol(Protocol):
     def catalog_schema_contents_tables(
         self,
         attach_opaque_data: bytes,
-        name: str,
+        path: SchemaPath,
         transaction_opaque_data: bytes | None = None,
     ) -> TablesResponse:
         """List tables in a schema."""
@@ -3228,7 +3229,7 @@ class VgiProtocol(Protocol):
     def catalog_schema_contents_views(
         self,
         attach_opaque_data: bytes,
-        name: str,
+        path: SchemaPath,
         transaction_opaque_data: bytes | None = None,
     ) -> ViewsResponse:
         """List views in a schema."""
@@ -3237,7 +3238,7 @@ class VgiProtocol(Protocol):
     def catalog_schema_contents_functions(
         self,
         attach_opaque_data: bytes,
-        name: str,
+        path: SchemaPath,
         type: SchemaObjectType,
         transaction_opaque_data: bytes | None = None,
     ) -> FunctionsResponse:
@@ -3263,7 +3264,7 @@ class VgiProtocol(Protocol):
     def catalog_table_get(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
@@ -3279,7 +3280,7 @@ class VgiProtocol(Protocol):
     def catalog_table_drop(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         ignore_not_found: bool = False,
         cascade: bool = False,
@@ -3291,7 +3292,7 @@ class VgiProtocol(Protocol):
     def catalog_table_scan_function_get(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
@@ -3303,7 +3304,7 @@ class VgiProtocol(Protocol):
     def catalog_table_scan_branches_get(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
@@ -3328,7 +3329,7 @@ class VgiProtocol(Protocol):
     def catalog_table_column_statistics_get(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         transaction_opaque_data: bytes | None = None,
     ) -> bytes | None:
@@ -3342,7 +3343,7 @@ class VgiProtocol(Protocol):
     def catalog_table_insert_function_get(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         transaction_opaque_data: bytes | None = None,
         writable_branch_function_name: str | None = None,
@@ -3361,7 +3362,7 @@ class VgiProtocol(Protocol):
     def catalog_table_update_function_get(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         transaction_opaque_data: bytes | None = None,
     ) -> bytes:
@@ -3371,7 +3372,7 @@ class VgiProtocol(Protocol):
     def catalog_table_delete_function_get(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         transaction_opaque_data: bytes | None = None,
     ) -> bytes:
@@ -3381,7 +3382,7 @@ class VgiProtocol(Protocol):
     def catalog_table_comment_set(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         comment: str | None = None,
         ignore_not_found: bool = False,
@@ -3393,7 +3394,7 @@ class VgiProtocol(Protocol):
     def catalog_table_column_comment_set(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         column_name: str,
         comment: str | None = None,
@@ -3406,7 +3407,7 @@ class VgiProtocol(Protocol):
     def catalog_table_rename(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         new_name: str,
         ignore_not_found: bool = False,
@@ -3418,7 +3419,7 @@ class VgiProtocol(Protocol):
     def catalog_table_column_add(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         column_definition: bytes,
         ignore_not_found: bool = False,
@@ -3431,7 +3432,7 @@ class VgiProtocol(Protocol):
     def catalog_table_column_drop(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         column_name: str,
         ignore_not_found: bool = False,
@@ -3445,7 +3446,7 @@ class VgiProtocol(Protocol):
     def catalog_table_column_rename(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         column_name: str,
         new_column_name: str,
@@ -3458,7 +3459,7 @@ class VgiProtocol(Protocol):
     def catalog_table_column_default_set(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         column_name: str,
         expression: str,
@@ -3471,7 +3472,7 @@ class VgiProtocol(Protocol):
     def catalog_table_column_default_drop(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         column_name: str,
         ignore_not_found: bool = False,
@@ -3483,7 +3484,7 @@ class VgiProtocol(Protocol):
     def catalog_table_column_type_change(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         column_definition: bytes,
         expression: str | None = None,
@@ -3496,7 +3497,7 @@ class VgiProtocol(Protocol):
     def catalog_table_not_null_drop(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         column_name: str,
         ignore_not_found: bool = False,
@@ -3508,7 +3509,7 @@ class VgiProtocol(Protocol):
     def catalog_table_not_null_set(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         column_name: str,
         ignore_not_found: bool = False,
@@ -3522,7 +3523,7 @@ class VgiProtocol(Protocol):
     def catalog_view_get(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         transaction_opaque_data: bytes | None = None,
     ) -> ViewsResponse:
@@ -3532,7 +3533,7 @@ class VgiProtocol(Protocol):
     def catalog_view_create(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         definition: str,
         on_conflict: OnConflict,
@@ -3544,7 +3545,7 @@ class VgiProtocol(Protocol):
     def catalog_view_drop(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         ignore_not_found: bool = False,
         cascade: bool = False,
@@ -3556,7 +3557,7 @@ class VgiProtocol(Protocol):
     def catalog_view_rename(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         new_name: str,
         ignore_not_found: bool = False,
@@ -3568,7 +3569,7 @@ class VgiProtocol(Protocol):
     def catalog_view_comment_set(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         comment: str | None = None,
         ignore_not_found: bool = False,
@@ -3582,7 +3583,7 @@ class VgiProtocol(Protocol):
     def catalog_macro_get(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         transaction_opaque_data: bytes | None = None,
     ) -> MacrosResponse:
@@ -3596,7 +3597,7 @@ class VgiProtocol(Protocol):
     def catalog_macro_drop(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
@@ -3607,7 +3608,7 @@ class VgiProtocol(Protocol):
     def catalog_schema_contents_macros(
         self,
         attach_opaque_data: bytes,
-        name: str,
+        path: SchemaPath,
         type: SchemaObjectType,
         transaction_opaque_data: bytes | None = None,
     ) -> MacrosResponse:
@@ -3619,7 +3620,7 @@ class VgiProtocol(Protocol):
     def catalog_index_get(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         transaction_opaque_data: bytes | None = None,
     ) -> IndexesResponse:
@@ -3633,7 +3634,7 @@ class VgiProtocol(Protocol):
     def catalog_index_drop(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         ignore_not_found: bool = False,
         cascade: bool = False,
@@ -3645,7 +3646,7 @@ class VgiProtocol(Protocol):
     def catalog_schema_contents_indexes(
         self,
         attach_opaque_data: bytes,
-        name: str,
+        path: SchemaPath,
         transaction_opaque_data: bytes | None = None,
     ) -> IndexesResponse:
         """List indexes in a schema."""

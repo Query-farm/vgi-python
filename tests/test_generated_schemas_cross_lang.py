@@ -53,7 +53,7 @@ def _available_languages() -> list[tuple[str, dict[str, pa.Schema]]]:
     return out
 
 
-def test_generators_agree_on_schema_names() -> None:
+def test_generators_agree_on_schema_paths() -> None:
     """Every language must emit the same set of schema names.
 
     Drift in this test means one language's generator lost or gained a schema

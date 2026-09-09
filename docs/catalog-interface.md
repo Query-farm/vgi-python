@@ -31,6 +31,12 @@ SELECT * FROM information_schema.schemata WHERE catalog_name = 'mydb';
 
 Catalog methods are dispatched via `vgi_rpc` typed protocol methods. Each method has its own typed request/response defined in `vgi.protocol`, with automatic Arrow serialization handled by the RPC layer. This is simpler than the function protocol — no bind/init phases.
 
+VGI protocol 2.0 represents every schema location as a `SchemaPath = list[str]`, ordered from the outermost schema to the innermost schema. The components are raw identifiers: `["a.b"]` is one schema whose name contains a dot, while `["a", "b"]` is a nested schema. Implementations must preserve those boundaries and must not flatten a path to a dotted string. On the Arrow wire these values are `list<utf8>`.
+
+Schema paths are non-empty and contain only non-empty strings. Every nested path must have its parent path in the catalog. Schema enumeration preserves a worker's order among peers while ensuring that parents precede children.
+
+`CatalogAttachResult.default_schema` remains a single string because it selects a root-level default/search-path schema. DuckDB 1.5 adapters—including the bundled Python transactor—consume protocol 2.0 by accepting only paths of length one and rejecting deeper paths explicitly.
+
 ---
 
 ## Data Types
@@ -39,11 +45,13 @@ Catalog methods are dispatched via `vgi_rpc` typed protocol methods. Each method
 
 ```python
 from vgi.catalog import AttachOpaqueData, TransactionOpaqueData, SerializedSchema, SqlExpression
+from vgi import SchemaPath
 
 AttachOpaqueData = NewType("AttachOpaqueData", bytes)           # Unique attachment identifier
 TransactionOpaqueData = NewType("TransactionOpaqueData", bytes)  # Transaction identifier
 SerializedSchema = NewType("SerializedSchema", bytes)  # Arrow schema bytes
 SqlExpression = NewType("SqlExpression", str)   # SQL expression string
+# SchemaPath is list[str]: outermost-to-innermost raw schema identifiers
 ```
 
 ### CatalogAttachResult
@@ -77,7 +85,7 @@ Information about a schema in a catalog:
 | Field | Type | Description |
 |-------|------|-------------|
 | `attach_opaque_data` | `AttachOpaqueData` | Parent attachment |
-| `name` | `str` | Schema name |
+| `path` | `SchemaPath` | Qualified schema path |
 | `comment` | `str \| None` | Optional description |
 | `tags` | `dict[str, str]` | Key-value metadata |
 
@@ -88,7 +96,7 @@ Information about a table:
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | `str` | Table name |
-| `schema_name` | `str` | Parent schema name |
+| `schema_path` | `SchemaPath` | Parent schema path |
 | `columns` | `SerializedSchema` | Column definitions as Arrow schema bytes |
 | `not_null_constraints` | `list[int]` | Column indices with NOT NULL |
 | `unique_constraints` | `list[list[int]]` | Column index groups for UNIQUE |
@@ -103,7 +111,7 @@ Information about a view:
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | `str` | View name |
-| `schema_name` | `str` | Parent schema name |
+| `schema_path` | `SchemaPath` | Parent schema path |
 | `definition` | `str` | SQL SELECT statement |
 | `comment` | `str \| None` | Optional description |
 | `tags` | `dict[str, str]` | Key-value metadata |
@@ -115,7 +123,7 @@ Information about a function in a schema:
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | `str` | Function name |
-| `schema_name` | `str` | Parent schema name |
+| `schema_path` | `SchemaPath` | Parent schema path |
 | `function_type` | `FunctionType` | `SCALAR` or `TABLE` |
 | `arguments` | `SerializedSchema` | Argument schema as Arrow bytes |
 | `output_schema` | `SerializedSchema` | Output schema as Arrow bytes |
@@ -152,7 +160,7 @@ def table_scan_function_get(
     *,
     attach_opaque_data: AttachOpaqueData,
     transaction_opaque_data: TransactionOpaqueData | None,
-    schema_name: str,
+    schema_path: SchemaPath,
     name: str,
     at_unit: str | None,
     at_value: str | None,
@@ -160,7 +168,7 @@ def table_scan_function_get(
     # Return a parquet scan for this table
     return ScanFunctionResult(
         function_name="read_parquet",
-        positional_arguments=[pa.scalar(f"s3://bucket/{schema_name}/{name}/*.parquet")],
+        positional_arguments=[pa.scalar(f"s3://bucket/{'/'.join(schema_path)}/{name}/*.parquet")],
         named_arguments={"hive_partitioning": pa.scalar(True)},
         required_extensions=["parquet", "httpfs"],
     )
@@ -188,15 +196,15 @@ class MyCatalog(CatalogInterface):
         """Attach to a catalog, returning attachment metadata."""
 
     @abstractmethod
-    def schema_get(self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None, name: str) -> SchemaInfo | None:
+    def schema_get(self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None, path: SchemaPath) -> SchemaInfo | None:
         """Get schema info, or None if not found."""
 
     @abstractmethod
-    def table_get(self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None, schema_name: str, name: str) -> TableInfo | None:
+    def table_get(self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None, schema_path: SchemaPath, name: str) -> TableInfo | None:
         """Get table info, or None if not found."""
 
     @abstractmethod
-    def view_get(self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None, schema_name: str, name: str) -> ViewInfo | None:
+    def view_get(self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None, schema_path: SchemaPath, name: str) -> ViewInfo | None:
         """Get view info, or None if not found."""
 ```
 
@@ -297,9 +305,9 @@ class MyReadOnlyCatalog(ReadOnlyCatalogInterface):
             attach_opaque_data_required=False,
         )
 
-    def schema_get(self, *, attach_opaque_data, transaction_opaque_data, name) -> SchemaInfo | None:
-        if name == "main":
-            return SchemaInfo(attach_opaque_data=attach_opaque_data, name="main", comment=None, tags={})
+    def schema_get(self, *, attach_opaque_data, transaction_opaque_data, path) -> SchemaInfo | None:
+        if path == ["main"]:
+            return SchemaInfo(attach_opaque_data=attach_opaque_data, path=["main"], comment=None, tags={})
         return None
 
     # table_get, view_get return None by default
@@ -319,8 +327,8 @@ Catalog(
     name="example",
     default_schema="main",
     schemas=[
-        Schema(name="main", functions=[ProdLookup]),   # Meta.name = "lookup"
-        Schema(name="staging", functions=[StagingLookup]),  # Meta.name = "lookup"
+        Schema(path=["main"], functions=[ProdLookup]),   # Meta.name = "lookup"
+        Schema(path=["staging"], functions=[StagingLookup]),  # Meta.name = "lookup"
     ],
 )
 ```
@@ -331,7 +339,7 @@ SELECT example.staging.lookup(1);  -- StagingLookup
 ```
 
 The DuckDB extension carries the owning schema on every bind request
-(`BindRequest.schema_name`), taken from the schema entry the function was
+(`BindRequest.schema_path`), taken from the schema entry the function was
 registered into. Two consequences worth knowing:
 
 - **Overloads still work.** Several classes sharing a name *within one schema*
@@ -415,7 +423,7 @@ class MyWorker(Worker):
         default_schema="main",
         schemas=[
             Schema(
-                name="main",
+                path=["main"],
                 comment="Main application data",
                 tables=[users_table],
                 views=[
@@ -428,7 +436,7 @@ class MyWorker(Worker):
                 functions=[UsersFunction],
             ),
             Schema(
-                name="analytics",
+                path=["analytics"],
                 comment="Analytics data",
                 tables=[events_table],
                 functions=[AggregateFunction],
@@ -487,7 +495,7 @@ Table(
 Catalog(
     name="myapp",
     default_schema="missing",
-    schemas=[Schema(name="main")],  # ValueError: default_schema 'missing' not found
+    schemas=[Schema(path=["main"])],  # ValueError: default_schema 'missing' not found
 )
 ```
 
@@ -567,10 +575,10 @@ attach_opaque_data = result.attach_opaque_data
 
 # List schemas
 for schema in client.schemas(attach_opaque_data=attach_opaque_data):
-    print(f"Schema: {schema.name}")
+    print(f"Schema: {schema.path}")
 
 # Get schema contents (tables, views, functions)
-for obj in client.schema_contents(attach_opaque_data=attach_opaque_data, name="main"):
+for obj in client.schema_contents(attach_opaque_data=attach_opaque_data, path=["main"]):
     if isinstance(obj, TableInfo):
         print(f"Table: {obj.name}")
     elif isinstance(obj, ViewInfo):
@@ -581,7 +589,7 @@ for obj in client.schema_contents(attach_opaque_data=attach_opaque_data, name="m
 # Get only scalar functions using type filter
 from vgi.catalog import SchemaObjectType
 for obj in client.schema_contents(
-    attach_opaque_data=attach_opaque_data, name="main", type=SchemaObjectType.SCALAR_FUNCTION
+    attach_opaque_data=attach_opaque_data, path=["main"], type=SchemaObjectType.SCALAR_FUNCTION
 ):
     print(f"Scalar Function: {obj.name}")
 
@@ -780,12 +788,12 @@ class SimpleCatalog(CatalogInterface):
         self._attachments.pop(attach_opaque_data, None)
 
     def schema_get(
-        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None, name: str
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None, path: SchemaPath
     ) -> SchemaInfo | None:
-        if name == "main":
+        if path == ["main"]:
             return SchemaInfo(
                 attach_opaque_data=attach_opaque_data,
-                name="main",
+                path=["main"],
                 comment="Default schema",
                 tags={},
             )
@@ -793,13 +801,13 @@ class SimpleCatalog(CatalogInterface):
 
     def table_get(
         self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str, name: str
+        schema_path: SchemaPath, name: str
     ) -> TableInfo | None:
         return None  # No tables
 
     def view_get(
         self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str, name: str
+        schema_path: SchemaPath, name: str
     ) -> ViewInfo | None:
         return None  # No views
 

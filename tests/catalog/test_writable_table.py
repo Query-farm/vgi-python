@@ -141,7 +141,7 @@ class TestTableInfoWriteFlags:
             update_function=WritableTableUpdate,
             delete_function=WritableTableDelete,
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         assert info.supports_insert is True
         assert info.supports_update is True
         assert info.supports_delete is True
@@ -152,7 +152,7 @@ class TestTableInfoWriteFlags:
             name="t",
             function=WritableTableScan,
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         assert info.supports_insert is False
         assert info.supports_update is False
         assert info.supports_delete is False
@@ -164,7 +164,7 @@ class TestTableInfoWriteFlags:
             function=WritableTableScan,
             insert_function=WritableTableInsert,
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         assert info.supports_insert is True
         assert info.supports_update is False
         assert info.supports_delete is False
@@ -178,7 +178,7 @@ class TestTableInfoWriteFlags:
             update_function=WritableTableUpdate,
             delete_function=WritableTableDelete,
         )
-        info = table.to_table_info("main")
+        info = table.to_table_info(["main"])
         data = info.serialize_to_bytes()
         restored = TableInfo.deserialize_from_bytes(data)
         assert restored.supports_insert is True
@@ -196,7 +196,7 @@ class TestReadOnlyCatalogInterfaceWriteMethods:
             name="test",
             schemas=[
                 Schema(
-                    name="main",
+                    path=["main"],
                     tables=[
                         Table(
                             name="writable",
@@ -225,7 +225,7 @@ class TestReadOnlyCatalogInterfaceWriteMethods:
         result = catalog_with_writable_table.table_insert_function_get(
             attach_opaque_data=AttachOpaqueData(b"test"),
             transaction_opaque_data=None,
-            schema_name="main",
+            schema_path=["main"],
             name="writable",
         )
         assert result.function_name == "generic_writable_insert"
@@ -235,7 +235,7 @@ class TestReadOnlyCatalogInterfaceWriteMethods:
         result = catalog_with_writable_table.table_update_function_get(
             attach_opaque_data=AttachOpaqueData(b"test"),
             transaction_opaque_data=None,
-            schema_name="main",
+            schema_path=["main"],
             name="writable",
         )
         assert result.function_name == "generic_writable_update"
@@ -245,7 +245,7 @@ class TestReadOnlyCatalogInterfaceWriteMethods:
         result = catalog_with_writable_table.table_delete_function_get(
             attach_opaque_data=AttachOpaqueData(b"test"),
             transaction_opaque_data=None,
-            schema_name="main",
+            schema_path=["main"],
             name="writable",
         )
         assert result.function_name == "generic_writable_delete"
@@ -256,7 +256,7 @@ class TestReadOnlyCatalogInterfaceWriteMethods:
             catalog_with_writable_table.table_insert_function_get(
                 attach_opaque_data=AttachOpaqueData(b"test"),
                 transaction_opaque_data=None,
-                schema_name="main",
+                schema_path=["main"],
                 name="readonly",
             )
 
@@ -266,7 +266,7 @@ class TestReadOnlyCatalogInterfaceWriteMethods:
             catalog_with_writable_table.table_update_function_get(
                 attach_opaque_data=AttachOpaqueData(b"test"),
                 transaction_opaque_data=None,
-                schema_name="main",
+                schema_path=["main"],
                 name="readonly",
             )
 
@@ -276,7 +276,7 @@ class TestReadOnlyCatalogInterfaceWriteMethods:
             catalog_with_writable_table.table_delete_function_get(
                 attach_opaque_data=AttachOpaqueData(b"test"),
                 transaction_opaque_data=None,
-                schema_name="main",
+                schema_path=["main"],
                 name="readonly",
             )
 
@@ -286,7 +286,7 @@ class TestReadOnlyCatalogInterfaceWriteMethods:
             catalog_with_writable_table.table_insert_function_get(
                 attach_opaque_data=AttachOpaqueData(b"test"),
                 transaction_opaque_data=None,
-                schema_name="main",
+                schema_path=["main"],
                 name="no_such_table",
             )
 
@@ -295,7 +295,7 @@ class TestReadOnlyCatalogInterfaceWriteMethods:
         result = catalog_with_writable_table.table_insert_function_get(
             attach_opaque_data=AttachOpaqueData(b"test"),
             transaction_opaque_data=None,
-            schema_name="MAIN",
+            schema_path=["MAIN"],
             name="WRITABLE",
         )
         assert result.function_name == "generic_writable_insert"

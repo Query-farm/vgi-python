@@ -101,7 +101,7 @@ class _MinimalWorker(Worker):
         name="test",
         schemas=[
             Schema(
-                name="main",
+                path=["main"],
                 comment="Main schema",
                 functions=[_AddFunc, _SeqFunc, _EchoFunc],
                 tables=[
@@ -135,7 +135,7 @@ class _WorkerWithSettings(Worker):
     catalog = Catalog(
         name="settings_test",
         schemas=[
-            Schema(name="main", functions=[_AddFunc]),
+            Schema(path=["main"], functions=[_AddFunc]),
         ],
     )
 
@@ -209,7 +209,7 @@ class TestBuildWorkerPage:
         assert "badge-table" in html
         assert "badge-table-in-out" in html
 
-    def test_contains_schema_name(self) -> None:
+    def test_contains_schema_path(self) -> None:
         """Schema name and comment appear."""
         html = build_worker_page(_MinimalWorker, "/vgi").decode()
         assert "main" in html
@@ -403,7 +403,7 @@ _PROD_OPTION_SPECS = extract_attach_option_specs(_ProdAttachOptions)
 _TEST_PROD_CATALOG = Catalog(
     name="prod",
     comment="Production warehouse",
-    schemas=[Schema(name="main", functions=[_AddFunc])],
+    schemas=[Schema(path=["main"], functions=[_AddFunc])],
 )
 
 

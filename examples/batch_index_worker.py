@@ -134,7 +134,7 @@ class BatchIndexWorker(Worker):
 
     catalog = Catalog(
         name="bi",
-        schemas=[Schema(name="main", functions=[BatchIndexes])],
+        schemas=[Schema(path=["main"], functions=[BatchIndexes])],
     )
 
 

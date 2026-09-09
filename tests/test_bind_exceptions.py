@@ -24,7 +24,7 @@ class TestBindExceptionHandling:
                 list(
                     client.table_function(
                         function_name="settings_aware",
-                        schema_name="main",
+                        schema_path=["main"],
                         arguments=Arguments(positional=(pa.scalar(3),)),
                         # No settings provided
                     )
@@ -40,7 +40,7 @@ class TestBindExceptionHandling:
                 list(
                     client.table_function(
                         function_name="settings_aware",
-                        schema_name="main",
+                        schema_path=["main"],
                         arguments=Arguments(positional=(pa.scalar(3),)),
                     )
                 )
@@ -65,7 +65,7 @@ class TestBindExceptionHandling:
                 list(
                     client.table_function(
                         function_name="settings_aware",
-                        schema_name="main",
+                        schema_path=["main"],
                         arguments=Arguments(positional=(pa.scalar(3),)),
                     )
                 )
@@ -86,7 +86,7 @@ class TestBindExceptionHandling:
                 list(
                     client.table_function(
                         function_name="nonexistent_function",
-                        schema_name="main",
+                        schema_path=["main"],
                         arguments=Arguments(positional=()),
                     )
                 )
@@ -105,7 +105,7 @@ class TestBindExceptionHandling:
                 list(
                     client.table_function(
                         function_name="sequence",
-                        schema_name="main",
+                        schema_path=["main"],
                         arguments=Arguments(positional=()),
                     )
                 )

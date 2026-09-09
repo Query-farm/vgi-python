@@ -25,7 +25,7 @@ class TestFilterBySettingFunction:
             outputs = list(
                 client.table_in_out_function(
                     function_name="filter_by_setting",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     settings={"threshold": 5},
                 )
@@ -46,7 +46,7 @@ class TestFilterBySettingFunction:
             outputs = list(
                 client.table_in_out_function(
                     function_name="filter_by_setting",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     settings={"threshold": 0},
                 )
@@ -68,7 +68,7 @@ class TestFilterBySettingFunction:
                 list(
                     client.table_in_out_function(
                         function_name="filter_by_setting",
-                        schema_name="main",
+                        schema_path=["main"],
                         input=iter([batch]),
                         # No settings provided
                     )

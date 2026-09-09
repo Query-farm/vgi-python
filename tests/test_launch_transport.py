@@ -55,7 +55,7 @@ def test_launch_round_trip_table_function(state_dir: str) -> None:
         batches = list(
             client.table_function(
                 function_name="sequence",
-                schema_name="main",
+                schema_path=["main"],
                 arguments=Arguments(positional=(pa.scalar(5),)),
             )
         )

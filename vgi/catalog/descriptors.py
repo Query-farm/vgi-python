@@ -39,6 +39,7 @@ from vgi.catalog.catalog_interface import (
 )
 from vgi.invocation import BindResponse, FunctionType
 from vgi.metadata import CatalogFunctionType
+from vgi.schema_path import SchemaPath, schema_path_display, schema_path_key
 
 if TYPE_CHECKING:
     from vgi.function import Function
@@ -179,7 +180,7 @@ def _default_to_sql(value: DefaultValue) -> str:
 def _inline_function_result(
     func: type[Function] | None,
     arguments: Arguments | None = None,
-    schema_name: str | None = None,
+    schema_path: SchemaPath | None = None,
 ) -> bytes | None:
     """Build inlined ``ScanFunctionResult`` IPC bytes for a function-backed table.
 
@@ -196,8 +197,8 @@ def _inline_function_result(
     function is parameterized by ``Table.arguments``; the insert/update/delete
     functions receive their rows via the streaming table input instead.
 
-    ``schema_name``: the table's own containing schema, passed through as
-    ``ScanFunctionResult.schema_name``. This descriptor object (unlike
+    ``schema_path``: the table's own containing schema, passed through as
+    ``ScanFunctionResult.schema_path``. This descriptor object (unlike
     ``ReadOnlyCatalogInterface``, which builds a full cross-schema function
     registry at runtime) has no visibility into which schema the backing
     function object is *actually* registered under if it differs from the
@@ -214,7 +215,7 @@ def _inline_function_result(
         positional_arguments=positional_arguments,
         named_arguments=named_arguments,
         required_extensions=[],
-        schema_name=schema_name,
+        schema_path=schema_path,
     ).serialize()
 
 
@@ -226,7 +227,7 @@ class ForeignKeyDef:
         columns: Column names in THIS table that form the FK.
         referenced_table: Name of the referenced table.
         referenced_columns: Column names in the referenced table.
-        referenced_schema: Schema of the referenced table.
+        referenced_schema_path: Schema path of the referenced table.
             Defaults to None meaning same schema as this table.
 
     """
@@ -234,7 +235,7 @@ class ForeignKeyDef:
     columns: tuple[str, ...]
     referenced_table: str
     referenced_columns: tuple[str, ...]
-    referenced_schema: str | None = None
+    referenced_schema_path: SchemaPath | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -568,7 +569,7 @@ class Table:
         cols = self.resolved_columns
         return [[cols.get_field_index(col) for col in group] for group in self.primary_key]
 
-    def _serialize_foreign_keys(self, schema_name: str) -> list[bytes]:
+    def _serialize_foreign_keys(self, schema_path: SchemaPath) -> list[bytes]:
         """Serialize foreign key constraints as IPC bytes."""
         from vgi_rpc.utils import serialize_record_batch_bytes
 
@@ -579,14 +580,14 @@ class Table:
                     "fk_columns": [list(fk.columns)],
                     "pk_columns": [list(fk.referenced_columns)],
                     "referenced_table": [fk.referenced_table],
-                    "referenced_schema": [fk.referenced_schema or schema_name],
+                    "referenced_schema_path": [fk.referenced_schema_path or schema_path],
                 },
                 schema=pa.schema(
                     [
                         ("fk_columns", pa.list_(pa.utf8())),
                         ("pk_columns", pa.list_(pa.utf8())),
                         ("referenced_table", pa.utf8()),
-                        ("referenced_schema", pa.utf8()),
+                        ("referenced_schema_path", pa.list_(pa.utf8())),
                     ]
                 ),
             )
@@ -632,7 +633,7 @@ class Table:
             schema = schema.set(idx, f.with_metadata(existing))  # type: ignore[arg-type]
         return schema
 
-    def to_table_info(self, schema_name: str) -> TableInfo:
+    def to_table_info(self, schema_path: SchemaPath) -> TableInfo:
         """Convert to [`TableInfo`][] for catalog response."""
         cols = self._apply_defaults_to_schema(self.resolved_columns)
         cols = self._apply_generated_columns_to_schema(cols)
@@ -654,23 +655,23 @@ class Table:
         )
         return TableInfo(
             name=self.name,
-            schema_name=schema_name,
+            schema_path=schema_path,
             columns=SerializedSchema(cols.serialize().to_pybytes()),
             not_null_constraints=self._resolve_not_null_indices(),
             unique_constraints=self._resolve_unique_indices(),
             check_constraints=list(self.check),
             primary_key_constraints=self._resolve_primary_key_indices(),
-            foreign_key_constraints=self._serialize_foreign_keys(schema_name),
+            foreign_key_constraints=self._serialize_foreign_keys(schema_path),
             supports_insert=self.insert_function is not None,
             supports_update=self.update_function is not None,
             supports_delete=self.delete_function is not None,
             supports_column_statistics=bool(self.statistics),
             comment=self.comment,
             tags=dict(self.tags),
-            scan_function=_inline_function_result(self.function, self.arguments, schema_name),
-            insert_function=_inline_function_result(self.insert_function, schema_name=schema_name),
-            update_function=_inline_function_result(self.update_function, schema_name=schema_name),
-            delete_function=_inline_function_result(self.delete_function, schema_name=schema_name),
+            scan_function=_inline_function_result(self.function, self.arguments, schema_path),
+            insert_function=_inline_function_result(self.insert_function, schema_path=schema_path),
+            update_function=_inline_function_result(self.update_function, schema_path=schema_path),
+            delete_function=_inline_function_result(self.delete_function, schema_path=schema_path),
             cardinality_estimate=self.cardinality_estimate,
             cardinality_max=self.cardinality_max,
             column_statistics=column_statistics_blob,
@@ -721,11 +722,11 @@ class View:
     column_comments: dict[str, str] = field(default_factory=dict)
     tags: dict[str, str] = field(default_factory=dict)
 
-    def to_view_info(self, schema_name: str) -> ViewInfo:
+    def to_view_info(self, schema_path: SchemaPath) -> ViewInfo:
         """Convert to [`ViewInfo`][] for catalog response."""
         return ViewInfo(
             name=self.name,
-            schema_name=schema_name,
+            schema_path=schema_path,
             definition=self.definition,
             comment=self.comment,
             column_comments=dict(self.column_comments),
@@ -788,11 +789,11 @@ class Macro:
                     f"in parameters list {self.parameters}"
                 )
 
-    def to_macro_info(self, schema_name: str) -> MacroInfo:
+    def to_macro_info(self, schema_path: SchemaPath) -> MacroInfo:
         """Convert to [`MacroInfo`][] for catalog response."""
         return MacroInfo(
             name=self.name,
-            schema_name=schema_name,
+            schema_path=schema_path,
             macro_type=self.macro_type,
             parameters=list(self.parameters),
             parameter_default_values=self.parameter_default_values,
@@ -843,11 +844,11 @@ class Index:
         if not self.table_name:
             raise ValueError(f"Index '{self.name}': must specify a table_name")
 
-    def to_index_info(self, schema_name: str) -> IndexInfo:
+    def to_index_info(self, schema_path: SchemaPath) -> IndexInfo:
         """Convert to [`IndexInfo`][] for catalog response."""
         return IndexInfo(
             name=self.name,
-            schema_name=schema_name,
+            schema_path=schema_path,
             table_name=self.table_name,
             index_type=self.index_type,
             constraint_type=self.constraint_type,
@@ -863,7 +864,7 @@ class Schema:
     """Declarative schema definition grouping tables, views, functions, macros, and indexes.
 
     Attributes:
-        name: Schema name.
+        path: Raw identifier components from the outermost schema to this schema.
         comment: Optional schema comment.
         tags: Optional metadata tags.
         tables: Sequence of Table definitions.
@@ -874,7 +875,7 @@ class Schema:
 
     """
 
-    name: str
+    path: SchemaPath
     comment: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
     tables: Sequence[Table] = ()
@@ -911,7 +912,7 @@ class Schema:
             function_counts[func.get_metadata().function_type] += 1
         return SchemaInfo(
             attach_opaque_data=attach_opaque_data,
-            name=self.name,
+            path=list(self.path),
             comment=self.comment,
             tags=dict(self.tags),
             estimated_object_count={
@@ -952,7 +953,7 @@ class Catalog:
             catalog (diagnostics, converters, helpers).
 
             Every entry must also appear in exactly one ``Schema.functions``:
-            bind dispatch is keyed on ``(schema_name, name)``, so a function
+            bind dispatch is keyed on ``(schema_path, name)``, so a function
             that exists only here would be registered but never dispatchable.
             The schema-qualified name keeps working and is the unambiguous
             fallback when a global name is claimed by another worker.
@@ -979,23 +980,33 @@ class Catalog:
 
     def __post_init__(self) -> None:
         """Validate catalog configuration."""
-        schema_names = {s.name.lower() for s in self.schemas}
+        schema_paths = {schema_path_key(s.path) for s in self.schemas}
 
         # Validate default_schema exists
-        if self.default_schema.lower() not in schema_names:
-            available = sorted(s.name for s in self.schemas) or ["(none)"]
+        if (self.default_schema.lower(),) not in schema_paths:
+            available = sorted(schema_path_display(s.path) for s in self.schemas) or ["(none)"]
             raise ValueError(
                 f"Catalog '{self.name}': default_schema '{self.default_schema}' "
                 f"not found in schemas. Available schemas: {available}"
             )
 
-        # Check for duplicate schema names (case-insensitive)
-        seen: set[str] = set()
+        # Check for duplicate schema paths (case-insensitive per component)
+        seen: set[tuple[str, ...]] = set()
         for schema in self.schemas:
-            key = schema.name.lower()
+            key = schema_path_key(schema.path)
             if key in seen:
-                raise ValueError(f"Catalog '{self.name}': duplicate schema name '{schema.name}'")
+                raise ValueError(f"Catalog '{self.name}': duplicate schema path {schema_path_display(schema.path)}")
             seen.add(key)
+
+        # DuckDB materializes nested schemas from the root down. A catalog
+        # cannot expose a child without also exposing every parent prefix.
+        for schema in self.schemas:
+            path_key = schema_path_key(schema.path)
+            if len(path_key) > 1 and path_key[:-1] not in schema_paths:
+                raise ValueError(
+                    f"Catalog '{self.name}': schema path {schema_path_display(schema.path)} "
+                    f"has no declared parent {schema_path_display(schema.path[:-1])}"
+                )
 
         self._validate_global_functions()
 
@@ -1004,7 +1015,7 @@ class Catalog:
 
         The prefix is concatenated into a SQL identifier, and every listed class
         must be schema-resident or it would be published globally yet never be
-        dispatchable (bind is keyed on ``(schema_name, name)``).
+        dispatchable (bind is keyed on ``(schema_path, name)``).
         """
         if self.global_function_prefix is not None and not _GLOBAL_PREFIX_RE.fullmatch(self.global_function_prefix):
             raise ValueError(
@@ -1024,25 +1035,26 @@ class Catalog:
             seen_classes.add(func_cls)
 
         # Map each schema-resident function class to the schemas holding it.
-        placement: dict[type[Function], list[str]] = {}
+        placement: dict[type[Function], list[SchemaPath]] = {}
         for schema in self.schemas:
             for func_cls in schema.functions:
-                placement.setdefault(func_cls, []).append(schema.name)
+                placement.setdefault(func_cls, []).append(schema.path)
 
         for func_cls in self.global_functions:
             schemas_holding = placement.get(func_cls, [])
             if not schemas_holding:
-                available = sorted(s.name for s in self.schemas) or ["(none)"]
+                available = sorted(schema_path_display(s.path) for s in self.schemas) or ["(none)"]
                 raise ValueError(
                     f"Catalog '{self.name}': {func_cls.__name__} is listed in global_functions "
                     f"but does not appear in any Schema.functions. A global function must also be "
-                    f"schema-resident — bind dispatch is keyed on (schema_name, name), so it would "
+                    f"schema-resident — bind dispatch is keyed on (schema_path, name), so it would "
                     f"be published globally yet never dispatchable. Add it to one of: {available}"
                 )
             if len(schemas_holding) > 1:
                 raise ValueError(
                     f"Catalog '{self.name}': {func_cls.__name__} is listed in global_functions "
-                    f"but appears in multiple schemas ({sorted(schemas_holding)}). The global "
-                    f"registration would be ambiguous about which one it dispatches to — list it "
-                    f"in exactly one schema, or drop it from global_functions."
+                    "but appears in multiple schemas "
+                    f"({sorted(map(schema_path_display, schemas_holding))}). The global registration would be "
+                    "ambiguous about which one it dispatches to — list it in exactly one schema, or drop it from "
+                    "global_functions."
                 )

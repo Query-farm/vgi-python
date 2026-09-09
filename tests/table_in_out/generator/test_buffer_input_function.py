@@ -17,7 +17,7 @@ class TestBufferInputFunction:
             output_batches = list(
                 client.table_buffering_function(
                     function_name="buffer_input",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter(simple_batches),
                 )
             )
@@ -32,7 +32,7 @@ class TestBufferInputFunction:
             output_batches = list(
                 client.table_buffering_function(
                     function_name="buffer_input",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter(simple_batches),
                 )
             )

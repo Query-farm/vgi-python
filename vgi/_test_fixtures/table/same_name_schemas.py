@@ -15,11 +15,11 @@ emitting a single row tagged with its own schema. A declarative ``Table``
 descriptor named ``test_same_name_table`` is registered in each schema too, each
 backed by that schema's own implementation.
 
-This is also the end-to-end regression guard for protocol 1.5.0's
-``ScanFunctionResult.schema_name``/``ScanBranch.schema_name``: the C++ extension
+This is also an end-to-end regression guard for protocol 2.0.0's
+``ScanFunctionResult.schema_path``/``ScanBranch.schema_path``: the C++ extension
 now prefers the worker-declared schema over its old table-schema/default-schema
 heuristic when resolving which catalog entry ``function_name`` refers to. A
-worker that regressed to leaving ``schema_name`` unset, or a client that stopped
+worker that regressed to leaving ``schema_path`` unset, or a client that stopped
 consuming it, would silently fall back to the old heuristic — which still
 happens to get *this* two-schema case right (the table's own schema is tried
 first and always matches here), so a regression here would show up not as a

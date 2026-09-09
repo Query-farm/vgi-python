@@ -28,7 +28,7 @@ def attached(client_transport: Any) -> Any:
 
 def test_returns_typed_statistics(attached: Any) -> None:
     client, aod = attached
-    stats = client.table_column_statistics(attach_opaque_data=aod, schema_name="data", name="numbers")
+    stats = client.table_column_statistics(attach_opaque_data=aod, schema_path=["data"], name="numbers")
     assert stats
     assert all(isinstance(s, ColumnStatistics) for s in stats)
 
@@ -36,7 +36,7 @@ def test_returns_typed_statistics(attached: Any) -> None:
 def test_decodes_min_max_for_a_known_table(attached: Any) -> None:
     """`numbers` holds integers 0-99, so its bounds are known exactly."""
     client, aod = attached
-    stats = client.table_column_statistics(attach_opaque_data=aod, schema_name="data", name="numbers")
+    stats = client.table_column_statistics(attach_opaque_data=aod, schema_path=["data"], name="numbers")
     value = next(s for s in stats if s.column_name == "value")
     assert value.min is not None
     assert value.max is not None
@@ -52,11 +52,11 @@ def test_matches_the_inlined_statistics(attached: Any) -> None:
     inlined blob has no supported way to read it.
     """
     client, aod = attached
-    info = client.table_get(attach_opaque_data=aod, schema_name="data", name="numbers")
+    info = client.table_get(attach_opaque_data=aod, schema_path=["data"], name="numbers")
     assert info is not None
     if not info.column_statistics:
         pytest.skip("worker does not inline statistics for this table")
-    fetched = client.table_column_statistics(attach_opaque_data=aod, schema_name="data", name="numbers")
+    fetched = client.table_column_statistics(attach_opaque_data=aod, schema_path=["data"], name="numbers")
     inlined = {s.column_name: s for s in deserialize_column_statistics(info.column_statistics)}
     assert {s.column_name for s in fetched} == set(inlined)
     for s in fetched:
@@ -70,4 +70,4 @@ def test_matches_the_inlined_statistics(attached: Any) -> None:
 def test_unknown_table_returns_empty_list(attached: Any) -> None:
     """A missing table yields no statistics rather than raising."""
     client, aod = attached
-    assert client.table_column_statistics(attach_opaque_data=aod, schema_name="data", name="no_such_table") == []
+    assert client.table_column_statistics(attach_opaque_data=aod, schema_path=["data"], name="no_such_table") == []

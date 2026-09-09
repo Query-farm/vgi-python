@@ -17,7 +17,7 @@ class TestStructSettingsFunction:
             outputs = list(
                 client.table_function(
                     function_name="struct_settings",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(3),)),
                     settings={
                         "config": {"start": 10, "step": 5, "label": "item"},
@@ -36,7 +36,7 @@ class TestStructSettingsFunction:
             outputs = list(
                 client.table_function(
                     function_name="struct_settings",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(4),)),
                     settings={
                         "config": {"start": 0, "step": 100, "label": "row"},

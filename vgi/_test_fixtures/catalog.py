@@ -34,6 +34,7 @@ from vgi.catalog import (
     TransactionOpaqueData,
     ViewInfo,
 )
+from vgi.schema_path import SchemaKey, schema_path_key
 from vgi.worker import Worker
 
 
@@ -73,7 +74,7 @@ class CatalogData:
     """In-memory storage for catalog metadata."""
 
     name: str
-    schemas: dict[str, SchemaData] = field(default_factory=dict)
+    schemas: dict[SchemaKey, SchemaData] = field(default_factory=dict)
     version: int = 1
     comment: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
@@ -103,10 +104,10 @@ class InMemoryCatalog(CatalogInterface):
         catalog = CatalogData(name="memory")
         # Create a placeholder attach_opaque_data for internal use
         placeholder_attach_opaque_data = AttachOpaqueData(b"\x00" * 16)
-        catalog.schemas["main"] = SchemaData(
+        catalog.schemas[("main",)] = SchemaData(
             info=SchemaInfo(
                 attach_opaque_data=placeholder_attach_opaque_data,
-                name="main",
+                path=["main"],
                 comment=None,
                 tags={},
             )
@@ -125,12 +126,12 @@ class InMemoryCatalog(CatalogInterface):
             raise ValueError(msg)
         return catalog
 
-    def _get_schema(self, attach_opaque_data: AttachOpaqueData, schema_name: str) -> SchemaData:
-        """Get the schema for the given attach_opaque_data and schema name."""
+    def _get_schema(self, attach_opaque_data: AttachOpaqueData, schema_path: list[str]) -> SchemaData:
+        """Get the schema for the given attachment and structural path."""
         catalog = self._get_catalog(attach_opaque_data)
-        schema = catalog.schemas.get(schema_name)
+        schema = catalog.schemas.get(schema_path_key(schema_path))
         if schema is None:
-            msg = f"Schema {schema_name!r} not found in catalog"
+            msg = f"Schema {schema_path!r} not found in catalog"
             raise ValueError(msg)
         return schema
 
@@ -190,17 +191,17 @@ class InMemoryCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
     ) -> SchemaInfo | None:
         """Get information about a schema."""
         catalog = self._get_catalog(attach_opaque_data)
-        schema_data = catalog.schemas.get(name)
+        schema_data = catalog.schemas.get(schema_path_key(path))
         if schema_data is None:
             return None
         # Update the attach_opaque_data in the returned info
         return SchemaInfo(
             attach_opaque_data=attach_opaque_data,
-            name=schema_data.info.name,
+            path=list(schema_data.info.path),
             comment=schema_data.info.comment,
             tags=schema_data.info.tags,
         )
@@ -210,14 +211,14 @@ class InMemoryCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
     ) -> TableInfo | None:
         """Get information about a table."""
         catalog = self._get_catalog(attach_opaque_data)
-        schema_data = catalog.schemas.get(schema_name)
+        schema_data = catalog.schemas.get(schema_path_key(schema_path))
         if schema_data is None:
             return None
         table_data = schema_data.tables.get(name)
@@ -230,12 +231,12 @@ class InMemoryCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
     ) -> ViewInfo | None:
         """Get information about a view."""
         catalog = self._get_catalog(attach_opaque_data)
-        schema_data = catalog.schemas.get(schema_name)
+        schema_data = catalog.schemas.get(schema_path_key(schema_path))
         if schema_data is None:
             return None
         view_data = schema_data.views.get(name)
@@ -248,12 +249,12 @@ class InMemoryCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
     ) -> MacroInfo | None:
         """Get information about a macro."""
         catalog = self._get_catalog(attach_opaque_data)
-        schema_data = catalog.schemas.get(schema_name)
+        schema_data = catalog.schemas.get(schema_path_key(schema_path))
         if schema_data is None:
             return None
         macro_data = schema_data.macros.get(name)
@@ -288,10 +289,10 @@ class InMemoryCatalog(CatalogInterface):
         catalog = CatalogData(name=name)
         # Create a placeholder attach_opaque_data for internal use
         placeholder_attach_opaque_data = AttachOpaqueData(b"\x00" * 16)
-        catalog.schemas["main"] = SchemaData(
+        catalog.schemas[("main",)] = SchemaData(
             info=SchemaInfo(
                 attach_opaque_data=placeholder_attach_opaque_data,
-                name="main",
+                path=["main"],
                 comment=None,
                 tags={},
             )
@@ -335,7 +336,7 @@ class InMemoryCatalog(CatalogInterface):
             result.append(
                 SchemaInfo(
                     attach_opaque_data=attach_opaque_data,
-                    name=schema_data.info.name,
+                    path=list(schema_data.info.path),
                     comment=schema_data.info.comment,
                     tags=schema_data.info.tags,
                     estimated_object_count=estimated,
@@ -348,20 +349,21 @@ class InMemoryCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         on_conflict: OnConflict = OnConflict.ERROR,
         comment: str | None,
         tags: dict[str, str],
     ) -> None:
         """Create a new schema."""
         catalog = self._get_catalog(attach_opaque_data)
-        if name in catalog.schemas:
-            msg = f"Schema {name!r} already exists"
+        path_key = schema_path_key(path)
+        if path_key in catalog.schemas:
+            msg = f"Schema {path!r} already exists"
             raise ValueError(msg)
-        catalog.schemas[name] = SchemaData(
+        catalog.schemas[path_key] = SchemaData(
             info=SchemaInfo(
                 attach_opaque_data=attach_opaque_data,
-                name=name,
+                path=list(path),
                 comment=comment,
                 tags=tags,
             )
@@ -373,22 +375,23 @@ class InMemoryCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         ignore_not_found: bool,
         cascade: bool,
     ) -> None:
         """Drop a schema."""
         catalog = self._get_catalog(attach_opaque_data)
-        if name not in catalog.schemas:
+        path_key = schema_path_key(path)
+        if path_key not in catalog.schemas:
             if ignore_not_found:
                 return
-            msg = f"Schema {name!r} not found"
+            msg = f"Schema {path!r} not found"
             raise ValueError(msg)
-        schema_data = catalog.schemas[name]
+        schema_data = catalog.schemas[path_key]
         if not cascade and (schema_data.tables or schema_data.views or schema_data.macros):
-            msg = f"Schema {name!r} is not empty, use CASCADE to drop"
+            msg = f"Schema {path!r} is not empty, use CASCADE to drop"
             raise ValueError(msg)
-        del catalog.schemas[name]
+        del catalog.schemas[path_key]
         self._increment_version(attach_opaque_data)
 
     @overload
@@ -397,7 +400,7 @@ class InMemoryCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         type: Literal[SchemaObjectType.TABLE],
     ) -> Sequence[TableInfo]: ...
 
@@ -407,7 +410,7 @@ class InMemoryCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         type: Literal[SchemaObjectType.VIEW],
     ) -> Sequence[ViewInfo]: ...
 
@@ -417,7 +420,7 @@ class InMemoryCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         type: Literal[
             SchemaObjectType.SCALAR_FUNCTION,
             SchemaObjectType.TABLE_FUNCTION,
@@ -431,7 +434,7 @@ class InMemoryCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         type: Literal[SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO],
     ) -> Sequence[MacroInfo]: ...
 
@@ -441,7 +444,7 @@ class InMemoryCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         type: Literal[SchemaObjectType.INDEX],
     ) -> Sequence[IndexInfo]: ...
 
@@ -450,7 +453,7 @@ class InMemoryCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: list[str],
         type: SchemaObjectType,
     ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo]:
         """Get the contents of a schema.
@@ -458,7 +461,7 @@ class InMemoryCatalog(CatalogInterface):
         Args:
             attach_opaque_data: The attachment identifier.
             transaction_opaque_data: The transaction identifier, if any.
-            name: The name of the schema.
+            path: Raw schema identifier components.
             type: The type of objects to return. Must be a SchemaObjectType enum.
 
         Returns:
@@ -466,7 +469,7 @@ class InMemoryCatalog(CatalogInterface):
             depending on the type parameter.
 
         """
-        schema_data = self._get_schema(attach_opaque_data, name)
+        schema_data = self._get_schema(attach_opaque_data, path)
         result: list[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo] = []
 
         # Normalize type parameter (may be string from wire protocol)
@@ -499,7 +502,7 @@ class InMemoryCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         columns: SerializedSchema,
         on_conflict: OnConflict,
@@ -510,10 +513,10 @@ class InMemoryCatalog(CatalogInterface):
         foreign_key_constraints: list[bytes] | None = None,
     ) -> None:
         """Create a new table."""
-        schema_data = self._get_schema(attach_opaque_data, schema_name)
+        schema_data = self._get_schema(attach_opaque_data, schema_path)
         if name in schema_data.tables:
             if on_conflict == OnConflict.ERROR:
-                msg = f"Table {name!r} already exists in schema {schema_name!r}"
+                msg = f"Table {name!r} already exists in schema {schema_path!r}"
                 raise ValueError(msg)
             if on_conflict == OnConflict.IGNORE:
                 return
@@ -522,7 +525,7 @@ class InMemoryCatalog(CatalogInterface):
         schema_data.tables[name] = TableData(
             info=TableInfo(
                 name=name,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 columns=columns,
                 not_null_constraints=not_null_constraints,
                 unique_constraints=unique_constraints,
@@ -538,17 +541,17 @@ class InMemoryCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         ignore_not_found: bool,
         cascade: bool = False,
     ) -> None:
         """Drop a table."""
-        schema_data = self._get_schema(attach_opaque_data, schema_name)
+        schema_data = self._get_schema(attach_opaque_data, schema_path)
         if name not in schema_data.tables:
             if ignore_not_found:
                 return
-            msg = f"Table {name!r} not found in schema {schema_name!r}"
+            msg = f"Table {name!r} not found in schema {schema_path!r}"
             raise ValueError(msg)
         del schema_data.tables[name]
         self._increment_version(attach_opaque_data)
@@ -558,25 +561,25 @@ class InMemoryCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         comment: str | None,
         ignore_not_found: bool,
     ) -> None:
         """Set the comment for a table."""
-        schema_data = self._get_schema(attach_opaque_data, schema_name)
+        schema_data = self._get_schema(attach_opaque_data, schema_path)
         table_data = schema_data.tables.get(name)
         if table_data is None:
             if ignore_not_found:
                 return
-            msg = f"Table {name!r} not found in schema {schema_name!r}"
+            msg = f"Table {name!r} not found in schema {schema_path!r}"
             raise ValueError(msg)
         # Create a new TableInfo with the updated comment
         old_info = table_data.info
         schema_data.tables[name] = TableData(
             info=TableInfo(
                 name=old_info.name,
-                schema_name=old_info.schema_name,
+                schema_path=old_info.schema_path,
                 columns=old_info.columns,
                 not_null_constraints=old_info.not_null_constraints,
                 unique_constraints=old_info.unique_constraints,
@@ -592,20 +595,20 @@ class InMemoryCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         new_name: str,
         ignore_not_found: bool,
     ) -> None:
         """Rename a table."""
-        schema_data = self._get_schema(attach_opaque_data, schema_name)
+        schema_data = self._get_schema(attach_opaque_data, schema_path)
         if name not in schema_data.tables:
             if ignore_not_found:
                 return
-            msg = f"Table {name!r} not found in schema {schema_name!r}"
+            msg = f"Table {name!r} not found in schema {schema_path!r}"
             raise ValueError(msg)
         if new_name in schema_data.tables:
-            msg = f"Table {new_name!r} already exists in schema {schema_name!r}"
+            msg = f"Table {new_name!r} already exists in schema {schema_path!r}"
             raise ValueError(msg)
         table_data = schema_data.tables.pop(name)
         # Create new TableInfo with updated name
@@ -613,7 +616,7 @@ class InMemoryCatalog(CatalogInterface):
         schema_data.tables[new_name] = TableData(
             info=TableInfo(
                 name=new_name,
-                schema_name=old_info.schema_name,
+                schema_path=old_info.schema_path,
                 columns=old_info.columns,
                 not_null_constraints=old_info.not_null_constraints,
                 unique_constraints=old_info.unique_constraints,
@@ -629,16 +632,16 @@ class InMemoryCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         definition: str,
         on_conflict: OnConflict,
     ) -> None:
         """Create a new view."""
-        schema_data = self._get_schema(attach_opaque_data, schema_name)
+        schema_data = self._get_schema(attach_opaque_data, schema_path)
         if name in schema_data.views:
             if on_conflict == OnConflict.ERROR:
-                msg = f"View {name!r} already exists in schema {schema_name!r}"
+                msg = f"View {name!r} already exists in schema {schema_path!r}"
                 raise ValueError(msg)
             if on_conflict == OnConflict.IGNORE:
                 return
@@ -647,7 +650,7 @@ class InMemoryCatalog(CatalogInterface):
         schema_data.views[name] = ViewData(
             info=ViewInfo(
                 name=name,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 definition=definition,
                 comment=None,
                 tags={},
@@ -660,17 +663,17 @@ class InMemoryCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         ignore_not_found: bool,
         cascade: bool = False,
     ) -> None:
         """Drop a view."""
-        schema_data = self._get_schema(attach_opaque_data, schema_name)
+        schema_data = self._get_schema(attach_opaque_data, schema_path)
         if name not in schema_data.views:
             if ignore_not_found:
                 return
-            msg = f"View {name!r} not found in schema {schema_name!r}"
+            msg = f"View {name!r} not found in schema {schema_path!r}"
             raise ValueError(msg)
         del schema_data.views[name]
         self._increment_version(attach_opaque_data)
@@ -680,20 +683,20 @@ class InMemoryCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         new_name: str,
         ignore_not_found: bool,
     ) -> None:
         """Rename a view."""
-        schema_data = self._get_schema(attach_opaque_data, schema_name)
+        schema_data = self._get_schema(attach_opaque_data, schema_path)
         if name not in schema_data.views:
             if ignore_not_found:
                 return
-            msg = f"View {name!r} not found in schema {schema_name!r}"
+            msg = f"View {name!r} not found in schema {schema_path!r}"
             raise ValueError(msg)
         if new_name in schema_data.views:
-            msg = f"View {new_name!r} already exists in schema {schema_name!r}"
+            msg = f"View {new_name!r} already exists in schema {schema_path!r}"
             raise ValueError(msg)
         view_data = schema_data.views.pop(name)
         # Create new ViewInfo with updated name
@@ -701,7 +704,7 @@ class InMemoryCatalog(CatalogInterface):
         schema_data.views[new_name] = ViewData(
             info=ViewInfo(
                 name=new_name,
-                schema_name=old_info.schema_name,
+                schema_path=old_info.schema_path,
                 definition=old_info.definition,
                 comment=old_info.comment,
                 tags=old_info.tags,
@@ -714,25 +717,25 @@ class InMemoryCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         comment: str | None,
         ignore_not_found: bool,
     ) -> None:
         """Set the comment for a view."""
-        schema_data = self._get_schema(attach_opaque_data, schema_name)
+        schema_data = self._get_schema(attach_opaque_data, schema_path)
         view_data = schema_data.views.get(name)
         if view_data is None:
             if ignore_not_found:
                 return
-            msg = f"View {name!r} not found in schema {schema_name!r}"
+            msg = f"View {name!r} not found in schema {schema_path!r}"
             raise ValueError(msg)
         # Create a new ViewInfo with the updated comment
         old_info = view_data.info
         schema_data.views[name] = ViewData(
             info=ViewInfo(
                 name=old_info.name,
-                schema_name=old_info.schema_name,
+                schema_path=old_info.schema_path,
                 definition=old_info.definition,
                 comment=comment,
                 tags=old_info.tags,
@@ -745,7 +748,7 @@ class InMemoryCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         macro_type: MacroType,
         parameters: list[str],
@@ -755,10 +758,10 @@ class InMemoryCatalog(CatalogInterface):
         arguments_schema: pa.Schema | None = None,
     ) -> None:
         """Create a new macro."""
-        schema_data = self._get_schema(attach_opaque_data, schema_name)
+        schema_data = self._get_schema(attach_opaque_data, schema_path)
         if name in schema_data.macros:
             if on_conflict == OnConflict.ERROR:
-                msg = f"Macro {name!r} already exists in schema {schema_name!r}"
+                msg = f"Macro {name!r} already exists in schema {schema_path!r}"
                 raise ValueError(msg)
             if on_conflict == OnConflict.IGNORE:
                 return
@@ -767,7 +770,7 @@ class InMemoryCatalog(CatalogInterface):
         schema_data.macros[name] = MacroData(
             info=MacroInfo(
                 name=name,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 macro_type=macro_type,
                 parameters=parameters,
                 parameter_default_values=parameter_default_values,
@@ -784,16 +787,16 @@ class InMemoryCatalog(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         ignore_not_found: bool,
     ) -> None:
         """Drop a macro."""
-        schema_data = self._get_schema(attach_opaque_data, schema_name)
+        schema_data = self._get_schema(attach_opaque_data, schema_path)
         if name not in schema_data.macros:
             if ignore_not_found:
                 return
-            msg = f"Macro {name!r} not found in schema {schema_name!r}"
+            msg = f"Macro {name!r} not found in schema {schema_path!r}"
             raise ValueError(msg)
         del schema_data.macros[name]
         self._increment_version(attach_opaque_data)

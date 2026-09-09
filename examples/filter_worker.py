@@ -59,7 +59,7 @@ class FilterWorker(Worker):
 
     catalog = Catalog(
         name="filters",
-        schemas=[Schema(name="main", functions=[FilterPositive])],
+        schemas=[Schema(path=["main"], functions=[FilterPositive])],
     )
 
 

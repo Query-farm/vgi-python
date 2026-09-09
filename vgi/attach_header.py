@@ -5,7 +5,7 @@ r"""Routing header that [`MetaWorker`][] encapsulates inside an attach envelope.
 When several [`Worker`][] instances are composed into one process, a call that
 carries an ``attach_opaque_data`` has to be routed back to the sub-worker whose
 catalog vended it. Nothing in the request identifies the catalog:
-``BindRequest`` carries only ``schema_name``, and the catalog's own opaque bytes
+``BindRequest`` carries only ``schema_path``, and the catalog's own opaque bytes
 are implementation-defined — the built-in read-only catalog returns the class
 constant ``b"readonly-catalog-"`` for *every* catalog it serves, so two catalogs
 in one process are byte-identical there.

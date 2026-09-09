@@ -19,6 +19,7 @@ import click
 
 from vgi.catalog import OnConflict, SerializedSchema, SqlExpression
 from vgi.client.cli_utils import (
+    SCHEMA_PATH,
     json_to_arrow_schema,
     optional_transaction_opaque_data,
     output_json,
@@ -35,7 +36,7 @@ def table() -> None:
 
 
 @table.command("get")
-@click.argument("schema_name")
+@click.argument("schema_path", type=SCHEMA_PATH)
 @click.argument("name")
 @click.option("--attach-opaque-data", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
@@ -43,7 +44,7 @@ def table() -> None:
 @click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-opaque-data", help="Transaction ID (hex) for transactional read")
 def table_get(
-    schema_name: str,
+    schema_path: list[str],
     name: str,
     attach_opaque_data: str | None,
     catalog_name: str | None,
@@ -61,17 +62,17 @@ def table_get(
     table_info = client.table_get(
         attach_opaque_data=resolved_attach_opaque_data,
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
-        schema_name=schema_name,
+        schema_path=schema_path,
         name=name,
     )
     if table_info:
         output_json(table_info_to_dict(table_info))
     else:
-        output_json({"error": "not_found", "schema": schema_name, "name": name})
+        output_json({"error": "not_found", "schema": schema_path, "name": name})
 
 
 @table.command("create")
-@click.argument("schema_name")
+@click.argument("schema_path", type=SCHEMA_PATH)
 @click.argument("name")
 @click.option("--attach-opaque-data", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
@@ -102,7 +103,7 @@ def table_get(
 )
 @click.option("--check", multiple=True, help="SQL check constraint (can repeat)")
 def table_create(
-    schema_name: str,
+    schema_path: list[str],
     name: str,
     attach_opaque_data: str | None,
     catalog_name: str | None,
@@ -135,7 +136,7 @@ def table_create(
     client.table_create(
         attach_opaque_data=resolved_attach_opaque_data,
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
-        schema_name=schema_name,
+        schema_path=schema_path,
         name=name,
         columns=SerializedSchema(arrow_schema.serialize().to_pybytes()),
         on_conflict=OnConflict(on_conflict),
@@ -143,11 +144,11 @@ def table_create(
         unique_constraints=unique_constraints,
         check_constraints=list(check),
     )
-    output_json({"status": "created", "schema": schema_name, "name": name})
+    output_json({"status": "created", "schema": schema_path, "name": name})
 
 
 @table.command("drop")
-@click.argument("schema_name")
+@click.argument("schema_path", type=SCHEMA_PATH)
 @click.argument("name")
 @click.option("--attach-opaque-data", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
@@ -156,7 +157,7 @@ def table_create(
 @click.option("--transaction-opaque-data", help="Transaction ID (hex)")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if not found")
 def table_drop(
-    schema_name: str,
+    schema_path: list[str],
     name: str,
     attach_opaque_data: str | None,
     catalog_name: str | None,
@@ -175,15 +176,15 @@ def table_drop(
     client.table_drop(
         attach_opaque_data=resolved_attach_opaque_data,
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
-        schema_name=schema_name,
+        schema_path=schema_path,
         name=name,
         ignore_not_found=ignore_not_found,
     )
-    output_json({"status": "dropped", "schema": schema_name, "name": name})
+    output_json({"status": "dropped", "schema": schema_path, "name": name})
 
 
 @table.command("rename")
-@click.argument("schema_name")
+@click.argument("schema_path", type=SCHEMA_PATH)
 @click.argument("name")
 @click.argument("new_name")
 @click.option("--attach-opaque-data", help="Hex-encoded attach ID")
@@ -193,7 +194,7 @@ def table_drop(
 @click.option("--transaction-opaque-data", help="Transaction ID (hex)")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if not found")
 def table_rename(
-    schema_name: str,
+    schema_path: list[str],
     name: str,
     new_name: str,
     attach_opaque_data: str | None,
@@ -214,7 +215,7 @@ def table_rename(
     client.table_rename(
         attach_opaque_data=resolved_attach_opaque_data,
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
-        schema_name=schema_name,
+        schema_path=schema_path,
         name=name,
         new_name=new_name,
         ignore_not_found=ignore_not_found,
@@ -222,7 +223,7 @@ def table_rename(
     output_json(
         {
             "status": "renamed",
-            "schema": schema_name,
+            "schema": schema_path,
             "old": name,
             "new": new_name,
         }
@@ -230,7 +231,7 @@ def table_rename(
 
 
 @table.command("comment")
-@click.argument("schema_name")
+@click.argument("schema_path", type=SCHEMA_PATH)
 @click.argument("name")
 @click.option("--attach-opaque-data", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
@@ -241,7 +242,7 @@ def table_rename(
 @click.option("--clear", is_flag=True, help="Clear the comment")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if not found")
 def table_comment(
-    schema_name: str,
+    schema_path: list[str],
     name: str,
     attach_opaque_data: str | None,
     catalog_name: str | None,
@@ -269,17 +270,17 @@ def table_comment(
     client.table_comment_set(
         attach_opaque_data=resolved_attach_opaque_data,
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
-        schema_name=schema_name,
+        schema_path=schema_path,
         name=name,
         comment=None if clear else comment_text,
         ignore_not_found=ignore_not_found,
     )
     action = "cleared" if clear else "set"
-    output_json({"status": f"comment_{action}", "schema": schema_name, "name": name})
+    output_json({"status": f"comment_{action}", "schema": schema_path, "name": name})
 
 
 @table.command("scan-function")
-@click.argument("schema_name")
+@click.argument("schema_path", type=SCHEMA_PATH)
 @click.argument("name")
 @click.option("--attach-opaque-data", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
@@ -289,7 +290,7 @@ def table_comment(
 @click.option("--at-unit", help="Time travel unit (e.g., 'timestamp', 'version')")
 @click.option("--at-value", help="Time travel value")
 def table_scan_function(
-    schema_name: str,
+    schema_path: list[str],
     name: str,
     attach_opaque_data: str | None,
     catalog_name: str | None,
@@ -309,7 +310,7 @@ def table_scan_function(
     result = client.table_scan_function_get(
         attach_opaque_data=resolved_attach_opaque_data,
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
-        schema_name=schema_name,
+        schema_path=schema_path,
         name=name,
         at_unit=at_unit,
         at_value=at_value,
@@ -324,7 +325,7 @@ def column() -> None:
 
 
 @column.command("add")
-@click.argument("schema_name")
+@click.argument("schema_path", type=SCHEMA_PATH)
 @click.argument("table_name")
 @click.option("--attach-opaque-data", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
@@ -340,7 +341,7 @@ def column() -> None:
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if table not found")
 @click.option("--if-not-exists", is_flag=True, help="Don't error if column already exists")
 def column_add(
-    schema_name: str,
+    schema_path: list[str],
     table_name: str,
     attach_opaque_data: str | None,
     catalog_name: str | None,
@@ -365,7 +366,7 @@ def column_add(
     client.table_column_add(
         attach_opaque_data=resolved_attach_opaque_data,
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
-        schema_name=schema_name,
+        schema_path=schema_path,
         name=table_name,
         column_definition=SerializedSchema(arrow_schema.serialize().to_pybytes()),
         ignore_not_found=ignore_not_found,
@@ -374,7 +375,7 @@ def column_add(
     output_json(
         {
             "status": "column_added",
-            "schema": schema_name,
+            "schema": schema_path,
             "table": table_name,
             "column": col_json["name"],
         }
@@ -382,7 +383,7 @@ def column_add(
 
 
 @column.command("drop")
-@click.argument("schema_name")
+@click.argument("schema_path", type=SCHEMA_PATH)
 @click.argument("table_name")
 @click.argument("column_name")
 @click.option("--attach-opaque-data", help="Hex-encoded attach ID")
@@ -394,7 +395,7 @@ def column_add(
 @click.option("--if-exists", is_flag=True, help="Don't error if column doesn't exist")
 @click.option("--cascade", is_flag=True, help="Drop dependent constraints")
 def column_drop(
-    schema_name: str,
+    schema_path: list[str],
     table_name: str,
     column_name: str,
     attach_opaque_data: str | None,
@@ -417,7 +418,7 @@ def column_drop(
     client.table_column_drop(
         attach_opaque_data=resolved_attach_opaque_data,
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
-        schema_name=schema_name,
+        schema_path=schema_path,
         name=table_name,
         column_name=column_name,
         ignore_not_found=ignore_not_found,
@@ -427,7 +428,7 @@ def column_drop(
     output_json(
         {
             "status": "column_dropped",
-            "schema": schema_name,
+            "schema": schema_path,
             "table": table_name,
             "column": column_name,
         }
@@ -435,7 +436,7 @@ def column_drop(
 
 
 @column.command("rename")
-@click.argument("schema_name")
+@click.argument("schema_path", type=SCHEMA_PATH)
 @click.argument("table_name")
 @click.argument("column_name")
 @click.argument("new_column_name")
@@ -446,7 +447,7 @@ def column_drop(
 @click.option("--transaction-opaque-data", help="Transaction ID (hex)")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if table not found")
 def column_rename(
-    schema_name: str,
+    schema_path: list[str],
     table_name: str,
     column_name: str,
     new_column_name: str,
@@ -469,7 +470,7 @@ def column_rename(
     client.table_column_rename(
         attach_opaque_data=resolved_attach_opaque_data,
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
-        schema_name=schema_name,
+        schema_path=schema_path,
         name=table_name,
         column_name=column_name,
         new_column_name=new_column_name,
@@ -478,7 +479,7 @@ def column_rename(
     output_json(
         {
             "status": "column_renamed",
-            "schema": schema_name,
+            "schema": schema_path,
             "table": table_name,
             "old_column": column_name,
             "new_column": new_column_name,
@@ -487,7 +488,7 @@ def column_rename(
 
 
 @column.command("set-default")
-@click.argument("schema_name")
+@click.argument("schema_path", type=SCHEMA_PATH)
 @click.argument("table_name")
 @click.argument("column_name")
 @click.argument("expression")
@@ -498,7 +499,7 @@ def column_rename(
 @click.option("--transaction-opaque-data", help="Transaction ID (hex)")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if table not found")
 def column_set_default(
-    schema_name: str,
+    schema_path: list[str],
     table_name: str,
     column_name: str,
     expression: str,
@@ -521,7 +522,7 @@ def column_set_default(
     client.table_column_default_set(
         attach_opaque_data=resolved_attach_opaque_data,
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
-        schema_name=schema_name,
+        schema_path=schema_path,
         name=table_name,
         column_name=column_name,
         expression=SqlExpression(expression),
@@ -530,7 +531,7 @@ def column_set_default(
     output_json(
         {
             "status": "default_set",
-            "schema": schema_name,
+            "schema": schema_path,
             "table": table_name,
             "column": column_name,
         }
@@ -538,7 +539,7 @@ def column_set_default(
 
 
 @column.command("drop-default")
-@click.argument("schema_name")
+@click.argument("schema_path", type=SCHEMA_PATH)
 @click.argument("table_name")
 @click.argument("column_name")
 @click.option("--attach-opaque-data", help="Hex-encoded attach ID")
@@ -548,7 +549,7 @@ def column_set_default(
 @click.option("--transaction-opaque-data", help="Transaction ID (hex)")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if table not found")
 def column_drop_default(
-    schema_name: str,
+    schema_path: list[str],
     table_name: str,
     column_name: str,
     attach_opaque_data: str | None,
@@ -569,7 +570,7 @@ def column_drop_default(
     client.table_column_default_drop(
         attach_opaque_data=resolved_attach_opaque_data,
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
-        schema_name=schema_name,
+        schema_path=schema_path,
         name=table_name,
         column_name=column_name,
         ignore_not_found=ignore_not_found,
@@ -577,7 +578,7 @@ def column_drop_default(
     output_json(
         {
             "status": "default_dropped",
-            "schema": schema_name,
+            "schema": schema_path,
             "table": table_name,
             "column": column_name,
         }
@@ -585,7 +586,7 @@ def column_drop_default(
 
 
 @column.command("set-type")
-@click.argument("schema_name")
+@click.argument("schema_path", type=SCHEMA_PATH)
 @click.argument("table_name")
 @click.option("--attach-opaque-data", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
@@ -601,7 +602,7 @@ def column_drop_default(
 @click.option("--using", "expression", help="SQL expression to convert values")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if table not found")
 def column_set_type(
-    schema_name: str,
+    schema_path: list[str],
     table_name: str,
     attach_opaque_data: str | None,
     catalog_name: str | None,
@@ -628,7 +629,7 @@ def column_set_type(
     client.table_column_type_change(
         attach_opaque_data=resolved_attach_opaque_data,
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
-        schema_name=schema_name,
+        schema_path=schema_path,
         name=table_name,
         column_definition=SerializedSchema(arrow_schema.serialize().to_pybytes()),
         expression=SqlExpression(expression) if expression else None,
@@ -637,7 +638,7 @@ def column_set_type(
     output_json(
         {
             "status": "type_changed",
-            "schema": schema_name,
+            "schema": schema_path,
             "table": table_name,
             "column": col_json["name"],
         }
@@ -645,7 +646,7 @@ def column_set_type(
 
 
 @column.command("set-not-null")
-@click.argument("schema_name")
+@click.argument("schema_path", type=SCHEMA_PATH)
 @click.argument("table_name")
 @click.argument("column_name")
 @click.option("--attach-opaque-data", help="Hex-encoded attach ID")
@@ -655,7 +656,7 @@ def column_set_type(
 @click.option("--transaction-opaque-data", help="Transaction ID (hex)")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if table not found")
 def column_set_not_null(
-    schema_name: str,
+    schema_path: list[str],
     table_name: str,
     column_name: str,
     attach_opaque_data: str | None,
@@ -676,7 +677,7 @@ def column_set_not_null(
     client.table_not_null_set(
         attach_opaque_data=resolved_attach_opaque_data,
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
-        schema_name=schema_name,
+        schema_path=schema_path,
         name=table_name,
         column_name=column_name,
         ignore_not_found=ignore_not_found,
@@ -684,7 +685,7 @@ def column_set_not_null(
     output_json(
         {
             "status": "not_null_set",
-            "schema": schema_name,
+            "schema": schema_path,
             "table": table_name,
             "column": column_name,
         }
@@ -692,7 +693,7 @@ def column_set_not_null(
 
 
 @column.command("drop-not-null")
-@click.argument("schema_name")
+@click.argument("schema_path", type=SCHEMA_PATH)
 @click.argument("table_name")
 @click.argument("column_name")
 @click.option("--attach-opaque-data", help="Hex-encoded attach ID")
@@ -702,7 +703,7 @@ def column_set_not_null(
 @click.option("--transaction-opaque-data", help="Transaction ID (hex)")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if table not found")
 def column_drop_not_null(
-    schema_name: str,
+    schema_path: list[str],
     table_name: str,
     column_name: str,
     attach_opaque_data: str | None,
@@ -723,7 +724,7 @@ def column_drop_not_null(
     client.table_not_null_drop(
         attach_opaque_data=resolved_attach_opaque_data,
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
-        schema_name=schema_name,
+        schema_path=schema_path,
         name=table_name,
         column_name=column_name,
         ignore_not_found=ignore_not_found,
@@ -731,7 +732,7 @@ def column_drop_not_null(
     output_json(
         {
             "status": "not_null_dropped",
-            "schema": schema_name,
+            "schema": schema_path,
             "table": table_name,
             "column": column_name,
         }

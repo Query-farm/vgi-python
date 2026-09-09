@@ -68,14 +68,14 @@ class _LegacyOnlyCatalog(_StubCatalogBase):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: object | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None,
         at_value: str | None,
     ) -> ScanFunctionResult:
         return ScanFunctionResult(
             function_name=self._function_name,
-            positional_arguments=[pa.scalar(f"{schema_name}.{name}", pa.string())],
+            positional_arguments=[pa.scalar(".".join([*schema_path, name]), pa.string())],
             named_arguments={},
             required_extensions=self._required,
         )
@@ -94,7 +94,7 @@ class _MultiBranchCatalog(_StubCatalogBase):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: object | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None,
         at_value: str | None,
@@ -113,7 +113,7 @@ class _MultiBranchCatalog(_StubCatalogBase):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: object | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None,
         at_value: str | None,
@@ -146,7 +146,7 @@ class TestDefaultImplShim:
         result = cat.table_scan_branches_get(
             attach_opaque_data=AttachOpaqueData(b"test"),
             transaction_opaque_data=None,
-            schema_name="main",
+            schema_path=["main"],
             name="orders",
             at_unit=None,
             at_value=None,
@@ -164,7 +164,7 @@ class TestDefaultImplShim:
         result = cat.table_scan_branches_get(
             attach_opaque_data=AttachOpaqueData(b"test"),
             transaction_opaque_data=None,
-            schema_name="main",
+            schema_path=["main"],
             name="orders",
             at_unit=None,
             at_value=None,
@@ -189,7 +189,7 @@ class TestDefaultImplShim:
                 *,
                 attach_opaque_data: AttachOpaqueData,
                 transaction_opaque_data: object | None,
-                schema_name: str,
+                schema_path: list[str],
                 name: str,
                 at_unit: str | None,
                 at_value: str | None,
@@ -198,7 +198,7 @@ class TestDefaultImplShim:
                 return super().table_scan_function_get(
                     attach_opaque_data=attach_opaque_data,
                     transaction_opaque_data=transaction_opaque_data,
-                    schema_name=schema_name,
+                    schema_path=schema_path,
                     name=name,
                     at_unit=at_unit,
                     at_value=at_value,
@@ -208,7 +208,7 @@ class TestDefaultImplShim:
         cat.table_scan_branches_get(
             attach_opaque_data=AttachOpaqueData(b"test"),
             transaction_opaque_data=None,
-            schema_name="main",
+            schema_path=["main"],
             name="versioned",
             at_unit="VERSION",
             at_value="3",
@@ -225,7 +225,7 @@ class TestMultiBranchOverride:
         result = cat.table_scan_branches_get(
             attach_opaque_data=AttachOpaqueData(b"test"),
             transaction_opaque_data=None,
-            schema_name="main",
+            schema_path=["main"],
             name="orders",
             at_unit=None,
             at_value=None,
@@ -243,7 +243,7 @@ class TestMultiBranchOverride:
         result = cat.table_scan_branches_get(
             attach_opaque_data=AttachOpaqueData(b"test"),
             transaction_opaque_data=None,
-            schema_name="main",
+            schema_path=["main"],
             name="orders",
             at_unit=None,
             at_value=None,
@@ -262,7 +262,7 @@ class TestMultiBranchOverride:
         legacy = cat.table_scan_function_get(
             attach_opaque_data=AttachOpaqueData(b"test"),
             transaction_opaque_data=None,
-            schema_name="main",
+            schema_path=["main"],
             name="orders",
             at_unit=None,
             at_value=None,
@@ -279,7 +279,7 @@ class TestShimSerializationRoundTrip:
         result = cat.table_scan_branches_get(
             attach_opaque_data=AttachOpaqueData(b"test"),
             transaction_opaque_data=None,
-            schema_name="main",
+            schema_path=["main"],
             name="orders",
             at_unit=None,
             at_value=None,
@@ -301,7 +301,7 @@ def test_default_shim_passes_at_args_through(at_unit: str | None, at_value: str 
     result = cat.table_scan_branches_get(
         attach_opaque_data=AttachOpaqueData(b"test"),
         transaction_opaque_data=None,
-        schema_name="main",
+        schema_path=["main"],
         name="t",
         at_unit=at_unit,
         at_value=at_value,

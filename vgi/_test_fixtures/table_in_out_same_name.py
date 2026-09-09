@@ -16,7 +16,7 @@ sites** in the DuckDB extension than scalars do:
 
 That distinction is the point. The extension originally threaded the owning
 schema onto the runtime exchange connections but not onto the bind-time one, so
-an exchange-mode call reached the worker with no ``BindRequest.schema_name`` and
+an exchange-mode call reached the worker with no ``BindRequest.schema_path`` and
 could not be resolved when the same name was declared in two schemas. The scalar
 fixture could not catch it — scalars bind through an entirely separate call site.
 

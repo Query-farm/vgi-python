@@ -103,7 +103,7 @@ class BufferWorker(Worker):
 
     catalog = Catalog(
         name="buffers",
-        schemas=[Schema(name="main", functions=[RowCount])],
+        schemas=[Schema(path=["main"], functions=[RowCount])],
     )
 
 

@@ -72,7 +72,7 @@ _COMPANION_CATALOG = Catalog(
     comment="VGI companion-catalog federation fixture",
     schemas=[
         Schema(
-            name="data",
+            path=["data"],
             comment="Multi-branch tables backed by a companion catalog",
             tables=[
                 Table(
@@ -122,13 +122,13 @@ class CompanionCatalog(ReadOnlyCatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
     ) -> ScanBranchesResult:
         del attach_opaque_data, transaction_opaque_data, at_unit, at_value
-        if schema_name.lower() == "data" and name.lower() == "hot_cold":
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() == "hot_cold":
             # Both arms scan the SAME companion table with disjoint branch_filters.
             # A query predicate disjoint with an arm's filter prunes that arm's
             # companion scan from the plan entirely.
@@ -139,7 +139,7 @@ class CompanionCatalog(ReadOnlyCatalogInterface):
                     named_arguments={},
                     branch_filter=branch_filter,
                     source_catalog=_ALIAS,
-                    source_schema="main",
+                    source_schema_path=["main"],
                     source_table="events",
                 )
 
@@ -150,7 +150,7 @@ class CompanionCatalog(ReadOnlyCatalogInterface):
                 branches=[_arm("id < 100"), _arm("id >= 100")],
                 required_extensions=["parquet"],
             )
-        msg = f"Unknown multi-branch table: {schema_name}.{name}"
+        msg = f"Unknown multi-branch table: {schema_path}.{name}"
         raise ValueError(msg)
 
 

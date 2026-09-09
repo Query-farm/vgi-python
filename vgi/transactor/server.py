@@ -27,6 +27,7 @@ from vgi_rpc import AnnotatedBatch, OutputCollector, RpcServer
 from vgi_rpc.rpc import CallContext, ExchangeState, ProducerState, Stream, StreamState, serve_unix
 
 from vgi._duckdb import connect as engine_connect
+from vgi.schema_path import SchemaPath, schema_path_key, sql_qualified_name
 from vgi.schema_utils import schema
 from vgi.transactor._duckdb_compat import subcursor
 from vgi.transactor.protocol import TransactorProtocol
@@ -61,6 +62,17 @@ class TransactorImpl:
         logger.info("Transactor started: db_dir=%s", db_dir)
 
     # ========== Helpers ==========
+
+    @staticmethod
+    def _duckdb_15_schema_path(schema_path: SchemaPath | None) -> SchemaPath:
+        """Validate the single-level schema subset supported by DuckDB 1.5."""
+        resolved = schema_path or ["main"]
+        schema_path_key(resolved)
+        if len(resolved) != 1:
+            raise NotImplementedError(
+                f"The embedded DuckDB 1.5 transactor supports only one-component schema paths; received {resolved!r}"
+            )
+        return resolved
 
     def _get_db_conn(self, attach_opaque_data: bytes) -> duckdb.DuckDBPyConnection:
         """Get the main connection for a database, raising if not registered."""
@@ -165,13 +177,13 @@ class TransactorImpl:
         attach_opaque_data: bytes,
         tx_id: bytes,
         table_name: str,
-        schema_name: str = "",
+        schema_path: SchemaPath | None = None,
         returning: bool = False,
     ) -> Stream[StreamState]:
         """Create an insert exchange stream."""
         conn = self._get_tx_conn(attach_opaque_data, tx_id)
         tx_lock = self._get_tx_lock(attach_opaque_data, tx_id)
-        qualified = f"{schema_name}.{table_name}" if schema_name else table_name
+        qualified = sql_qualified_name(self._duckdb_15_schema_path(schema_path), table_name)
         table_schema = self._table_schema(qualified, attach_opaque_data, tx_id)
 
         input_fields = [f for f in table_schema if f.name != "rowid"]
@@ -189,12 +201,17 @@ class TransactorImpl:
         return Stream(output_schema=output_schema, state=state, input_schema=input_schema)
 
     def delete(
-        self, attach_opaque_data: bytes, tx_id: bytes, table_name: str, schema_name: str = "", returning: bool = False
+        self,
+        attach_opaque_data: bytes,
+        tx_id: bytes,
+        table_name: str,
+        schema_path: SchemaPath | None = None,
+        returning: bool = False,
     ) -> Stream[StreamState]:
         """Create a delete exchange stream."""
         conn = self._get_tx_conn(attach_opaque_data, tx_id)
         tx_lock = self._get_tx_lock(attach_opaque_data, tx_id)
-        qualified = f"{schema_name}.{table_name}" if schema_name else table_name
+        qualified = sql_qualified_name(self._duckdb_15_schema_path(schema_path), table_name)
         table_schema = self._table_schema(qualified, attach_opaque_data, tx_id)
 
         input_schema = schema(rowid=pa.int64())
@@ -213,14 +230,14 @@ class TransactorImpl:
         attach_opaque_data: bytes,
         tx_id: bytes,
         table_name: str,
-        schema_name: str = "",
+        schema_path: SchemaPath | None = None,
         columns: list[str] | None = None,
         returning: bool = False,
     ) -> Stream[StreamState]:
         """Create an update exchange stream."""
         conn = self._get_tx_conn(attach_opaque_data, tx_id)
         tx_lock = self._get_tx_lock(attach_opaque_data, tx_id)
-        qualified = f"{schema_name}.{table_name}" if schema_name else table_name
+        qualified = sql_qualified_name(self._duckdb_15_schema_path(schema_path), table_name)
         table_schema = self._table_schema(qualified, attach_opaque_data, tx_id)
 
         if columns:
@@ -248,13 +265,13 @@ class TransactorImpl:
         tx_id: bytes,
         table_name: str,
         columns: list[str],
-        schema_name: str = "",
+        schema_path: SchemaPath | None = None,
         pushdown_filters: bytes | None = None,
     ) -> Stream[StreamState]:
         """Create a scan producer stream within the transaction."""
         conn = self._get_tx_conn(attach_opaque_data, tx_id)
         tx_lock = self._get_tx_lock(attach_opaque_data, tx_id)
-        qualified = f"{schema_name}.{table_name}" if schema_name else table_name
+        qualified = sql_qualified_name(self._duckdb_15_schema_path(schema_path), table_name)
         col_list = ", ".join(columns) if columns else "*"
 
         sql = f"SELECT {col_list} FROM {qualified}"  # noqa: S608
@@ -345,19 +362,24 @@ class TransactorImpl:
             result = conn.execute(sql, params or [])
             return [row[0] for row in result.fetchall()]
 
-    def list_schemas(self, attach_opaque_data: bytes, tx_id: bytes) -> list[str]:
-        """List schema names within a transaction."""
-        return self._query_list(
-            attach_opaque_data, tx_id, "SELECT schema_name FROM duckdb_schemas() WHERE NOT internal"
-        )
+    def list_schemas(self, attach_opaque_data: bytes, tx_id: bytes) -> list[SchemaPath]:
+        """List schema paths within a transaction."""
+        return [
+            [name]
+            for name in self._query_list(
+                attach_opaque_data, tx_id, "SELECT schema_name FROM duckdb_schemas() WHERE NOT internal"
+            )
+        ]
 
-    def list_user_tables(self, attach_opaque_data: bytes, tx_id: bytes, schema_name: str = "main") -> list[str]:
+    def list_user_tables(
+        self, attach_opaque_data: bytes, tx_id: bytes, schema_path: SchemaPath | None = None
+    ) -> list[str]:
         """List user tables in the given schema within a transaction."""
         return self._query_list(
             attach_opaque_data,
             tx_id,
             "SELECT table_name FROM information_schema.tables WHERE table_schema=? AND table_type='BASE TABLE'",
-            [schema_name],
+            [self._duckdb_15_schema_path(schema_path)[0]],
         )
 
     def table_schema(self, attach_opaque_data: bytes, table_name: str, tx_id: bytes) -> bytes:
@@ -455,13 +477,15 @@ class TransactorImpl:
             return str(result[0])
         return None
 
-    def list_user_views(self, attach_opaque_data: bytes, tx_id: bytes, schema_name: str = "main") -> list[str]:
+    def list_user_views(
+        self, attach_opaque_data: bytes, tx_id: bytes, schema_path: SchemaPath | None = None
+    ) -> list[str]:
         """List user-created view names in the given schema within a transaction."""
         return self._query_list(
             attach_opaque_data,
             tx_id,
             "SELECT view_name FROM duckdb_views() WHERE schema_name = ? AND NOT internal",
-            [schema_name],
+            [self._duckdb_15_schema_path(schema_path)[0]],
         )
 
     def view_info(self, attach_opaque_data: bytes, view_name: str, tx_id: bytes) -> str:

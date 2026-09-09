@@ -23,7 +23,7 @@ import pytest
 from vgi.arguments import Arguments
 from vgi.protocol import ScanSplit
 
-MAIN = "main"
+MAIN = ["main"]
 
 
 @pytest.fixture
@@ -35,7 +35,7 @@ def client(client_transport: Any) -> Any:
 
 def test_plan_returns_typed_scan_splits(client: Any) -> None:
     args = Arguments(named={"n": pa.scalar(20), "splits": pa.scalar(4)})
-    plan = client.table_function_plan(function_name="split_sequence", schema_name=MAIN, arguments=args)
+    plan = client.table_function_plan(function_name="split_sequence", schema_path=MAIN, arguments=args)
     assert len(plan.splits) == 4
     for split in plan.splits:
         assert isinstance(split, ScanSplit)
@@ -52,14 +52,14 @@ def test_redeeming_each_split_in_order_reproduces_the_whole_scan(client: Any) ->
     them without erroring, for workers that do.
     """
     args = Arguments(named={"n": pa.scalar(37), "splits": pa.scalar(5)})
-    plan = client.table_function_plan(function_name="split_sequence", schema_name=MAIN, arguments=args)
+    plan = client.table_function_plan(function_name="split_sequence", schema_path=MAIN, arguments=args)
 
     all_rows: list[int] = []
     for split in plan.splits:
         batches = list(
             client.table_function(
                 function_name="split_sequence",
-                schema_name=MAIN,
+                schema_path=MAIN,
                 arguments=args,
                 split_tokens=[split.token],
                 split_execution_id=plan.execution_id,
@@ -74,18 +74,18 @@ def test_redeeming_each_split_in_order_reproduces_the_whole_scan(client: Any) ->
 
 def test_split_zero_yields_no_splits_and_no_rows(client: Any) -> None:
     args = Arguments(named={"n": pa.scalar(10), "splits": pa.scalar(4)})
-    plan = client.table_function_plan(function_name="split_zero", schema_name=MAIN, arguments=args)
+    plan = client.table_function_plan(function_name="split_zero", schema_path=MAIN, arguments=args)
     assert plan.splits == []
 
 
 def test_redeeming_a_split_forces_single_worker(client: Any) -> None:
     """`split_tokens` bypasses `_spawn_additional_workers` — no additional worker connections open."""
     args = Arguments(named={"n": pa.scalar(8), "splits": pa.scalar(2)})
-    plan = client.table_function_plan(function_name="split_sequence", schema_name=MAIN, arguments=args)
+    plan = client.table_function_plan(function_name="split_sequence", schema_path=MAIN, arguments=args)
     list(
         client.table_function(
             function_name="split_sequence",
-            schema_name=MAIN,
+            schema_path=MAIN,
             arguments=args,
             split_tokens=[plan.splits[0].token],
         )

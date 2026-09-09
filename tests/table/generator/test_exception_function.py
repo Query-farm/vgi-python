@@ -21,7 +21,7 @@ class TestGeneratorExceptionFunctionViaClient:
             list(
                 client.table_function(
                     function_name="generator_exception",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(3),)),
                 )
             )
@@ -37,7 +37,7 @@ class TestGeneratorExceptionFunctionViaClient:
             list(
                 client.table_function(
                     function_name="generator_exception",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(0),)),
                 )
             )
@@ -51,7 +51,7 @@ class TestGeneratorExceptionFunctionViaClient:
             try:
                 for batch in client.table_function(
                     function_name="generator_exception",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(3),)),
                 ):
                     outputs.append(batch)

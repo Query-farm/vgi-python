@@ -22,7 +22,7 @@ class TestProjectionEnforcement:
             outputs = list(
                 client.table_function(
                     function_name="named_params_echo",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(3),)),
                     projection_ids=[0, 2],  # id and value — should be ignored
                 )
@@ -40,7 +40,7 @@ class TestProjectionEnforcement:
             outputs = list(
                 client.table_function(
                     function_name="projected_data",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(3),)),
                     projection_ids=[0, 2],  # id and value
                 )
@@ -57,14 +57,14 @@ class TestProjectionEnforcement:
             echo_outputs = list(
                 client.table_function(
                     function_name="named_params_echo",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(2),)),
                 )
             )
             proj_outputs = list(
                 client.table_function(
                     function_name="projected_data",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(2),)),
                 )
             )

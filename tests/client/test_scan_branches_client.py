@@ -21,7 +21,7 @@ import pytest
 
 from vgi.catalog import ScanBranch, ScanBranchesResult
 
-DATA = "data"
+DATA = ["data"]
 
 
 @pytest.fixture
@@ -41,7 +41,7 @@ def _attach_opaque(client: Any) -> Any:
 def test_multi_branch_table_returns_all_branches(client: Any) -> None:
     result = client.table_scan_branches_get(
         attach_opaque_data=_attach_opaque(client),
-        schema_name=DATA,
+        schema_path=DATA,
         name="multi_branch_numbers",
     )
     assert isinstance(result, ScanBranchesResult)
@@ -56,7 +56,7 @@ def test_single_branch_table_falls_back_to_legacy_rpc(client: Any) -> None:
     """`data.numbers` only implements `table_scan_function_get` — the fallback wraps it as one branch."""
     result = client.table_scan_branches_get(
         attach_opaque_data=_attach_opaque(client),
-        schema_name=DATA,
+        schema_path=DATA,
         name="numbers",
     )
     assert len(result.branches) == 1
@@ -64,7 +64,7 @@ def test_single_branch_table_falls_back_to_legacy_rpc(client: Any) -> None:
         result.branches[0].function_name
         == client.table_scan_function_get(
             attach_opaque_data=_attach_opaque(client),
-            schema_name=DATA,
+            schema_path=DATA,
             name="numbers",
         ).function_name
     )

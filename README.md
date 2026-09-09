@@ -46,7 +46,7 @@ class Multiply(ScalarFunction):
 class MyWorker(Worker):
     catalog = Catalog(
         name="my_worker",
-        schemas=[Schema(name="main", functions=[Multiply])],
+        schemas=[Schema(path=["main"], functions=[Multiply])],
     )
 
 if __name__ == "__main__":
@@ -162,7 +162,7 @@ class UpperCase(ScalarFunction):
 class MyWorker(Worker):
     catalog = Catalog(
         name="my_funcs",
-        schemas=[Schema(name="main", functions=[UpperCase])],
+        schemas=[Schema(path=["main"], functions=[UpperCase])],
     )
 
 

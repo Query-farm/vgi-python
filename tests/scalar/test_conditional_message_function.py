@@ -23,7 +23,7 @@ class TestConditionalMessageFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="conditional_message",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     # ConstParams only: repeat_count=3, message="Hi! "
                     # Param "condition" resolves from batch column 0
@@ -43,7 +43,7 @@ class TestConditionalMessageFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="conditional_message",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar(2), pa.scalar("X"))),
                 )

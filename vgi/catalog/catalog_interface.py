@@ -47,6 +47,7 @@ from vgi.metadata import (
     OrderPreservation,
     PartitionKind,
 )
+from vgi.schema_path import SchemaKey, SchemaPath, schema_path_display, schema_path_key
 
 __all__ = [
     # Re-exported from vgi.metadata
@@ -66,6 +67,7 @@ __all__ = [
     "SecretLookupEntry",
     "MacroType",
     "SchemaObjectType",
+    "SchemaPath",
     "TableColumnStatisticsResult",
     "WriteFunctionResult",
 ]
@@ -262,7 +264,7 @@ class CatalogAttachResult(ArrowSerializableDataclass):
             the *global* function namespace (DuckDB's ``system.main``), in
             addition to their normal schema-qualified registration. Each
             :class:`FunctionInfo` is serialized as bytes for Arrow
-            compatibility. ``name``/``schema_name`` stay the real dispatch
+            compatibility. ``name``/``schema_path`` stay the real dispatch
             coordinates — the client derives the globally visible name by
             applying ``global_function_prefix``. Registration is
             first-attach-wins: a name already owned by a different worker is
@@ -318,11 +320,11 @@ class CatalogSchemaObject(CatalogObject):
 
     Attributes:
         name: The name of the object.
-        schema_name: The name of the schema containing the object.
+        schema_path: Raw identifier components of the schema containing the object.
     """
 
     name: str
-    schema_name: str
+    schema_path: SchemaPath
 
 
 @dataclass(frozen=True)
@@ -331,7 +333,7 @@ class SchemaInfo(CatalogObject, ArrowSerializableDataclass):
 
     Attributes:
         attach_opaque_data: The unique id for the attached catalog.
-        name: The name of the schema.
+        path: Raw identifier components from the outermost schema to this schema.
         estimated_object_count: Approximate population per object kind, keyed by
             the same names the C++ extension uses for its set-cache
             instrumentation: ``"table"``, ``"view"``, ``"scalar_function"``,
@@ -358,7 +360,7 @@ class SchemaInfo(CatalogObject, ArrowSerializableDataclass):
     """
 
     attach_opaque_data: AttachOpaqueData
-    name: str
+    path: SchemaPath
     estimated_object_count: dict[str, int] | None = None
 
 
@@ -856,12 +858,11 @@ class ScanFunctionResult:
         positional_arguments: Positional arguments as PyArrow scalars.
         named_arguments: Named arguments as PyArrow scalars.
         required_extensions: DuckDB extensions to load before calling.
-        schema_name: Catalog schema ``function_name`` is registered in. A
+        schema_path: Catalog schema ``function_name`` is registered in. A
             function name is unique only within a schema, so a client that
             doesn't know this cannot tell which implementation a colliding
             name refers to — set this whenever the resolving code already
-            knows the schema (added in protocol 1.5.0; ``None`` for a
-            pre-1.5.0 caller, or when the resolved function is a native
+            knows the schema. ``None`` when the resolved function is a native
             DuckDB function with no VGI-side schema of its own, e.g.
             ``read_parquet``).
         ARROW_SCHEMA: Arrow IPC schema used to (de)serialize this result over the wire.
@@ -872,14 +873,14 @@ class ScanFunctionResult:
     positional_arguments: list[pa.Scalar]  # type: ignore[type-arg]
     named_arguments: dict[str, pa.Scalar]  # type: ignore[type-arg]
     required_extensions: list[str] = field(default_factory=list)
-    schema_name: str | None = None
+    schema_path: SchemaPath | None = None
 
     ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
         [
             pa.field("function_name", pa.string(), nullable=False),
             pa.field("arguments", pa.binary(), nullable=False),
             pa.field("required_extensions", pa.list_(pa.string()), nullable=False),
-            pa.field("schema_name", pa.string(), nullable=True),
+            pa.field("schema_path", pa.list_(pa.string()), nullable=True),
         ]  # type: ignore[arg-type]
     )
 
@@ -907,7 +908,7 @@ class ScanFunctionResult:
             "function_name": self.function_name,
             "arguments": serialize_record_batch_bytes(argument_batch),
             "required_extensions": list(self.required_extensions) if self.required_extensions is not None else None,
-            "schema_name": self.schema_name,
+            "schema_path": self.schema_path,
         }
 
     def serialize(self) -> bytes:
@@ -951,10 +952,7 @@ class ScanFunctionResult:
             positional_arguments=positional_arguments,
             named_arguments=named_arguments,
             required_extensions=list(cast("list[str]", row.get("required_extensions") or [])),
-            # Absent for a pre-1.5.0 peer (the column itself won't exist on
-            # the wire in that case — .get() covers both "column present but
-            # null" and "column entirely absent").
-            schema_name=cast("str | None", row.get("schema_name")),
+            schema_path=list(cast("list[str]", row["schema_path"])) if row.get("schema_path") is not None else None,
         )
 
 
@@ -1062,7 +1060,7 @@ class ScanBranch:
       function bound with ``positional_arguments``/``named_arguments``.
     * **Catalog-table branch** — ``function_name`` is empty (``""``) and
       ``source_table`` is set; the branch scans the base table
-      ``source_catalog.source_schema.source_table`` in an *attached* catalog
+      ``source_catalog.source_schema_path.source_table`` in an *attached* catalog
       (typically an :class:`AttachCatalogInfo` companion, e.g. a DuckLake
       table). The extension binds it via the catalog's own scan function, so a
       companion's snapshot/pruning semantics are honored.
@@ -1098,7 +1096,7 @@ class ScanBranch:
         source_catalog: Catalog-table branch only — the attached catalog name
             (matches an :attr:`AttachCatalogInfo.alias`). ``None`` for function
             branches.
-        source_schema: Catalog-table branch only — the schema of the source
+        source_schema_path: Catalog-table branch only — the schema of the source
             table. ``None`` for function branches.
         source_table: Catalog-table branch only — the base table name; its
             presence selects the catalog-table kind. ``None`` for function
@@ -1112,11 +1110,10 @@ class ScanBranch:
             rejected at catalog-load.
         format_options: Format branch only — reader options, passed through as the
             reader's named arguments.
-        schema_name: Function branch only — catalog schema ``function_name`` is
+        schema_path: Function branch only — catalog schema ``function_name`` is
             registered in (``None`` for a catalog-table/format branch, which
-            has no VGI-side schema of its own; also ``None`` for a pre-1.5.0
-            caller or a native DuckDB function). Not to be confused with
-            ``source_schema``, which names the schema of a catalog-table
+            has no VGI-side schema of its own, or a native DuckDB function). Not to be confused with
+            ``source_schema_path``, which names the schema of a catalog-table
             branch's *source table*, a different, older field.
         ARROW_SCHEMA: Arrow IPC schema used to (de)serialize this branch over the wire.
 
@@ -1128,12 +1125,12 @@ class ScanBranch:
     branch_filter: str | None = None
     writable: bool = False
     source_catalog: str | None = None
-    source_schema: str | None = None
+    source_schema_path: SchemaPath | None = None
     source_table: str | None = None
     format_name: str | None = None
     format_locations: list[str] = field(default_factory=list)
     format_options: dict[str, pa.Scalar] = field(default_factory=dict)  # type: ignore[type-arg]
-    schema_name: str | None = None
+    schema_path: SchemaPath | None = None
 
     ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
         [
@@ -1142,7 +1139,7 @@ class ScanBranch:
             pa.field("branch_filter", pa.string(), nullable=True),
             pa.field("writable", pa.bool_(), nullable=False),
             pa.field("source_catalog", pa.string(), nullable=True),
-            pa.field("source_schema", pa.string(), nullable=True),
+            pa.field("source_schema_path", pa.list_(pa.string()), nullable=True),
             pa.field("source_table", pa.string(), nullable=True),
             pa.field("format_name", pa.string(), nullable=True),
             pa.field("format_locations", pa.list_(pa.string()), nullable=True),
@@ -1151,7 +1148,7 @@ class ScanBranch:
             # because an option value can be any Arrow type and no static schema
             # could express that.
             pa.field("format_options", pa.binary(), nullable=True),
-            pa.field("schema_name", pa.string(), nullable=True),
+            pa.field("schema_path", pa.list_(pa.string()), nullable=True),
         ]  # type: ignore[arg-type]
     )
 
@@ -1182,9 +1179,9 @@ class ScanBranch:
             "format_locations": list(self.format_locations),
             "format_options": _serialize_named_scalars(self.format_options),
             "source_catalog": self.source_catalog,
-            "source_schema": self.source_schema,
+            "source_schema_path": self.source_schema_path,
             "source_table": self.source_table,
-            "schema_name": self.schema_name,
+            "schema_path": self.schema_path,
         }
 
     def serialize(self) -> bytes:
@@ -1227,7 +1224,11 @@ class ScanBranch:
             # writable is non-nullable on the wire — trust the schema.
             writable=bool(row["writable"]),
             source_catalog=cast("str | None", row.get("source_catalog")),
-            source_schema=cast("str | None", row.get("source_schema")),
+            source_schema_path=(
+                list(cast("list[str]", row["source_schema_path"]))
+                if row.get("source_schema_path") is not None
+                else None
+            ),
             source_table=cast("str | None", row.get("source_table")),
             # The format fields round-trip too. They were omitted here, so a
             # deserialized format branch came back looking like a (malformed)
@@ -1236,8 +1237,7 @@ class ScanBranch:
             format_name=cast("str | None", row.get("format_name")),
             format_locations=list(cast("list[str] | None", row.get("format_locations")) or []),
             format_options=_deserialize_named_scalars(cast("bytes | None", row.get("format_options"))),
-            # Absent for a pre-1.5.0 peer, or a catalog-table/format branch.
-            schema_name=cast("str | None", row.get("schema_name")),
+            schema_path=list(cast("list[str]", row["schema_path"])) if row.get("schema_path") is not None else None,
         )
 
 
@@ -1768,7 +1768,7 @@ class CatalogInterface(ABC):
         return [
             SchemaInfo(
                 attach_opaque_data=attach_opaque_data,
-                name="main",
+                path=["main"],
                 comment=None,
                 tags={},
             )
@@ -1779,12 +1779,12 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: SchemaPath,
         on_conflict: OnConflict = OnConflict.ERROR,
         comment: str | None,
         tags: dict[str, str],
     ) -> None:
-        """Create a new schema with the given name, comment, and tags."""
+        """Create a new schema with the given path, comment, and tags."""
         raise NotImplementedError("Schema create not implemented.")
 
     def schema_drop(
@@ -1792,11 +1792,11 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: SchemaPath,
         ignore_not_found: bool,
         cascade: bool,
     ) -> None:
-        """Drop the schema with the given name."""
+        """Drop the schema with the given path."""
         raise NotImplementedError("Schema drop not implemented.")
 
     @overload
@@ -1805,7 +1805,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: SchemaPath,
         type: Literal[SchemaObjectType.TABLE],
     ) -> Sequence[TableInfo]: ...
 
@@ -1815,7 +1815,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: SchemaPath,
         type: Literal[SchemaObjectType.VIEW],
     ) -> Sequence[ViewInfo]: ...
 
@@ -1825,7 +1825,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: SchemaPath,
         type: Literal[
             SchemaObjectType.SCALAR_FUNCTION,
             SchemaObjectType.TABLE_FUNCTION,
@@ -1839,7 +1839,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: SchemaPath,
         type: Literal[SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO],
     ) -> Sequence[MacroInfo]: ...
 
@@ -1849,7 +1849,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: SchemaPath,
         type: Literal[SchemaObjectType.INDEX],
     ) -> Sequence[IndexInfo]: ...
 
@@ -1858,17 +1858,17 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: SchemaPath,
         type: SchemaObjectType,
     ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo]:
-        """Get the contents of the schema with the given name.
+        """Get the contents of the schema with the given path.
 
         Schemas can contain tables, views, functions, macros, and indexes.
 
         Args:
             attach_opaque_data: The attachment identifier.
             transaction_opaque_data: The transaction identifier, if any.
-            name: The name of the schema.
+            path: Raw schema identifier components.
             type: The type of objects to return. Must be a [`SchemaObjectType`][] enum:
                 - `SchemaObjectType.TABLE`: Return only tables
                 - `SchemaObjectType.VIEW`: Return only views
@@ -1891,9 +1891,9 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: SchemaPath,
     ) -> SchemaInfo | None:
-        """Get information about the schema with the given name.
+        """Get information about the schema with the given path.
 
         Returns a [`SchemaInfo`][] object if the schema exists, or None if it does not.
         """
@@ -1904,7 +1904,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
@@ -1922,7 +1922,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         # The contents of the table is a serialized PyArrow schema
         # the nullability for each field is ignored.
@@ -1950,7 +1950,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         ignore_not_found: bool,
         cascade: bool = False,
@@ -1963,7 +1963,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         comment: str | None,
         ignore_not_found: bool,
@@ -1976,7 +1976,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         column_name: str,
         comment: str | None,
@@ -1990,7 +1990,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         new_name: str,
         ignore_not_found: bool,
@@ -2003,7 +2003,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         # Arrow schema with single field for column to add.
         # Serialized via schema.serialize().to_pybytes()
@@ -2019,7 +2019,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         column_name: str,
         ignore_not_found: bool,
@@ -2034,7 +2034,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         column_name: str,
         new_column_name: str,
@@ -2048,7 +2048,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         column_name: str,
         expression: SqlExpression,
@@ -2062,7 +2062,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         column_name: str,
         ignore_not_found: bool,
@@ -2075,7 +2075,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         # Arrow schema with single field for the new column type.
         # Serialized via schema.serialize().to_pybytes()
@@ -2094,7 +2094,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         column_name: str,
         ignore_not_found: bool,
@@ -2107,7 +2107,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         column_name: str,
         ignore_not_found: bool,
@@ -2120,7 +2120,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         # Time travel fields (iceberg style)
         at_unit: str | None,
@@ -2138,7 +2138,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         at_unit: str | None,
         at_value: str | None,
@@ -2167,7 +2167,7 @@ class CatalogInterface(ABC):
         Args:
             attach_opaque_data: Per-attach session token.
             transaction_opaque_data: Optional transaction token.
-            schema_name: Schema containing the table.
+            schema_path: Schema containing the table.
             name: Table name.
             at_unit: Optional time-travel unit (e.g., ``"VERSION"`` /
                 ``"TIMESTAMP"``). The VGI C++ side refuses ``AT(...)`` on
@@ -2186,7 +2186,7 @@ class CatalogInterface(ABC):
         legacy = self.table_scan_function_get(
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=transaction_opaque_data,
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             at_unit=at_unit,
             at_value=at_value,
@@ -2201,9 +2201,9 @@ class CatalogInterface(ABC):
                     # Propagate whatever schema the table_scan_function_get
                     # override above already resolved — this glue method has
                     # no independent way to know the function's own schema
-                    # (which the table's own schema_name param above does NOT
-                    # necessarily match; see ScanBranch.schema_name's own doc).
-                    schema_name=legacy.schema_name,
+                    # (which the table's own schema_path param above does NOT
+                    # necessarily match; see ScanBranch.schema_path's own doc).
+                    schema_path=legacy.schema_path,
                 ),
             ],
             required_extensions=list(legacy.required_extensions),
@@ -2214,7 +2214,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
     ) -> TableColumnStatisticsResult | None:
         """Get column statistics for all columns in a table.
@@ -2233,7 +2233,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         writable_branch_function_name: str | None = None,
     ) -> ScanFunctionResult:
@@ -2257,7 +2257,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
     ) -> ScanFunctionResult:
         """Get the write function for UPDATE operations on the table.
@@ -2273,7 +2273,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
     ) -> ScanFunctionResult:
         """Get the write function for DELETE operations on the table.
@@ -2289,7 +2289,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         definition: str,
         on_conflict: OnConflict,
@@ -2302,7 +2302,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         ignore_not_found: bool,
         cascade: bool = False,
@@ -2315,7 +2315,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         new_name: str,
         ignore_not_found: bool,
@@ -2329,7 +2329,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
     ) -> ViewInfo | None:
         """Get information about the view with the given name.
@@ -2342,7 +2342,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         comment: str | None,
         ignore_not_found: bool,
@@ -2358,7 +2358,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
     ) -> MacroInfo | None:
         """Get information about the macro with the given name.
@@ -2371,7 +2371,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         macro_type: "MacroType",
         parameters: list[str],
@@ -2385,7 +2385,7 @@ class CatalogInterface(ABC):
         Args:
             attach_opaque_data: Per-attach catalog session token.
             transaction_opaque_data: Optional transaction handle.
-            schema_name: Schema to create the macro in.
+            schema_path: Schema to create the macro in.
             name: Name for the new macro.
             macro_type: Whether this is a scalar or table macro.
             parameters: Ordered list of parameter names.
@@ -2404,7 +2404,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         ignore_not_found: bool,
     ) -> None:
@@ -2418,7 +2418,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
     ) -> IndexInfo | None:
         """Get information about the index with the given name.
@@ -2433,7 +2433,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         table_name: str,
         index_type: str,
@@ -2450,7 +2450,7 @@ class CatalogInterface(ABC):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         ignore_not_found: bool,
         cascade: bool = False,
@@ -2613,13 +2613,13 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     _FIXED_ATTACH_ID: AttachOpaqueData = AttachOpaqueData(b"readonly-catalog-")
 
     # Instance-level registry caches (built lazily)
-    # Keys are LOWERCASE for case-insensitive lookup
-    _schema_registry: "dict[str, Schema] | None" = None
-    _table_registry: "dict[tuple[str, str], Table] | None" = None
-    _view_registry: "dict[tuple[str, str], View] | None" = None
-    _function_registry: "dict[tuple[str, str], list[type]] | None" = None
-    _macro_registry: "dict[tuple[str, str], Macro] | None" = None
-    _index_registry: "dict[tuple[str, str], Index] | None" = None
+    # Schema components and object names are normalized independently.
+    _schema_registry: "dict[SchemaKey, Schema] | None" = None
+    _table_registry: "dict[tuple[SchemaKey, str], Table] | None" = None
+    _view_registry: "dict[tuple[SchemaKey, str], View] | None" = None
+    _function_registry: "dict[tuple[SchemaKey, str], list[type]] | None" = None
+    _macro_registry: "dict[tuple[SchemaKey, str], Macro] | None" = None
+    _index_registry: "dict[tuple[SchemaKey, str], Index] | None" = None
     # Lazy registry build is one-time but the fixture HTTP server is
     # multi-threaded and shares one catalog instance, so concurrent
     # first-requests can race the build. Serialize it under a lock and flip
@@ -2648,7 +2648,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     def _build_registries_locked(self) -> None:
         """Populate the registries. Caller must hold ``_build_lock``.
 
-        All registry keys are lowercase for case-insensitive lookups.
+        Each schema component and object name is lowercase for case-insensitive lookups.
         Raises ValueError if duplicate names detected within same schema.
         """
         # Import here to avoid circular imports
@@ -2661,32 +2661,32 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         self._macro_registry = {}
         self._index_registry = {}
 
-        def _register_table(schema_key: str, table: "Table") -> None:
+        def _register_table(schema_key: SchemaKey, table: "Table") -> None:
             key = (schema_key, table.name.lower())
             if key in self._table_registry:  # type: ignore[operator]
                 raise ValueError(f"Duplicate table '{table.name}' in schema '{schema_key}'")
             self._table_registry[key] = table  # type: ignore[index]
 
-        def _register_view(schema_key: str, view: "View") -> None:
+        def _register_view(schema_key: SchemaKey, view: "View") -> None:
             key = (schema_key, view.name.lower())
             if key in self._view_registry:  # type: ignore[operator]
                 raise ValueError(f"Duplicate view '{view.name}' in schema '{schema_key}'")
             self._view_registry[key] = view  # type: ignore[index]
 
-        def _register_function(schema_key: str, func_cls: type) -> None:
+        def _register_function(schema_key: SchemaKey, func_cls: type) -> None:
             meta = func_cls.get_metadata()  # type: ignore[attr-defined]
             key = (schema_key, meta.name.lower())
             if key not in self._function_registry:  # type: ignore[operator]
                 self._function_registry[key] = []  # type: ignore[index]
             self._function_registry[key].append(func_cls)  # type: ignore[index]
 
-        def _register_macro(schema_key: str, macro: "Macro") -> None:
+        def _register_macro(schema_key: SchemaKey, macro: "Macro") -> None:
             key = (schema_key, macro.name.lower())
             if key in self._macro_registry:  # type: ignore[operator]
                 raise ValueError(f"Duplicate macro '{macro.name}' in schema '{schema_key}'")
             self._macro_registry[key] = macro  # type: ignore[index]
 
-        def _register_index(schema_key: str, index: "Index") -> None:
+        def _register_index(schema_key: SchemaKey, index: "Index") -> None:
             key = (schema_key, index.name.lower())
             if key in self._index_registry:  # type: ignore[operator]
                 raise ValueError(f"Duplicate index '{index.name}' in schema '{schema_key}'")
@@ -2695,7 +2695,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         if self.catalog is not None:
             # Build from Catalog object
             for schema in self.catalog.schemas:
-                schema_key = schema.name.lower()
+                schema_key = schema_path_key(schema.path)
                 self._schema_registry[schema_key] = schema
 
                 for table in schema.tables:
@@ -2715,32 +2715,33 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             # zero count as a hard "no objects of this type" guarantee and
             # skips the enumeration RPC entirely, so an empty schema here
             # silently hides every legacy function from ATTACH.
-            main_schema = Schema(name="main", tables=(), views=(), functions=tuple(self.functions))
-            self._schema_registry["main"] = main_schema
+            main_schema = Schema(path=["main"], tables=(), views=(), functions=tuple(self.functions))
+            main_key = ("main",)
+            self._schema_registry[main_key] = main_schema
 
             for func_cls in self.functions:
-                _register_function("main", func_cls)
+                _register_function(main_key, func_cls)
 
         # Publish last: only now may a concurrent reader skip the build and
         # iterate these registries (they are fully populated and no longer
         # mutated).
         self._registries_built = True
 
-    def _schema_for_function(self, func_cls: type, name: str) -> str | None:
+    def _schema_for_function(self, func_cls: type, name: str) -> SchemaPath | None:
         """Find which schema ``func_cls`` (registered as ``name``) actually lives in.
 
         A table's backing function is NOT necessarily registered in the
         table's own schema — a table declared in ``data`` may scan via a
         function registered in ``main`` (a real, existing case in this
-        fixture set). Populating ``ScanFunctionResult.schema_name``/
-        ``ScanBranch.schema_name`` correctly needs this identity-based
-        reverse lookup, not the table's own ``schema_name`` parameter.
+        fixture set). Populating ``ScanFunctionResult.schema_path``/
+        ``ScanBranch.schema_path`` correctly needs this identity-based
+        reverse lookup, not the table's own ``schema_path`` parameter.
         """
         assert self._function_registry is not None
         name_lower = name.lower()
         for (schema_key, func_name), classes in self._function_registry.items():
             if func_name == name_lower and func_cls in classes:
-                return schema_key
+                return list(schema_key)
         return None
 
     @property
@@ -2827,7 +2828,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     def _global_function_infos(self) -> list[FunctionInfo]:
         """Build [`FunctionInfo`][] records for ``Catalog.global_functions``.
 
-        ``schema_name`` is the schema the function actually lives in, not a
+        ``schema_path`` is the schema the function actually lives in, not a
         sentinel: it is the bind-dispatch key, and ``Catalog.__post_init__``
         has already guaranteed each entry resolves to exactly one schema. The
         globally visible name is derived client-side from
@@ -2836,10 +2837,10 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         if self.catalog is None or not self.catalog.global_functions:
             return []
 
-        schema_of: dict[type, str] = {}
+        schema_of: dict[type, SchemaPath] = {}
         for schema in self.catalog.schemas:
             for func_cls in schema.functions:
-                schema_of.setdefault(func_cls, schema.name)
+                schema_of.setdefault(func_cls, schema.path)
 
         return [self._function_to_info(func_cls, schema_of[func_cls]) for func_cls in self.catalog.global_functions]
 
@@ -2856,12 +2857,12 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: SchemaPath,
     ) -> SchemaInfo | None:
         """Get information about a schema (case-insensitive lookup)."""
         self._build_registries()
         assert self._schema_registry is not None
-        schema = self._schema_registry.get(name.lower())
+        schema = self._schema_registry.get(schema_path_key(path))
         return schema.to_schema_info(attach_opaque_data) if schema else None
 
     def table_get(
@@ -2869,7 +2870,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
@@ -2885,33 +2886,33 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         self._build_registries()
         assert self._table_registry is not None
         assert self._schema_registry is not None
-        table = self._table_registry.get((schema_name.lower(), name.lower()))
+        table = self._table_registry.get((schema_path_key(schema_path), name.lower()))
         if table is None:
             return None
 
         # If AT clause present but table doesn't support time travel, error
         if at_unit and not table.supports_time_travel:
-            raise ValueError(f"Table '{schema_name}.{name}' does not support time travel queries")
+            raise ValueError(f"Table {schema_path_display(schema_path)}::{name!r} does not support time travel queries")
 
-        schema = self._schema_registry.get(schema_name.lower())
-        return table.to_table_info(schema.name if schema else schema_name)
+        schema = self._schema_registry.get(schema_path_key(schema_path))
+        return table.to_table_info(list(schema.path) if schema else list(schema_path))
 
     def view_get(
         self,
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
     ) -> ViewInfo | None:
         """Get information about a view (case-insensitive lookup)."""
         self._build_registries()
         assert self._view_registry is not None
         assert self._schema_registry is not None
-        view = self._view_registry.get((schema_name.lower(), name.lower()))
+        view = self._view_registry.get((schema_path_key(schema_path), name.lower()))
         if view:
-            schema = self._schema_registry.get(schema_name.lower())
-            return view.to_view_info(schema.name if schema else schema_name)
+            schema = self._schema_registry.get(schema_path_key(schema_path))
+            return view.to_view_info(list(schema.path) if schema else list(schema_path))
         return None
 
     def macro_get(
@@ -2919,17 +2920,17 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
     ) -> MacroInfo | None:
         """Get information about a macro (case-insensitive lookup)."""
         self._build_registries()
         assert self._macro_registry is not None
         assert self._schema_registry is not None
-        macro = self._macro_registry.get((schema_name.lower(), name.lower()))
+        macro = self._macro_registry.get((schema_path_key(schema_path), name.lower()))
         if macro:
-            schema = self._schema_registry.get(schema_name.lower())
-            return macro.to_macro_info(schema.name if schema else schema_name)
+            schema = self._schema_registry.get(schema_path_key(schema_path))
+            return macro.to_macro_info(list(schema.path) if schema else list(schema_path))
         return None
 
     def index_get(
@@ -2937,17 +2938,17 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
     ) -> IndexInfo | None:
         """Get information about an index (case-insensitive lookup)."""
         self._build_registries()
         assert self._index_registry is not None
         assert self._schema_registry is not None
-        index = self._index_registry.get((schema_name.lower(), name.lower()))
+        index = self._index_registry.get((schema_path_key(schema_path), name.lower()))
         if index is not None:
-            schema = self._schema_registry.get(schema_name.lower())
-            return index.to_index_info(schema.name if schema else schema_name)
+            schema = self._schema_registry.get(schema_path_key(schema_path))
+            return index.to_index_info(list(schema.path) if schema else list(schema_path))
         return None
 
     def table_column_statistics_get(
@@ -2955,7 +2956,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
     ) -> TableColumnStatisticsResult | None:
         """Get column statistics from the [`Table`][] descriptor's ``statistics`` dict.
@@ -2966,7 +2967,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         """
         self._build_registries()
         assert self._table_registry is not None
-        table = self._table_registry.get((schema_name.lower(), name.lower()))
+        table = self._table_registry.get((schema_path_key(schema_path), name.lower()))
         if table is None:
             return None
         return table.resolve_column_statistics()
@@ -2976,7 +2977,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         at_unit: str | None,
         at_value: str | None,
@@ -2996,9 +2997,9 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         assert self._schema_registry is not None
 
         # Validate AT clause against table's supports_time_travel
-        table = self._table_registry.get((schema_name.lower(), name.lower()))
+        table = self._table_registry.get((schema_path_key(schema_path), name.lower()))
         if table is not None and at_unit and not table.supports_time_travel:
-            raise ValueError(f"Table '{schema_name}.{name}' does not support time travel queries")
+            raise ValueError(f"Table {schema_path_display(schema_path)}::{name!r} does not support time travel queries")
 
         # Check if table exists and is function-backed
         if table is not None and table.function is not None:
@@ -3013,12 +3014,12 @@ class ReadOnlyCatalogInterface(CatalogInterface):
                 positional_arguments=positional_arguments,
                 named_arguments=named_arguments,
                 required_extensions=[],
-                schema_name=self._schema_for_function(table.function, func_meta.name),
+                schema_path=self._schema_for_function(table.function, func_meta.name),
             )
 
         # No auto-implementation available - provide helpful error
         available = [
-            f"{self._effective_catalog_name}.{s.name}.{t.name}"
+            f"{self._effective_catalog_name}.{schema_path_display(s.path)}.{t.name}"
             for s in self._schema_registry.values()
             for t in s.tables
         ]
@@ -3026,7 +3027,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
 
         raise NotImplementedError(
             f"table_scan_function_get not implemented for table "
-            f"'{self._effective_catalog_name}.{schema_name}.{name}'. "
+            f"{self._effective_catalog_name}.{schema_path_display(schema_path)}::{name!r}. "
             f"Available tables: {available_str}. "
             f"Either use Table(function=...) for automatic scanning, "
             f"or override table_scan_function_get in your Worker."
@@ -3035,7 +3036,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     def _write_function_get(
         self,
         *,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         operation: str,
         attr_name: str,
@@ -3044,13 +3045,15 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         self._build_registries()
         assert self._table_registry is not None
 
-        table = self._table_registry.get((schema_name.lower(), name.lower()))
+        table = self._table_registry.get((schema_path_key(schema_path), name.lower()))
         if table is None:
-            raise NotImplementedError(f"Table '{schema_name}.{name}' not found in catalog.")
+            raise NotImplementedError(f"Table {schema_path_display(schema_path)}::{name!r} not found in catalog.")
 
         write_func = getattr(table, attr_name, None)
         if write_func is None:
-            raise CatalogReadOnlyError(f"Table '{schema_name}.{name}' does not support {operation}.")
+            raise CatalogReadOnlyError(
+                f"Table {schema_path_display(schema_path)}::{name!r} does not support {operation}."
+            )
 
         func_meta = write_func.get_metadata()
         return ScanFunctionResult(
@@ -3058,7 +3061,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             positional_arguments=[],
             named_arguments={},
             required_extensions=[],
-            schema_name=self._schema_for_function(write_func, func_meta.name),
+            schema_path=self._schema_for_function(write_func, func_meta.name),
         )
 
     def table_insert_function_get(
@@ -3066,7 +3069,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
         writable_branch_function_name: str | None = None,
     ) -> ScanFunctionResult:
@@ -3075,7 +3078,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         # disambiguation is not relevant here. Discard the hint.
         del writable_branch_function_name
         return self._write_function_get(
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             operation="INSERT",
             attr_name="insert_function",
@@ -3086,12 +3089,12 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
     ) -> ScanFunctionResult:
         """Get update function for a table."""
         return self._write_function_get(
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             operation="UPDATE",
             attr_name="update_function",
@@ -3102,12 +3105,12 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        schema_name: str,
+        schema_path: SchemaPath,
         name: str,
     ) -> ScanFunctionResult:
         """Get delete function for a table."""
         return self._write_function_get(
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             operation="DELETE",
             attr_name="delete_function",
@@ -3119,7 +3122,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: SchemaPath,
         type: Literal[SchemaObjectType.TABLE],
     ) -> Sequence[TableInfo]: ...
 
@@ -3129,7 +3132,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: SchemaPath,
         type: Literal[SchemaObjectType.VIEW],
     ) -> Sequence[ViewInfo]: ...
 
@@ -3139,7 +3142,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: SchemaPath,
         type: Literal[
             SchemaObjectType.SCALAR_FUNCTION,
             SchemaObjectType.TABLE_FUNCTION,
@@ -3153,7 +3156,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: SchemaPath,
         type: Literal[SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO],
     ) -> Sequence[MacroInfo]: ...
 
@@ -3163,7 +3166,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: SchemaPath,
         type: Literal[SchemaObjectType.INDEX],
     ) -> Sequence[IndexInfo]: ...
 
@@ -3172,18 +3175,18 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None,
-        name: str,
+        path: SchemaPath,
         type: SchemaObjectType,
     ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo]:
         """List contents of a schema.
 
         Returns tables, views, functions, macros, or indexes based on the type parameter.
-        Uses case-insensitive schema name lookup.
+        Uses case-insensitive component-wise schema-path lookup.
 
         Args:
             attach_opaque_data: The attachment identifier.
             transaction_opaque_data: The transaction identifier, if any.
-            name: The name of the schema.
+            path: Raw schema identifier components.
             type: The type of objects to return. Must be a [`SchemaObjectType`][] enum.
 
         Returns:
@@ -3199,12 +3202,12 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         assert self._index_registry is not None
 
         # Case-insensitive schema lookup
-        name_lower = name.lower()
-        schema = self._schema_registry.get(name_lower)
+        path_key = schema_path_key(path)
+        schema = self._schema_registry.get(path_key)
         if schema is None:
             return []
 
-        schema_name = schema.name
+        schema_path = list(schema.path)
 
         # Normalize type parameter (may be string from wire protocol)
         type_enum = type if isinstance(type, SchemaObjectType) else SchemaObjectType(type)
@@ -3213,8 +3216,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
 
         if type_enum == SchemaObjectType.TABLE:
             for (sn, _), table in self._table_registry.items():
-                if sn == name_lower:
-                    info = table.to_table_info(schema_name)
+                if sn == path_key:
+                    info = table.to_table_info(schema_path)
                     # Inline-bind post-pass: descriptors with inline_bind=True
                     # backed by @bind_fixed_schema-decorated functions get a
                     # pre-built BindResponse inlined onto TableInfo.bind_result.
@@ -3227,24 +3230,24 @@ class ReadOnlyCatalogInterface(CatalogInterface):
                     results.append(info)
         elif type_enum == SchemaObjectType.VIEW:
             for (sn, _), view in self._view_registry.items():
-                if sn == name_lower:
-                    results.append(view.to_view_info(schema_name))
+                if sn == path_key:
+                    results.append(view.to_view_info(schema_path))
         elif type_enum == SchemaObjectType.INDEX:
             for (sn, _), index in self._index_registry.items():
-                if sn == name_lower:
-                    results.append(index.to_index_info(schema_name))
+                if sn == path_key:
+                    results.append(index.to_index_info(schema_path))
         elif type_enum in (SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO):
             target_macro_type = MacroType.SCALAR if type_enum == SchemaObjectType.SCALAR_MACRO else MacroType.TABLE
             for (sn, _), macro in self._macro_registry.items():
-                if sn == name_lower and macro.macro_type == target_macro_type:
-                    results.append(macro.to_macro_info(schema_name))
+                if sn == path_key and macro.macro_type == target_macro_type:
+                    results.append(macro.to_macro_info(schema_path))
         else:
             # SCALAR_FUNCTION or TABLE_FUNCTION
             for (sn, _), func_classes in self._function_registry.items():
-                if sn != name_lower:
+                if sn != path_key:
                     continue
                 for func_cls in func_classes:
-                    func_info = self._function_to_info(func_cls, schema_name)
+                    func_info = self._function_to_info(func_cls, schema_path)
                     # Filter by function type
                     if type_enum == SchemaObjectType.SCALAR_FUNCTION and func_info.function_type != FunctionType.SCALAR:
                         continue
@@ -3349,7 +3352,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
                 )
         return formats
 
-    def _function_to_info(self, func_cls: type, schema_name: str) -> FunctionInfo:
+    def _function_to_info(self, func_cls: type, schema_path: SchemaPath) -> FunctionInfo:
         """Convert a function class to [`FunctionInfo`][]."""
         # Import here to avoid circular imports
         from vgi.argument_spec import (
@@ -3388,7 +3391,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
 
         return FunctionInfo(
             name=meta.name,
-            schema_name=schema_name,
+            schema_path=schema_path,
             function_type=func_type,
             arguments=args_bytes,
             output_schema=output_bytes,

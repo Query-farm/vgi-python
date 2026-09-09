@@ -52,7 +52,7 @@ _VERSIONED_CATALOG = Catalog(
     default_schema="main",
     comment="Example catalog demonstrating data_version_spec validation and cookie stickiness",
     tags={},
-    schemas=[Schema(name="main", tables=[])],
+    schemas=[Schema(path=["main"], tables=[])],
 )
 
 

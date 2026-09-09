@@ -24,7 +24,7 @@ Usage:
     # Use transactions for atomic operations
     tx_id = client.catalog_transaction_begin(attach_opaque_data=result.attach_opaque_data)
     client.schema_create(
-        attach_opaque_data=result.attach_opaque_data, transaction_opaque_data=tx_id, name="new_schema"
+        attach_opaque_data=result.attach_opaque_data, transaction_opaque_data=tx_id, path=["new_schema"]
     )
     client.catalog_transaction_commit(
         attach_opaque_data=result.attach_opaque_data, transaction_opaque_data=tx_id
@@ -434,14 +434,14 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        name: str,
+        path: list[str],
     ) -> SchemaInfo | None:
         """Get information about a schema.
 
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID for transactional reads.
-            name: The schema name.
+            path: Raw schema identifier components.
 
         Returns:
             [`SchemaInfo`][] for the schema, or None if not found.
@@ -450,7 +450,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             return proxy.catalog_schema_get(  # type: ignore[no-any-return]
                 attach_opaque_data=attach_opaque_data,
-                name=name,
+                path=path,
                 transaction_opaque_data=transaction_opaque_data,
             ).to_optional()
 
@@ -459,7 +459,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        name: str,
+        path: list[str],
         comment: str | None = None,
         tags: dict[str, str] | None = None,
     ) -> None:
@@ -468,7 +468,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID.
-            name: The name for the new schema.
+            path: Raw schema identifier components for the new schema.
             comment: Optional description of the schema.
             tags: Optional key-value tags for the schema.
 
@@ -476,7 +476,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             proxy.catalog_schema_create(
                 attach_opaque_data=attach_opaque_data,
-                name=name,
+                path=path,
                 comment=comment,
                 tags=tags,
                 transaction_opaque_data=transaction_opaque_data,
@@ -487,7 +487,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        name: str,
+        path: list[str],
         ignore_not_found: bool = False,
         cascade: bool = False,
     ) -> None:
@@ -496,7 +496,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID.
-            name: The name of the schema to drop.
+            path: Raw schema identifier components to drop.
             ignore_not_found: If True, don't error if schema doesn't exist.
             cascade: If True, drop all contained tables and views.
 
@@ -504,7 +504,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             proxy.catalog_schema_drop(
                 attach_opaque_data=attach_opaque_data,
-                name=name,
+                path=path,
                 ignore_not_found=ignore_not_found,
                 cascade=cascade,
                 transaction_opaque_data=transaction_opaque_data,
@@ -516,7 +516,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        name: str,
+        path: list[str],
         type: Literal[SchemaObjectType.TABLE],
     ) -> Sequence[TableInfo]: ...
 
@@ -526,7 +526,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        name: str,
+        path: list[str],
         type: Literal[SchemaObjectType.VIEW],
     ) -> Sequence[ViewInfo]: ...
 
@@ -536,7 +536,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        name: str,
+        path: list[str],
         type: Literal[SchemaObjectType.SCALAR_FUNCTION, SchemaObjectType.TABLE_FUNCTION],
     ) -> Sequence[FunctionInfo]: ...
 
@@ -546,7 +546,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        name: str,
+        path: list[str],
         type: Literal[SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO],
     ) -> Sequence[MacroInfo]: ...
 
@@ -556,7 +556,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        name: str,
+        path: list[str],
         type: Literal[SchemaObjectType.INDEX],
     ) -> Sequence[IndexInfo]: ...
 
@@ -566,7 +566,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        name: str,
+        path: list[str],
         type: SchemaObjectType,
     ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo]: ...
 
@@ -575,7 +575,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        name: str,
+        path: list[str],
         type: SchemaObjectType,
     ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo]:
         """List contents of a schema (tables, views, functions, macros, indexes).
@@ -583,7 +583,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID for transactional reads.
-            name: The schema name.
+            path: Raw schema identifier components.
             type: The type of objects to return. Must be a [`SchemaObjectType`][] enum:
                 - `SchemaObjectType.TABLE`: Return only tables
                 - `SchemaObjectType.VIEW`: Return only views
@@ -602,19 +602,19 @@ class CatalogClientMixin:
             if type == SchemaObjectType.TABLE:
                 return proxy.catalog_schema_contents_tables(
                     attach_opaque_data=attach_opaque_data,
-                    name=name,
+                    path=path,
                     transaction_opaque_data=transaction_opaque_data,
                 ).to_infos()
             elif type == SchemaObjectType.VIEW:
                 return proxy.catalog_schema_contents_views(
                     attach_opaque_data=attach_opaque_data,
-                    name=name,
+                    path=path,
                     transaction_opaque_data=transaction_opaque_data,
                 ).to_infos()
             elif type in (SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO):
                 return proxy.catalog_schema_contents_macros(
                     attach_opaque_data=attach_opaque_data,
-                    name=name,
+                    path=path,
                     type=type,
                     transaction_opaque_data=transaction_opaque_data,
                 ).to_infos()
@@ -626,13 +626,13 @@ class CatalogClientMixin:
                 # nonsense (or an empty list) instead of raising or working.
                 return proxy.catalog_schema_contents_indexes(
                     attach_opaque_data=attach_opaque_data,
-                    name=name,
+                    path=path,
                     transaction_opaque_data=transaction_opaque_data,
                 ).to_infos()
             else:
                 return proxy.catalog_schema_contents_functions(
                     attach_opaque_data=attach_opaque_data,
-                    name=name,
+                    path=path,
                     type=type,
                     transaction_opaque_data=transaction_opaque_data,
                 ).to_infos()
@@ -680,7 +680,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
@@ -690,7 +690,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID for transactional reads.
-            schema_name: The schema containing the table.
+            schema_path: The schema containing the table.
             name: The table name.
             at_unit: Optional time travel unit (e.g. 'timestamp', 'version') —
                 the schema at a past point may differ from the live one.
@@ -704,7 +704,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             return proxy.catalog_table_get(  # type: ignore[no-any-return]
                 attach_opaque_data=attach_opaque_data,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 name=name,
                 at_unit=at_unit,
                 at_value=at_value,
@@ -716,7 +716,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
     ) -> list[ColumnStatistics]:
         """Fetch a table's column statistics, decoded.
@@ -729,7 +729,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID for transactional reads.
-            schema_name: The schema containing the table.
+            schema_path: The schema containing the table.
             name: The table name.
 
         Returns:
@@ -740,7 +740,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             data = proxy.catalog_table_column_statistics_get(
                 attach_opaque_data=attach_opaque_data,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 name=name,
                 transaction_opaque_data=transaction_opaque_data,
             )
@@ -751,7 +751,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         columns: SerializedSchema,
         on_conflict: OnConflict = OnConflict.ERROR,
@@ -764,7 +764,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID.
-            schema_name: The schema to create the table in.
+            schema_path: The schema to create the table in.
             name: The name for the new table.
             columns: Serialized PyArrow schema for the table columns.
             on_conflict: Behavior if table already exists.
@@ -777,7 +777,7 @@ class CatalogClientMixin:
             proxy.catalog_table_create(
                 request=TableCreateRequest(
                     attach_opaque_data=attach_opaque_data,
-                    schema_name=schema_name,
+                    schema_path=schema_path,
                     name=name,
                     columns=columns,
                     on_conflict=on_conflict,
@@ -793,7 +793,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         ignore_not_found: bool = False,
         cascade: bool = False,
@@ -803,7 +803,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID.
-            schema_name: The schema containing the table.
+            schema_path: The schema containing the table.
             name: The name of the table to drop.
             ignore_not_found: If True, don't error if table doesn't exist.
             cascade: If True, also drop dependent objects.
@@ -812,7 +812,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             proxy.catalog_table_drop(
                 attach_opaque_data=attach_opaque_data,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 name=name,
                 ignore_not_found=ignore_not_found,
                 cascade=cascade,
@@ -824,7 +824,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
@@ -837,7 +837,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID for transactional reads.
-            schema_name: The schema containing the table.
+            schema_path: The schema containing the table.
             name: The table name.
             at_unit: Optional time travel unit (e.g., 'timestamp', 'version').
             at_value: Optional time travel value.
@@ -852,7 +852,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             result_bytes = proxy.catalog_table_scan_function_get(
                 attach_opaque_data=attach_opaque_data,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 name=name,
                 at_unit=at_unit,
                 at_value=at_value,
@@ -866,7 +866,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
@@ -890,7 +890,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID for transactional reads.
-            schema_name: The schema containing the table.
+            schema_path: The schema containing the table.
             name: The table name.
             at_unit: Optional time travel unit (e.g., 'timestamp', 'version').
                 The C++ extension refuses `AT(...)` on tables with more than
@@ -907,7 +907,7 @@ class CatalogClientMixin:
             try:
                 result_bytes = proxy.catalog_table_scan_branches_get(
                     attach_opaque_data=attach_opaque_data,
-                    schema_name=schema_name,
+                    schema_path=schema_path,
                     name=name,
                     at_unit=at_unit,
                     at_value=at_value,
@@ -919,7 +919,7 @@ class CatalogClientMixin:
                 scan_fn = self.table_scan_function_get(
                     attach_opaque_data=attach_opaque_data,
                     transaction_opaque_data=transaction_opaque_data,
-                    schema_name=schema_name,
+                    schema_path=schema_path,
                     name=name,
                     at_unit=at_unit,
                     at_value=at_value,
@@ -942,7 +942,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         comment: str | None,
         ignore_not_found: bool = False,
@@ -952,7 +952,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID.
-            schema_name: The schema containing the table.
+            schema_path: The schema containing the table.
             name: The table name.
             comment: The new comment, or None to clear.
             ignore_not_found: If True, don't error if table doesn't exist.
@@ -961,7 +961,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             proxy.catalog_table_comment_set(
                 attach_opaque_data=attach_opaque_data,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 name=name,
                 comment=comment,
                 ignore_not_found=ignore_not_found,
@@ -973,7 +973,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         new_name: str,
         ignore_not_found: bool = False,
@@ -983,7 +983,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID.
-            schema_name: The schema containing the table.
+            schema_path: The schema containing the table.
             name: The current name of the table.
             new_name: The new name for the table.
             ignore_not_found: If True, don't error if table doesn't exist.
@@ -992,7 +992,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             proxy.catalog_table_rename(
                 attach_opaque_data=attach_opaque_data,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 name=name,
                 new_name=new_name,
                 ignore_not_found=ignore_not_found,
@@ -1004,7 +1004,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_definition: SerializedSchema,
         ignore_not_found: bool = False,
@@ -1015,7 +1015,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID.
-            schema_name: The schema containing the table.
+            schema_path: The schema containing the table.
             name: The table name.
             column_definition: Serialized schema with single field for the new column.
             ignore_not_found: If True, don't error if table doesn't exist.
@@ -1025,7 +1025,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             proxy.catalog_table_column_add(
                 attach_opaque_data=attach_opaque_data,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 name=name,
                 column_definition=column_definition,
                 ignore_not_found=ignore_not_found,
@@ -1038,7 +1038,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_name: str,
         ignore_not_found: bool = False,
@@ -1050,7 +1050,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID.
-            schema_name: The schema containing the table.
+            schema_path: The schema containing the table.
             name: The table name.
             column_name: The name of the column to drop.
             ignore_not_found: If True, don't error if table doesn't exist.
@@ -1061,7 +1061,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             proxy.catalog_table_column_drop(
                 attach_opaque_data=attach_opaque_data,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 name=name,
                 column_name=column_name,
                 ignore_not_found=ignore_not_found,
@@ -1075,7 +1075,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_name: str,
         new_column_name: str,
@@ -1086,7 +1086,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID.
-            schema_name: The schema containing the table.
+            schema_path: The schema containing the table.
             name: The table name.
             column_name: The current name of the column.
             new_column_name: The new name for the column.
@@ -1096,7 +1096,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             proxy.catalog_table_column_rename(
                 attach_opaque_data=attach_opaque_data,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 name=name,
                 column_name=column_name,
                 new_column_name=new_column_name,
@@ -1109,7 +1109,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_name: str,
         expression: SqlExpression,
@@ -1120,7 +1120,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID.
-            schema_name: The schema containing the table.
+            schema_path: The schema containing the table.
             name: The table name.
             column_name: The column to set the default for.
             expression: The SQL expression for the default value.
@@ -1130,7 +1130,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             proxy.catalog_table_column_default_set(
                 attach_opaque_data=attach_opaque_data,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 name=name,
                 column_name=column_name,
                 expression=expression,
@@ -1143,7 +1143,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_name: str,
         ignore_not_found: bool = False,
@@ -1153,7 +1153,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID.
-            schema_name: The schema containing the table.
+            schema_path: The schema containing the table.
             name: The table name.
             column_name: The column to remove the default from.
             ignore_not_found: If True, don't error if table doesn't exist.
@@ -1162,7 +1162,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             proxy.catalog_table_column_default_drop(
                 attach_opaque_data=attach_opaque_data,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 name=name,
                 column_name=column_name,
                 ignore_not_found=ignore_not_found,
@@ -1174,7 +1174,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_definition: SerializedSchema,
         expression: SqlExpression | None = None,
@@ -1185,7 +1185,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID.
-            schema_name: The schema containing the table.
+            schema_path: The schema containing the table.
             name: The table name.
             column_definition: Serialized schema with single field defining the
                 new type. Column name is taken from the schema field name.
@@ -1196,7 +1196,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             proxy.catalog_table_column_type_change(
                 attach_opaque_data=attach_opaque_data,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 name=name,
                 column_definition=column_definition,
                 expression=expression,
@@ -1209,7 +1209,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_name: str,
         ignore_not_found: bool = False,
@@ -1219,7 +1219,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID.
-            schema_name: The schema containing the table.
+            schema_path: The schema containing the table.
             name: The table name.
             column_name: The column to remove NOT NULL from.
             ignore_not_found: If True, don't error if table doesn't exist.
@@ -1228,7 +1228,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             proxy.catalog_table_not_null_drop(
                 attach_opaque_data=attach_opaque_data,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 name=name,
                 column_name=column_name,
                 ignore_not_found=ignore_not_found,
@@ -1240,7 +1240,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_name: str,
         ignore_not_found: bool = False,
@@ -1250,7 +1250,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID.
-            schema_name: The schema containing the table.
+            schema_path: The schema containing the table.
             name: The table name.
             column_name: The column to add NOT NULL to.
             ignore_not_found: If True, don't error if table doesn't exist.
@@ -1259,7 +1259,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             proxy.catalog_table_not_null_set(
                 attach_opaque_data=attach_opaque_data,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 name=name,
                 column_name=column_name,
                 ignore_not_found=ignore_not_found,
@@ -1273,7 +1273,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
     ) -> ViewInfo | None:
         """Get information about a view.
@@ -1281,7 +1281,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID for transactional reads.
-            schema_name: The schema containing the view.
+            schema_path: The schema containing the view.
             name: The view name.
 
         Returns:
@@ -1291,7 +1291,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             return proxy.catalog_view_get(  # type: ignore[no-any-return]
                 attach_opaque_data=attach_opaque_data,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 name=name,
                 transaction_opaque_data=transaction_opaque_data,
             ).to_optional()
@@ -1301,7 +1301,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         definition: str,
         on_conflict: OnConflict = OnConflict.ERROR,
@@ -1311,7 +1311,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID.
-            schema_name: The schema to create the view in.
+            schema_path: The schema to create the view in.
             name: The name for the new view.
             definition: The SQL SELECT statement defining the view.
             on_conflict: Behavior if view already exists.
@@ -1320,7 +1320,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             proxy.catalog_view_create(
                 attach_opaque_data=attach_opaque_data,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 name=name,
                 definition=definition,
                 on_conflict=on_conflict,
@@ -1332,7 +1332,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         ignore_not_found: bool = False,
         cascade: bool = False,
@@ -1342,7 +1342,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID.
-            schema_name: The schema containing the view.
+            schema_path: The schema containing the view.
             name: The name of the view to drop.
             ignore_not_found: If True, don't error if view doesn't exist.
             cascade: If True, also drop dependent objects.
@@ -1351,7 +1351,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             proxy.catalog_view_drop(
                 attach_opaque_data=attach_opaque_data,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 name=name,
                 ignore_not_found=ignore_not_found,
                 cascade=cascade,
@@ -1363,7 +1363,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         new_name: str,
         ignore_not_found: bool = False,
@@ -1373,7 +1373,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID.
-            schema_name: The schema containing the view.
+            schema_path: The schema containing the view.
             name: The current name of the view.
             new_name: The new name for the view.
             ignore_not_found: If True, don't error if view doesn't exist.
@@ -1382,7 +1382,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             proxy.catalog_view_rename(
                 attach_opaque_data=attach_opaque_data,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 name=name,
                 new_name=new_name,
                 ignore_not_found=ignore_not_found,
@@ -1394,7 +1394,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         comment: str | None,
         ignore_not_found: bool = False,
@@ -1404,7 +1404,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID.
-            schema_name: The schema containing the view.
+            schema_path: The schema containing the view.
             name: The view name.
             comment: The new comment, or None to clear.
             ignore_not_found: If True, don't error if view doesn't exist.
@@ -1413,7 +1413,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             proxy.catalog_view_comment_set(
                 attach_opaque_data=attach_opaque_data,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 name=name,
                 comment=comment,
                 ignore_not_found=ignore_not_found,
@@ -1427,7 +1427,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
     ) -> MacroInfo | None:
         """Get information about a macro.
@@ -1435,7 +1435,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID for transactional reads.
-            schema_name: The schema containing the macro.
+            schema_path: The schema containing the macro.
             name: The macro name.
 
         Returns:
@@ -1445,7 +1445,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             return proxy.catalog_macro_get(  # type: ignore[no-any-return]
                 attach_opaque_data=attach_opaque_data,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 name=name,
                 transaction_opaque_data=transaction_opaque_data,
             ).to_optional()
@@ -1455,7 +1455,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         macro_type: MacroType,
         parameters: list[str],
@@ -1469,7 +1469,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID.
-            schema_name: The schema to create the macro in.
+            schema_path: The schema to create the macro in.
             name: The name for the new macro.
             macro_type: Whether this is a scalar or table macro.
             parameters: Ordered list of parameter names.
@@ -1486,7 +1486,7 @@ class CatalogClientMixin:
             proxy.catalog_macro_create(
                 request=MacroCreateRequest(
                     attach_opaque_data=attach_opaque_data,
-                    schema_name=schema_name,
+                    schema_path=schema_path,
                     name=name,
                     macro_type=macro_type,
                     parameters=parameters,
@@ -1503,7 +1503,7 @@ class CatalogClientMixin:
         *,
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         ignore_not_found: bool = False,
     ) -> None:
@@ -1512,7 +1512,7 @@ class CatalogClientMixin:
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID.
-            schema_name: The schema containing the macro.
+            schema_path: The schema containing the macro.
             name: The name of the macro to drop.
             ignore_not_found: If True, don't error if macro doesn't exist.
 
@@ -1520,7 +1520,7 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             proxy.catalog_macro_drop(
                 attach_opaque_data=attach_opaque_data,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 name=name,
                 ignore_not_found=ignore_not_found,
                 transaction_opaque_data=transaction_opaque_data,

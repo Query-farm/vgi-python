@@ -51,7 +51,7 @@ class TestClientLifecycle:
             list(
                 client.table_in_out_function(
                     function_name="echo",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                 )
             )
@@ -69,7 +69,7 @@ class TestEdgeCases:
             list(
                 client.table_in_out_function(
                     function_name="echo",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([]),
                 )
             )
@@ -83,7 +83,7 @@ class TestEdgeCases:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="echo",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([empty_batch]),
                 )
             )
@@ -102,7 +102,7 @@ class TestEdgeCases:
             output_batches = list(
                 client.table_buffering_function(
                     function_name="sum_all_columns",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([empty_batch]),
                 )
             )
@@ -119,7 +119,7 @@ class TestEdgeCases:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="echo",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([single_row_batch]),
                 )
             )
@@ -135,7 +135,7 @@ class TestEdgeCases:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="echo",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter(batches),
                 )
             )
@@ -160,7 +160,7 @@ class TestMultiWorkerEdgeCases:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="echo",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([zero_row_batch]),
                 )
             )
@@ -179,7 +179,7 @@ class TestMultiWorkerEdgeCases:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="echo",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([zero_row_batch]),
                 )
             )
@@ -198,7 +198,7 @@ class TestMultiWorkerEdgeCases:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="echo",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([single_batch]),
                 )
             )
@@ -217,7 +217,7 @@ class TestMultiWorkerEdgeCases:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="echo",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch1, batch2]),
                 )
             )
@@ -236,7 +236,7 @@ class TestWorkerStderrCapture:
             list(
                 client.table_in_out_function(
                     function_name="echo",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter(simple_batches),
                 )
             )

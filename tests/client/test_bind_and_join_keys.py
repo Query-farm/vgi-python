@@ -33,7 +33,7 @@ import pytest
 
 from vgi.arguments import Arguments
 
-MAIN = "main"
+MAIN = ["main"]
 
 
 @pytest.fixture
@@ -66,7 +66,7 @@ class TestBind:
     def test_bind_returns_the_bound_schema(self, client: Any) -> None:
         resp = client.bind(
             function_name="filter_echo",
-            schema_name=MAIN,
+            schema_path=MAIN,
             arguments=Arguments(positional=(pa.scalar(10),)),
         )
         assert resp.output_schema.names == ["n", "s", "pushed_filters"]
@@ -81,13 +81,13 @@ class TestBind:
         """
         client.bind(
             function_name="filter_echo",
-            schema_name=MAIN,
+            schema_path=MAIN,
             arguments=Arguments(positional=(pa.scalar(10),)),
         )
         batches = list(
             client.table_function(
                 function_name="filter_echo",
-                schema_name=MAIN,
+                schema_path=MAIN,
                 arguments=Arguments(positional=(pa.scalar(5),)),
             )
         )
@@ -104,7 +104,7 @@ class TestJoinKeys:
         batches = list(
             client.table_function(
                 function_name="filter_echo",
-                schema_name=MAIN,
+                schema_path=MAIN,
                 arguments=Arguments(positional=(pa.scalar(10),)),
                 pushdown_filters=pushdown_filters,
                 join_keys=join_keys,
@@ -125,7 +125,7 @@ class TestJoinKeys:
         batches = list(
             client.table_function(
                 function_name="filter_echo",
-                schema_name=MAIN,
+                schema_path=MAIN,
                 arguments=Arguments(positional=(pa.scalar(5),)),
             )
         )

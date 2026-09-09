@@ -44,7 +44,7 @@ class TestRequiredFiltersField:
         """Default is an empty tuple; TableInfo wire field is an empty list."""
         t = Table(name="t", columns=self._bbox_columns())
         assert t.required_filters == ()
-        info = t.to_table_info("main")
+        info = t.to_table_info(["main"])
         assert info.required_filters == []
 
     def test_singleton_groups_round_trip(self) -> None:
@@ -52,20 +52,20 @@ class TestRequiredFiltersField:
         groups = (("bbox.xmin",), ("bbox.xmax",), ("bbox.ymin",), ("bbox.ymax",))
         t = Table(name="place", columns=self._bbox_columns(), required_filters=groups)
         assert t.required_filters == groups
-        info = t.to_table_info("main")
+        info = t.to_table_info(["main"])
         assert info.required_filters == [list(g) for g in groups]
 
     def test_or_group_round_trip(self) -> None:
         """A multi-path OR-group survives alongside a singleton mandatory group."""
         groups = (("id",), ("id", "ticker"))
         t = Table(name="t", columns=self._bbox_columns(), required_filters=groups)
-        info = t.to_table_info("main")
+        info = t.to_table_info(["main"])
         assert info.required_filters == [["id"], ["id", "ticker"]]
 
     def test_top_level_path(self) -> None:
         """A top-level column name (no dots) is a valid path."""
         t = Table(name="t", columns=self._bbox_columns(), required_filters=(("id",),))
-        assert t.to_table_info("main").required_filters == [["id"]]
+        assert t.to_table_info(["main"]).required_filters == [["id"]]
 
     def test_nested_path_is_not_unpacked_for_validation(self) -> None:
         """Only the leading dotted segment is validated; deeper segments pass through."""

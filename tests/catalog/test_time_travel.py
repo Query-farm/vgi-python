@@ -107,7 +107,7 @@ class TestAtParamValidation:
             cat.table_get(
                 attach_opaque_data=AttachOpaqueData(b"test"),
                 transaction_opaque_data=None,
-                schema_name="data",
+                schema_path=["data"],
                 name="versioned_data",
                 at_unit="VERSION",
                 at_value=None,
@@ -121,7 +121,7 @@ class TestAtParamValidation:
             cat.table_get(
                 attach_opaque_data=AttachOpaqueData(b"test"),
                 transaction_opaque_data=None,
-                schema_name="data",
+                schema_path=["data"],
                 name="versioned_data",
                 at_unit=None,
                 at_value="1",
@@ -135,7 +135,7 @@ class TestAtParamValidation:
             cat.table_scan_function_get(
                 attach_opaque_data=AttachOpaqueData(b"test"),
                 transaction_opaque_data=None,
-                schema_name="data",
+                schema_path=["data"],
                 name="versioned_data",
                 at_unit="VERSION",
                 at_value=None,
@@ -208,7 +208,7 @@ class TestCatalogAttachTimeTravel:
                 name="test",
                 schemas=[
                     Schema(
-                        name="main",
+                        path=["main"],
                         tables=[
                             Table(name="t1", columns=pa.schema([pa.field("x", pa.int64())])),
                         ],
@@ -236,7 +236,7 @@ class TestTableGetTimeTravel:
         result = cat.table_get(
             attach_opaque_data=AttachOpaqueData(b"test"),
             transaction_opaque_data=None,
-            schema_name="data",
+            schema_path=["data"],
             name="versioned_data",
             at_unit="VERSION",
             at_value="1",
@@ -252,7 +252,7 @@ class TestTableGetTimeTravel:
         result = cat.table_get(
             attach_opaque_data=AttachOpaqueData(b"test"),
             transaction_opaque_data=None,
-            schema_name="data",
+            schema_path=["data"],
             name="versioned_data",
             at_unit="VERSION",
             at_value="2",
@@ -268,7 +268,7 @@ class TestTableGetTimeTravel:
         result = cat.table_get(
             attach_opaque_data=AttachOpaqueData(b"test"),
             transaction_opaque_data=None,
-            schema_name="data",
+            schema_path=["data"],
             name="versioned_data",
             at_unit="VERSION",
             at_value="3",
@@ -284,7 +284,7 @@ class TestTableGetTimeTravel:
         result = cat.table_get(
             attach_opaque_data=AttachOpaqueData(b"test"),
             transaction_opaque_data=None,
-            schema_name="data",
+            schema_path=["data"],
             name="versioned_data",
         )
         assert result is not None
@@ -299,7 +299,7 @@ class TestTableGetTimeTravel:
             cat.table_get(
                 attach_opaque_data=AttachOpaqueData(b"test"),
                 transaction_opaque_data=None,
-                schema_name="data",
+                schema_path=["data"],
                 name="numbers",
                 at_unit="VERSION",
                 at_value="1",
@@ -313,7 +313,7 @@ class TestTableGetTimeTravel:
             cat.table_get(
                 attach_opaque_data=AttachOpaqueData(b"test"),
                 transaction_opaque_data=None,
-                schema_name="data",
+                schema_path=["data"],
                 name="versioned_data",
                 at_unit="VERSION",
                 at_value="0",
@@ -327,7 +327,7 @@ class TestTableGetTimeTravel:
             cat.table_get(
                 attach_opaque_data=AttachOpaqueData(b"test"),
                 transaction_opaque_data=None,
-                schema_name="data",
+                schema_path=["data"],
                 name="versioned_data",
                 at_unit="VERSION",
                 at_value="99",
@@ -341,7 +341,7 @@ class TestTableGetTimeTravel:
             cat.table_get(
                 attach_opaque_data=AttachOpaqueData(b"test"),
                 transaction_opaque_data=None,
-                schema_name="data",
+                schema_path=["data"],
                 name="versioned_data",
                 at_unit="VERSION",
                 at_value="-1",
@@ -355,7 +355,7 @@ class TestTableGetTimeTravel:
             cat.table_get(
                 attach_opaque_data=AttachOpaqueData(b"test"),
                 transaction_opaque_data=None,
-                schema_name="data",
+                schema_path=["data"],
                 name="versioned_data",
                 at_unit="TIMESTAMP",
                 at_value="1990-01-01 00:00:00",
@@ -368,7 +368,7 @@ class TestTableGetTimeTravel:
         result = cat.table_get(
             attach_opaque_data=AttachOpaqueData(b"test"),
             transaction_opaque_data=None,
-            schema_name="data",
+            schema_path=["data"],
             name="versioned_data",
             at_unit="TIMESTAMP",
             at_value="2099-01-01 00:00:00",
@@ -393,7 +393,7 @@ class TestTableScanFunctionGetTimeTravel:
         result = cat.table_scan_function_get(
             attach_opaque_data=AttachOpaqueData(b"test"),
             transaction_opaque_data=None,
-            schema_name="data",
+            schema_path=["data"],
             name="versioned_data",
             at_unit="VERSION",
             at_value="2",
@@ -409,7 +409,7 @@ class TestTableScanFunctionGetTimeTravel:
         result = cat.table_scan_function_get(
             attach_opaque_data=AttachOpaqueData(b"test"),
             transaction_opaque_data=None,
-            schema_name="data",
+            schema_path=["data"],
             name="versioned_data",
             at_unit="TIMESTAMP",
             at_value="2020-06-15 00:00:00",
@@ -424,7 +424,7 @@ class TestTableScanFunctionGetTimeTravel:
         result = cat.table_scan_function_get(
             attach_opaque_data=AttachOpaqueData(b"test"),
             transaction_opaque_data=None,
-            schema_name="data",
+            schema_path=["data"],
             name="versioned_data",
             at_unit=None,
             at_value=None,
@@ -440,7 +440,7 @@ class TestTableScanFunctionGetTimeTravel:
             cat.table_scan_function_get(
                 attach_opaque_data=AttachOpaqueData(b"test"),
                 transaction_opaque_data=None,
-                schema_name="data",
+                schema_path=["data"],
                 name="numbers",
                 at_unit="VERSION",
                 at_value="1",

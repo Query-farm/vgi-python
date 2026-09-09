@@ -22,7 +22,7 @@ class TestMultiplyBySettingFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="multiply_by_setting",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     settings={"multiplier": 5},
                 )
@@ -40,7 +40,7 @@ class TestMultiplyBySettingFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="multiply_by_setting",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     settings={"multiplier": 1},
                 )

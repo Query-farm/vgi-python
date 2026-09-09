@@ -17,6 +17,7 @@ import click
 
 from vgi.catalog import OnConflict
 from vgi.client.cli_utils import (
+    SCHEMA_PATH,
     optional_transaction_opaque_data,
     output_json,
     resolve_attach,
@@ -30,7 +31,7 @@ def view() -> None:
 
 
 @view.command("get")
-@click.argument("schema_name")
+@click.argument("schema_path", type=SCHEMA_PATH)
 @click.argument("name")
 @click.option("--attach-opaque-data", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
@@ -38,7 +39,7 @@ def view() -> None:
 @click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-opaque-data", help="Transaction ID (hex) for transactional read")
 def view_get(
-    schema_name: str,
+    schema_path: list[str],
     name: str,
     attach_opaque_data: str | None,
     catalog_name: str | None,
@@ -56,17 +57,17 @@ def view_get(
     view_info = client.view_get(
         attach_opaque_data=resolved_attach_opaque_data,
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
-        schema_name=schema_name,
+        schema_path=schema_path,
         name=name,
     )
     if view_info:
         output_json(view_info_to_dict(view_info))
     else:
-        output_json({"error": "not_found", "schema": schema_name, "name": name})
+        output_json({"error": "not_found", "schema": schema_path, "name": name})
 
 
 @view.command("create")
-@click.argument("schema_name")
+@click.argument("schema_path", type=SCHEMA_PATH)
 @click.argument("name")
 @click.option("--attach-opaque-data", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
@@ -81,7 +82,7 @@ def view_get(
     help="Behavior if view already exists",
 )
 def view_create(
-    schema_name: str,
+    schema_path: list[str],
     name: str,
     attach_opaque_data: str | None,
     catalog_name: str | None,
@@ -101,16 +102,16 @@ def view_create(
     client.view_create(
         attach_opaque_data=resolved_attach_opaque_data,
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
-        schema_name=schema_name,
+        schema_path=schema_path,
         name=name,
         definition=definition,
         on_conflict=OnConflict(on_conflict),
     )
-    output_json({"status": "created", "schema": schema_name, "name": name})
+    output_json({"status": "created", "schema": schema_path, "name": name})
 
 
 @view.command("drop")
-@click.argument("schema_name")
+@click.argument("schema_path", type=SCHEMA_PATH)
 @click.argument("name")
 @click.option("--attach-opaque-data", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
@@ -119,7 +120,7 @@ def view_create(
 @click.option("--transaction-opaque-data", help="Transaction ID (hex)")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if not found")
 def view_drop(
-    schema_name: str,
+    schema_path: list[str],
     name: str,
     attach_opaque_data: str | None,
     catalog_name: str | None,
@@ -138,15 +139,15 @@ def view_drop(
     client.view_drop(
         attach_opaque_data=resolved_attach_opaque_data,
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
-        schema_name=schema_name,
+        schema_path=schema_path,
         name=name,
         ignore_not_found=ignore_not_found,
     )
-    output_json({"status": "dropped", "schema": schema_name, "name": name})
+    output_json({"status": "dropped", "schema": schema_path, "name": name})
 
 
 @view.command("rename")
-@click.argument("schema_name")
+@click.argument("schema_path", type=SCHEMA_PATH)
 @click.argument("name")
 @click.argument("new_name")
 @click.option("--attach-opaque-data", help="Hex-encoded attach ID")
@@ -156,7 +157,7 @@ def view_drop(
 @click.option("--transaction-opaque-data", help="Transaction ID (hex)")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if not found")
 def view_rename(
-    schema_name: str,
+    schema_path: list[str],
     name: str,
     new_name: str,
     attach_opaque_data: str | None,
@@ -177,7 +178,7 @@ def view_rename(
     client.view_rename(
         attach_opaque_data=resolved_attach_opaque_data,
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
-        schema_name=schema_name,
+        schema_path=schema_path,
         name=name,
         new_name=new_name,
         ignore_not_found=ignore_not_found,
@@ -185,7 +186,7 @@ def view_rename(
     output_json(
         {
             "status": "renamed",
-            "schema": schema_name,
+            "schema": schema_path,
             "old": name,
             "new": new_name,
         }
@@ -193,7 +194,7 @@ def view_rename(
 
 
 @view.command("comment")
-@click.argument("schema_name")
+@click.argument("schema_path", type=SCHEMA_PATH)
 @click.argument("name")
 @click.option("--attach-opaque-data", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
@@ -204,7 +205,7 @@ def view_rename(
 @click.option("--clear", is_flag=True, help="Clear the comment")
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if not found")
 def view_comment(
-    schema_name: str,
+    schema_path: list[str],
     name: str,
     attach_opaque_data: str | None,
     catalog_name: str | None,
@@ -232,10 +233,10 @@ def view_comment(
     client.view_comment_set(
         attach_opaque_data=resolved_attach_opaque_data,
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
-        schema_name=schema_name,
+        schema_path=schema_path,
         name=name,
         comment=None if clear else comment_text,
         ignore_not_found=ignore_not_found,
     )
     status = "comment_cleared" if clear else "comment_set"
-    output_json({"status": status, "schema": schema_name, "name": name})
+    output_json({"status": status, "schema": schema_path, "name": name})

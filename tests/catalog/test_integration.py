@@ -80,22 +80,22 @@ class TestCatalogSchemas:
         schemas = client.schemas(attach_opaque_data=result.attach_opaque_data)
 
         assert len(schemas) == 1
-        assert schemas[0].name == "main"
+        assert schemas[0].path == ["main"]
 
     def test_schema_get_main(self) -> None:
         """Can get the main schema."""
         client = Client(CATALOG_WORKER)
         result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
-        info = client.schema_get(attach_opaque_data=result.attach_opaque_data, name="main")
+        info = client.schema_get(attach_opaque_data=result.attach_opaque_data, path=["main"])
 
         assert info is not None
-        assert info.name == "main"
+        assert info.path == ["main"]
 
     def test_schema_get_nonexistent(self) -> None:
         """Getting nonexistent schema returns None."""
         client = Client(CATALOG_WORKER)
         result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
-        info = client.schema_get(attach_opaque_data=result.attach_opaque_data, name="nonexistent")
+        info = client.schema_get(attach_opaque_data=result.attach_opaque_data, path=["nonexistent"])
 
         assert info is None
 
@@ -106,16 +106,16 @@ class TestCatalogSchemas:
 
         client.schema_create(
             attach_opaque_data=result.attach_opaque_data,
-            name="analytics",
+            path=["analytics"],
             comment="Analytics schema",
             tags={"team": "data"},
         )
 
         schemas = client.schemas(attach_opaque_data=result.attach_opaque_data)
-        schema_names = [s.name for s in schemas]
-        assert "analytics" in schema_names
+        schema_paths = [s.path for s in schemas]
+        assert ["analytics"] in schema_paths
 
-        info = client.schema_get(attach_opaque_data=result.attach_opaque_data, name="analytics")
+        info = client.schema_get(attach_opaque_data=result.attach_opaque_data, path=["analytics"])
         assert info is not None
         assert info.comment == "Analytics schema"
         assert info.tags == {"team": "data"}
@@ -128,7 +128,7 @@ class TestCatalogSchemas:
         with pytest.raises(CatalogClientError, match="already exists"):
             client.schema_create(
                 attach_opaque_data=result.attach_opaque_data,
-                name="main",  # Already exists
+                path=["main"],  # Already exists
             )
 
     def test_schema_drop(self) -> None:
@@ -138,15 +138,15 @@ class TestCatalogSchemas:
 
         client.schema_create(
             attach_opaque_data=result.attach_opaque_data,
-            name="to_drop",
+            path=["to_drop"],
         )
 
         client.schema_drop(
             attach_opaque_data=result.attach_opaque_data,
-            name="to_drop",
+            path=["to_drop"],
         )
 
-        info = client.schema_get(attach_opaque_data=result.attach_opaque_data, name="to_drop")
+        info = client.schema_get(attach_opaque_data=result.attach_opaque_data, path=["to_drop"])
         assert info is None
 
     def test_schema_drop_ignore_not_found(self) -> None:
@@ -157,7 +157,7 @@ class TestCatalogSchemas:
         # Should not raise
         client.schema_drop(
             attach_opaque_data=result.attach_opaque_data,
-            name="nonexistent",
+            path=["nonexistent"],
             ignore_not_found=True,
         )
 
@@ -175,7 +175,7 @@ class TestCatalogTables:
 
         client.table_create(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="users",
             columns=columns,
             on_conflict=OnConflict.ERROR,
@@ -186,13 +186,13 @@ class TestCatalogTables:
 
         table = client.table_get(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="users",
         )
 
         assert table is not None
         assert table.name == "users"
-        assert table.schema_name == "main"
+        assert table.schema_path == ["main"]
         assert table.columns == columns
         assert table.not_null_constraints == [0]
         assert table.unique_constraints == [[0]]
@@ -204,7 +204,7 @@ class TestCatalogTables:
 
         table = client.table_get(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="nonexistent",
         )
         assert table is None
@@ -217,20 +217,20 @@ class TestCatalogTables:
         columns = SerializedSchema(schema().serialize().to_pybytes())
         client.table_create(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="to_drop",
             columns=columns,
         )
 
         client.table_drop(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="to_drop",
         )
 
         table = client.table_get(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="to_drop",
         )
         assert table is None
@@ -243,26 +243,26 @@ class TestCatalogTables:
         columns = SerializedSchema(schema().serialize().to_pybytes())
         client.table_create(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="old_name",
             columns=columns,
         )
 
         client.table_rename(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="old_name",
             new_name="new_name",
         )
 
         old = client.table_get(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="old_name",
         )
         new = client.table_get(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="new_name",
         )
 
@@ -278,21 +278,21 @@ class TestCatalogTables:
         columns = SerializedSchema(schema().serialize().to_pybytes())
         client.table_create(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="commented",
             columns=columns,
         )
 
         client.table_comment_set(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="commented",
             comment="This is a comment",
         )
 
         table = client.table_get(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="commented",
         )
         assert table is not None
@@ -309,7 +309,7 @@ class TestCatalogViews:
 
         client.view_create(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="user_view",
             definition="SELECT * FROM users",
             on_conflict=OnConflict.ERROR,
@@ -317,7 +317,7 @@ class TestCatalogViews:
 
         view = client.view_get(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="user_view",
         )
 
@@ -332,20 +332,20 @@ class TestCatalogViews:
 
         client.view_create(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="to_drop",
             definition="SELECT 1",
         )
 
         client.view_drop(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="to_drop",
         )
 
         view = client.view_get(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="to_drop",
         )
         assert view is None
@@ -357,26 +357,26 @@ class TestCatalogViews:
 
         client.view_create(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="old_view",
             definition="SELECT 1",
         )
 
         client.view_rename(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="old_view",
             new_name="new_view",
         )
 
         old = client.view_get(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="old_view",
         )
         new = client.view_get(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="new_view",
         )
 
@@ -396,7 +396,7 @@ class TestCatalogVersioning:
 
         client.schema_create(
             attach_opaque_data=result.attach_opaque_data,
-            name="new_schema",
+            path=["new_schema"],
         )
 
         version2 = client.catalog_version(attach_opaque_data=result.attach_opaque_data)
@@ -413,7 +413,7 @@ class TestCatalogVersioning:
         columns = SerializedSchema(schema().serialize().to_pybytes())
         client.table_create(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="table",
             columns=columns,
         )
@@ -434,14 +434,14 @@ class TestCatalogSchemaContents:
         columns = SerializedSchema(schema().serialize().to_pybytes())
         client.table_create(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="users",
             columns=columns,
         )
 
         client.view_create(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="user_view",
             definition="SELECT * FROM users",
         )
@@ -449,14 +449,14 @@ class TestCatalogSchemaContents:
         # Get tables
         tables = client.schema_contents(
             attach_opaque_data=result.attach_opaque_data,
-            name="main",
+            path=["main"],
             type=SchemaObjectType.TABLE,
         )
 
         # Get views
         views = client.schema_contents(
             attach_opaque_data=result.attach_opaque_data,
-            name="main",
+            path=["main"],
             type=SchemaObjectType.VIEW,
         )
 
@@ -477,7 +477,7 @@ class TestCatalogOnConflict:
         columns = SerializedSchema(schema().serialize().to_pybytes())
         client.table_create(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="table",
             columns=columns,
             on_conflict=OnConflict.ERROR,
@@ -486,7 +486,7 @@ class TestCatalogOnConflict:
         with pytest.raises(CatalogClientError, match="already exists"):
             client.table_create(
                 attach_opaque_data=result.attach_opaque_data,
-                schema_name="main",
+                schema_path=["main"],
                 name="table",
                 columns=columns,
                 on_conflict=OnConflict.ERROR,
@@ -500,7 +500,7 @@ class TestCatalogOnConflict:
         columns = SerializedSchema(schema().serialize().to_pybytes())
         client.table_create(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="table",
             columns=columns,
             on_conflict=OnConflict.ERROR,
@@ -509,7 +509,7 @@ class TestCatalogOnConflict:
         # Should not raise
         client.table_create(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="table",
             columns=columns,
             on_conflict=OnConflict.IGNORE,
@@ -525,7 +525,7 @@ class TestCatalogOnConflict:
 
         client.table_create(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="table",
             columns=columns1,
             on_conflict=OnConflict.ERROR,
@@ -533,7 +533,7 @@ class TestCatalogOnConflict:
 
         client.table_create(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="table",
             columns=columns2,
             on_conflict=OnConflict.REPLACE,
@@ -541,7 +541,7 @@ class TestCatalogOnConflict:
 
         table = client.table_get(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="table",
         )
         assert table is not None
@@ -558,7 +558,7 @@ class TestCatalogMacros:
 
         client.macro_create(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="double",
             macro_type=MacroType.SCALAR,
             parameters=["x"],
@@ -567,13 +567,13 @@ class TestCatalogMacros:
 
         macro = client.macro_get(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="double",
         )
 
         assert macro is not None
         assert macro.name == "double"
-        assert macro.schema_name == "main"
+        assert macro.schema_path == ["main"]
         assert macro.macro_type == MacroType.SCALAR
         assert macro.parameters == ["x"]
         assert macro.definition == "x * 2"
@@ -585,7 +585,7 @@ class TestCatalogMacros:
 
         client.macro_create(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="to_drop",
             macro_type=MacroType.SCALAR,
             parameters=["x"],
@@ -594,13 +594,13 @@ class TestCatalogMacros:
 
         client.macro_drop(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="to_drop",
         )
 
         macro = client.macro_get(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="to_drop",
         )
         assert macro is None
@@ -613,7 +613,7 @@ class TestCatalogMacros:
         with pytest.raises(CatalogClientError, match="not found"):
             client.macro_drop(
                 attach_opaque_data=result.attach_opaque_data,
-                schema_name="main",
+                schema_path=["main"],
                 name="nonexistent",
             )
 
@@ -625,7 +625,7 @@ class TestCatalogMacros:
         # Should not raise
         client.macro_drop(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="nonexistent",
             ignore_not_found=True,
         )
@@ -637,7 +637,7 @@ class TestCatalogMacros:
 
         client.macro_create(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="scalar_one",
             macro_type=MacroType.SCALAR,
             parameters=["x"],
@@ -645,7 +645,7 @@ class TestCatalogMacros:
         )
         client.macro_create(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="table_one",
             macro_type=MacroType.TABLE,
             parameters=["n"],
@@ -654,12 +654,12 @@ class TestCatalogMacros:
 
         scalar_macros = client.schema_contents(
             attach_opaque_data=result.attach_opaque_data,
-            name="main",
+            path=["main"],
             type=SchemaObjectType.SCALAR_MACRO,
         )
         table_macros = client.schema_contents(
             attach_opaque_data=result.attach_opaque_data,
-            name="main",
+            path=["main"],
             type=SchemaObjectType.TABLE_MACRO,
         )
 
@@ -679,7 +679,7 @@ class TestCatalogMacros:
 
         client.macro_create(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="clamp",
             macro_type=MacroType.SCALAR,
             parameters=["val", "lo", "hi"],
@@ -689,7 +689,7 @@ class TestCatalogMacros:
 
         macro = client.macro_get(
             attach_opaque_data=result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="clamp",
         )
 

@@ -21,7 +21,7 @@ class TestRepeatInputsFunction:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="repeat_inputs",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(repeat_count),)),
                     input=iter(simple_batches),
                 )
@@ -35,7 +35,7 @@ class TestRepeatInputsFunction:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="repeat_inputs",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(1),), named={}),
                     input=iter(simple_batches),
                 )
@@ -66,7 +66,7 @@ class TestRepeatInputsFunction:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="repeat_inputs",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(repeat_count),)),
                     input=iter(batches),
                 )
@@ -91,7 +91,7 @@ class TestRepeatInputsFunction:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="repeat_inputs",
-                    schema_name="main",
+                    schema_path=["main"],
                     arguments=Arguments(positional=(pa.scalar(repeat_count),)),
                     input=iter(batches),
                 )

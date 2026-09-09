@@ -30,7 +30,7 @@ class TestBinaryPacketFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="binary_packet",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     arguments=Arguments(positional=(header, config)),
                 )
@@ -57,7 +57,7 @@ class TestBinaryPacketFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="binary_packet",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     arguments=Arguments(positional=(header, config)),
                 )

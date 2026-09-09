@@ -381,8 +381,8 @@ class TestTableDescriptorStatistics:
         )
         table_without = Table(name="no_stats", columns=pa.schema([("x", pa.int64())]))
 
-        assert table_with.to_table_info("main").supports_column_statistics is True
-        assert table_without.to_table_info("main").supports_column_statistics is False
+        assert table_with.to_table_info(["main"]).supports_column_statistics is True
+        assert table_without.to_table_info(["main"]).supports_column_statistics is False
 
     def test_invalid_statistics_column_name(self) -> None:
         with pytest.raises(ValueError, match="statistics column 'nonexistent' not found"):

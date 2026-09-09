@@ -44,7 +44,7 @@ class TestBlendedExplodeProvenance:
             results = list(
                 client.table_in_out_function(
                     function_name="blended_explode",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     parent_row_callback=parent_rows_seen.extend,
                 )
@@ -72,7 +72,7 @@ class TestBlendedExplodeProvenance:
             results = list(
                 client.table_in_out_function(
                     function_name="blended_explode",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     parent_row_callback=parent_rows_seen.append,
                 )
@@ -101,7 +101,7 @@ class TestBlendedExplodeProvenance:
             results = list(
                 client.table_in_out_function(
                     function_name="blended_explode",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     parent_row_callback=parent_rows_seen.extend,
                 )
@@ -134,7 +134,7 @@ class TestHostileProvenance:
             list(
                 client.table_in_out_function(
                     function_name="hostile_provenance",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     arguments=Arguments(named={"mode": pa.scalar(mode)}),
                     parent_row_callback=lambda _rows: None,
@@ -156,7 +156,7 @@ class TestHostileProvenance:
             results = list(
                 client.table_in_out_function(
                     function_name="hostile_provenance",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     arguments=Arguments(named={"mode": pa.scalar("range")}),
                 )
@@ -183,7 +183,7 @@ class TestBlendedArityAndVarargs:
             results = list(
                 client.table_in_out_function(
                     function_name="geo_encode",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     arguments=Arguments(named={"precision": pa.scalar(1)}),
                     parent_row_callback=parent_rows_seen.extend,
@@ -212,7 +212,7 @@ class TestBlendedArityAndVarargs:
             results = list(
                 client.table_in_out_function(
                     function_name="geo_encode",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     arguments=Arguments(named={"precision": pa.scalar(0)}),
                 )
@@ -230,7 +230,7 @@ class TestBlendedArityAndVarargs:
             results = list(
                 client.table_in_out_function(
                     function_name="row_sum",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     arguments=Arguments(named={"absolute": pa.scalar(True)}),
                 )
@@ -263,7 +263,7 @@ class TestHasFinalizeSkip:
             with_finalize = list(
                 client.table_in_out_function(
                     function_name="blended_explode",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                 )
             )
@@ -271,7 +271,7 @@ class TestHasFinalizeSkip:
             without_finalize = list(
                 client.table_in_out_function(
                     function_name="blended_explode",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     has_finalize=False,
                 )

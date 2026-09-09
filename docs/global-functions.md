@@ -25,7 +25,7 @@ CATALOG = Catalog(
     global_function_prefix="acme",
     global_functions=[TableInfoFunction, ChecksumFunction],
     schemas=[
-        Schema(name="main", functions=[TableInfoFunction, ChecksumFunction, ...]),
+        Schema(path=["main"], functions=[TableInfoFunction, ChecksumFunction, ...]),
     ],
 )
 ```
@@ -33,7 +33,7 @@ CATALOG = Catalog(
 All four function types are supported: scalar, aggregate, table, and table-buffering.
 
 **Every global must also appear in exactly one `Schema.functions`.** This is enforced in
-`Catalog.__post_init__`. Bind dispatch is keyed on `(schema_name, name)`, so a function listed
+`Catalog.__post_init__`. Bind dispatch is keyed on `(schema_path, name)`, so a function listed
 only in `global_functions` would be registered by the client but never dispatchable. Keeping it
 schema-resident also means the qualified name (`acme.main.table_info()`) keeps working, which is
 the unambiguous fallback if the global name is unavailable.
@@ -81,7 +81,7 @@ Globals ride on the existing attach response — there is no extra round trip an
 `CatalogAttachResult` carries:
 
 - `global_functions: list[bytes]` — IPC-serialized `FunctionInfo` records. `name` and
-  `schema_name` are the real dispatch coordinates; the prefix is *not* baked into `name`.
+  `schema_path` are the real dispatch coordinates; the prefix is *not* baked into `name`.
 - `global_function_prefix: str` — empty string means publish bare names.
 
 Both fields are additive and default to empty, so a worker that doesn't set them advertises

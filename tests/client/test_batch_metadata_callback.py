@@ -24,7 +24,7 @@ import pytest
 
 from vgi.arguments import Arguments
 
-DATA = "data"
+DATA = ["data"]
 
 
 @pytest.fixture
@@ -39,7 +39,7 @@ def test_callback_receives_cache_control_metadata(client: Any) -> None:
     batches = list(
         client.table_function(
             function_name="cacheable_numbers",
-            schema_name=DATA,
+            schema_path=DATA,
             arguments=Arguments(named={"n": pa.scalar(5)}),
             batch_metadata_callback=metas.append,
         )
@@ -55,7 +55,7 @@ def test_callback_is_optional_and_defaults_to_none(client: Any) -> None:
     batches = list(
         client.table_function(
             function_name="cacheable_numbers",
-            schema_name=DATA,
+            schema_path=DATA,
             arguments=Arguments(named={"n": pa.scalar(3)}),
         )
     )
@@ -68,7 +68,7 @@ def test_callback_sees_none_for_a_batch_without_custom_metadata(client: Any) -> 
     list(
         client.table_function(
             function_name="sequence",
-            schema_name="main",
+            schema_path=["main"],
             arguments=Arguments(positional=(pa.scalar(4),)),
             batch_metadata_callback=metas.append,
         )

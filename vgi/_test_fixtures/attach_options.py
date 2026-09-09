@@ -238,7 +238,7 @@ _CATALOG_DESCRIPTOR = Catalog(
     name=CATALOG_NAME,
     schemas=[
         Schema(
-            name="main",
+            path=["main"],
             tables=(),
             views=(),
             functions=(EchoAttachOptionsFunction,),

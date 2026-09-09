@@ -13,7 +13,7 @@ use vgi_protocol::wire::to_batch;
 
 let batch = to_batch(CatalogTableGetParams {
     attach_opaque_data: handle.into(),
-    schema_name: "main".into(),
+    schema_path: vec!["main".into()],
     name: "orders".into(),
     at_unit: None,
     at_value: None,
@@ -149,6 +149,7 @@ _SCALAR_RUST: dict[Any, str] = {
 
 _DICT_STRING = pa.dictionary(pa.int16(), pa.string())
 _STR_MAP = pa.map_(pa.string(), pa.string())
+_STRING_LIST = pa.list_(pa.string())
 
 
 def _rust_type(dtype: pa.DataType, *, origin: str) -> str:
@@ -159,10 +160,11 @@ def _rust_type(dtype: pa.DataType, *, origin: str) -> str:
         return "DictString"
     if dtype.equals(_STR_MAP):
         return "StrMap"
+    if dtype.equals(_STRING_LIST):
+        return "Vec<String>"
     raise GeneratorError(
         f"vgi.codegen.rust_request_builders: no Rust type for Arrow type {dtype!r} at {origin}.\n"
-        "Params schemas have historically used only binary / string / bool / dictionary<string> / "
-        "map<string,string>. Add a mapping to _rust_type() in "
+        "Add a mapping to _rust_type() in "
         "vgi/codegen/rust_request_builders.py, and make sure the VgiArrow derive round-trips it.",
     )
 

@@ -21,7 +21,7 @@ class TestEchoFunction:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="echo",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter(simple_batches),
                 )
             )
@@ -47,7 +47,7 @@ class TestEchoFunction:
             output_batches = list(
                 client.table_in_out_function(
                     function_name="echo",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter(simple_batches),
                 )
             )

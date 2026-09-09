@@ -23,7 +23,7 @@ class TestHashSeedFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="hash_seed",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar(42),)),
                 )
@@ -41,7 +41,7 @@ class TestHashSeedFunction:
             first = list(
                 client.scalar_function(
                     function_name="hash_seed",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar(99),)),
                 )
@@ -49,7 +49,7 @@ class TestHashSeedFunction:
             second = list(
                 client.scalar_function(
                     function_name="hash_seed",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar(99),)),
                 )
@@ -66,7 +66,7 @@ class TestHashSeedFunction:
             first = list(
                 client.scalar_function(
                     function_name="hash_seed",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar(1),)),
                 )
@@ -74,7 +74,7 @@ class TestHashSeedFunction:
             second = list(
                 client.scalar_function(
                     function_name="hash_seed",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar(1000),)),
                 )
@@ -91,7 +91,7 @@ class TestHashSeedFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="hash_seed",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar(100),)),
                 )
@@ -108,7 +108,7 @@ class TestHashSeedFunction:
             outputs = list(
                 client.scalar_function(
                     function_name="hash_seed",
-                    schema_name="main",
+                    schema_path=["main"],
                     input=iter([batch]),
                     arguments=Arguments(positional=(pa.scalar(0),)),
                 )

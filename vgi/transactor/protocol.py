@@ -20,6 +20,8 @@ from typing import Protocol
 
 from vgi_rpc.rpc import ExchangeState, ProducerState, Stream
 
+from vgi.schema_path import SchemaPath
+
 
 class TransactorProtocol(Protocol):
     """RPC interface for the db-transactor subprocess."""
@@ -57,7 +59,7 @@ class TransactorProtocol(Protocol):
         attach_opaque_data: bytes,
         tx_id: bytes,
         table_name: str,
-        schema_name: str = "",
+        schema_path: SchemaPath | None = None,
         returning: bool = False,
     ) -> Stream[ExchangeState]:
         """Insert rows into a table via lockstep exchange."""
@@ -68,7 +70,7 @@ class TransactorProtocol(Protocol):
         attach_opaque_data: bytes,
         tx_id: bytes,
         table_name: str,
-        schema_name: str = "",
+        schema_path: SchemaPath | None = None,
         returning: bool = False,
     ) -> Stream[ExchangeState]:
         """Delete rows from a table via lockstep exchange."""
@@ -79,7 +81,7 @@ class TransactorProtocol(Protocol):
         attach_opaque_data: bytes,
         tx_id: bytes,
         table_name: str,
-        schema_name: str = "",
+        schema_path: SchemaPath | None = None,
         columns: list[str] | None = None,
         returning: bool = False,
     ) -> Stream[ExchangeState]:
@@ -94,7 +96,7 @@ class TransactorProtocol(Protocol):
         tx_id: bytes,
         table_name: str,
         columns: list[str],
-        schema_name: str = "",
+        schema_path: SchemaPath | None = None,
         pushdown_filters: bytes | None = None,
     ) -> Stream[ProducerState]:
         """Scan rows from a table with optional predicate pushdown."""
@@ -114,11 +116,13 @@ class TransactorProtocol(Protocol):
 
     # ========== Metadata (unary) ==========
 
-    def list_schemas(self, attach_opaque_data: bytes, tx_id: bytes) -> list[str]:
-        """List schema names within a transaction."""
+    def list_schemas(self, attach_opaque_data: bytes, tx_id: bytes) -> list[SchemaPath]:
+        """List schema paths within a transaction."""
         ...
 
-    def list_user_tables(self, attach_opaque_data: bytes, tx_id: bytes, schema_name: str = "main") -> list[str]:
+    def list_user_tables(
+        self, attach_opaque_data: bytes, tx_id: bytes, schema_path: SchemaPath | None = None
+    ) -> list[str]:
         """List user-created table names in the given schema within a transaction."""
         ...
 
@@ -130,7 +134,9 @@ class TransactorProtocol(Protocol):
         """Get the comment on a table, or None if no comment is set."""
         ...
 
-    def list_user_views(self, attach_opaque_data: bytes, tx_id: bytes, schema_name: str = "main") -> list[str]:
+    def list_user_views(
+        self, attach_opaque_data: bytes, tx_id: bytes, schema_path: SchemaPath | None = None
+    ) -> list[str]:
         """List user-created view names in the given schema within a transaction."""
         ...
 

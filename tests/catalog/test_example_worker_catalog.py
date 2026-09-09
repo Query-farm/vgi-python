@@ -55,14 +55,14 @@ def _get_all_functions(client: Client, attach_opaque_data: AttachOpaqueData) -> 
     table_funcs = list(
         client.schema_contents(
             attach_opaque_data=attach_opaque_data,
-            name="main",
+            path=["main"],
             type=SchemaObjectType.TABLE_FUNCTION,
         )
     )
     scalar_funcs = list(
         client.schema_contents(
             attach_opaque_data=attach_opaque_data,
-            name="main",
+            path=["main"],
             type=SchemaObjectType.SCALAR_FUNCTION,
         )
     )
@@ -108,7 +108,7 @@ class TestExampleWorkerCatalog:
         # Get table functions
         contents = list(
             client.schema_contents(
-                attach_opaque_data=attach_opaque_data, name="main", type=SchemaObjectType.TABLE_FUNCTION
+                attach_opaque_data=attach_opaque_data, path=["main"], type=SchemaObjectType.TABLE_FUNCTION
             )
         )
 
@@ -132,7 +132,7 @@ class TestExampleWorkerCatalog:
         table_funcs = list(
             client.schema_contents(
                 attach_opaque_data=attach_result.attach_opaque_data,
-                name="main",
+                path=["main"],
                 type=SchemaObjectType.TABLE_FUNCTION,
             )
         )
@@ -141,7 +141,7 @@ class TestExampleWorkerCatalog:
         scalar_funcs = list(
             client.schema_contents(
                 attach_opaque_data=attach_result.attach_opaque_data,
-                name="main",
+                path=["main"],
                 type=SchemaObjectType.SCALAR_FUNCTION,
             )
         )
@@ -150,7 +150,7 @@ class TestExampleWorkerCatalog:
         aggregate_funcs = list(
             client.schema_contents(
                 attach_opaque_data=attach_result.attach_opaque_data,
-                name="main",
+                path=["main"],
                 type=SchemaObjectType.AGGREGATE_FUNCTION,
             )
         )
@@ -227,7 +227,7 @@ class TestExampleWorkerCatalog:
         functions = list(
             client.schema_contents(
                 attach_opaque_data=attach_result.attach_opaque_data,
-                name="main",
+                path=["main"],
                 type=SchemaObjectType.TABLE_FUNCTION,
             )
         )
@@ -240,8 +240,8 @@ class TestExampleWorkerCatalog:
         assert echo_info.description is not None
         assert len(echo_info.description) > 0
 
-    def test_function_info_schema_name(self) -> None:
-        """FunctionInfo has schema_name set to 'main'."""
+    def test_function_info_schema_path(self) -> None:
+        """FunctionInfo has schema_path set to 'main'."""
         client = Client(EXAMPLE_WORKER)
 
         attach_result = client.catalog_attach(
@@ -251,7 +251,7 @@ class TestExampleWorkerCatalog:
 
         # All functions should be in 'main' schema
         for item in functions:
-            assert item.schema_name == "main"
+            assert item.schema_path == ["main"]
 
     def test_scalar_function_has_output_schema(self) -> None:
         """Scalar functions with static output types have output_schema populated."""
@@ -263,7 +263,7 @@ class TestExampleWorkerCatalog:
         functions = list(
             client.schema_contents(
                 attach_opaque_data=attach_result.attach_opaque_data,
-                name="main",
+                path=["main"],
                 type=SchemaObjectType.SCALAR_FUNCTION,
             )
         )
@@ -290,7 +290,7 @@ class TestExampleWorkerCatalog:
         functions = list(
             client.schema_contents(
                 attach_opaque_data=attach_result.attach_opaque_data,
-                name="main",
+                path=["main"],
                 type=SchemaObjectType.SCALAR_FUNCTION,
             )
         )
@@ -318,7 +318,7 @@ class TestExampleWorkerCatalog:
         functions = list(
             client.schema_contents(
                 attach_opaque_data=attach_result.attach_opaque_data,
-                name="main",
+                path=["main"],
                 type=SchemaObjectType.TABLE_FUNCTION,
             )
         )
@@ -347,7 +347,7 @@ class TestExampleWorkerViews:
         views = list(
             client.schema_contents(
                 attach_opaque_data=attach_result.attach_opaque_data,
-                name="main",
+                path=["main"],
                 type=SchemaObjectType.VIEW,
             )
         )
@@ -367,7 +367,7 @@ class TestExampleWorkerViews:
         views = list(
             client.schema_contents(
                 attach_opaque_data=attach_result.attach_opaque_data,
-                name="data",
+                path=["data"],
                 type=SchemaObjectType.VIEW,
             )
         )
@@ -384,7 +384,7 @@ class TestExampleWorkerViews:
 
         view = client.view_get(
             attach_opaque_data=attach_result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="first_ten",
         )
 
@@ -413,7 +413,7 @@ class TestExampleWorkerIndexes:
         indexes = list(
             client.schema_contents(
                 attach_opaque_data=attach_result.attach_opaque_data,
-                name="data",
+                path=["data"],
                 type=SchemaObjectType.INDEX,
             )
         )
@@ -439,14 +439,14 @@ class TestExampleWorkerMacros:
         scalar_macros = list(
             client.schema_contents(
                 attach_opaque_data=attach_result.attach_opaque_data,
-                name="main",
+                path=["main"],
                 type=SchemaObjectType.SCALAR_MACRO,
             )
         )
         table_macros = list(
             client.schema_contents(
                 attach_opaque_data=attach_result.attach_opaque_data,
-                name="main",
+                path=["main"],
                 type=SchemaObjectType.TABLE_MACRO,
             )
         )
@@ -464,14 +464,14 @@ class TestExampleWorkerMacros:
 
         info = client.macro_get(
             attach_opaque_data=attach_result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="vgi_multiply",
         )
 
         assert info is not None
         assert isinstance(info, MacroInfo)
         assert info.name == "vgi_multiply"
-        assert info.schema_name == "main"
+        assert info.schema_path == ["main"]
         assert info.definition == "x * y"
         assert info.comment == "Multiply two values"
 
@@ -484,12 +484,12 @@ class TestExampleWorkerMacros:
 
         multiply = client.macro_get(
             attach_opaque_data=attach_result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="vgi_multiply",
         )
         range_table = client.macro_get(
             attach_opaque_data=attach_result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="vgi_range_table",
         )
 
@@ -508,7 +508,7 @@ class TestExampleWorkerMacros:
 
         info = client.macro_get(
             attach_opaque_data=attach_result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="vgi_multiply",
         )
 
@@ -524,7 +524,7 @@ class TestExampleWorkerMacros:
 
         info = client.macro_get(
             attach_opaque_data=attach_result.attach_opaque_data,
-            schema_name="main",
+            schema_path=["main"],
             name="vgi_clamp",
         )
 

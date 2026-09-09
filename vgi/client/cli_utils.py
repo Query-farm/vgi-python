@@ -18,6 +18,7 @@ import click
 import pyarrow as pa
 
 from vgi.catalog import AttachOpaqueData, TransactionOpaqueData
+from vgi.schema_path import SchemaPath
 
 if TYPE_CHECKING:
     from vgi.catalog import CatalogAttachResult, FunctionInfo, SchemaInfo, TableInfo, ViewInfo
@@ -68,6 +69,36 @@ ARROW_TYPE_MAP: dict[str, pa.DataType] = {
     "time32": pa.time32("ms"),
     "time64": pa.time64("us"),
 }
+
+
+class SchemaPathParamType(click.ParamType[SchemaPath]):
+    """Parse a bare root schema or a JSON array of schema components."""
+
+    name = "schema-path"
+
+    def convert(self, value: Any, param: click.Parameter | None, ctx: click.Context | None) -> SchemaPath:
+        """Convert one CLI token without treating dots as separators."""
+        if not isinstance(value, str):
+            self.fail("schema path must be a string", param, ctx)
+        if not value:
+            self.fail("schema path must not be empty", param, ctx)
+        json_value = value.lstrip()
+        if not json_value.startswith("["):
+            return [value]
+        try:
+            decoded = json.loads(json_value)
+        except json.JSONDecodeError as exc:
+            self.fail(f"invalid JSON array: {exc}", param, ctx)
+        if (
+            not isinstance(decoded, list)
+            or not decoded
+            or any(not isinstance(item, str) or not item for item in decoded)
+        ):
+            self.fail("must be a non-empty JSON array of non-empty strings", param, ctx)
+        return decoded
+
+
+SCHEMA_PATH = SchemaPathParamType()
 
 
 def hex_to_bytes(hex_string: str) -> bytes:
@@ -250,7 +281,7 @@ def schema_info_to_dict(schema_info: SchemaInfo) -> dict[str, Any]:
 
     """
     return {
-        "name": schema_info.name,
+        "path": schema_info.path,
         "comment": schema_info.comment,
         "tags": dict(schema_info.tags),
     }
@@ -268,7 +299,7 @@ def table_info_to_dict(table_info: TableInfo) -> dict[str, Any]:
     """
     return {
         "name": table_info.name,
-        "schema_name": table_info.schema_name,
+        "schema_path": table_info.schema_path,
         "columns": arrow_schema_to_json(table_info.columns),
         "not_null_constraints": table_info.not_null_constraints,
         "unique_constraints": table_info.unique_constraints,
@@ -290,7 +321,7 @@ def view_info_to_dict(view_info: ViewInfo) -> dict[str, Any]:
     """
     return {
         "name": view_info.name,
-        "schema_name": view_info.schema_name,
+        "schema_path": view_info.schema_path,
         "definition": view_info.definition,
         "comment": view_info.comment,
         "tags": dict(view_info.tags),
@@ -309,7 +340,7 @@ def function_info_to_dict(function_info: FunctionInfo) -> dict[str, Any]:
     """
     result: dict[str, Any] = {
         "name": function_info.name,
-        "schema_name": function_info.schema_name,
+        "schema_path": function_info.schema_path,
         "function_type": function_info.function_type.value,
         "arguments": arrow_schema_to_json(function_info.arguments),
         "description": function_info.description,

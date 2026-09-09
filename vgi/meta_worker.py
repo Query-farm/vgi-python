@@ -44,6 +44,7 @@ from vgi.protocol import (
     InitRequest,
     ProcessState,
 )
+from vgi.schema_path import schema_path_display, schema_path_key
 from vgi.worker import Worker
 
 logger = logging.getLogger("vgi.meta_worker")
@@ -229,20 +230,20 @@ class MetaWorker:
             )
         return self._workers[idx]
 
-    def _candidates_for(self, function_name: str, schema_name: str | None) -> list[Worker]:
+    def _candidates_for(self, function_name: str, schema_path: list[str] | None) -> list[Worker]:
         """Every sub-worker declaring ``function_name``, most specific first."""
-        if schema_name is not None:
-            key = (schema_name.lower(), function_name)
+        if schema_path is not None:
+            key = (schema_path_key(schema_path), function_name)
             scoped = [w for w in self._workers if key in type(w)._build_schema_registry()]
             if scoped:
                 return scoped
         return [w for w in self._workers if function_name in type(w)._build_registry()]
 
-    def _worker_for_unattached(self, function_name: str, schema_name: str | None) -> Worker | None:
+    def _worker_for_unattached(self, function_name: str, schema_path: list[str] | None) -> Worker | None:
         """Pick a sub-worker for a call that carries no usable attach.
 
         Non-catalog callers (the legacy ``Worker.functions`` list, where
-        ``BindRequest.schema_name`` is ``None``) invoke a function without ever
+        ``BindRequest.schema_path`` is ``None``) invoke a function without ever
         opening a catalog, so there is no attach to route on and the sole
         declarer of the name is the intended target.
 
@@ -254,11 +255,11 @@ class MetaWorker:
         an ambiguous name means the routing key was lost, which is a bug worth
         surfacing.
         """
-        candidates = self._candidates_for(function_name, schema_name)
+        candidates = self._candidates_for(function_name, schema_path)
         if not candidates:
             return None
         if len(candidates) > 1:
-            where = f"{schema_name}.{function_name}" if schema_name else function_name
+            where = f"{schema_path_display(schema_path)}::{function_name}" if schema_path else function_name
             msg = (
                 f"Cannot route {where!r}: {len(candidates)} sub-workers declare it "
                 f"({', '.join(type(w).__name__ for w in candidates)}) and the call carries "
@@ -314,7 +315,7 @@ class MetaWorker:
         if worker is not None:
             return worker._resolve_function(request)
 
-        fallback_worker = self._worker_for_unattached(request.function_name, request.schema_name)
+        fallback_worker = self._worker_for_unattached(request.function_name, request.schema_path)
         if fallback_worker is not None:
             return fallback_worker._resolve_function(request)
         msg = f"Unknown function: '{request.function_name}'"
@@ -427,12 +428,12 @@ class MetaWorker:
         if worker is not None:
             return worker.bind(request, ctx=ctx)
 
-        fallback_worker = self._worker_for_unattached(request.function_name, request.schema_name)
+        fallback_worker = self._worker_for_unattached(request.function_name, request.schema_path)
         if fallback_worker is not None:
             logger.debug(
                 "dispatch method=bind function=%r schema=%r fallback=registry_scan",
                 request.function_name,
-                request.schema_name,
+                request.schema_path,
             )
             return fallback_worker.bind(request, ctx=ctx)
 
@@ -447,7 +448,7 @@ class MetaWorker:
                 return worker.init(request, ctx=ctx)
 
         fn_name = request.bind_call.function_name if request.bind_call else ""
-        schema = request.bind_call.schema_name if request.bind_call else None
+        schema = request.bind_call.schema_path if request.bind_call else None
         fallback_worker = self._worker_for_unattached(fn_name, schema)
         if fallback_worker is not None:
             logger.debug(

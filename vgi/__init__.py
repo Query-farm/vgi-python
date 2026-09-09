@@ -65,6 +65,7 @@ from vgi.scalar_function import (
     ScalarFunctionGenerator,
     TypeMismatchError,
 )
+from vgi.schema_path import SchemaPath
 from vgi.schema_utils import schema, schema_like
 from vgi.table_filter_pushdown import (
     ColumnBounds,
@@ -138,6 +139,7 @@ __all__ = [
     "ParameterInfo",
     "ResolvedMetadata",
     "RowCountMismatchError",
+    "SchemaPath",
     "ScalarFunction",
     "ScalarFunctionGenerator",
     "TableInOutFunction",

@@ -163,7 +163,7 @@ class AggregateSession:
     output_schema: pa.Schema
     _client: AggregateClientMixin
     _function_name: str
-    _schema_name: str | None
+    _schema_path: list[str] | None
     _attach_opaque_data: bytes | None
 
     # ------------------------------------------------------------------
@@ -208,7 +208,7 @@ class AggregateSession:
                     execution_id=self.execution_id,
                     input_batch=_ipc_bytes(full),
                     attach_opaque_data=self._attach_opaque_data,
-                    schema_name=self._schema_name,
+                    schema_path=self._schema_path,
                 )
             ),
         )
@@ -248,7 +248,7 @@ class AggregateSession:
                     execution_id=self.execution_id,
                     merge_batch=_ipc_bytes(merge),
                     attach_opaque_data=self._attach_opaque_data,
-                    schema_name=self._schema_name,
+                    schema_path=self._schema_path,
                 )
             ),
         )
@@ -280,7 +280,7 @@ class AggregateSession:
                     group_ids_batch=_ipc_bytes(batch),
                     output_schema=self.output_schema,
                     attach_opaque_data=self._attach_opaque_data,
-                    schema_name=self._schema_name,
+                    schema_path=self._schema_path,
                 )
             ),
         )
@@ -307,7 +307,7 @@ class AggregateSession:
                         execution_id=self.execution_id,
                         group_ids_batch=_ipc_bytes(batch),
                         attach_opaque_data=self._attach_opaque_data,
-                        schema_name=self._schema_name,
+                        schema_path=self._schema_path,
                     )
                 ),
             )
@@ -361,7 +361,7 @@ class AggregateSession:
                     frame_stats=pack_frame_stats(frame_stats),
                     all_valid=pack_all_valid(all_valid),
                     attach_opaque_data=self._attach_opaque_data,
-                    schema_name=self._schema_name,
+                    schema_path=self._schema_path,
                 )
             ),
         )
@@ -394,7 +394,7 @@ class AggregateSession:
                     frame_starts=[begin for begin, _ in frames],
                     frame_ends=[end for _, end in frames],
                     attach_opaque_data=self._attach_opaque_data,
-                    schema_name=self._schema_name,
+                    schema_path=self._schema_path,
                 )
             ),
         )
@@ -434,7 +434,7 @@ class AggregateSession:
                     frame_starts=flat_starts,
                     frame_ends=flat_ends,
                     attach_opaque_data=self._attach_opaque_data,
-                    schema_name=self._schema_name,
+                    schema_path=self._schema_path,
                 )
             ),
         )
@@ -451,7 +451,7 @@ class AggregateSession:
                         execution_id=self.execution_id,
                         partition_id=partition_id,
                         attach_opaque_data=self._attach_opaque_data,
-                        schema_name=self._schema_name,
+                        schema_path=self._schema_path,
                     )
                 ),
             )
@@ -481,7 +481,7 @@ class AggregateStreamingSession:
     output_schema: pa.Schema
     _client: AggregateClientMixin
     _function_name: str
-    _schema_name: str | None
+    _schema_path: list[str] | None
     _attach_opaque_data: bytes | None
 
     def chunk(self, batch: pa.RecordBatch) -> pa.RecordBatch:
@@ -507,7 +507,7 @@ class AggregateStreamingSession:
                     execution_id=self.execution_id,
                     input_batch=_ipc_bytes(batch),
                     attach_opaque_data=self._attach_opaque_data,
-                    schema_name=self._schema_name,
+                    schema_path=self._schema_path,
                 )
             ),
         )
@@ -523,7 +523,7 @@ class AggregateStreamingSession:
                         function_name=self._function_name,
                         execution_id=self.execution_id,
                         attach_opaque_data=self._attach_opaque_data,
-                        schema_name=self._schema_name,
+                        schema_path=self._schema_path,
                     )
                 ),
             )
@@ -579,7 +579,7 @@ class AggregateClientMixin:
         self,
         *,
         function_name: str,
-        schema_name: str,
+        schema_path: list[str],
         input_schema: pa.Schema | None = None,
         arguments: Arguments | None = None,
         settings: dict[str, Any] | None = None,
@@ -592,7 +592,7 @@ class AggregateClientMixin:
 
         Args:
             function_name: Name of the aggregate to bind.
-            schema_name: Catalog schema that declares the function. A name is
+            schema_path: Catalog schema that declares the function. A name is
                 unique only within a schema, so this is what identifies the
                 implementation.
             input_schema: Schema of the aggregate's value columns, in
@@ -615,7 +615,7 @@ class AggregateClientMixin:
         """
         session = self.aggregate_bind(
             function_name=function_name,
-            schema_name=schema_name,
+            schema_path=schema_path,
             input_schema=input_schema,
             arguments=arguments,
             settings=settings,
@@ -630,7 +630,7 @@ class AggregateClientMixin:
         self,
         *,
         function_name: str,
-        schema_name: str,
+        schema_path: list[str],
         input_schema: pa.Schema | None = None,
         arguments: Arguments | None = None,
         settings: dict[str, Any] | None = None,
@@ -645,7 +645,7 @@ class AggregateClientMixin:
 
         Args:
             function_name: Name of the aggregate to bind.
-            schema_name: Catalog schema that declares the function.
+            schema_path: Catalog schema that declares the function.
             input_schema: Schema of the aggregate's value columns, in
                 declaration order, without the ``__vgi_group_id`` column.
                 ``None`` for a nullary aggregate.
@@ -671,7 +671,7 @@ class AggregateClientMixin:
                     settings=self._settings_to_batch(settings),
                     secrets=self._secrets_to_batch(secrets),
                     attach_opaque_data=self._attach_opaque_data,
-                    schema_name=schema_name,
+                    schema_path=schema_path,
                 )
             ),
         )
@@ -680,7 +680,7 @@ class AggregateClientMixin:
             output_schema=response.output_schema,
             _client=self,
             _function_name=function_name,
-            _schema_name=schema_name,
+            _schema_path=schema_path,
             _attach_opaque_data=self._attach_opaque_data,
         )
 
@@ -692,7 +692,7 @@ class AggregateClientMixin:
         self,
         *,
         function_name: str,
-        schema_name: str,
+        schema_path: list[str],
         input: Iterable[pa.RecordBatch] = (),
         group_by: Sequence[str] = (),
         arguments: Arguments | None = None,
@@ -715,7 +715,7 @@ class AggregateClientMixin:
 
         Args:
             function_name: Name of the aggregate to invoke.
-            schema_name: Catalog schema that declares the function.
+            schema_path: Catalog schema that declares the function.
             input: Input batches. All must share one schema. May be empty.
             group_by: Column names to group on. Empty (the default) means a
                 global aggregate, which returns exactly one row even for empty
@@ -763,7 +763,7 @@ class AggregateClientMixin:
 
         with self.aggregate_session(
             function_name=function_name,
-            schema_name=schema_name,
+            schema_path=schema_path,
             input_schema=bind_schema,
             arguments=arguments,
             settings=settings,
@@ -825,7 +825,7 @@ class AggregateClientMixin:
         self,
         *,
         function_name: str,
-        schema_name: str,
+        schema_path: list[str],
         input_schema: pa.Schema,
         partition_key_count: int,
         order_key_count: int = 0,
@@ -840,7 +840,7 @@ class AggregateClientMixin:
 
         Args:
             function_name: Name of the aggregate to open.
-            schema_name: Catalog schema that declares the function.
+            schema_path: Catalog schema that declares the function.
             input_schema: Schema of every chunk. Column order is fixed by the
                 protocol: ``partition_key_count`` partition-key columns first,
                 then ``order_key_count`` order-key columns, then the
@@ -874,7 +874,7 @@ class AggregateClientMixin:
             value_schema = pa.schema(list(input_schema)[value_start:])
             probe = self.aggregate_bind(
                 function_name=function_name,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 input_schema=value_schema,
                 arguments=arguments,
                 settings=settings,
@@ -896,7 +896,7 @@ class AggregateClientMixin:
                     settings=self._settings_to_batch(settings),
                     secrets=self._secrets_to_batch(secrets),
                     attach_opaque_data=self._attach_opaque_data,
-                    schema_name=schema_name,
+                    schema_path=schema_path,
                 )
             ),
         )
@@ -905,7 +905,7 @@ class AggregateClientMixin:
             output_schema=output_schema,
             _client=self,
             _function_name=function_name,
-            _schema_name=schema_name,
+            _schema_path=schema_path,
             _attach_opaque_data=self._attach_opaque_data,
         )
         try:

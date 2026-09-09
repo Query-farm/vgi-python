@@ -147,6 +147,7 @@ from vgi.protocol import (
     ViewsResponse,
 )
 from vgi.scalar_function import ScalarFunctionGenerator
+from vgi.schema_path import schema_path_display, schema_path_key
 from vgi.table_buffering_function import (
     TableBufferingFunction,
     TableBufferingParams,
@@ -1146,12 +1147,12 @@ class Worker:
     catalog_name: str | None = "functions"  # Set to None to disable default catalog
     catalog: Catalog | None = None
     _registry: dict[str, list[type[Function]]] | None = None
-    # (lowercased schema name, function name) -> classes declared in that schema.
+    # (lowercased structural schema path, function name) -> classes declared there.
     # Built alongside ``_registry`` so a name registered in two catalog schemas
     # can be resolved by the schema the caller named. Only the declarative
     # ``catalog`` pattern populates it; the legacy ``functions`` list has no
     # schema, so those entries resolve through ``_registry`` alone.
-    _schema_registry: dict[tuple[str, str], list[type[Function]]] | None = None
+    _schema_registry: dict[tuple[tuple[str, ...], str], list[type[Function]]] | None = None
     _default_catalog_interface: type[CatalogInterface] | None = None
     _setting_specs: list[SettingSpec] = []  # Extracted from Settings inner class
     _secret_type_specs: list[SecretTypeSpec] = []  # Secret types to register
@@ -1257,14 +1258,14 @@ class Worker:
             catalog_obj = getattr(cls.catalog_interface, "catalog", None)
 
         registry: dict[str, list[type[Function]]] = {}
-        schema_registry: dict[tuple[str, str], list[type[Function]]] = {}
+        schema_registry: dict[tuple[tuple[str, ...], str], list[type[Function]]] = {}
 
         seen: set[type[Function]] = set()
 
-        def add_function(func_cls: type[Function], schema_name: str | None) -> None:
+        def add_function(func_cls: type[Function], schema_path: list[str] | None) -> None:
             meta = func_cls.get_metadata()
-            if schema_name is not None:
-                key = (schema_name.lower(), meta.name)
+            if schema_path is not None:
+                key = (schema_path_key(schema_path), meta.name)
                 bucket = schema_registry.setdefault(key, [])
                 if func_cls not in bucket:
                     bucket.append(func_cls)
@@ -1278,32 +1279,32 @@ class Worker:
         # them into, so a qualified call has to find them there.
         default_schema = catalog_obj.default_schema if catalog_obj is not None else "main"
         for func_cls in cls.functions:
-            add_function(func_cls, default_schema)
+            add_function(func_cls, [default_schema])
 
         # Declarative pattern: functions in catalog schemas
         if catalog_obj is not None:
             for schema in catalog_obj.schemas:
                 for func_cls in schema.functions:
-                    add_function(func_cls, schema.name)
+                    add_function(func_cls, schema.path)
 
                 # Auto-register functions referenced by table descriptors
                 for table in schema.tables:
                     # Scan function (Table.function)
                     if table.function is not None:
-                        add_function(table.function, schema.name)
+                        add_function(table.function, schema.path)
                     # Write functions
                     for attr in ("insert_function", "update_function", "delete_function"):
                         write_func = getattr(table, attr, None)
                         if write_func is not None:
-                            add_function(write_func, schema.name)
+                            add_function(write_func, schema.path)
 
         cls._registry = registry
         cls._schema_registry = schema_registry
         return registry
 
     @classmethod
-    def _build_schema_registry(cls) -> dict[tuple[str, str], list[type[Function]]]:
-        """Return the ``(lowercased schema, function name)`` index.
+    def _build_schema_registry(cls) -> dict[tuple[tuple[str, ...], str], list[type[Function]]]:
+        """Return the ``(normalized schema path, function name)`` index.
 
         Built as a side effect of :meth:`_build_registry`; this accessor just
         guarantees the build has run.
@@ -1312,7 +1313,7 @@ class Worker:
         assert cls._schema_registry is not None
         return cls._schema_registry
 
-    def _candidates_for(self, function_name: str, schema_name: str | None) -> list[type[Function]]:
+    def _candidates_for(self, function_name: str, schema_path: list[str] | None) -> list[type[Function]]:
         """Resolve ``function_name`` to its candidate classes, scoped by schema.
 
         A schema-qualified lookup is *exact*: only functions declared in that
@@ -1323,8 +1324,8 @@ class Worker:
         """
         registry = self._build_registry()
 
-        if schema_name is not None:
-            scoped = self._build_schema_registry().get((schema_name.lower(), function_name))
+        if schema_path is not None:
+            scoped = self._build_schema_registry().get((schema_path_key(schema_path), function_name))
             if scoped:
                 return list(scoped)
             # Named a schema that doesn't hold this function. Report where it
@@ -1332,8 +1333,8 @@ class Worker:
             if function_name in registry:
                 schemas = sorted({schema for (schema, name) in self._build_schema_registry() if name == function_name})
                 raise ValueError(
-                    f"Function '{function_name}' is not registered in schema '{schema_name}'. "
-                    f"It is available in: {schemas}"
+                    f"Function '{function_name}' is not registered in schema {schema_path_display(schema_path)}. "
+                    f"It is available in: {[schema_path_display(path) for path in schemas]}"
                 )
 
         if function_name not in registry:
@@ -1856,7 +1857,7 @@ class Worker:
         arguments: Arguments,
         input_schema: pa.Schema | None,
         candidates: Sequence[type[Function]],
-        schema_registry: dict[tuple[str, str], list[type[Function]]] | None = None,
+        schema_registry: dict[tuple[tuple[str, ...], str], list[type[Function]]] | None = None,
     ) -> type[Function]:
         """Find the function that matches the invocation's arguments.
 
@@ -2285,7 +2286,7 @@ class Worker:
         """Look up and disambiguate function class from registry.
 
         Args:
-            request: The BindRequest carrying function_name, schema_name and
+            request: The BindRequest carrying function_name, schema_path and
                 arguments.
 
         Returns:
@@ -2295,7 +2296,7 @@ class Worker:
             ValueError: If function not found or ambiguous.
 
         """
-        candidates = self._candidates_for(request.function_name, request.schema_name)
+        candidates = self._candidates_for(request.function_name, request.schema_path)
         if len(candidates) == 1:
             return candidates[0]
 
@@ -2312,7 +2313,7 @@ class Worker:
         function_name: str,
         attach_opaque_data: bytes | None = None,
         function_type: type[Function] | None = None,
-        schema_name: str | None = None,
+        schema_path: list[str] | None = None,
     ) -> type[Function]:
         """Look up a function by name only (no argument disambiguation).
 
@@ -2320,7 +2321,7 @@ class Worker:
             function_name: The name of the function to look up.
             attach_opaque_data: Optional attach ID (reserved for future catalog use).
             function_type: Optional base class to filter candidates by type.
-            schema_name: Catalog schema owning the function, when the caller
+            schema_path: Catalog schema owning the function, when the caller
                 knows it. Scopes the lookup so a name declared in two schemas
                 resolves to the right one.
 
@@ -2328,7 +2329,7 @@ class Worker:
             The resolved [`Function`][] subclass for ``function_name``.
 
         """
-        candidates = self._candidates_for(function_name, schema_name)
+        candidates = self._candidates_for(function_name, schema_path)
         if function_type is not None:
             candidates = [c for c in candidates if issubclass(c, function_type)]
             if not candidates:
@@ -2349,7 +2350,7 @@ class Worker:
         function (filtering on `AggregateFunction`), narrows the type, and
         raises ``TypeError`` if the resolved class is not an aggregate.
 
-        Every aggregate request carries ``schema_name``, so an aggregate name
+        Every aggregate request carries ``schema_path``, so an aggregate name
         declared in two schemas resolves to the one the caller named rather
         than to whichever the by-name lookup happens to find first. ``None``
         (a caller that names no schema) keeps the cross-schema lookup, which
@@ -2359,7 +2360,7 @@ class Worker:
             request.function_name,
             self._unwrap_attach(request.attach_opaque_data),
             function_type=AggregateFunction,
-            schema_name=getattr(request, "schema_name", None),
+            schema_path=getattr(request, "schema_path", None),
         )
         if not issubclass(func_cls, AggregateFunction):
             raise TypeError(f"Function '{request.function_name}' is not an AggregateFunction (got {func_cls.__name__})")
@@ -3336,10 +3337,10 @@ class Worker:
         # by bare name would run the wrong implementation whenever the name is
         # declared in two schemas, and it would do so *after* a bind that had
         # resolved correctly — silently returning another schema's answer.
-        schema_name: str | None = getattr(request, "schema_name", None)
+        schema_path: list[str] | None = getattr(request, "schema_path", None)
         if function_name is None:
             function_name = request.bind_call.function_name
-            schema_name = request.bind_call.schema_name
+            schema_path = request.bind_call.schema_path
             if attach is None:
                 attach = request.bind_call.attach_opaque_data
             if transaction_id is None:
@@ -3359,7 +3360,7 @@ class Worker:
             function_name,
             catalog_bytes,
             function_type=TableBufferingFunction,
-            schema_name=schema_name,
+            schema_path=schema_path,
         )
         if not issubclass(func_cls, TableBufferingFunction):
             raise TypeError(f"Function '{function_name}' is not a TableBufferingFunction (got {func_cls.__name__})")
@@ -3467,7 +3468,7 @@ class Worker:
                 request.function_name,
                 self._unwrap_attach(request.attach_opaque_data),
                 function_type=TableBufferingFunction,
-                schema_name=getattr(request, "schema_name", None),
+                schema_path=getattr(request, "schema_path", None),
             )
             storage = self._bound(func_cls.storage, request.execution_id, request)
             storage.execution_clear()
@@ -3938,7 +3939,7 @@ class Worker:
                     request.function_name,
                     self._unwrap_attach(request.attach_opaque_data),
                     function_type=AggregateFunction,
-                    schema_name=getattr(request, "schema_name", None),
+                    schema_path=getattr(request, "schema_path", None),
                 )
             except Exception:  # noqa: BLE001
                 func_cls = None
@@ -4541,37 +4542,48 @@ class Worker:
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
         )
-        return SchemasResponse.from_infos(list(infos))
+        # Parents must precede children so consumers can materialize a schema
+        # hierarchy in one pass. Validate custom catalogs at the wire boundary.
+        info_list = list(infos)
+        path_keys = [schema_path_key(info.path) for info in info_list]
+        path_key_set = set(path_keys)
+        if len(path_keys) != len(path_key_set):
+            raise ValueError("Catalog returned duplicate schema paths")
+        for path_key in path_keys:
+            if len(path_key) > 1 and path_key[:-1] not in path_key_set:
+                raise ValueError(f"Catalog returned schema path {list(path_key)!r} without its parent")
+        ordered = sorted(info_list, key=lambda info: len(info.path))
+        return SchemasResponse.from_infos(ordered)
 
     def catalog_schema_get(
-        self, attach_opaque_data: bytes, name: str, transaction_opaque_data: bytes | None = None
+        self, attach_opaque_data: bytes, path: list[str], transaction_opaque_data: bytes | None = None
     ) -> SchemasResponse:
         """Get information about a schema. Returns 0 or 1 items."""
-        self._enrich_catalog_span(vgi_schema_name=name)
+        self._enrich_catalog_span(vgi_schema_path=path)
         cat = self._get_catalog()
         info = cat.schema_get(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            name=name,
+            path=path,
         )
         return SchemasResponse.from_optional(info)
 
     def catalog_schema_create(
         self,
         attach_opaque_data: bytes,
-        name: str,
+        path: list[str],
         on_conflict: OnConflict = OnConflict.ERROR,
         comment: str | None = None,
         tags: dict[str, str] | None = None,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Create a new schema."""
-        self._enrich_catalog_span(vgi_schema_name=name)
+        self._enrich_catalog_span(vgi_schema_path=path)
         cat = self._get_catalog()
         cat.schema_create(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            name=name,
+            path=path,
             on_conflict=on_conflict,
             comment=comment,
             tags=tags or {},
@@ -4580,18 +4592,18 @@ class Worker:
     def catalog_schema_drop(
         self,
         attach_opaque_data: bytes,
-        name: str,
+        path: list[str],
         ignore_not_found: bool = False,
         cascade: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a schema."""
-        self._enrich_catalog_span(vgi_schema_name=name)
+        self._enrich_catalog_span(vgi_schema_path=path)
         cat = self._get_catalog()
         cat.schema_drop(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            name=name,
+            path=path,
             ignore_not_found=ignore_not_found,
             cascade=cascade,
         )
@@ -4599,16 +4611,16 @@ class Worker:
     def catalog_schema_contents_tables(
         self,
         attach_opaque_data: bytes,
-        name: str,
+        path: list[str],
         transaction_opaque_data: bytes | None = None,
     ) -> TablesResponse:
         """List tables in a schema."""
-        self._enrich_catalog_span(vgi_schema_name=name)
+        self._enrich_catalog_span(vgi_schema_path=path)
         cat = self._get_catalog()
         infos = cat.schema_contents(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            name=name,
+            path=path,
             type=SchemaObjectType.TABLE,
         )
         return TablesResponse.from_infos(list(infos))
@@ -4616,16 +4628,16 @@ class Worker:
     def catalog_schema_contents_views(
         self,
         attach_opaque_data: bytes,
-        name: str,
+        path: list[str],
         transaction_opaque_data: bytes | None = None,
     ) -> ViewsResponse:
         """List views in a schema."""
-        self._enrich_catalog_span(vgi_schema_name=name)
+        self._enrich_catalog_span(vgi_schema_path=path)
         cat = self._get_catalog()
         infos = cat.schema_contents(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            name=name,
+            path=path,
             type=SchemaObjectType.VIEW,
         )
         return ViewsResponse.from_infos(list(infos))
@@ -4633,17 +4645,17 @@ class Worker:
     def catalog_schema_contents_functions(
         self,
         attach_opaque_data: bytes,
-        name: str,
+        path: list[str],
         type: SchemaObjectType,
         transaction_opaque_data: bytes | None = None,
     ) -> FunctionsResponse:
         """List functions in a schema (scalar or table)."""
-        self._enrich_catalog_span(vgi_schema_name=name)
+        self._enrich_catalog_span(vgi_schema_path=path)
         cat = self._get_catalog()
         infos = cat.schema_contents(  # type: ignore[call-overload]
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            name=name,
+            path=path,
             type=type,
         )
         return FunctionsResponse.from_infos(list(infos))
@@ -4668,7 +4680,7 @@ class Worker:
     def catalog_table_get(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
@@ -4676,12 +4688,12 @@ class Worker:
     ) -> TablesResponse:
         """Get information about a table. Returns 0 or 1 items."""
         _validate_at_params(at_unit, at_value)
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         info = cat.table_get(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             at_unit=at_unit,
             at_value=at_value,
@@ -4690,7 +4702,7 @@ class Worker:
 
     def catalog_table_create(self, request: TableCreateRequest) -> None:
         """Create a new table."""
-        self._enrich_catalog_span(vgi_schema_name=request.schema_name, vgi_table_name=request.name)
+        self._enrich_catalog_span(vgi_schema_path=request.schema_path, vgi_table_name=request.name)
         cat = self._get_catalog()
         cat.table_create(
             attach_opaque_data=self._unwrap_attach(request.attach_opaque_data),
@@ -4699,7 +4711,7 @@ class Worker:
             )
             if request.transaction_opaque_data
             else None,
-            schema_name=request.schema_name,
+            schema_path=request.schema_path,
             name=request.name,
             columns=SerializedSchema(request.columns),
             on_conflict=request.on_conflict,
@@ -4717,19 +4729,19 @@ class Worker:
     def catalog_table_drop(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         ignore_not_found: bool = False,
         cascade: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a table."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_drop(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             ignore_not_found=ignore_not_found,
             cascade=cascade,
@@ -4738,7 +4750,7 @@ class Worker:
     def catalog_table_scan_function_get(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
@@ -4746,12 +4758,12 @@ class Worker:
     ) -> bytes:
         """Get the scan function for a table. Returns `ScanFunctionResult` as IPC bytes."""
         _validate_at_params(at_unit, at_value)
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         result = cat.table_scan_function_get(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             at_unit=at_unit,
             at_value=at_value,
@@ -4761,7 +4773,7 @@ class Worker:
     def catalog_table_scan_branches_get(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
@@ -4776,12 +4788,12 @@ class Worker:
         further code changes.
         """
         _validate_at_params(at_unit, at_value)
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         result = cat.table_scan_branches_get(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             at_unit=at_unit,
             at_value=at_value,
@@ -4791,17 +4803,17 @@ class Worker:
     def catalog_table_column_statistics_get(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         transaction_opaque_data: bytes | None = None,
     ) -> bytes | None:
         """Get column statistics for a table. Returns IPC bytes or None."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         result = cat.table_column_statistics_get(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
         )
         if result is None:
@@ -4811,18 +4823,18 @@ class Worker:
     def catalog_table_insert_function_get(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         transaction_opaque_data: bytes | None = None,
         writable_branch_function_name: str | None = None,
     ) -> bytes:
         """Get the insert function for a table. Returns `WriteFunctionResult` as IPC bytes."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         result = cat.table_insert_function_get(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             writable_branch_function_name=writable_branch_function_name,
         )
@@ -4831,17 +4843,17 @@ class Worker:
     def catalog_table_update_function_get(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         transaction_opaque_data: bytes | None = None,
     ) -> bytes:
         """Get the update function for a table. Returns `WriteFunctionResult` as IPC bytes."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         result = cat.table_update_function_get(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
         )
         return result.serialize()
@@ -4849,17 +4861,17 @@ class Worker:
     def catalog_table_delete_function_get(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         transaction_opaque_data: bytes | None = None,
     ) -> bytes:
         """Get the delete function for a table. Returns `WriteFunctionResult` as IPC bytes."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         result = cat.table_delete_function_get(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
         )
         return result.serialize()
@@ -4867,19 +4879,19 @@ class Worker:
     def catalog_table_comment_set(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         comment: str | None = None,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Set or clear the comment on a table."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_comment_set(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             comment=comment,
             ignore_not_found=ignore_not_found,
@@ -4888,7 +4900,7 @@ class Worker:
     def catalog_table_column_comment_set(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_name: str,
         comment: str | None = None,
@@ -4896,12 +4908,12 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Set or clear the comment on a table column."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_comment_set(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             column_name=column_name,
             comment=comment,
@@ -4911,19 +4923,19 @@ class Worker:
     def catalog_table_rename(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         new_name: str,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Rename a table."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_rename(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             new_name=new_name,
             ignore_not_found=ignore_not_found,
@@ -4932,7 +4944,7 @@ class Worker:
     def catalog_table_column_add(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_definition: bytes,
         ignore_not_found: bool = False,
@@ -4940,12 +4952,12 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Add a new column to a table."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_add(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             column_definition=SerializedSchema(column_definition),
             ignore_not_found=ignore_not_found,
@@ -4955,7 +4967,7 @@ class Worker:
     def catalog_table_column_drop(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_name: str,
         ignore_not_found: bool = False,
@@ -4964,12 +4976,12 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a column from a table."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_drop(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             column_name=column_name,
             ignore_not_found=ignore_not_found,
@@ -4980,7 +4992,7 @@ class Worker:
     def catalog_table_column_rename(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_name: str,
         new_column_name: str,
@@ -4988,12 +5000,12 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Rename a column."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_rename(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             column_name=column_name,
             new_column_name=new_column_name,
@@ -5003,7 +5015,7 @@ class Worker:
     def catalog_table_column_default_set(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_name: str,
         expression: str,
@@ -5011,12 +5023,12 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Set the default value expression for a column."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_default_set(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             column_name=column_name,
             expression=SqlExpression(expression),
@@ -5026,19 +5038,19 @@ class Worker:
     def catalog_table_column_default_drop(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_name: str,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Remove the default value from a column."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_default_drop(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             column_name=column_name,
             ignore_not_found=ignore_not_found,
@@ -5047,7 +5059,7 @@ class Worker:
     def catalog_table_column_type_change(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_definition: bytes,
         expression: str | None = None,
@@ -5055,12 +5067,12 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Change the type of a column."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_type_change(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             column_definition=SerializedSchema(column_definition),
             expression=SqlExpression(expression) if expression else None,
@@ -5070,19 +5082,19 @@ class Worker:
     def catalog_table_not_null_drop(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_name: str,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Remove NOT NULL constraint from a column."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_not_null_drop(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             column_name=column_name,
             ignore_not_found=ignore_not_found,
@@ -5091,19 +5103,19 @@ class Worker:
     def catalog_table_not_null_set(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         column_name: str,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Add NOT NULL constraint to a column."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_table_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_not_null_set(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             column_name=column_name,
             ignore_not_found=ignore_not_found,
@@ -5116,17 +5128,17 @@ class Worker:
     def catalog_view_get(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         transaction_opaque_data: bytes | None = None,
     ) -> ViewsResponse:
         """Get information about a view. Returns 0 or 1 items."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_view_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_view_name=name)
         cat = self._get_catalog()
         info = cat.view_get(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
         )
         return ViewsResponse.from_optional(info)
@@ -5134,19 +5146,19 @@ class Worker:
     def catalog_view_create(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         definition: str,
         on_conflict: OnConflict,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Create a new view."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_view_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_view_name=name)
         cat = self._get_catalog()
         cat.view_create(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             definition=definition,
             on_conflict=on_conflict,
@@ -5155,19 +5167,19 @@ class Worker:
     def catalog_view_drop(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         ignore_not_found: bool = False,
         cascade: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a view."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_view_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_view_name=name)
         cat = self._get_catalog()
         cat.view_drop(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             ignore_not_found=ignore_not_found,
             cascade=cascade,
@@ -5176,19 +5188,19 @@ class Worker:
     def catalog_view_rename(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         new_name: str,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Rename a view."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_view_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_view_name=name)
         cat = self._get_catalog()
         cat.view_rename(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             new_name=new_name,
             ignore_not_found=ignore_not_found,
@@ -5197,19 +5209,19 @@ class Worker:
     def catalog_view_comment_set(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         comment: str | None = None,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Set or clear the comment on a view."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_view_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_view_name=name)
         cat = self._get_catalog()
         cat.view_comment_set(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             comment=comment,
             ignore_not_found=ignore_not_found,
@@ -5222,24 +5234,24 @@ class Worker:
     def catalog_macro_get(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         transaction_opaque_data: bytes | None = None,
     ) -> MacrosResponse:
         """Get information about a macro. Returns 0 or 1 items."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_macro_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_macro_name=name)
         cat = self._get_catalog()
         info = cat.macro_get(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
         )
         return MacrosResponse.from_optional(info)
 
     def catalog_macro_create(self, request: MacroCreateRequest) -> None:
         """Create a new macro."""
-        self._enrich_catalog_span(vgi_schema_name=request.schema_name, vgi_macro_name=request.name)
+        self._enrich_catalog_span(vgi_schema_path=request.schema_path, vgi_macro_name=request.name)
         cat = self._get_catalog()
         cat.macro_create(
             attach_opaque_data=self._unwrap_attach(request.attach_opaque_data),
@@ -5248,7 +5260,7 @@ class Worker:
             )
             if request.transaction_opaque_data
             else None,
-            schema_name=request.schema_name,
+            schema_path=request.schema_path,
             name=request.name,
             macro_type=request.macro_type,
             parameters=request.parameters,
@@ -5261,18 +5273,18 @@ class Worker:
     def catalog_macro_drop(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a macro."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_macro_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_macro_name=name)
         cat = self._get_catalog()
         cat.macro_drop(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             ignore_not_found=ignore_not_found,
         )
@@ -5280,17 +5292,17 @@ class Worker:
     def catalog_schema_contents_macros(
         self,
         attach_opaque_data: bytes,
-        name: str,
+        path: list[str],
         type: SchemaObjectType,
         transaction_opaque_data: bytes | None = None,
     ) -> MacrosResponse:
         """List macros in a schema (scalar or table)."""
-        self._enrich_catalog_span(vgi_schema_name=name)
+        self._enrich_catalog_span(vgi_schema_path=path)
         cat = self._get_catalog()
         infos = cat.schema_contents(  # type: ignore[call-overload]
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            name=name,
+            path=path,
             type=type,
         )
         return MacrosResponse.from_infos(list(infos))
@@ -5302,24 +5314,24 @@ class Worker:
     def catalog_index_get(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         transaction_opaque_data: bytes | None = None,
     ) -> IndexesResponse:
         """Get information about an index. Returns 0 or 1 items."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_index_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_index_name=name)
         cat = self._get_catalog()
         info = cat.index_get(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
         )
         return IndexesResponse.from_optional(info)
 
     def catalog_index_create(self, request: IndexCreateRequest) -> None:
         """Create a new index."""
-        self._enrich_catalog_span(vgi_schema_name=request.schema_name, vgi_index_name=request.name)
+        self._enrich_catalog_span(vgi_schema_path=request.schema_path, vgi_index_name=request.name)
         cat = self._get_catalog()
         cat.index_create(
             attach_opaque_data=self._unwrap_attach(request.attach_opaque_data),
@@ -5328,7 +5340,7 @@ class Worker:
             )
             if request.transaction_opaque_data
             else None,
-            schema_name=request.schema_name,
+            schema_path=request.schema_path,
             name=request.name,
             table_name=request.table_name,
             index_type=request.index_type,
@@ -5341,19 +5353,19 @@ class Worker:
     def catalog_index_drop(
         self,
         attach_opaque_data: bytes,
-        schema_name: str,
+        schema_path: list[str],
         name: str,
         ignore_not_found: bool = False,
         cascade: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop an index."""
-        self._enrich_catalog_span(vgi_schema_name=schema_name, vgi_index_name=name)
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_index_name=name)
         cat = self._get_catalog()
         cat.index_drop(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_name=schema_name,
+            schema_path=schema_path,
             name=name,
             ignore_not_found=ignore_not_found,
             cascade=cascade,
@@ -5362,16 +5374,16 @@ class Worker:
     def catalog_schema_contents_indexes(
         self,
         attach_opaque_data: bytes,
-        name: str,
+        path: list[str],
         transaction_opaque_data: bytes | None = None,
     ) -> IndexesResponse:
         """List indexes in a schema."""
-        self._enrich_catalog_span(vgi_schema_name=name)
+        self._enrich_catalog_span(vgi_schema_path=path)
         cat = self._get_catalog()
         infos = cat.schema_contents(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            name=name,
+            path=path,
             type=SchemaObjectType.INDEX,
         )
         return IndexesResponse.from_infos(list(infos))

@@ -104,7 +104,7 @@ def _catalog(name: str, function: type[Function]) -> Catalog:
         comment=f"Catalog-disambiguation twin ({name})",
         schemas=[
             Schema(
-                name=SCHEMA_NAME,
+                path=[SCHEMA_NAME],
                 comment=f"Colliding function name served by {name}",
                 functions=[function],
             ),

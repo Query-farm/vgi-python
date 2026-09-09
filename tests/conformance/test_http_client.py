@@ -64,9 +64,9 @@ def test_attach_and_list_schemas_over_http(http_example_base_url: str) -> None:
             data_version_spec=None,
             implementation_version=None,
         )
-        schema_names = [s.name for s in client.schemas(attach_opaque_data=attach.attach_opaque_data)]
+        schema_paths = [s.path for s in client.schemas(attach_opaque_data=attach.attach_opaque_data)]
 
-    assert "main" in schema_names
+    assert ["main"] in schema_paths
 
 
 def test_schema_contents_functions_over_http(http_example_base_url: str) -> None:
@@ -82,7 +82,7 @@ def test_schema_contents_functions_over_http(http_example_base_url: str) -> None
         )
         scalars = client.schema_contents(
             attach_opaque_data=attach.attach_opaque_data,
-            name="main",
+            path=["main"],
             type=SchemaObjectType.SCALAR_FUNCTION,
         )
 
@@ -102,7 +102,7 @@ def test_scalar_function_over_http(http_example_base_url: str) -> None:
         out = list(
             client.scalar_function(
                 function_name="double",
-                schema_name="main",
+                schema_path=["main"],
                 arguments=Arguments(positional=(pa.scalar("x"),)),
                 input=iter([batch]),
             )
@@ -120,7 +120,7 @@ def test_table_function_over_http(http_example_base_url: str) -> None:
         out = list(
             client.table_function(
                 function_name="sequence",
-                schema_name="main",
+                schema_path=["main"],
                 arguments=Arguments(positional=(pa.scalar(5),)),
             )
         )

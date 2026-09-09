@@ -146,7 +146,7 @@ def bind_fingerprint(bind_call: BindRequest) -> bytes:
         h.update(repr(value).encode("utf-8", "surrogatepass"))
         h.update(b"\x00")
 
-    _feed(b"schema_name", getattr(bind_call, "schema_name", None))
+    _feed(b"schema_path", getattr(bind_call, "schema_path", None))
     _feed(b"function_name", getattr(bind_call, "function_name", None))
     _feed(b"arguments", getattr(bind_call, "arguments", None))
     _feed(b"settings", getattr(bind_call, "settings", None))

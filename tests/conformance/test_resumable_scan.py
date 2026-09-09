@@ -60,7 +60,7 @@ def _reference_rows(base_url: str) -> list[int]:
     with Client.from_http(base_url) as client:
         return [
             v
-            for b in client.table_function(function_name="sequence", schema_name="main", arguments=_ARGS)
+            for b in client.table_function(function_name="sequence", schema_path=["main"], arguments=_ARGS)
             for v in _ns(b)
         ]
 
@@ -72,7 +72,7 @@ def test_resumable_scan_matches_table_function(http_base_url: str) -> None:
 
     rows: list[int] = []
     with Client.from_http(http_base_url) as client:
-        cur = client.table_scan_resumable(function_name="sequence", schema_name="main", arguments=_ARGS)
+        cur = client.table_scan_resumable(function_name="sequence", schema_path=["main"], arguments=_ARGS)
         while True:
             batch, _token = cur.next()
             if batch is None:
@@ -91,7 +91,7 @@ def test_resume_on_fresh_client_after_node_hop(http_base_url: str) -> None:
     token: bytes | None = None
     # Read the first few batches, then abandon the connection (as if the LB node died).
     with Client.from_http(http_base_url) as client:
-        cur = client.table_scan_resumable(function_name="sequence", schema_name="main", arguments=_ARGS)
+        cur = client.table_scan_resumable(function_name="sequence", schema_path=["main"], arguments=_ARGS)
         for _ in range(3):
             batch, token = cur.next()
             assert batch is not None
@@ -102,7 +102,7 @@ def test_resume_on_fresh_client_after_node_hop(http_base_url: str) -> None:
     # A brand-new client resumes from the serialized token alone.
     with Client.from_http(http_base_url) as client2:
         cur2 = client2.table_scan_resumable(
-            function_name="sequence", schema_name="main", arguments=_ARGS, resume_token=token
+            function_name="sequence", schema_path=["main"], arguments=_ARGS, resume_token=token
         )
         while True:
             batch, token = cur2.next()
@@ -128,7 +128,7 @@ def test_continue_on_fresh_client_skips_rebind(http_base_url: str) -> None:
     rows: list[int] = []
     token: bytes | None = None
     with Client.from_http(http_base_url) as client:
-        cur = client.table_scan_resumable(function_name="sequence", schema_name="main", arguments=_ARGS)
+        cur = client.table_scan_resumable(function_name="sequence", schema_path=["main"], arguments=_ARGS)
         for _ in range(3):
             batch, token = cur.next()
             assert batch is not None
@@ -165,4 +165,4 @@ def test_resumable_scan_rejected_on_subprocess() -> None:
     client = Client("/nonexistent/worker")  # subprocess transport, never started
     assert client.supports_resumable_scan is False
     with pytest.raises(ResumeUnsupported):
-        client.table_scan_resumable(function_name="sequence", schema_name="main", arguments=_ARGS)
+        client.table_scan_resumable(function_name="sequence", schema_path=["main"], arguments=_ARGS)

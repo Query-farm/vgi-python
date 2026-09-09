@@ -17,6 +17,7 @@ import click
 
 from vgi.catalog import FunctionInfo, SchemaObjectType, TableInfo, ViewInfo
 from vgi.client.cli_utils import (
+    SCHEMA_PATH,
     function_info_to_dict,
     optional_transaction_opaque_data,
     output_json,
@@ -56,14 +57,14 @@ def schema_list(
 
 
 @schema.command("get")
-@click.argument("name")
+@click.argument("path", type=SCHEMA_PATH)
 @click.option("--attach-opaque-data", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
 @click.option("--worker", "-w", required=True, help="VGI worker command")
 @click.option("--transaction-opaque-data", help="Transaction ID (hex) for transactional read")
 def schema_get(
-    name: str,
+    path: list[str],
     attach_opaque_data: str | None,
     catalog_name: str | None,
     attach_options: str,
@@ -72,23 +73,23 @@ def schema_get(
 ) -> None:
     """Get information about a schema.
 
-    NAME is the schema name.
+    PATH is a bare root schema or a JSON array of identifier components.
 
     """
     client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
     schema_info = client.schema_get(
         attach_opaque_data=resolved_attach_opaque_data,
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
-        name=name,
+        path=path,
     )
     if schema_info:
         output_json(schema_info_to_dict(schema_info))
     else:
-        output_json({"error": "not_found", "name": name})
+        output_json({"error": "not_found", "path": path})
 
 
 @schema.command("create")
-@click.argument("name")
+@click.argument("path", type=SCHEMA_PATH)
 @click.option("--attach-opaque-data", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
@@ -97,7 +98,7 @@ def schema_get(
 @click.option("--comment", help="Description of the schema")
 @click.option("--tags", default="{}", help="Metadata tags as JSON object")
 def schema_create(
-    name: str,
+    path: list[str],
     attach_opaque_data: str | None,
     catalog_name: str | None,
     attach_options: str,
@@ -108,7 +109,7 @@ def schema_create(
 ) -> None:
     """Create a new schema.
 
-    NAME is the name for the new schema.
+    PATH is a bare root schema or a JSON array of identifier components.
 
     """
     client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
@@ -116,15 +117,15 @@ def schema_create(
     client.schema_create(
         attach_opaque_data=resolved_attach_opaque_data,
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
-        name=name,
+        path=path,
         comment=comment,
         tags=tags_dict,
     )
-    output_json({"status": "created", "name": name})
+    output_json({"status": "created", "path": path})
 
 
 @schema.command("drop")
-@click.argument("name")
+@click.argument("path", type=SCHEMA_PATH)
 @click.option("--attach-opaque-data", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
@@ -133,7 +134,7 @@ def schema_create(
 @click.option("--ignore-not-found", is_flag=True, help="Don't error if not found")
 @click.option("--cascade", is_flag=True, help="Drop contained tables and views")
 def schema_drop(
-    name: str,
+    path: list[str],
     attach_opaque_data: str | None,
     catalog_name: str | None,
     attach_options: str,
@@ -144,22 +145,22 @@ def schema_drop(
 ) -> None:
     """Drop a schema.
 
-    NAME is the name of the schema to drop.
+    PATH is a bare root schema or a JSON array of identifier components.
 
     """
     client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
     client.schema_drop(
         attach_opaque_data=resolved_attach_opaque_data,
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
-        name=name,
+        path=path,
         ignore_not_found=ignore_not_found,
         cascade=cascade,
     )
-    output_json({"status": "dropped", "name": name})
+    output_json({"status": "dropped", "path": path})
 
 
 @schema.command("contents")
-@click.argument("name")
+@click.argument("path", type=SCHEMA_PATH)
 @click.option("--attach-opaque-data", help="Hex-encoded attach ID")
 @click.option("--catalog", "catalog_name", help="Catalog name for auto-attach")
 @click.option("--attach-options", default="{}", help="Attach options as JSON")
@@ -173,7 +174,7 @@ def schema_drop(
     help="Object type to list (required)",
 )
 def schema_contents(
-    name: str,
+    path: list[str],
     attach_opaque_data: str | None,
     catalog_name: str | None,
     attach_options: str,
@@ -183,7 +184,7 @@ def schema_contents(
 ) -> None:
     """List contents of a schema by object type.
 
-    NAME is the schema name.
+    PATH is a bare root schema or a JSON array of identifier components.
 
     Requires --type to specify which object type to list.
 
@@ -196,7 +197,7 @@ def schema_contents(
     for item in client.schema_contents(
         attach_opaque_data=resolved_attach_opaque_data,
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
-        name=name,
+        path=path,
         type=type_filter,
     ):
         if isinstance(item, TableInfo):

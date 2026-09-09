@@ -1119,11 +1119,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             assert self._iroh_endpoint is not None
             target = parse_iroh_uri(self._iroh_endpoint)
             native_transport = IrohHttpTransport(self._iroh_endpoint, **self._iroh_options)
-            iroh_headers = (
-                {"Authorization": f"Bearer {self._bearer_token}"}
-                if self._bearer_token is not None
-                else None
-            )
+            iroh_headers = {"Authorization": f"Bearer {self._bearer_token}"} if self._bearer_token is not None else None
             self._httpx_client = httpx2.Client(
                 base_url=f"http://{target.endpoint_hex}",
                 transport=cast("Any", native_transport),
@@ -1530,7 +1526,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         self,
         *,
         function_name: str,
-        schema_name: str,
+        schema_path: list[str],
         arguments: Arguments,
         function_type: FunctionType,
         input_schema: pa.Schema | None = None,
@@ -1545,7 +1541,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         """Create a BindRequest for the given function parameters."""
         return BindRequest(
             function_name=function_name,
-            schema_name=schema_name,
+            schema_path=schema_path,
             arguments=arguments,
             function_type=function_type,
             input_schema=input_schema,
@@ -1659,7 +1655,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         self,
         *,
         function_name: str,
-        schema_name: str,
+        schema_path: list[str],
         arguments: Arguments,
         function_type: FunctionType,
         input_schema: pa.Schema | None,
@@ -1723,7 +1719,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
 
         bind_request = self._make_bind_request(
             function_name=function_name,
-            schema_name=schema_name,
+            schema_path=schema_path,
             arguments=arguments,
             function_type=function_type,
             input_schema=input_schema,
@@ -2216,7 +2212,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         self,
         *,
         function_name: str,
-        schema_name: str,
+        schema_path: list[str],
         input: Iterator[pa.RecordBatch],
         arguments: Arguments | None = None,
         bind_result_callback: Callable[[BindResponse], None] | None = None,
@@ -2239,7 +2235,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         Args:
             function_name: Name of the function to invoke. Must exist in the
                 worker's registry.
-            schema_name: Name of the catalog schema that declares the function.
+            schema_path: Raw identifier path of the catalog schema that declares the function.
                 Required — a worker may register one name in several schemas, so
                 the (schema, name) pair is what identifies the implementation.
             input: Iterator yielding input `RecordBatch`es. Must yield at least one
@@ -2320,7 +2316,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
 
                 bind_request, bind_response, init_response = self._initialize_stream_common(
                     function_name=function_name,
-                    schema_name=schema_name,
+                    schema_path=schema_path,
                     arguments=arguments,
                     function_type=FunctionType.TABLE,
                     input_schema=input_schema,
@@ -2384,7 +2380,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         self,
         *,
         function_name: str,
-        schema_name: str,
+        schema_path: list[str],
         input: Iterator[pa.RecordBatch],
         arguments: Arguments | None = None,
         bind_result_callback: Callable[[BindResponse], None] | None = None,
@@ -2423,7 +2419,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
 
         Args:
             function_name: Name of the ``TableBufferingFunction`` to invoke.
-            schema_name: Name of the catalog schema that declares the function.
+            schema_path: Raw identifier path of the catalog schema that declares the function.
                 Required — a worker may register one name in several schemas, so
                 the (schema, name) pair is what identifies the implementation.
             input: Iterator yielding input `RecordBatch`es. May be empty —
@@ -2476,7 +2472,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
 
             bind_request = self._make_bind_request(
                 function_name=function_name,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 arguments=arguments,
                 function_type=FunctionType.TABLE_BUFFERING,
                 input_schema=input_schema,
@@ -2637,7 +2633,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         self,
         *,
         function_name: str,
-        schema_name: str,
+        schema_path: list[str],
         arguments: Arguments | None = None,
         function_type: FunctionType = FunctionType.TABLE,
         settings: dict[str, Any] | None = None,
@@ -2660,7 +2656,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         Args:
             function_name: Name of the function to bind. Must exist in the
                 worker's registry.
-            schema_name: Name of the catalog schema that declares the
+            schema_path: Raw identifier path of the catalog schema that declares the
                 function. Required — a worker may register one name in
                 several schemas, so the (schema, name) pair is what
                 identifies the implementation.
@@ -2694,7 +2690,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         try:
             bind_request = self._make_bind_request(
                 function_name=function_name,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 arguments=arguments,
                 function_type=function_type,
                 settings=settings,
@@ -2709,7 +2705,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         self,
         *,
         function_name: str,
-        schema_name: str,
+        schema_path: list[str],
         arguments: Arguments | None = None,
         projection_ids: list[int] | None = None,
         pushdown_filters: bytes | None = None,
@@ -2746,7 +2742,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
 
         Args:
             function_name: Name of the table function to plan.
-            schema_name: Name of the catalog schema that declares the function.
+            schema_path: Raw identifier path of the catalog schema that declares the function.
             arguments: Optional [`Arguments`][] container. Defaults to empty
                 `Arguments()`.
             projection_ids: Optional list of column indices for projection —
@@ -2794,7 +2790,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
 
             bind_request = self._make_bind_request(
                 function_name=function_name,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 arguments=arguments,
                 function_type=FunctionType.TABLE,
                 settings=settings,
@@ -2836,7 +2832,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         self,
         *,
         function_name: str,
-        schema_name: str,
+        schema_path: list[str],
         arguments: Arguments | None = None,
         bind_result_callback: Callable[[BindResponse], None] | None = None,
         projection_ids: list[int] | None = None,
@@ -2867,7 +2863,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         Args:
             function_name: Name of the function to invoke. Must exist in the
                 worker's registry and be a table function (not table-in-out).
-            schema_name: Name of the catalog schema that declares the function.
+            schema_path: Raw identifier path of the catalog schema that declares the function.
                 Required — a worker may register one name in several schemas, so
                 the (schema, name) pair is what identifies the implementation.
             arguments: Optional [`Arguments`][] container with positional and named
@@ -2944,7 +2940,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
 
             self._initialize_stream_common(
                 function_name=function_name,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 arguments=arguments,
                 function_type=FunctionType.TABLE,
                 input_schema=None,
@@ -2983,7 +2979,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         self,
         *,
         function_name: str,
-        schema_name: str,
+        schema_path: list[str],
         arguments: Arguments | None = None,
         projection_ids: list[int] | None = None,
         pushdown_filters: bytes | None = None,
@@ -3006,7 +3002,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
 
         Args:
             function_name: Name of the table function to scan.
-            schema_name: Name of the catalog schema that declares the function.
+            schema_path: Raw identifier path of the catalog schema that declares the function.
                 Required — a worker may register one name in several schemas, so
                 the (schema, name) pair is what identifies the implementation.
             arguments: Positional/named arguments for the function's bind.
@@ -3044,7 +3040,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             # (parallel max_workers>1 reads are unordered and not token-resumable).
             bind_request = self._make_bind_request(
                 function_name=function_name,
-                schema_name=schema_name,
+                schema_path=schema_path,
                 arguments=arguments,
                 function_type=FunctionType.TABLE,
                 input_schema=None,
@@ -3236,7 +3232,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         self,
         *,
         function_name: str,
-        schema_name: str,
+        schema_path: list[str],
         format: str,
         file_path: str,
         expected_schema: pa.Schema,
@@ -3261,7 +3257,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         Args:
             function_name: The reader function (a ``CopyFromFunction``) — the
                 ``handler`` field of the advertised format.
-            schema_name: Catalog schema that declares the function.
+            schema_path: Catalog schema that declares the function.
             format: The SQL ``FORMAT`` identifier the read is running under.
             file_path: Source path from the ``COPY ... FROM 'path'`` statement.
             expected_schema: Schema of the COPY target's columns, in target
@@ -3285,7 +3281,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         """
         yield from self.table_function(
             function_name=function_name,
-            schema_name=schema_name,
+            schema_path=schema_path,
             arguments=arguments,
             bind_result_callback=bind_result_callback,
             projection_ids=projection_ids,
@@ -3303,7 +3299,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         self,
         *,
         function_name: str,
-        schema_name: str,
+        schema_path: list[str],
         format: str,
         file_path: str,
         input: Iterator[pa.RecordBatch],
@@ -3327,7 +3323,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         Args:
             function_name: The writer function (a ``CopyToFunction``) — the
                 ``handler`` field of the advertised format.
-            schema_name: Catalog schema that declares the function.
+            schema_path: Catalog schema that declares the function.
             format: The SQL ``FORMAT`` identifier the write is running under.
             file_path: Destination path from the ``COPY ... TO 'path'``
                 statement.
@@ -3348,7 +3344,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         """
         for batch in self.table_buffering_function(
             function_name=function_name,
-            schema_name=schema_name,
+            schema_path=schema_path,
             input=input,
             arguments=arguments,
             bind_result_callback=bind_result_callback,
@@ -3369,7 +3365,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         self,
         *,
         function_name: str,
-        schema_name: str,
+        schema_path: list[str],
         input: Iterator[pa.RecordBatch],
         arguments: Arguments | None = None,
         bind_result_callback: Callable[[BindResponse], None] | None = None,
@@ -3389,7 +3385,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         Args:
             function_name: Name of the function to invoke. Must exist in the
                 worker's registry.
-            schema_name: Name of the catalog schema that declares the function.
+            schema_path: Raw identifier path of the catalog schema that declares the function.
                 Required — a worker may register one name in several schemas, so
                 the (schema, name) pair is what identifies the implementation.
             input: Iterator yielding input `RecordBatch`es. Must yield at least one
@@ -3434,7 +3430,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
 
                 self._initialize_stream_common(
                     function_name=function_name,
-                    schema_name=schema_name,
+                    schema_path=schema_path,
                     arguments=arguments,
                     function_type=FunctionType.SCALAR,
                     input_schema=input_schema,
