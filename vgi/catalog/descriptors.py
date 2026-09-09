@@ -24,6 +24,7 @@ from vgi.arguments import Arguments
 from vgi.catalog.catalog_interface import (
     AttachOpaqueData,
     ColumnStatistics,
+    ForeignKeyInfo,
     IndexConstraintType,
     IndexInfo,
     MacroInfo,
@@ -571,28 +572,15 @@ class Table:
 
     def _serialize_foreign_keys(self, schema_path: SchemaPath) -> list[bytes]:
         """Serialize foreign key constraints as IPC bytes."""
-        from vgi_rpc.utils import serialize_record_batch_bytes
-
-        result = []
-        for fk in self.foreign_key:
-            batch = pa.RecordBatch.from_pydict(
-                {
-                    "fk_columns": [list(fk.columns)],
-                    "pk_columns": [list(fk.referenced_columns)],
-                    "referenced_table": [fk.referenced_table],
-                    "referenced_schema_path": [fk.referenced_schema_path or schema_path],
-                },
-                schema=pa.schema(
-                    [
-                        ("fk_columns", pa.list_(pa.utf8())),
-                        ("pk_columns", pa.list_(pa.utf8())),
-                        ("referenced_table", pa.utf8()),
-                        ("referenced_schema_path", pa.list_(pa.utf8())),
-                    ]
-                ),
-            )
-            result.append(serialize_record_batch_bytes(batch))
-        return result
+        return [
+            ForeignKeyInfo(
+                fk_columns=list(fk.columns),
+                pk_columns=list(fk.referenced_columns),
+                referenced_table=fk.referenced_table,
+                referenced_schema_path=fk.referenced_schema_path or schema_path,
+            ).serialize_to_bytes()
+            for fk in self.foreign_key
+        ]
 
     def _apply_defaults_to_schema(self, schema: pa.Schema) -> pa.Schema:
         """Return schema with default value metadata applied to fields."""

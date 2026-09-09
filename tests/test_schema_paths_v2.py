@@ -22,7 +22,14 @@ from vgi.catalog import (
 from vgi.client.cli_utils import SCHEMA_PATH
 from vgi.codegen._common import EXTRA_RESPONSE_TYPES, REQUEST_TYPES, collect_schemas
 from vgi.invocation import FunctionType
-from vgi.protocol import BindRequest, IndexCreateRequest, MacroCreateRequest, TableCreateRequest
+from vgi.protocol import (
+    BindRequest,
+    CatalogAttachRequest,
+    ClientCapabilities,
+    IndexCreateRequest,
+    MacroCreateRequest,
+    TableCreateRequest,
+)
 from vgi.schema_path import schema_path_key, sql_qualified_name
 from vgi.transactor.server import TransactorImpl
 from vgi.worker import Worker
@@ -60,6 +67,28 @@ def test_bind_request_preserves_nested_path_and_dotted_component() -> None:
     )
     restored = BindRequest.deserialize_from_bytes(request.serialize_to_bytes())
     assert restored.schema_path == ["tenant.with.dot", "analytics", "daily"]
+
+
+def test_catalog_attach_round_trips_typed_client_capabilities() -> None:
+    """The opaque capabilities blob has one shared, independently generated schema."""
+    capabilities = ClientCapabilities(
+        engine="duckdb",
+        native_formats=["parquet", "csv", "json"],
+        catalogs=["ducklake", "iceberg"],
+        can_stream=False,
+        filter_encodings=["vgi.filters.v1"],
+    )
+    request = CatalogAttachRequest(
+        name="lake",
+        options=None,
+        data_version_spec=None,
+        implementation_version=None,
+        client_capabilities=capabilities,
+    )
+
+    restored = CatalogAttachRequest.deserialize_from_bytes(request.serialize_to_bytes())
+    assert restored.client_capabilities == capabilities
+    assert CatalogAttachRequest.ARROW_SCHEMA.field("client_capabilities").type == pa.binary()
 
 
 def test_manual_scan_records_preserve_both_kinds_of_schema_path() -> None:

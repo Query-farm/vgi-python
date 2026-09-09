@@ -27,6 +27,7 @@ from vgi.catalog.catalog_interface import (
     CatalogInfo,
     CatalogObject,
     CopyFromFormatInfo,
+    ForeignKeyInfo,
     FunctionInfo,
     IndexInfo,
     MacroInfo,
@@ -54,6 +55,7 @@ from vgi.protocol import (
     BindRequest,
     CatalogAttachRequest,
     CatalogCreateRequest,
+    ClientCapabilities,
     CopyFromContext,
     CopyToContext,
     IndexCreateRequest,
@@ -93,6 +95,7 @@ EXTRA_RESPONSE_TYPES: tuple[type, ...] = (
     ScanBranch,  # one entry inside ScanBranchesResult.branches (binary blob)
     ScanSplit,  # one entry inside PlanResponse.splits (binary blob)
     AttachCatalogInfo,  # one entry inside CatalogAttachResult.attach_catalogs (binary blob)
+    ForeignKeyInfo,  # one entry inside TableInfo.foreign_key_constraints (binary blob)
 )
 
 
@@ -123,6 +126,7 @@ REQUEST_TYPES: tuple[type, ...] = (
     BindRequest,
     CatalogAttachRequest,
     CatalogCreateRequest,
+    ClientCapabilities,  # nested inside CatalogAttachRequest.client_capabilities
     CopyFromContext,
     CopyToContext,
     GlobalInitResponse,

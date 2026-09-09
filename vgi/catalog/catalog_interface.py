@@ -62,6 +62,7 @@ __all__ = [
     "CatalogExample",
     "CatalogInfo",
     "ColumnStatistics",
+    "ForeignKeyInfo",
     "IndexConstraintType",
     "IndexInfo",
     "SecretLookupEntry",
@@ -362,6 +363,27 @@ class SchemaInfo(CatalogObject, ArrowSerializableDataclass):
     attach_opaque_data: AttachOpaqueData
     path: SchemaPath
     estimated_object_count: dict[str, int] | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ForeignKeyInfo(ArrowSerializableDataclass):
+    """Serialized foreign-key constraint carried inside `TableInfo`.
+
+    `TableInfo.foreign_key_constraints` contains IPC-serialized instances of
+    this record. It is distinct from the author-facing `ForeignKeyDef`, whose
+    column-name fields are resolved into this wire representation.
+
+    Attributes:
+        fk_columns: Referencing column names on the table carrying the constraint.
+        pk_columns: Referenced column names on the target table.
+        referenced_table: Name of the target table.
+        referenced_schema_path: Schema path containing the target table.
+    """
+
+    fk_columns: list[str]
+    pk_columns: list[str]
+    referenced_table: str
+    referenced_schema_path: SchemaPath
 
 
 @dataclass(frozen=True)

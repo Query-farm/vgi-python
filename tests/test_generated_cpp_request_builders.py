@@ -89,3 +89,12 @@ def test_emits_at_least_a_few_builders() -> None:
     text = out.getvalue()
     count = text.count("\ninline std::shared_ptr<arrow::RecordBatch> Build")
     assert count >= 30, f"generator emitted only {count} builders — expected at least 30"
+
+
+def test_emits_builders_for_opaque_nested_records() -> None:
+    """C++ can construct nested protocol records without hand-written schemas."""
+    out = io.StringIO()
+    emit(out)
+    text = out.getvalue()
+    assert "BuildClientCapabilities(" in text
+    assert "BuildForeignKeyInfo(" in text

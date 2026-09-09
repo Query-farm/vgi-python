@@ -4,8 +4,9 @@ r"""Emit RecordBatch-builders for VGI RPC request schemas as a C++ header.
 
 Companion to ``cpp_schemas`` (which emits the schema-factory header). This
 generator emits one ``Build<Name>Params(...)`` function per ``params`` schema
-collected from VgiProtocol — the Arrow record-batch builders the C++ extension
-uses to construct outgoing RPC request batches.
+collected from VgiProtocol, plus builders for selected opaque nested records —
+the Arrow record-batch builders the C++ extension uses to construct outgoing
+RPC request batches.
 
 Why a generator: hand-coded ``Build*Params`` functions in
 ``vgi/src/vgi_rpc_types.cpp`` and the schema declarations in
@@ -42,7 +43,9 @@ import sys
 from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
+from vgi_rpc import ArrowSerializableDataclass
 
+from vgi.catalog.catalog_interface import ForeignKeyInfo
 from vgi.codegen._common import (
     DEFAULT_CPP_NAMESPACE,
     EmittedSchema,
@@ -52,13 +55,21 @@ from vgi.codegen._common import (
     open_namespace,
     parse_cpp_namespace,
     provenance_comment,
+    sanitize_name,
 )
+from vgi.protocol import ClientCapabilities
 
 if TYPE_CHECKING:
     from typing import TextIO
 
 
 GENERATOR_VERSION = "1"
+
+
+# Opaque nested records that the C++ client constructs directly. Their schemas
+# are part of the shared schema inventory, while this list additionally opts
+# them into concrete C++ builders.
+STANDALONE_BUILDER_TYPES: tuple[type[ArrowSerializableDataclass], ...] = (ClientCapabilities, ForeignKeyInfo)
 
 
 # Methods whose ``params`` field set is hand-coded in vgi_rpc_types.cpp because
@@ -353,12 +364,13 @@ def emit_builders(
     helpers_include: str = "vgi_rpc_types.hpp",
     exception_include: str = '"duckdb/common/exception.hpp"',
     exception_type: str = "IOException",
+    standalone_schemas: tuple[EmittedSchema, ...] = (),
 ) -> None:
     """Render request-builder functions for a set of params schemas as a C++ header.
 
     Shared by the main protocol generator and the secret protocol generator;
-    only the schema set, the schema-factory include, and the provenance banner
-    differ.
+    only the schema set, standalone opaque records, the schema-factory include,
+    and the provenance banner differ.
 
     The generated builders lean on two things this function does not
     hard-code, so a non-DuckDB C++ SDK (a client, not just a worker) can
@@ -420,6 +432,14 @@ def emit_builders(
         else:
             emitted.append(method_name)
 
+    for es in standalone_schemas:
+        chunk = _emit_builder(es, method_name=es.name, exception_type=exception_type)
+        body.write(chunk + "\n")
+        if chunk.lstrip().startswith("// SKIPPED"):
+            skipped.append(es.name)
+        else:
+            emitted.append(es.name)
+
     body.write(close_namespace(namespace))
 
     out.write("// ============================================================================\n")
@@ -456,6 +476,10 @@ def emit(
     exception_type: str = "IOException",
 ) -> None:
     """Emit the generated C++ request-builder header to *out*."""
+    standalone_schemas = tuple(
+        EmittedSchema(name=sanitize_name(cls.__name__), schema=cls.ARROW_SCHEMA, origin=cls.__name__)
+        for cls in STANDALONE_BUILDER_TYPES
+    )
     emit_builders(
         out,
         collect_schemas(),
@@ -470,6 +494,7 @@ def emit(
         helpers_include=helpers_include,
         exception_include=exception_include,
         exception_type=exception_type,
+        standalone_schemas=standalone_schemas,
     )
 
 

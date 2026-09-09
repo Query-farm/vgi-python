@@ -86,6 +86,7 @@ from vgi.table_in_out_function import TableInOutGenerator
 
 __all__ = [
     "BindRequest",
+    "ClientCapabilities",
     "CatalogAttachRequest",
     "CatalogCreateRequest",
     "CatalogsResponse",
@@ -691,6 +692,29 @@ class TableFunctionDynamicToStringResponse(ArrowSerializableDataclass):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class ClientCapabilities(ArrowSerializableDataclass):
+    """Capabilities an engine client advertises while attaching a catalog.
+
+    This record is serialized as IPC bytes inside
+    [`CatalogAttachRequest.client_capabilities`][]. Naming the inner record
+    keeps every SDK's schema and builder generated from the same definition.
+
+    Attributes:
+        engine: Engine family constructing the request.
+        native_formats: File formats the client can scan without worker-side conversion.
+        catalogs: Companion catalog types the client can attach.
+        can_stream: Whether the client can consume an unbounded streaming scan.
+        filter_encodings: Filter representations understood by the client.
+    """
+
+    engine: str
+    native_formats: list[str]
+    catalogs: list[str]
+    can_stream: bool
+    filter_encodings: list[str]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class CatalogAttachRequest(ArrowSerializableDataclass):
     """Request for catalog_attach. Uses `RecordBatch` for mixed-type options.
 
@@ -722,7 +746,7 @@ class CatalogAttachRequest(ArrowSerializableDataclass):
     options: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
     data_version_spec: str | None
     implementation_version: str | None
-    client_capabilities: Annotated[bytes | None, ArrowType(pa.binary())] = None
+    client_capabilities: Annotated[ClientCapabilities | None, ArrowType(pa.binary())] = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

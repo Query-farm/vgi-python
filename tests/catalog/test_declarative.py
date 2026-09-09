@@ -697,10 +697,13 @@ class TestTableForeignKeyConstraints:
         )
         fk_bytes = table._serialize_foreign_keys(["my_schema"])
         assert len(fk_bytes) == 1
-        from vgi_rpc.utils import deserialize_record_batch
+        from vgi.catalog import ForeignKeyInfo
 
-        batch, _ = deserialize_record_batch(fk_bytes[0])
-        assert batch.column("referenced_schema_path")[0].as_py() == ["my_schema"]
+        info = ForeignKeyInfo.deserialize_from_bytes(fk_bytes[0])
+        assert info.fk_columns == ["ref_id"]
+        assert info.pk_columns == ["id"]
+        assert info.referenced_table == "other"
+        assert info.referenced_schema_path == ["my_schema"]
 
     def test_serialize_foreign_keys_uses_explicit_schema(self) -> None:
         """_serialize_foreign_keys uses ForeignKeyDef.referenced_schema_path when set."""
@@ -717,10 +720,10 @@ class TestTableForeignKeyConstraints:
             ),
         )
         fk_bytes = table._serialize_foreign_keys(["my_schema"])
-        from vgi_rpc.utils import deserialize_record_batch
+        from vgi.catalog import ForeignKeyInfo
 
-        batch, _ = deserialize_record_batch(fk_bytes[0])
-        assert batch.column("referenced_schema_path")[0].as_py() == ["alt_schema"]
+        info = ForeignKeyInfo.deserialize_from_bytes(fk_bytes[0])
+        assert info.referenced_schema_path == ["alt_schema"]
 
 
 class TestTableToTableInfoConstraints:
