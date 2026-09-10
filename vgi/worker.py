@@ -1868,6 +1868,7 @@ class Worker:
         arguments: Arguments,
         input_schema: pa.Schema | None,
         candidates: Sequence[type[Function]],
+        argument_names: Sequence[str | None] | None = None,
         schema_registry: dict[tuple[tuple[str, ...], str], list[type[Function]]] | None = None,
     ) -> type[Function]:
         """Find the function that matches the invocation's arguments.
@@ -1881,6 +1882,8 @@ class Worker:
             function_name: The name of the candidate function
             arguments: The arguments that were used to call the function
             input_schema: The input_schema that is passed to the function,
+            argument_names: Resolved names aligned with the complete logical
+                argument order, or None when unavailable.
             candidates: Sequence of function classes with the same name.
             schema_registry: The worker's ``(schema, name)`` index, used only to
                 turn a cross-schema tie into an actionable error message.
@@ -1911,6 +1914,24 @@ class Worker:
             positional_params = [p for p in meta.parameters if isinstance(p.position, int) and not p.is_table_input]
             named_params = [p for p in meta.parameters if isinstance(p.position, str)]
 
+            if argument_names is not None and is_scalar:
+                fixed_positional_params = [p for p in positional_params if not p.is_varargs]
+                has_positional_varargs = any(p.is_varargs for p in positional_params)
+                names_match = True
+                for index, argument_name in enumerate(argument_names):
+                    if index < len(fixed_positional_params):
+                        if (
+                            argument_name is None
+                            or argument_name.casefold() != fixed_positional_params[index].name.casefold()
+                        ):
+                            names_match = False
+                            break
+                    elif not has_positional_varargs:
+                        names_match = False
+                        break
+                if not names_match:
+                    continue
+
             # Check positional arguments
             if is_scalar:
                 # Scalar functions have two calling conventions:
@@ -1924,8 +1945,9 @@ class Worker:
                 #    - Column NAMES passed as positional args to specify bindings
                 #    - All params come from invocation.arguments
                 #
-                # All scalar params are always required (no defaults).
-                # Scalar functions don't support named arguments.
+                # Fixed parameters may declare trailing defaults. SQL named
+                # calls are normalized by the engine before this point; raw
+                # Arguments.named remains reserved for table-style options.
 
                 # Only ConstParams come from arguments
                 # Column params come from input batch
@@ -1941,7 +1963,8 @@ class Worker:
                     if num_positional != expected_positional:
                         continue  # Must match exactly
 
-                # Scalar functions don't support named arguments
+                # Named scalar arguments are represented by argument_names,
+                # not by the table-option Arguments.named map.
                 if named_keys:
                     continue
             elif meta.input_from_args:
@@ -2315,6 +2338,7 @@ class Worker:
             function_name=request.function_name,
             arguments=request.arguments,
             input_schema=request.input_schema,
+            argument_names=request.argument_names,
             candidates=candidates,
             schema_registry=self._build_schema_registry(),
         )
@@ -3040,6 +3064,7 @@ class Worker:
         bind_params = AggregateBindParams(
             args=request.arguments,
             input_schema=request.input_schema,
+            argument_names=request.argument_names,
             settings=_batch_to_scalar_dict(request.settings),
             secrets=SecretsAccessor(request.secrets),
             auth_context=ctx.auth,

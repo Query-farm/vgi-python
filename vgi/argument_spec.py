@@ -29,6 +29,7 @@ __all__ = [
     "ArgumentSpec",
     "argument_specs_to_schema",
     "extract_argument_specs",
+    "parameter_default_values_from_specs",
     "macro_arguments_schema",
     "macro_parameter_docs_from_schema",
     "schema_to_argument_specs",
@@ -78,7 +79,8 @@ VGI_DOC_KEY = b"vgi_doc"
 # Keys carrying per-argument constraint metadata for agent discovery. All are
 # presence-only (omitted when the constraint is absent) and value-encoded as
 # UTF-8 so the column type stays uniform regardless of the arg's value type:
-#   vgi_default — JSON scalar (the arg's default value; named/optional args only)
+#   vgi_default — legacy JSON discovery rendering of an argument default;
+#                 FunctionInfo.parameter_default_values is authoritative
 #   vgi_choices — JSON array (the closed set of allowed values)
 #   vgi_range   — interval notation built from ge/le/gt/lt (e.g. "[0, 100]",
 #                 "(0, +inf)", "[1, 10)"); a discovery surface, not the raw bounds
@@ -131,7 +133,11 @@ class ArgumentSpec:
             through the catalog as the ``vgi_doc`` Arrow field metadata key
             (UTF-8); empty string means undocumented.
         default_json: Optional JSON-encoded default value (``vgi_default``);
-            None when the argument is required.
+            None when the argument is required. This is discovery-only; the
+            authoritative typed value is transported by
+            ``FunctionInfo.parameter_default_values``.
+        default_value: Python value used to construct the authoritative typed
+            default. ``_MISSING`` means the parameter is required.
         choices_json: Optional JSON array of allowed values (``vgi_choices``);
             None when the argument is not restricted to a closed set.
         range_notation: Optional interval-notation string built from the arg's
@@ -162,6 +168,7 @@ class ArgumentSpec:
     is_const: bool = False
     doc: str = ""
     default_json: str | None = None
+    default_value: Any = _MISSING
     choices_json: str | None = None
     range_notation: str | None = None
     pattern: str | None = None
@@ -336,6 +343,76 @@ def schema_to_argument_specs(schema: pa.Schema) -> list[ArgumentSpec]:
     return specs
 
 
+def parameter_default_values_from_specs(
+    specs: Sequence[ArgumentSpec], *, require_trailing: bool = False
+) -> pa.RecordBatch | None:
+    """Build the authoritative typed default-value batch for a function.
+
+    The result has exactly one row and contains only parameters that declare a
+    default, in signature order. Column presence distinguishes a default from a
+    required parameter, so an explicit null default remains representable.
+
+    Args:
+        specs: Function argument specifications.
+        require_trailing: Validate scalar/aggregate signature rules: parameter
+            names are case-insensitively unique and defaults form a trailing
+            sequence of fixed parameters.
+
+    Returns:
+        A one-row RecordBatch, or ``None`` when no defaults are declared.
+
+    Raises:
+        ValueError: If the signature/default ordering is invalid or a value
+            cannot be represented using its declared Arrow type.
+    """
+    ordered_specs = sorted(specs, key=_argument_spec_sort_key)
+    seen_names: set[str] = set()
+    found_default = False
+    default_specs: list[ArgumentSpec] = []
+
+    for spec in ordered_specs:
+        folded_name = spec.name.casefold()
+        if folded_name in seen_names:
+            raise ValueError(f"Duplicate function parameter name: {spec.name!r}")
+        seen_names.add(folded_name)
+
+        has_default = spec.default_value is not _MISSING
+        if spec.is_varargs:
+            if has_default:
+                raise ValueError(f"Variadic parameter {spec.name!r} cannot have a default value")
+            continue
+        if require_trailing:
+            if has_default:
+                found_default = True
+            elif found_default:
+                raise ValueError(f"Required parameter {spec.name!r} cannot follow a parameter with a default value")
+        if has_default:
+            default_specs.append(spec)
+
+    if not default_specs:
+        return None
+
+    arrays: list[pa.Array[Any]] = []
+    names: list[str] = []
+    for spec in default_specs:
+        if pa.types.is_null(spec.arrow_type):
+            raise ValueError(
+                f"Parameter {spec.name!r} has a default but no concrete Arrow type; "
+                "typed defaults require an explicit parameter type"
+            )
+        value = spec.default_value
+        if isinstance(value, pa.Scalar):
+            value = value.as_py()
+        try:
+            arrays.append(pa.array([value], type=spec.arrow_type))
+        except (pa.ArrowException, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Default for parameter {spec.name!r} cannot be represented as {spec.arrow_type}: {exc}"
+            ) from exc
+        names.append(spec.name)
+    return pa.RecordBatch.from_arrays(arrays, names=names)
+
+
 # =============================================================================
 # Macro Argument Schemas
 # =============================================================================
@@ -481,6 +558,7 @@ def _constraint_kwargs(arg: Arg[Any]) -> dict[str, Any]:
 
     default = getattr(arg, "default", _MISSING)
     if default is not _MISSING:
+        kwargs["default_value"] = default
         try:
             kwargs["default_json"] = json.dumps(default)
         except (TypeError, ValueError):

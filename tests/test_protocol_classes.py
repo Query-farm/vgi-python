@@ -1183,6 +1183,28 @@ class TestBindCallWireFormat:
             function_type=FunctionType.TABLE,
         )
 
+    def test_argument_names_round_trip(self) -> None:
+        """Bind requests preserve aligned names, including unnamed varargs."""
+        from vgi.invocation import FunctionType
+        from vgi.protocol import AggregateBindRequest, BindRequest
+
+        bind = BindRequest(
+            function_name="f",
+            arguments=Arguments(),
+            function_type=FunctionType.SCALAR,
+            argument_names=["value", None, "named_tail"],
+        )
+        restored = BindRequest.deserialize_from_bytes(bind.serialize_to_bytes())
+        assert restored.argument_names == ["value", None, "named_tail"]
+
+        aggregate_bind = AggregateBindRequest(
+            function_name="agg",
+            arguments=Arguments(),
+            argument_names=["value", "separator"],
+        )
+        restored_aggregate = AggregateBindRequest.deserialize_from_bytes(aggregate_bind.serialize_to_bytes())
+        assert restored_aggregate.argument_names == ["value", "separator"]
+
     def test_init_request_bind_call_is_binary(self) -> None:
         """``InitRequest.bind_call`` serializes as binary and round-trips."""
         from vgi.protocol import InitRequest

@@ -26,6 +26,7 @@ from vgi.argument_spec import (
     _format_range,
     argument_specs_to_schema,
     extract_argument_specs,
+    parameter_default_values_from_specs,
     schema_to_argument_specs,
 )
 from vgi.arguments import AnyArrow, AnyArrowValue, Arg, TableInput
@@ -824,3 +825,55 @@ class TestArgumentConstraints:
         # The columnar Param carries no constraints.
         assert specs["value"].choices_json is None
         assert specs["value"].range_notation is None
+
+    def test_scalar_signature_defaults_build_typed_batch(self) -> None:
+        """Python method defaults become typed FunctionInfo default values."""
+        from vgi.arguments import ConstParam, Param, Returns
+        from vgi.scalar_function import ScalarFunction
+
+        class DefaultedScalar(ScalarFunction):
+            class Meta:
+                name = "defaulted_scalar"
+
+            @classmethod
+            def compute(
+                cls,
+                value: Annotated[pa.Int64Array, Param()],
+                factor: Annotated[int, ConstParam()] = 2,
+                label: Annotated[str | None, ConstParam(arrow_type=pa.string())] = None,
+            ) -> Annotated[pa.Int64Array, Returns()]:
+                raise AssertionError("metadata-only test")
+
+        specs = extract_argument_specs(DefaultedScalar)
+        defaults = parameter_default_values_from_specs(specs, require_trailing=True)
+
+        assert defaults is not None
+        assert defaults.num_rows == 1
+        assert defaults.schema.names == ["factor", "label"]
+        assert defaults.column("factor").type == pa.int64()
+        assert defaults.column("factor")[0].as_py() == 2
+        assert defaults.column("label").type == pa.string()
+        assert defaults.column("label")[0].as_py() is None
+
+    def test_typed_default_requires_concrete_parameter_type(self) -> None:
+        """An ANY parameter cannot carry an untyped protocol default."""
+        spec = ArgumentSpec(
+            name="value",
+            position=0,
+            arrow_type=pa.null(),
+            is_any_type=True,
+            default_value=1,
+        )
+
+        with pytest.raises(ValueError, match="typed defaults require an explicit parameter type"):
+            parameter_default_values_from_specs([spec], require_trailing=True)
+
+    def test_typed_defaults_reject_case_insensitive_duplicate_names(self) -> None:
+        """Default-batch field names must identify one signature slot."""
+        specs = [
+            ArgumentSpec(name="Scale", position=0, arrow_type=pa.int64()),
+            ArgumentSpec(name="scale", position=1, arrow_type=pa.int64(), default_value=2),
+        ]
+
+        with pytest.raises(ValueError, match="Duplicate function parameter name"):
+            parameter_default_values_from_specs(specs)

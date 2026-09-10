@@ -281,6 +281,34 @@ class AddValuesFunction(ScalarFunction):
         return result
 
 
+class ArgumentNamesProbeFunction(ScalarFunction):
+    """Verify that the engine forwards the complete resolved bind signature."""
+
+    class Meta:
+        """Function metadata."""
+
+        name = "argument_names_probe"
+        description = "Checks VGI 2.0 bind-time argument names"
+
+    @classmethod
+    def on_bind(cls, params: BindParameters) -> BindResult:
+        """Reject a bind that loses names or separates ConstParam too early."""
+        expected = ["left", "right", "scale"]
+        if params.argument_names != expected:
+            raise ValueError(f"argument_names_probe expected {expected!r}, got {params.argument_names!r}")
+        return BindResult(pa.int64())
+
+    @classmethod
+    def compute(
+        cls,
+        left: Annotated[pa.Int64Array, Param(doc="Left value")],
+        right: Annotated[pa.Int64Array, Param(doc="Right value")],
+        scale: Annotated[int, ConstParam("Scale factor", arrow_type=pa.int64())] = 2,
+    ) -> Annotated[pa.Int64Array, Returns(pa.int64())]:
+        """Add both inputs and multiply by the constant scale."""
+        return pc.multiply(pc.add(left, right), scale)
+
+
 class SumValuesFunction(ScalarFunction):
     """Sums multiple numeric values.
 

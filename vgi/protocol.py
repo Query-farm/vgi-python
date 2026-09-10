@@ -212,6 +212,10 @@ class BindRequest(ArrowSerializableDataclass):
             into, so a name registered in two schemas resolves to the right
             implementation. ``None`` for non-catalog callers (the legacy
             ``Worker.functions`` list), where lookup falls back to bare name.
+        argument_names: Resolved name of each logical argument, aligned with the
+            complete pre-execution argument order. Fixed parameters use their
+            declared names, unnamed varargs contain ``None``, and named varargs
+            retain the caller-provided name. ``None`` means names are unavailable.
     """
 
     function_name: str
@@ -236,6 +240,8 @@ class BindRequest(ArrowSerializableDataclass):
     # Catalog schema owning the function; disambiguates a name registered in
     # more than one schema. None for non-catalog callers.
     schema_path: SchemaPath | None = None
+
+    argument_names: Annotated[list[str | None] | None, ArrowType(pa.list_(pa.string()))] = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -2416,6 +2422,8 @@ class AggregateBindRequest(ArrowSerializableDataclass):
         schema_path: Catalog schema that declares the function. A name is unique
             only within a schema, so this is what lets the worker resolve
             (schema, name); ``None`` when the caller names no schema.
+        argument_names: Resolved names aligned with the complete logical
+            argument order; ``None`` when the engine cannot provide them.
     """
 
     function_name: str
@@ -2425,6 +2433,7 @@ class AggregateBindRequest(ArrowSerializableDataclass):
     secrets: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
     attach_opaque_data: bytes | None = None
     schema_path: SchemaPath | None = None
+    argument_names: Annotated[list[str | None] | None, ArrowType(pa.list_(pa.string()))] = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

@@ -114,6 +114,8 @@ class BindParameters:
         arguments_schema: Schema describing the input columns.
         settings: DuckDB settings as a single-row `RecordBatch`, or None.
         secrets: [`SecretsAccessor`][] for accessing resolved and dynamic secrets.
+        argument_names: Resolved names aligned with the complete logical
+            argument order, or ``None`` when unavailable.
         auth_context: Authentication context for the current request.
         attach_opaque_data: Catalog attach ID, if the function was invoked through an ATTACHed catalog.
         transaction_opaque_data: Catalog transaction ID, if invoked inside a catalog transaction.
@@ -127,6 +129,7 @@ class BindParameters:
     auth_context: AuthContext = AuthContext.anonymous()
     attach_opaque_data: bytes | None = None
     transaction_opaque_data: bytes | None = None
+    argument_names: list[str | None] | None = None
 
 
 def _resolve_explicit_arrow_type(arrow_type: pa.DataType | type) -> pa.DataType:
@@ -717,6 +720,7 @@ class ScalarFunctionGenerator(vgi.function.Function):
             # is already sealed.
             attach_catalog_bytes(attach_plaintext),
             input.transaction_opaque_data,
+            input.argument_names,
         )
         result = cls.on_bind(bind_params)
 
@@ -991,6 +995,9 @@ class ScalarFunction(ScalarFunctionGenerator):
                         # Use overall position for metadata, column_index for resolution
                         arg = _param_to_arg(meta, base_type, overall_position)
                         arg._name = name
+                        parameter_default = sig.parameters[name].default
+                        if parameter_default is not inspect.Parameter.empty:
+                            arg.default = parameter_default
                         # Store column_index in _resolution_index for batch lookup
                         arg._resolution_index = column_index
                         compute_params[name] = arg
@@ -1007,6 +1014,9 @@ class ScalarFunction(ScalarFunctionGenerator):
                         # Use overall position for metadata
                         arg = _const_param_to_arg(meta, base_type, overall_position)
                         arg._name = name
+                        parameter_default = sig.parameters[name].default
+                        if parameter_default is not inspect.Parameter.empty:
+                            arg.default = parameter_default
                         # _resolution_index points to Arguments.positional index
                         arg._resolution_index = const_index
                         const_params[name] = arg

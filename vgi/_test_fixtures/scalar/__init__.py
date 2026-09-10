@@ -19,6 +19,7 @@ unchanged.
 
 from vgi._test_fixtures.scalar.arithmetic import (
     AddValuesFunction,
+    ArgumentNamesProbeFunction,
     CachedAddConstScalarFunction,
     CachedDoubleScalarFunction,
     CachedLabelScalarFunction,
@@ -92,6 +93,7 @@ from vgi._test_fixtures.scalar.type_info import (
 __all__ = [
     "_POINT_STRUCT_TYPE",
     "AddValuesFunction",
+    "ArgumentNamesProbeFunction",
     "AnyMixedIntFunction",
     "AnyMixedStrFunction",
     "BernoulliFunction",

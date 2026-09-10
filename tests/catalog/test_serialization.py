@@ -2,6 +2,8 @@
 
 """Tests for catalog dataclass serialization/deserialization."""
 
+from decimal import Decimal
+
 import pyarrow as pa
 import pytest
 from vgi_rpc.utils import deserialize_record_batch
@@ -775,6 +777,37 @@ class TestFunctionInfoSerialization:
         assert restored.function_type == FunctionType.SCALAR
         assert restored.arguments == original.arguments
         assert restored.output_schema == original.output_schema
+
+    def test_function_parameter_default_values_round_trip(self) -> None:
+        """FunctionInfo preserves typed defaults and explicit nulls."""
+        args_schema = schema(value=pa.int64(), scale=pa.decimal128(10, 2), label=pa.string())
+        output_schema = schema(result=pa.int64())
+        defaults = pa.RecordBatch.from_arrays(
+            [
+                pa.array([Decimal("1.25")], type=pa.decimal128(10, 2)),
+                pa.array([None], type=pa.string()),
+            ],
+            names=["scale", "label"],
+        )
+        original = FunctionInfo(
+            name="configured",
+            schema_path=["main"],
+            function_type=FunctionType.SCALAR,
+            arguments=SerializedSchema(args_schema.serialize().to_pybytes()),
+            output_schema=SerializedSchema(output_schema.serialize().to_pybytes()),
+            parameter_default_values=defaults,
+            comment=None,
+            tags={},
+        )
+
+        restored = FunctionInfo.deserialize_from_bytes(original.serialize_to_bytes())
+
+        assert restored.parameter_default_values is not None
+        actual = restored.parameter_default_values
+        assert actual.schema.names == ["scale", "label"]
+        assert actual.column("scale").type == pa.decimal128(10, 2)
+        assert str(actual.column("scale")[0].as_py()) == "1.25"
+        assert actual.column("label")[0].as_py() is None
 
     def test_table_function(self) -> None:
         """Test with table function type."""

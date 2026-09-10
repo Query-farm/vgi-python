@@ -127,6 +127,7 @@ Information about a function in a schema:
 | `function_type` | `FunctionType` | `SCALAR` or `TABLE` |
 | `arguments` | `SerializedSchema` | Argument schema as Arrow bytes |
 | `output_schema` | `SerializedSchema` | Output schema as Arrow bytes |
+| `parameter_default_values` | `pa.RecordBatch \| None` | One-row typed defaults batch containing only defaulted parameters in signature order; a present null is an explicit `NULL` default |
 | `comment` | `str \| None` | Optional description |
 | `tags` | `dict[str, str]` | Key-value metadata |
 

@@ -26,6 +26,7 @@ from vgi.argument_spec import (
     VGI_VARARGS_TRUE,
     ArgumentSpec,
     argument_specs_to_schema,
+    parameter_default_values_from_specs,
     schema_to_argument_specs,
 )
 from vgi.arguments import (
@@ -132,6 +133,7 @@ __all__ = [
     "AuthContext",
     "CallContext",
     "argument_specs_to_schema",
+    "parameter_default_values_from_specs",
     "BindRequest",
     "ColumnBounds",
     "ColumnRefNode",

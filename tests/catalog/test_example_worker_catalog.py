@@ -217,6 +217,25 @@ class TestExampleWorkerCatalog:
         field_names = [f.name for f in args_schema]
         assert "value" in field_names
 
+    def test_scalar_signature_names_and_typed_defaults(self) -> None:
+        """Fixed field names and the typed default batch share one signature order."""
+        client = Client(EXAMPLE_WORKER)
+        attach_result = client.catalog_attach(
+            name="example", options={}, data_version_spec=None, implementation_version=None
+        )
+        functions = _get_all_functions(client, attach_result.attach_opaque_data)
+        probe = next(fn for fn in functions if fn.name == "argument_names_probe")
+
+        arguments = pa.ipc.read_schema(pa.py_buffer(probe.arguments))
+        assert arguments.names == ["left", "right", "scale"]
+        assert all(b"vgi_arg" not in (field.metadata or {}) for field in arguments)
+
+        defaults = probe.parameter_default_values
+        assert defaults is not None
+        assert defaults.schema.names == ["scale"]
+        assert defaults.column("scale").type == pa.int64()
+        assert defaults.column("scale")[0].as_py() == 2
+
     def test_function_info_has_description(self) -> None:
         """FunctionInfo has description from docstring or Meta."""
         client = Client(EXAMPLE_WORKER)

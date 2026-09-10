@@ -81,6 +81,7 @@ from vgi._test_fixtures.scalar import (
     AddValuesFunction,
     AnyMixedIntFunction,
     AnyMixedStrFunction,
+    ArgumentNamesProbeFunction,
     BernoulliFunction,
     BinaryPacketFunction,
     CachedAddConstScalarFunction,
@@ -609,6 +610,7 @@ _EXAMPLE_CATALOG = Catalog(
                 RffStructScanFunction,
                 # ScalarFunctionGenerator - transform to single-column output
                 AddValuesFunction,
+                ArgumentNamesProbeFunction,
                 BernoulliFunction,
                 BinaryPacketFunction,
                 CachedAddConstScalarFunction,

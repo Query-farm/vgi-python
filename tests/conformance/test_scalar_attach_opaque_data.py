@@ -35,6 +35,7 @@ class _AttachOpaqueDataEcho(ScalarFunction):
     def on_bind(cls, params: BindParameters) -> BindResult:
         _seen["attach_opaque_data"] = params.attach_opaque_data
         _seen["transaction_opaque_data"] = params.transaction_opaque_data
+        _seen["argument_names"] = params.argument_names
         return BindResult(pa.int64())
 
     @classmethod
@@ -45,7 +46,11 @@ class _AttachOpaqueDataEcho(ScalarFunction):
         return x
 
 
-def _bind(attach_opaque_data: bytes | None, transaction_opaque_data: bytes | None) -> None:
+def _bind(
+    attach_opaque_data: bytes | None,
+    transaction_opaque_data: bytes | None,
+    argument_names: list[str | None] | None = None,
+) -> None:
     _seen.clear()
     # The worker unwraps the sealed attach to the framework plaintext
     # ``uuid(16) || catalog_bytes`` and threads it as ``attach_plaintext``; the
@@ -60,6 +65,7 @@ def _bind(attach_opaque_data: bytes | None, transaction_opaque_data: bytes | Non
             input_schema=pa.schema([("x", pa.int64())]),
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=transaction_opaque_data,
+            argument_names=argument_names,
         ),
         attach_plaintext=attach_plaintext,
     )
@@ -84,3 +90,9 @@ def test_on_bind_attach_opaque_data_optional() -> None:
     _bind(attach_opaque_data=None, transaction_opaque_data=None)
     assert _seen["attach_opaque_data"] is None
     assert _seen["transaction_opaque_data"] is None
+
+
+def test_on_bind_receives_argument_names() -> None:
+    """Resolved logical argument names reach scalar implementation bind code."""
+    _bind(None, None, ["x", None])
+    assert _seen["argument_names"] == ["x", None]

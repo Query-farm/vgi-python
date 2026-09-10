@@ -689,6 +689,9 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
             ``schema.serialize().to_pybytes()``.
         output_schema: The output schema as a serialized Apache arrow schema
             using ``schema.serialize().to_pybytes()``.
+        parameter_default_values: Authoritative typed defaults as a one-row
+            RecordBatch. Only parameters with defaults are present, in signature
+            order; a present null value is an explicit null default.
         stability: Scalar function behavior field (None for non-scalar
             functions).
         null_handling: Scalar function behavior field (None for non-scalar
@@ -793,6 +796,8 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     arguments: SerializedSchema
 
     output_schema: SerializedSchema
+
+    parameter_default_values: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
 
     stability: FunctionStability | None = None
     null_handling: NullHandling | None = None
@@ -3412,6 +3417,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         from vgi.argument_spec import (
             argument_specs_to_schema,
             extract_argument_specs,
+            parameter_default_values_from_specs,
         )
         from vgi.metadata import CatalogFunctionType as MetadataFunctionType
         from vgi.metadata import resolve_metadata
@@ -3431,6 +3437,10 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         arg_specs = extract_argument_specs(func_cls)
         args_schema = argument_specs_to_schema(arg_specs)
         args_bytes = SerializedSchema(args_schema.serialize().to_pybytes())
+        parameter_default_values = parameter_default_values_from_specs(
+            arg_specs,
+            require_trailing=func_type in (FunctionType.SCALAR, FunctionType.AGGREGATE),
+        )
 
         # Get output schema from catalog introspection methods if available
         output_schema: pa.Schema = pa.schema([])
@@ -3449,6 +3459,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             function_type=func_type,
             arguments=args_bytes,
             output_schema=output_bytes,
+            parameter_default_values=parameter_default_values,
             comment=meta.comment,  # Static, Meta-declared only — see Meta.comment
             tags=meta.tags,
             # Scalar/aggregate function behavior fields

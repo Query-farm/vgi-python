@@ -7,6 +7,10 @@
 **VGI examined:** `588bb2fd99de6a58461b3dfbbf26cc604da4c94e`
 **vgi-python examined:** `97b68f0f42d560bbc00947eddf39370ca167aa2d`
 
+**Function-signature decision:** 2026-09-10 — named fixed parameters,
+authoritative typed defaults, and bind-time resolved names are part of VGI 2.0;
+there is no protocol overload identifier.
+
 ## Executive answer
 
 Nested schemas are **not** the only possible VGI protocol change.
@@ -25,6 +29,43 @@ The audit found three protocol areas that deserve action, plus several optional 
 My confidence is **high that the audit has found the DuckDB 2.0 changes that alter VGI's current wire semantics**, but not absolute: the examined DuckDB branch is still moving. The audit should be rerun against the 2.0 release candidate or final tag. Most of the large C++ migration is API adaptation inside the extension and does not require a protocol change.
 
 VGI protocol 2.0 will not carry a v1 compatibility path. A 1.x peer is rejected during protocol negotiation. The DuckDB 1.5 extension can still implement the v2 wire format; its engine adapter simply produces the subset of the v2 AST that DuckDB 1.5 can offer.
+
+## Accepted function-signature contract
+
+DuckDB 2.0 can bind named arguments and defaults for scalar, aggregate, and
+window functions. VGI models the portable semantics rather than exposing a
+DuckDB overload handle:
+
+1. For scalar and aggregate functions, fields in `FunctionInfo.arguments` are
+   ordered fixed signature slots and each field name is the SQL/VGI parameter
+   name. `vgi_arg=named` remains reserved for table-function-style named-only
+   options. `vgi_const` is orthogonal to naming.
+2. `FunctionInfo.parameter_default_values` is a nullable IPC-serialized
+   `RecordBatch`. When present it has exactly one row and contains only
+   defaulted parameters, in signature order. Column absence means required/no
+   default; a present null scalar means an explicit `NULL` default. Each column
+   type exactly matches its argument field. Scalar and aggregate defaults form
+   a trailing sequence of fixed parameters, and varargs cannot have defaults.
+3. `BindRequest.argument_names` and `AggregateBindRequest.argument_names` are
+   nullable `list<utf8>` values aligned with the complete logical argument
+   order before constant arguments are separated for execution. Fixed slots
+   carry their declared names, unnamed varargs carry null elements, and named
+   varargs retain caller-provided names. A null list means the engine cannot
+   provide resolved names.
+
+The legacy `vgi_default` field metadata is discovery-only and may be removed in
+a later protocol. It is never authoritative when the typed batch is present.
+Implementations select behavior by inspecting the bound arguments, types, and
+resolved names; VGI does not add `overload_id`.
+
+The DuckDB 1.5 adapter implements this VGI 2.0 wire shape now. It advertises and
+validates typed defaults and synthesizes fixed names plus null unnamed-vararg
+entries. Because DuckDB 1.5 cannot register scalar/aggregate named calls or
+engine-applied defaults, SQL callers must still provide those values
+positionally. A DuckDB 2.0 adapter can map the same metadata to
+`FunctionSignature` without changing the worker protocol. DataFusion, Spark,
+and SQLite adapters should normalize their native call forms to the same bind
+representation.
 
 ## 1. Protocol version and rollout
 

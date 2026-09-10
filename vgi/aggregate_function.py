@@ -51,6 +51,8 @@ class AggregateBindParams:
     Attributes:
         args: The bound function [`Arguments`][], or ``None`` if none.
         input_schema: Arrow schema of the aggregate's input columns, or ``None``.
+        argument_names: Resolved names aligned with the complete logical
+            argument order, or ``None`` when unavailable.
         settings: DuckDB session settings relevant to the function.
         secrets: Accessor for the resolved secrets the function declared.
         auth_context: The caller's authentication context (anonymous by default).
@@ -60,6 +62,7 @@ class AggregateBindParams:
     input_schema: pa.Schema | None
     settings: dict[str, Any]
     secrets: SecretsAccessor
+    argument_names: list[str | None] | None = None
     auth_context: AuthContext = AuthContext.anonymous()
 
 
@@ -243,6 +246,9 @@ class AggregateFunction[TState: StreamStateCodec](vgi.function.Function):
                         base_type = hint_args[0] if hint_args else pa.Array
                         arg = _param_to_arg(meta, base_type, overall_position)
                         arg._name = name
+                        parameter_default = sig.parameters[name].default
+                        if parameter_default is not inspect.Parameter.empty:
+                            arg.default = parameter_default
                         arg._resolution_index = column_index
                         compute_params[name] = arg
                         overall_position += 1
@@ -253,6 +259,9 @@ class AggregateFunction[TState: StreamStateCodec](vgi.function.Function):
                         base_type = cast(type, hint_args[0] if hint_args else Any)
                         arg = _const_param_to_arg(meta, base_type, overall_position)
                         arg._name = name
+                        parameter_default = sig.parameters[name].default
+                        if parameter_default is not inspect.Parameter.empty:
+                            arg.default = parameter_default
                         arg._resolution_index = const_index
                         const_params[name] = arg
                         const_param_phases[name] = getattr(meta, "phase", "all")
