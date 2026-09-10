@@ -1,0 +1,15 @@
+.git
+.venv
+.mypy_cache
+.pytest_cache
+.ruff_cache
+site
+__pycache__
+*.pyc
+.tailnet/vgi-rpc/.git
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx

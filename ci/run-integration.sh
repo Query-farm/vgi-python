@@ -86,6 +86,10 @@ if [ "$TRANSPORT" = "http" ]; then
   #   * buffer_input/sizes.test — input buffering semantics differ over HTTP
   #     (same known limitation). (scale.test_slow is a .test_slow file and is
   #     never staged below, which only finds *.test.)
+  #   * database_worker/package.test — the packaged fixture is deliberately an
+  #     executable wrapper around VGI_TEST_WORKER. An HTTP URL is not an
+  #     executable artifact; the direct-exec lifecycle is covered by all three
+  #     process/socket lanes.
   # cache/revalidate.test now runs on http too: HTTP conditional revalidation is
   # implemented (C++ /init-request validators + vgi-rpc >=0.24.0 surfacing them to
   # the producer's first process()). It needs a community vgi extension carrying
@@ -96,6 +100,7 @@ if [ "$TRANSPORT" = "http" ]; then
     -not -name 'dynamic_filter.test'
     -not -name 'partitioned_sequence.test'
     -not -path './table_in_out/buffer_input/sizes.test'
+    -not -path './database_worker/package.test'
   )
 fi
 
@@ -119,6 +124,16 @@ mkdir -p "$STAGE/test/sql/integration"
     mkdir -p "$STAGE/test/sql/integration/$(dirname "$f")"
     awk -v http="$AWK_HTTP" -f "$HERE/preprocess-require.awk" "$f" > "$STAGE/test/sql/integration/$f"
   done )
+
+# Some integration cases package an executable from the upstream support tree.
+# The staged suite runs with ``$STAGE`` as its working directory, so preserve
+# the relative path used by those SQL fixtures instead of making it depend on
+# the checkout layout outside the stage.
+if [ -f "$VGI_SRC/test/support/database_worker_fixture.sh" ]; then
+  mkdir -p "$STAGE/test/support"
+  cp "$VGI_SRC/test/support/database_worker_fixture.sh" "$STAGE/test/support/"
+  chmod +x "$STAGE/test/support/database_worker_fixture.sh"
+fi
 
 # Empty VGI_RPC_SHM_SIZE_BYTES must not reach the C++ client (it would try to
 # attach a zero-size segment); only a real value enables the shm side channel.

@@ -42,6 +42,15 @@ _EXEMPTIONS: dict[str, str] = {
         "path, ProcessParams.if_none_match threading, and the revalidatable "
         "fixture's 304 behavior)."
     ),
+    "database_worker": (
+        "Resolving database:// package rows, validating artifact digests and "
+        "entrypoints, installing archives, and managing runtime leases are "
+        "C++-extension responsibilities. The Python SDK supplies workers that "
+        "the extension packages and launches, but its Client neither parses "
+        "database:// locations nor owns the extension's artifact cache. The "
+        "cross-language executable/archive cases remain covered by "
+        "vgi/test/sql/integration/database_worker/."
+    ),
     "global_functions": (
         "Publishing worker-declared functions into DuckDB's system.main is "
         "entirely a C++-extension concern: the registry, prefix application, "

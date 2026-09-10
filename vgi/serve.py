@@ -32,7 +32,7 @@ import logging
 import os
 import secrets
 import sys
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -42,7 +42,7 @@ from vgi.profiling import maybe_start_profile
 if TYPE_CHECKING:
     import falcon
     from vgi_rpc.otel import OtelConfig
-    from vgi_rpc.rpc import AuthContext
+    from vgi_rpc.rpc import AuthContext, PeerAuthenticationPolicy, PeerIdentityProvider
 
     from vgi.worker import Worker
 
@@ -205,6 +205,11 @@ def create_app(
     signing_key: bytes | None = None,
     log_level: int = logging.INFO,
     authenticate: Callable[[falcon.Request], AuthContext] | None = None,
+    peer_identity_providers: Sequence[PeerIdentityProvider] = (),
+    peer_authentication_policy: PeerAuthenticationPolicy | None = None,
+    peer_service_name: str | None = None,
+    peer_resolution_timeout: float = 5.0,
+    peer_provider_concurrency: int = 64,
     proxy_proof_required: bool | None = None,
     oauth_resource_metadata: Any = None,
     otel_config: OtelConfig | None = None,
@@ -234,6 +239,18 @@ def create_app(
         authenticate: Optional callback that validates each HTTP request
             and returns an `AuthContext`. When ``None``, all requests are
             anonymous.
+        peer_identity_providers: Transport identity evidence providers. Their
+            immutable results are exposed on each call context independently
+            of application authentication.
+        peer_authentication_policy: Optional policy that composes peer
+            evidence with the result of ``authenticate``. A policy may
+            preserve, replace, or reject the request authentication.
+        peer_service_name: Logical destination supplied to providers for
+            destination-scoped identity or capability evidence.
+        peer_resolution_timeout: Total provider-resolution deadline per HTTP
+            request, in seconds.
+        peer_provider_concurrency: Maximum active provider callbacks for this
+            application, including callbacks that ignore cancellation.
         proxy_proof_required: Whether to advertise ``VGI-Proxy-Proof-Required``
             so a proxy can confirm this worker actually enforces the proof it
             mints. ``None`` (the default) derives it from
@@ -318,22 +335,23 @@ def create_app(
             "introspect_rate_limit": _resolve_introspect_rate_limit(introspect_rate_limit),
         }
 
-    peer_identity_providers: tuple[Any, ...] = ()
-    peer_authentication_policy: Any = None
+    effective_peer_identity_providers = tuple(peer_identity_providers)
+    effective_peer_authentication_policy = peer_authentication_policy
     if iroh_bridge_issuer is not None:
         from vgi_rpc.http import iroh_forwarded_header_provider
         from vgi_rpc.rpc import observe_peer_identity, peer_identity_primary
 
         trusted_iroh_addresses = tuple(iroh_trusted_proxy_addresses) or ("127.0.0.1",)
-        peer_identity_providers = (
+        effective_peer_identity_providers += (
             iroh_forwarded_header_provider(
                 issuer=iroh_bridge_issuer,
                 trusted_proxy_addresses=trusted_iroh_addresses,
             ),
         )
-        peer_authentication_policy = (
-            peer_identity_primary("iroh") if iroh_authenticate else observe_peer_identity
-        )
+        if effective_peer_authentication_policy is None:
+            effective_peer_authentication_policy = (
+                peer_identity_primary("iroh") if iroh_authenticate else observe_peer_identity
+            )
 
     wsgi_app = make_wsgi_app(
         server,
@@ -341,13 +359,16 @@ def create_app(
         cors_origins=cors_origins,
         token_key=signing_key,
         authenticate=authenticate,
+        peer_identity_providers=effective_peer_identity_providers,
+        peer_authentication_policy=effective_peer_authentication_policy,
+        peer_service_name=peer_service_name,
+        peer_resolution_timeout=peer_resolution_timeout,
+        peer_provider_concurrency=peer_provider_concurrency,
         proxy_proof_required=proxy_proof_required,
         oauth_resource_metadata=oauth_resource_metadata,
         otel_config=otel_config,
         max_stream_response_bytes=max_stream_response_bytes,
         max_externalized_response_bytes=max_externalized_response_bytes,
-        peer_identity_providers=peer_identity_providers,
-        peer_authentication_policy=peer_authentication_policy,
         enable_landing_page=False,
         **introspect_kwargs,
     )
@@ -601,9 +622,7 @@ def main() -> None:
             try:
                 raw_port = int(raw_port_text)
             except ValueError:
-                raise SystemExit(
-                    f"--iroh-raw-upstream expects [HOST:]PORT, got {iroh_raw_upstream!r}"
-                ) from None
+                raise SystemExit(f"--iroh-raw-upstream expects [HOST:]PORT, got {iroh_raw_upstream!r}") from None
 
             worker = worker_cls(quiet=quiet, log_level=effective_level)
             # Iroh is also a directly addressable RPC endpoint, so advertise

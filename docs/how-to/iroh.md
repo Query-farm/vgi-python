@@ -66,7 +66,7 @@ route, and configure the worker to trust only the intermediary's exact address.
 
 The same high-level client accepts both endpoint schemes:
 
-```python
+```python test="skip"
 from vgi.client import Client
 
 with Client.from_iroh("iroh://<endpoint-id>") as client:
@@ -78,7 +78,7 @@ with Client.from_iroh("httpi://<endpoint-id>/vgi") as client:
 
 For a private relay:
 
-```python
+```python test="skip"
 client = Client.from_iroh(
     "httpi://<endpoint-id>/vgi",
     relay_urls=["https://relay.example.com"],
