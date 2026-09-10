@@ -70,6 +70,15 @@ from vgi.filter_v2 import (
     RuntimeFilter,
     StandardFilterFunction,
 )
+from vgi.filter_v2_builder import (
+    FilterPayload,
+    artifact_payload,
+    build_filter_batch,
+    deserialize_filter_batch,
+    serialize_filter_batch,
+    type_payload,
+    value_payload,
+)
 from vgi.metadata import (
     CatalogFunctionType,
     EvaluationContextCapability,
@@ -193,6 +202,13 @@ __all__ = [
     "FunctionIdentity",
     "StandardFilterFunction",
     "RuntimeFilter",
+    "FilterPayload",
+    "value_payload",
+    "type_payload",
+    "artifact_payload",
+    "build_filter_batch",
+    "serialize_filter_batch",
+    "deserialize_filter_batch",
     "InitRequest",
     "Level",
     "VgiOutputCollector",

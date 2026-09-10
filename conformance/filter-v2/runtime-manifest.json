@@ -1,0 +1,975 @@
+{
+  "manifest_version": 1,
+  "vgi_protocol_version": "2.0.0",
+  "filter_encoding": "vgi.filters.v2",
+  "cases": [
+    {
+      "id": "runtime.comparison-eq",
+      "input": "runtime/comparison-eq/input.arrow",
+      "filter": "runtime/comparison-eq/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "expected": "runtime/comparison-eq/expected.arrow",
+      "worker_expected": "runtime/comparison-eq/worker-expected.arrow",
+      "sha256": {
+        "runtime/comparison-eq/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/comparison-eq/filter.arrow": "533a5b9c04f2c4c15974d164936a6f0c33862e0e1cc02267fa39c29de6c7332b",
+        "runtime/comparison-eq/expected.arrow": "767c4ea51a41a287075612bb8348113356bc868d5b34dee597d043a06d5cfde1",
+        "runtime/comparison-eq/worker-expected.arrow": "4e785f9c1b75c575d03432220dcd089a1c84801babfa954404d54a7efdb12b8f"
+      }
+    },
+    {
+      "id": "runtime.comparison-ne",
+      "input": "runtime/comparison-ne/input.arrow",
+      "filter": "runtime/comparison-ne/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "expected": "runtime/comparison-ne/expected.arrow",
+      "worker_expected": "runtime/comparison-ne/worker-expected.arrow",
+      "sha256": {
+        "runtime/comparison-ne/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/comparison-ne/filter.arrow": "e8df1fcec142b6242ab9f08082a0cb651fd16579c2e2be4e2feb284665e49a64",
+        "runtime/comparison-ne/expected.arrow": "dc26d0ef6a2f05b37d19f76acecc436c7d3633f81437b695439beaca6d8fbdff",
+        "runtime/comparison-ne/worker-expected.arrow": "fae0c9d167f8cc6b986b6f5fda40956597022382e9db13261fcff5e9782c6d78"
+      }
+    },
+    {
+      "id": "runtime.comparison-lt",
+      "input": "runtime/comparison-lt/input.arrow",
+      "filter": "runtime/comparison-lt/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "expected": "runtime/comparison-lt/expected.arrow",
+      "worker_expected": "runtime/comparison-lt/worker-expected.arrow",
+      "sha256": {
+        "runtime/comparison-lt/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/comparison-lt/filter.arrow": "db05aad8f86d78d0acb850c63dbf9e33d541fe332cc341b8fe9fcfdd7efac2dc",
+        "runtime/comparison-lt/expected.arrow": "bb281d76789e8393b7de85bd985b3b0e12ce572a8769519885e2b50a8b7449ba",
+        "runtime/comparison-lt/worker-expected.arrow": "7927ba4c9837cc69038ef67a0be74082bcb63f1fe1d423b953cfe7e4c96ddc2e"
+      }
+    },
+    {
+      "id": "runtime.comparison-le",
+      "input": "runtime/comparison-le/input.arrow",
+      "filter": "runtime/comparison-le/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "expected": "runtime/comparison-le/expected.arrow",
+      "worker_expected": "runtime/comparison-le/worker-expected.arrow",
+      "sha256": {
+        "runtime/comparison-le/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/comparison-le/filter.arrow": "f35f942c30b2e4120d5c75889217f7a19af882bcf4604165070581ceba57db94",
+        "runtime/comparison-le/expected.arrow": "cdf6bf3f3895e7ad06aa288b7155639f996a8da4a29417decb47d2dc4aed0082",
+        "runtime/comparison-le/worker-expected.arrow": "b3f41db4dcb6e030c554cf2fadc1d4cd900c6429775b6905babe168a2d2019ab"
+      }
+    },
+    {
+      "id": "runtime.comparison-gt",
+      "input": "runtime/comparison-gt/input.arrow",
+      "filter": "runtime/comparison-gt/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "expected": "runtime/comparison-gt/expected.arrow",
+      "worker_expected": "runtime/comparison-gt/worker-expected.arrow",
+      "sha256": {
+        "runtime/comparison-gt/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/comparison-gt/filter.arrow": "30d327c2cca6114ebb44edcec23ba3ca940d57115e60b7f5da19a06ab1f3185c",
+        "runtime/comparison-gt/expected.arrow": "0789d2b4bba758a584deefc978e85e6cb2738ee22c0b28ea734066aed0d88789",
+        "runtime/comparison-gt/worker-expected.arrow": "0a9230a2e17a02e4415fa2f0610746eb1d0f0c665897971c869404064465a04a"
+      }
+    },
+    {
+      "id": "runtime.comparison-ge",
+      "input": "runtime/comparison-ge/input.arrow",
+      "filter": "runtime/comparison-ge/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "expected": "runtime/comparison-ge/expected.arrow",
+      "worker_expected": "runtime/comparison-ge/worker-expected.arrow",
+      "sha256": {
+        "runtime/comparison-ge/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/comparison-ge/filter.arrow": "d7eef9a8a9708221b0c51c29d36fb27070c1ec591ebc55812a7cbe155fbecb5f",
+        "runtime/comparison-ge/expected.arrow": "5101aae10eff7daa0f04d2863cb044bc8d0c0897afb13ca54456e0f4a4f39fd4",
+        "runtime/comparison-ge/worker-expected.arrow": "782c06fa1faeb67b9dca37bd89614a5df0595d1040f2f69c5661ed8b8e4c4de6"
+      }
+    },
+    {
+      "id": "runtime.comparison-distinct_from",
+      "input": "runtime/comparison-distinct_from/input.arrow",
+      "filter": "runtime/comparison-distinct_from/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "expected": "runtime/comparison-distinct_from/expected.arrow",
+      "worker_expected": "runtime/comparison-distinct_from/worker-expected.arrow",
+      "sha256": {
+        "runtime/comparison-distinct_from/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/comparison-distinct_from/filter.arrow": "b77be46fa6c884f15cd86734a19880d318aab44a3d7883bcf581183f9024644b",
+        "runtime/comparison-distinct_from/expected.arrow": "7118fabf64cef2a52109ccfb040ce49567a384b1b6ba62b72a07c44c8660450b",
+        "runtime/comparison-distinct_from/worker-expected.arrow": "fae0c9d167f8cc6b986b6f5fda40956597022382e9db13261fcff5e9782c6d78"
+      }
+    },
+    {
+      "id": "runtime.comparison-not_distinct_from",
+      "input": "runtime/comparison-not_distinct_from/input.arrow",
+      "filter": "runtime/comparison-not_distinct_from/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "expected": "runtime/comparison-not_distinct_from/expected.arrow",
+      "worker_expected": "runtime/comparison-not_distinct_from/worker-expected.arrow",
+      "sha256": {
+        "runtime/comparison-not_distinct_from/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/comparison-not_distinct_from/filter.arrow": "b07fb429e25babd0ad73630f061a4951fd4e0f2c5025692d759ebb0497bb16e2",
+        "runtime/comparison-not_distinct_from/expected.arrow": "767c4ea51a41a287075612bb8348113356bc868d5b34dee597d043a06d5cfde1",
+        "runtime/comparison-not_distinct_from/worker-expected.arrow": "4e785f9c1b75c575d03432220dcd089a1c84801babfa954404d54a7efdb12b8f"
+      }
+    },
+    {
+      "id": "runtime.kleene-and",
+      "input": "runtime/kleene-and/input.arrow",
+      "filter": "runtime/kleene-and/filter.arrow",
+      "expected": "runtime/kleene-and/expected.arrow",
+      "sha256": {
+        "runtime/kleene-and/input.arrow": "663603ab58f9c2f8be6ba4eaf8cc444490b53222bc74e9c7fc0390915acb54ec",
+        "runtime/kleene-and/filter.arrow": "b5dbb6925b4a7e66a295ee4abaf248b9937a83a90096837a327d6690c63fcfe8",
+        "runtime/kleene-and/expected.arrow": "849d53116bf06e21ee6e29a8981a059b71b4466267a194115fc6665d476dce74"
+      }
+    },
+    {
+      "id": "runtime.kleene-or",
+      "input": "runtime/kleene-or/input.arrow",
+      "filter": "runtime/kleene-or/filter.arrow",
+      "expected": "runtime/kleene-or/expected.arrow",
+      "sha256": {
+        "runtime/kleene-or/input.arrow": "663603ab58f9c2f8be6ba4eaf8cc444490b53222bc74e9c7fc0390915acb54ec",
+        "runtime/kleene-or/filter.arrow": "a602bc0d06a1798ac7aaca6f72ccf9928cf22a6412520ba70ea1603fe3985067",
+        "runtime/kleene-or/expected.arrow": "409857aef9d1cf3de5ea831262d6d9c4238b67405e4bc206f2075eacd13cf332"
+      }
+    },
+    {
+      "id": "runtime.kleene-not",
+      "input": "runtime/kleene-not/input.arrow",
+      "filter": "runtime/kleene-not/filter.arrow",
+      "expected": "runtime/kleene-not/expected.arrow",
+      "sha256": {
+        "runtime/kleene-not/input.arrow": "663603ab58f9c2f8be6ba4eaf8cc444490b53222bc74e9c7fc0390915acb54ec",
+        "runtime/kleene-not/filter.arrow": "c24c95df03efef65f165e986865f8fd6f49b6437cc62e2095d945a1506877155",
+        "runtime/kleene-not/expected.arrow": "7d2f37b7cac0fade1a396623979c385eb0b358b886c42841c0637286881bea0d"
+      }
+    },
+    {
+      "id": "runtime.is-null",
+      "input": "runtime/is-null/input.arrow",
+      "filter": "runtime/is-null/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "expected": "runtime/is-null/expected.arrow",
+      "worker_expected": "runtime/is-null/worker-expected.arrow",
+      "sha256": {
+        "runtime/is-null/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/is-null/filter.arrow": "2c6ad6aa227c13f34791289ba750cdb85af5ad132c30a895b10e1f6a95838fd0",
+        "runtime/is-null/expected.arrow": "df7a0bca624ddf101a653c904d63fa57e26916596603ff4917ac068993a931dc",
+        "runtime/is-null/worker-expected.arrow": "7f8f699c7d29b1dc46b94a425f30f894b5d59421ebd7cec936c7f4752ec5e8a4"
+      }
+    },
+    {
+      "id": "runtime.is-not-null",
+      "input": "runtime/is-not-null/input.arrow",
+      "filter": "runtime/is-not-null/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "expected": "runtime/is-not-null/expected.arrow",
+      "worker_expected": "runtime/is-not-null/worker-expected.arrow",
+      "sha256": {
+        "runtime/is-not-null/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/is-not-null/filter.arrow": "366d8c5921f4a5a31668f4d22cfcf823f76bafe577086ff378c8e082f56d7c78",
+        "runtime/is-not-null/expected.arrow": "2b779ea7e7b34fe4026ecedf41ecaa302b9fb748ace1b966e5cd86a0640cfa6a",
+        "runtime/is-not-null/worker-expected.arrow": "6d1a2283d425ca5086c474b394bbf8a33820f6475ea2810162f92129a6e27bdd"
+      }
+    },
+    {
+      "id": "runtime.nested-null-propagation",
+      "input": "runtime/nested-null-propagation/input.arrow",
+      "filter": "runtime/nested-null-propagation/filter.arrow",
+      "expected": "runtime/nested-null-propagation/expected.arrow",
+      "sha256": {
+        "runtime/nested-null-propagation/input.arrow": "5dde33c1f53d3f674ecf50cc7a860e242d4f1e3687c9d1030b5081730d35f288",
+        "runtime/nested-null-propagation/filter.arrow": "7519cba7a571eaee3eb54197141e2b59ad01a1a4cd01fe2cec41d6f925fdd6bb",
+        "runtime/nested-null-propagation/expected.arrow": "5c40c16b9b5371ca2d9a8aabcbc83b9aab2aef8c440aa60a35bc66b60cee7563"
+      }
+    },
+    {
+      "id": "runtime.in-with-null",
+      "input": "runtime/in-with-null/input.arrow",
+      "filter": "runtime/in-with-null/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "expected": "runtime/in-with-null/expected.arrow",
+      "worker_expected": "runtime/in-with-null/worker-expected.arrow",
+      "sha256": {
+        "runtime/in-with-null/input.arrow": "1c90cd87a48a4d16535dd4c6a9a9ce1ef630eef7adbc53cce80cf65a17fc41ba",
+        "runtime/in-with-null/filter.arrow": "8d7821e7643952e8035f48a1aaadfb5ce3496ca4b7dcf60e409157c60b3f8b71",
+        "runtime/in-with-null/expected.arrow": "b62e68f123d0c77badd8ccec2dc4e94cfb14d3f0bf3785e6fd99069786b2865b",
+        "runtime/in-with-null/worker-expected.arrow": "3b30b6911f34eaac943464937c531c1507e29958f2d0f4d91214bc44d269de2f"
+      }
+    },
+    {
+      "id": "runtime.not-in-with-null",
+      "input": "runtime/not-in-with-null/input.arrow",
+      "filter": "runtime/not-in-with-null/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "expected": "runtime/not-in-with-null/expected.arrow",
+      "worker_expected": "runtime/not-in-with-null/worker-expected.arrow",
+      "sha256": {
+        "runtime/not-in-with-null/input.arrow": "1c90cd87a48a4d16535dd4c6a9a9ce1ef630eef7adbc53cce80cf65a17fc41ba",
+        "runtime/not-in-with-null/filter.arrow": "8ae3c13aca342e84a52ae96ad8e445b9a506c28401dc7fab6cd786f68138aac8",
+        "runtime/not-in-with-null/expected.arrow": "f4b562f3c5b35b77a76b6e517abd3231e1af1355d432fc74c86414c2a1773af1",
+        "runtime/not-in-with-null/worker-expected.arrow": "7f8f699c7d29b1dc46b94a425f30f894b5d59421ebd7cec936c7f4752ec5e8a4"
+      }
+    },
+    {
+      "id": "runtime.in-empty",
+      "input": "runtime/in-empty/input.arrow",
+      "filter": "runtime/in-empty/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "expected": "runtime/in-empty/expected.arrow",
+      "worker_expected": "runtime/in-empty/worker-expected.arrow",
+      "sha256": {
+        "runtime/in-empty/input.arrow": "1c90cd87a48a4d16535dd4c6a9a9ce1ef630eef7adbc53cce80cf65a17fc41ba",
+        "runtime/in-empty/filter.arrow": "44bfd0fdb2550305c01c8832aec80eb309ae151e7456f2520dfad4eccd079252",
+        "runtime/in-empty/expected.arrow": "f4b562f3c5b35b77a76b6e517abd3231e1af1355d432fc74c86414c2a1773af1",
+        "runtime/in-empty/worker-expected.arrow": "7f8f699c7d29b1dc46b94a425f30f894b5d59421ebd7cec936c7f4752ec5e8a4"
+      }
+    },
+    {
+      "id": "runtime.not-in-empty",
+      "input": "runtime/not-in-empty/input.arrow",
+      "filter": "runtime/not-in-empty/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "expected": "runtime/not-in-empty/expected.arrow",
+      "worker_expected": "runtime/not-in-empty/worker-expected.arrow",
+      "sha256": {
+        "runtime/not-in-empty/input.arrow": "1c90cd87a48a4d16535dd4c6a9a9ce1ef630eef7adbc53cce80cf65a17fc41ba",
+        "runtime/not-in-empty/filter.arrow": "2a4d58980c2d618f0923910353c3fe0d50bc38b4ab86223260a95ea62e3aa19c",
+        "runtime/not-in-empty/expected.arrow": "1c90cd87a48a4d16535dd4c6a9a9ce1ef630eef7adbc53cce80cf65a17fc41ba",
+        "runtime/not-in-empty/worker-expected.arrow": "6d1a2283d425ca5086c474b394bbf8a33820f6475ea2810162f92129a6e27bdd"
+      }
+    },
+    {
+      "id": "runtime.external-in-nonzero-column",
+      "input": "runtime/external-in-nonzero-column/input.arrow",
+      "filter": "runtime/external-in-nonzero-column/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "join_keys": [
+        "runtime/external-in-nonzero-column/join-keys-0.arrow"
+      ],
+      "expected": "runtime/external-in-nonzero-column/expected.arrow",
+      "worker_expected": "runtime/external-in-nonzero-column/worker-expected.arrow",
+      "sha256": {
+        "runtime/external-in-nonzero-column/input.arrow": "1c90cd87a48a4d16535dd4c6a9a9ce1ef630eef7adbc53cce80cf65a17fc41ba",
+        "runtime/external-in-nonzero-column/filter.arrow": "c18dee671662a0ee5cc5b2445326573edbc5eae76626e92eef4ab80e7bc02b22",
+        "runtime/external-in-nonzero-column/expected.arrow": "b62e68f123d0c77badd8ccec2dc4e94cfb14d3f0bf3785e6fd99069786b2865b",
+        "runtime/external-in-nonzero-column/worker-expected.arrow": "3b30b6911f34eaac943464937c531c1507e29958f2d0f4d91214bc44d269de2f",
+        "runtime/external-in-nonzero-column/join-keys-0.arrow": "c9a2e263fc3789295c17a804c82c0fb98a45a722c488a020baf7f490bddfd951"
+      }
+    },
+    {
+      "id": "runtime.function-starts-with",
+      "input": "runtime/function-starts-with/input.arrow",
+      "filter": "runtime/function-starts-with/filter.arrow",
+      "expected": "runtime/function-starts-with/expected.arrow",
+      "sha256": {
+        "runtime/function-starts-with/input.arrow": "52a700be53362373c5000d375737cbff175cd5bd2c080b444d231367715f63a9",
+        "runtime/function-starts-with/filter.arrow": "828dc88e67b82163112b4b6edaf1f11febac2383dc2d8e4bc45566f503d85121",
+        "runtime/function-starts-with/expected.arrow": "50709a9ab0dd5ca81471ccaff6f8a06ddc63d10df5f1839ef223bd29dc617736"
+      }
+    },
+    {
+      "id": "runtime.function-ends-with",
+      "input": "runtime/function-ends-with/input.arrow",
+      "filter": "runtime/function-ends-with/filter.arrow",
+      "expected": "runtime/function-ends-with/expected.arrow",
+      "sha256": {
+        "runtime/function-ends-with/input.arrow": "52a700be53362373c5000d375737cbff175cd5bd2c080b444d231367715f63a9",
+        "runtime/function-ends-with/filter.arrow": "b8b87d0e75f36bf43efb5ca53dc7cb18f6e42d8e68630a7843b6e30a006efccc",
+        "runtime/function-ends-with/expected.arrow": "71681bbf6923564a85fcf7ac65b2769931332ad3c8a6844a1efddbf574c06196"
+      }
+    },
+    {
+      "id": "runtime.function-contains",
+      "input": "runtime/function-contains/input.arrow",
+      "filter": "runtime/function-contains/filter.arrow",
+      "expected": "runtime/function-contains/expected.arrow",
+      "sha256": {
+        "runtime/function-contains/input.arrow": "52a700be53362373c5000d375737cbff175cd5bd2c080b444d231367715f63a9",
+        "runtime/function-contains/filter.arrow": "8a8623c2e6b3d56b923eceaa73ac04acc0be9a355e8b1a8367b4aa4258fea899",
+        "runtime/function-contains/expected.arrow": "50709a9ab0dd5ca81471ccaff6f8a06ddc63d10df5f1839ef223bd29dc617736"
+      }
+    },
+    {
+      "id": "runtime.function-list-contains",
+      "input": "runtime/function-list-contains/input.arrow",
+      "filter": "runtime/function-list-contains/filter.arrow",
+      "expected": "runtime/function-list-contains/expected.arrow",
+      "sha256": {
+        "runtime/function-list-contains/input.arrow": "52a700be53362373c5000d375737cbff175cd5bd2c080b444d231367715f63a9",
+        "runtime/function-list-contains/filter.arrow": "3b0d2ed4fcf6a779b8db243d780a552bcbfd12c678b84bfde4dd27fb0fd3b0c1",
+        "runtime/function-list-contains/expected.arrow": "7cb9917bb9673003465b378ca3f1e7534c901e8ce15c8c17212fbd43c6d8c39e"
+      }
+    },
+    {
+      "id": "runtime.arithmetic-add",
+      "input": "runtime/arithmetic-add/input.arrow",
+      "filter": "runtime/arithmetic-add/filter.arrow",
+      "expected": "runtime/arithmetic-add/expected.arrow",
+      "sha256": {
+        "runtime/arithmetic-add/input.arrow": "a6e5837f3bd502581a0ca3ec485eb27f39a37178d417b63a034b5c6a4f798003",
+        "runtime/arithmetic-add/filter.arrow": "60ae3022e069da363e86e2cff00f5465888fdef29491b6d93bba11e5dfb8c950",
+        "runtime/arithmetic-add/expected.arrow": "2b779ea7e7b34fe4026ecedf41ecaa302b9fb748ace1b966e5cd86a0640cfa6a"
+      }
+    },
+    {
+      "id": "runtime.arithmetic-subtract",
+      "input": "runtime/arithmetic-subtract/input.arrow",
+      "filter": "runtime/arithmetic-subtract/filter.arrow",
+      "expected": "runtime/arithmetic-subtract/expected.arrow",
+      "sha256": {
+        "runtime/arithmetic-subtract/input.arrow": "a6e5837f3bd502581a0ca3ec485eb27f39a37178d417b63a034b5c6a4f798003",
+        "runtime/arithmetic-subtract/filter.arrow": "815a3f0e439ee2c25da62f9ce244f5291032cfbe71258824588328cb9beee6c8",
+        "runtime/arithmetic-subtract/expected.arrow": "f4b562f3c5b35b77a76b6e517abd3231e1af1355d432fc74c86414c2a1773af1"
+      }
+    },
+    {
+      "id": "runtime.arithmetic-multiply",
+      "input": "runtime/arithmetic-multiply/input.arrow",
+      "filter": "runtime/arithmetic-multiply/filter.arrow",
+      "expected": "runtime/arithmetic-multiply/expected.arrow",
+      "sha256": {
+        "runtime/arithmetic-multiply/input.arrow": "a6e5837f3bd502581a0ca3ec485eb27f39a37178d417b63a034b5c6a4f798003",
+        "runtime/arithmetic-multiply/filter.arrow": "e87d2bcf81db3ed4fa343f57cb5a615d0f96d821cc1db20749ad192bd2b2e268",
+        "runtime/arithmetic-multiply/expected.arrow": "5101aae10eff7daa0f04d2863cb044bc8d0c0897afb13ca54456e0f4a4f39fd4"
+      }
+    },
+    {
+      "id": "runtime.arithmetic-negate",
+      "input": "runtime/arithmetic-negate/input.arrow",
+      "filter": "runtime/arithmetic-negate/filter.arrow",
+      "expected": "runtime/arithmetic-negate/expected.arrow",
+      "sha256": {
+        "runtime/arithmetic-negate/input.arrow": "a6e5837f3bd502581a0ca3ec485eb27f39a37178d417b63a034b5c6a4f798003",
+        "runtime/arithmetic-negate/filter.arrow": "f578a9d06b874f90ca5a5585a296d15afb8be4d9360eb0d766197885521344b4",
+        "runtime/arithmetic-negate/expected.arrow": "bd24653b7cc402176b4fd38f4089b7a2d2671bfd09a4a22f288343f5e218a11d"
+      }
+    },
+    {
+      "id": "runtime.cast-integer-to-double",
+      "input": "runtime/cast-integer-to-double/input.arrow",
+      "filter": "runtime/cast-integer-to-double/filter.arrow",
+      "expected": "runtime/cast-integer-to-double/expected.arrow",
+      "sha256": {
+        "runtime/cast-integer-to-double/input.arrow": "a6e5837f3bd502581a0ca3ec485eb27f39a37178d417b63a034b5c6a4f798003",
+        "runtime/cast-integer-to-double/filter.arrow": "e7e778cb5c723323c6630cca924d2e1c3d5163668592a1c735dbc05443924bd3",
+        "runtime/cast-integer-to-double/expected.arrow": "0789d2b4bba758a584deefc978e85e6cb2738ee22c0b28ea734066aed0d88789"
+      }
+    },
+    {
+      "id": "runtime.nan-comparison",
+      "input": "runtime/nan-comparison/input.arrow",
+      "filter": "runtime/nan-comparison/filter.arrow",
+      "expected": "runtime/nan-comparison/expected.arrow",
+      "sha256": {
+        "runtime/nan-comparison/input.arrow": "94273be71a719815fdd177c0a68f427e801059d82c91151f63de3b5f90f57125",
+        "runtime/nan-comparison/filter.arrow": "0babbd55cc2362d50afdc668cb78a2a3ad916388fa51be61b747eeac9385afe0",
+        "runtime/nan-comparison/expected.arrow": "0409902e7ca7640be2470de935c87a271ded23ac9d885d105e992a7cddec7211"
+      }
+    },
+    {
+      "id": "runtime.negative-zero-membership",
+      "input": "runtime/negative-zero-membership/input.arrow",
+      "filter": "runtime/negative-zero-membership/filter.arrow",
+      "expected": "runtime/negative-zero-membership/expected.arrow",
+      "sha256": {
+        "runtime/negative-zero-membership/input.arrow": "94273be71a719815fdd177c0a68f427e801059d82c91151f63de3b5f90f57125",
+        "runtime/negative-zero-membership/filter.arrow": "f12f4991db3c4828525ba724ca344413687f92ed6dcab70843df4e5c6706ab35",
+        "runtime/negative-zero-membership/expected.arrow": "560074835d528e637eea667f04325f5bd63e7d9976689cc4bc3a0bdff5560049"
+      }
+    },
+    {
+      "id": "runtime.session-integer-division",
+      "input": "runtime/session-integer-division/input.arrow",
+      "filter": "runtime/session-integer-division/filter.arrow",
+      "evaluation_capabilities": [
+        [
+          "vgi.duckdb.session.v1",
+          null
+        ]
+      ],
+      "expected": "runtime/session-integer-division/expected.arrow",
+      "sha256": {
+        "runtime/session-integer-division/input.arrow": "a6e5837f3bd502581a0ca3ec485eb27f39a37178d417b63a034b5c6a4f798003",
+        "runtime/session-integer-division/filter.arrow": "be625a995374a5fd19be63e769632db1b7b3c824bdedf7da009ee49f6419d8b2",
+        "runtime/session-integer-division/expected.arrow": "0789d2b4bba758a584deefc978e85e6cb2738ee22c0b28ea734066aed0d88789"
+      }
+    },
+    {
+      "id": "runtime.empty-snapshot",
+      "input": "runtime/empty-snapshot/input.arrow",
+      "filter": "runtime/empty-snapshot/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "expected": "runtime/empty-snapshot/expected.arrow",
+      "worker_expected": "runtime/empty-snapshot/worker-expected.arrow",
+      "sha256": {
+        "runtime/empty-snapshot/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/empty-snapshot/filter.arrow": "57a324d135b860acc2f7ee8a55c67544f9905ed856bd1c0c77267f029dadedc5",
+        "runtime/empty-snapshot/expected.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/empty-snapshot/worker-expected.arrow": "6d1a2283d425ca5086c474b394bbf8a33820f6475ea2810162f92129a6e27bdd"
+      }
+    },
+    {
+      "id": "runtime.delta-upsert-remove-stale",
+      "input": "runtime/delta-upsert-remove-stale/input.arrow",
+      "filter": "runtime/delta-upsert-remove-stale/filter.arrow",
+      "deltas": [
+        "runtime/delta-upsert-remove-stale/delta-0.arrow",
+        "runtime/delta-upsert-remove-stale/delta-1.arrow",
+        "runtime/delta-upsert-remove-stale/delta-2.arrow"
+      ],
+      "expected": "runtime/delta-upsert-remove-stale/expected.arrow",
+      "sha256": {
+        "runtime/delta-upsert-remove-stale/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/delta-upsert-remove-stale/filter.arrow": "57a324d135b860acc2f7ee8a55c67544f9905ed856bd1c0c77267f029dadedc5",
+        "runtime/delta-upsert-remove-stale/expected.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/delta-upsert-remove-stale/delta-0.arrow": "14972f53361f06fac6a9759e050bd03543f2c96d3508cce7adfefd3541e316b4",
+        "runtime/delta-upsert-remove-stale/delta-1.arrow": "078ad98ee56a52a22d89ee6dd39b07667d24d602ce8bbbdcf4de854817438572",
+        "runtime/delta-upsert-remove-stale/delta-2.arrow": "8d38cfb5ddac3407a4238e9cc3c136f0f83da0e4a27c48a6e68417091c98e546"
+      }
+    },
+    {
+      "id": "runtime.delta-atomic-multi-update",
+      "input": "runtime/delta-atomic-multi-update/input.arrow",
+      "filter": "runtime/delta-atomic-multi-update/filter.arrow",
+      "deltas": [
+        "runtime/delta-atomic-multi-update/delta-0.arrow"
+      ],
+      "expected": "runtime/delta-atomic-multi-update/expected.arrow",
+      "sha256": {
+        "runtime/delta-atomic-multi-update/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/delta-atomic-multi-update/filter.arrow": "57a324d135b860acc2f7ee8a55c67544f9905ed856bd1c0c77267f029dadedc5",
+        "runtime/delta-atomic-multi-update/expected.arrow": "767c4ea51a41a287075612bb8348113356bc868d5b34dee597d043a06d5cfde1",
+        "runtime/delta-atomic-multi-update/delta-0.arrow": "95c80cb0264b285e38adbf0e84acd9d2ce9bd72adaec637be881c7d79574159f"
+      }
+    },
+    {
+      "id": "runtime.delta-empty-noop",
+      "input": "runtime/delta-empty-noop/input.arrow",
+      "filter": "runtime/delta-empty-noop/filter.arrow",
+      "deltas": [
+        "runtime/delta-empty-noop/delta-0.arrow"
+      ],
+      "expected": "runtime/delta-empty-noop/expected.arrow",
+      "sha256": {
+        "runtime/delta-empty-noop/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/delta-empty-noop/filter.arrow": "57a324d135b860acc2f7ee8a55c67544f9905ed856bd1c0c77267f029dadedc5",
+        "runtime/delta-empty-noop/expected.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/delta-empty-noop/delta-0.arrow": "8ee87491a034c71ca049476af1c2a5d93a9e8c7d3c42ad1747465aab522277e5"
+      }
+    },
+    {
+      "id": "runtime.error-column-name",
+      "input": "runtime/error-column-name/input.arrow",
+      "filter": "runtime/error-column-name/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "error": "does not match index",
+      "sha256": {
+        "runtime/error-column-name/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/error-column-name/filter.arrow": "ca13bb873f82bf9cc8aae576bfde6a9d4e80cab7d04f5d1fc664e04b0dfa8135"
+      }
+    },
+    {
+      "id": "runtime.error-column-index",
+      "input": "runtime/error-column-index/input.arrow",
+      "filter": "runtime/error-column-index/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "error": "out of range",
+      "sha256": {
+        "runtime/error-column-index/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/error-column-index/filter.arrow": "35a811c2b97e4ccced8dfd83b37533ae58a13aa00d09eab6b2b1b169c6931d90"
+      }
+    },
+    {
+      "id": "runtime.error-non-boolean-root",
+      "input": "runtime/error-non-boolean-root/input.arrow",
+      "filter": "runtime/error-non-boolean-root/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "error": "predicate root must resolve to BOOLEAN",
+      "sha256": {
+        "runtime/error-non-boolean-root/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/error-non-boolean-root/filter.arrow": "e15f9f499ec41764421ee580ab501cd8f1c8b1558e0a453e148bd21c342ceea7"
+      }
+    },
+    {
+      "id": "runtime.error-missing-literal",
+      "input": "runtime/error-missing-literal/input.arrow",
+      "filter": "runtime/error-missing-literal/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "error": "value_99",
+      "sha256": {
+        "runtime/error-missing-literal/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/error-missing-literal/filter.arrow": "0fadce735024cd02274c3fd9eff626ad5f27bde6aa7cd34a93d06f08eeb2ae15"
+      }
+    },
+    {
+      "id": "runtime.error-invalid-overload",
+      "input": "runtime/error-invalid-overload/input.arrow",
+      "filter": "runtime/error-invalid-overload/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "error": "does not bind",
+      "sha256": {
+        "runtime/error-invalid-overload/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/error-invalid-overload/filter.arrow": "5d1f7bb7345966ca6b391d7d9aae818ede36a9c5cafc9df894be8522186068ff"
+      }
+    },
+    {
+      "id": "runtime.error-field-non-struct",
+      "input": "runtime/error-field-non-struct/input.arrow",
+      "filter": "runtime/error-field-non-struct/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "error": "struct type",
+      "sha256": {
+        "runtime/error-field-non-struct/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/error-field-non-struct/filter.arrow": "cae790e1abdc1198662d681dd4c3d5f559cc16f9bc5ccbb5b745b52cc2fbeac7"
+      }
+    },
+    {
+      "id": "runtime.error-in-payload-not-list",
+      "input": "runtime/error-in-payload-not-list/input.arrow",
+      "filter": "runtime/error-in-payload-not-list/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "error": "list scalar",
+      "sha256": {
+        "runtime/error-in-payload-not-list/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/error-in-payload-not-list/filter.arrow": "a257ddbcd57d12ba16f4720c75513b91984d5751499a5235902f9f334dd866c2"
+      }
+    },
+    {
+      "id": "runtime.error-in-payload-null-list",
+      "input": "runtime/error-in-payload-null-list/input.arrow",
+      "filter": "runtime/error-in-payload-null-list/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "error": "list must not be NULL",
+      "sha256": {
+        "runtime/error-in-payload-null-list/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/error-in-payload-null-list/filter.arrow": "e28974dc326d863265a7c32ed6899c9aa268f197010e5e099ee2e47f49301e2c"
+      }
+    },
+    {
+      "id": "runtime.error-external-column-index",
+      "input": "runtime/error-external-column-index/input.arrow",
+      "filter": "runtime/error-external-column-index/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "join_keys": [
+        "runtime/error-external-column-index/join-keys-0.arrow"
+      ],
+      "error": "out of range",
+      "sha256": {
+        "runtime/error-external-column-index/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/error-external-column-index/filter.arrow": "4150fc6de7230699e409025f69339188bc336332cdc421692f517ddf3130e25c",
+        "runtime/error-external-column-index/join-keys-0.arrow": "c9a2e263fc3789295c17a804c82c0fb98a45a722c488a020baf7f490bddfd951"
+      }
+    },
+    {
+      "id": "runtime.error-external-column-name",
+      "input": "runtime/error-external-column-name/input.arrow",
+      "filter": "runtime/error-external-column-name/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "join_keys": [
+        "runtime/error-external-column-name/join-keys-0.arrow"
+      ],
+      "error": "does not match",
+      "sha256": {
+        "runtime/error-external-column-name/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/error-external-column-name/filter.arrow": "ef1785cbb05e914db9638fd1562b93431f1ad08cb2e0c2b703514a43d2c4c1d6",
+        "runtime/error-external-column-name/join-keys-0.arrow": "c9a2e263fc3789295c17a804c82c0fb98a45a722c488a020baf7f490bddfd951"
+      }
+    },
+    {
+      "id": "runtime.error-cast-type-not-null",
+      "input": "runtime/error-cast-type-not-null/input.arrow",
+      "filter": "runtime/error-cast-type-not-null/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "error": "type_0 must contain a NULL",
+      "sha256": {
+        "runtime/error-cast-type-not-null/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/error-cast-type-not-null/filter.arrow": "1285f1a21fbddea053282fe7c482f0e34c99b0cb750386a002d91355b5b2aa1a"
+      }
+    },
+    {
+      "id": "runtime.error-duplicate-predicate-id",
+      "input": "runtime/error-duplicate-predicate-id/input.arrow",
+      "filter": "runtime/error-duplicate-predicate-id/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "error": "duplicate predicate ID",
+      "sha256": {
+        "runtime/error-duplicate-predicate-id/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/error-duplicate-predicate-id/filter.arrow": "70c1bf9c84b0855dd9ffad5aeb5df27b75d85273353a50a1cfca7fb9addeaa8c"
+      }
+    },
+    {
+      "id": "runtime.error-unknown-standard-function",
+      "input": "runtime/error-unknown-standard-function/input.arrow",
+      "filter": "runtime/error-unknown-standard-function/filter.arrow",
+      "worker": {
+        "function": "filter_echo",
+        "schema_path": [
+          "main"
+        ],
+        "arguments": [
+          5
+        ],
+        "projection_ids": [
+          0,
+          1
+        ]
+      },
+      "error": "unknown standard filter function",
+      "sha256": {
+        "runtime/error-unknown-standard-function/input.arrow": "57c88a010e71c72cec25595dec69157af49e160a2462ad0594b4db277289da12",
+        "runtime/error-unknown-standard-function/filter.arrow": "42120d75f6f93a914373f00f03eff57493b5066fcf5e038d45c5e1481efa61ff"
+      }
+    },
+    {
+      "id": "runtime.error-contextual-cast-without-session",
+      "input": "runtime/error-contextual-cast-without-session/input.arrow",
+      "filter": "runtime/error-contextual-cast-without-session/filter.arrow",
+      "error": "requires vgi.duckdb.session.v1",
+      "sha256": {
+        "runtime/error-contextual-cast-without-session/input.arrow": "674794a2111e261384806045f82d4cfdf0e50bcf956c7fc4ceb23690972d374b",
+        "runtime/error-contextual-cast-without-session/filter.arrow": "752b96b1342765a1c92332ca7f33da444eb477b1968fe625eb9b123ab2cb3bfa"
+      }
+    }
+  ]
+}

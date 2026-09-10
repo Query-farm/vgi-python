@@ -42,7 +42,7 @@ def _format_pushed_filters(filters: PushdownFilters | None) -> str:
     if not filters:
         return "(none)"
 
-    from vgi.table_filter_pushdown import AndFilter, InFilter, OrFilter, _filter_to_sql
+    from vgi.table_filter_pushdown import AndFilter, InFilter, OrFilter, V2ExpressionFilter, _filter_to_sql
 
     def _format_one(f: object) -> str:
         """Format a single filter, truncating large InFilters."""
@@ -54,6 +54,8 @@ def _format_pushed_filters(filters: PushdownFilters | None) -> str:
         if isinstance(f, OrFilter):
             child_parts = [_format_one(c) for c in f.children]
             return "(" + " OR ".join(child_parts) + ")"
+        if isinstance(f, V2ExpressionFilter):
+            return repr(f)
         # Fall back to SQL rendering for other filter types
         sql, params = _filter_to_sql(f, lambda s: s, "?", 0)  # type: ignore[arg-type]
         parts: list[str] = []
