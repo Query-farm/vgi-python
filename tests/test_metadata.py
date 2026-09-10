@@ -744,7 +744,7 @@ class TestFunctionTags:
             catalog_name = "functions"
             functions = [DynamicTable]
 
-        info = Cat()._function_to_info(DynamicTable, "main")
+        info = Cat()._function_to_info(DynamicTable, ["main"])
         assert isinstance(info, FunctionInfo)
         assert info.tags == {
             "vgi.columns_md": "| col | type |\n| --- | --- |\n| id | BIGINT |",
@@ -789,9 +789,9 @@ class TestFunctionTags:
             catalog_name = "functions"
             functions = [CommentedTable, UncommentedTable]
 
-        commented_info = Cat()._function_to_info(CommentedTable, "main")
+        commented_info = Cat()._function_to_info(CommentedTable, ["main"])
         assert isinstance(commented_info, FunctionInfo)
         assert commented_info.comment == "internal — do not call directly"
 
-        uncommented_info = Cat()._function_to_info(UncommentedTable, "main")
+        uncommented_info = Cat()._function_to_info(UncommentedTable, ["main"])
         assert uncommented_info.comment is None

@@ -51,10 +51,10 @@ class AggregateBindParams:
     Attributes:
         args: The bound function [`Arguments`][], or ``None`` if none.
         input_schema: Arrow schema of the aggregate's input columns, or ``None``.
-        argument_names: Resolved names aligned with the complete logical
-            argument order, or ``None`` when unavailable.
         settings: DuckDB session settings relevant to the function.
         secrets: Accessor for the resolved secrets the function declared.
+        argument_names: Resolved names aligned with the complete logical
+            argument order, or ``None`` when unavailable.
         auth_context: The caller's authentication context (anonymous by default).
     """
 

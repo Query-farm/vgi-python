@@ -87,10 +87,6 @@ if [ "$TRANSPORT" = "http" ]; then
   #   * buffer_input/sizes.test — input buffering semantics differ over HTTP
   #     (same known limitation). (scale.test_slow is a .test_slow file and is
   #     never staged below, which only finds *.test.)
-  #   * database_worker/package.test — the packaged fixture is deliberately an
-  #     executable wrapper around VGI_TEST_WORKER. An HTTP URL is not an
-  #     executable artifact; the direct-exec lifecycle is covered by all three
-  #     process/socket lanes.
   # cache/revalidate.test now runs on http too: HTTP conditional revalidation is
   # implemented (C++ /init-request validators + vgi-rpc >=0.24.0 surfacing them to
   # the producer's first process()). It needs a community vgi extension carrying
@@ -101,7 +97,6 @@ if [ "$TRANSPORT" = "http" ]; then
     -not -name 'dynamic_filter.test'
     -not -name 'partitioned_sequence.test'
     -not -path './table_in_out/buffer_input/sizes.test'
-    -not -path './database_worker/package.test'
   )
 fi
 
@@ -230,6 +225,9 @@ export VGI_BAD_PROTOCOL_WORKER="${LAUNCH_PREFIX}${BAD_PROTOCOL}"
 # it stays a binary path, so those tests run over subprocess there (they do NOT
 # self-skip: the http lane passes all 5 files).
 export VGI_SIMPLE_WRITABLE_WORKER="${LAUNCH_PREFIX}${SIMPLE_WRITABLE}"
+# database:// installs and directly executes this package, even when the main
+# lane talks to an already-running HTTP worker.
+export VGI_DATABASE_PACKAGE_WORKER="$WORKER"
 
 case "$TRANSPORT" in
   stdio)

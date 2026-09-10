@@ -150,8 +150,8 @@ def test_catalog_routes_dotted_and_nested_paths_independently() -> None:
         schema_path=["a", "b"],
         name="events",
     )
-    assert dotted is not None and pa.ipc.read_schema(pa.BufferReader(dotted.columns)).names == ["kind"]
-    assert nested is not None and pa.ipc.read_schema(pa.BufferReader(nested.columns)).names == ["value"]
+    assert dotted is not None and pa.ipc.read_schema(pa.py_buffer(dotted.columns)).names == ["kind"]
+    assert nested is not None and pa.ipc.read_schema(pa.py_buffer(nested.columns)).names == ["value"]
     assert [
         item.schema_path
         for item in catalog.schema_contents(
