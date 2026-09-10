@@ -25,13 +25,13 @@ SQL-like text in its `pushed_filters` column — the same fixture the
 
 from __future__ import annotations
 
-import json
 from typing import Any, cast
 
 import pyarrow as pa
 import pytest
 
 from vgi.arguments import Arguments
+from vgi.filter_v2_builder import build_filter_batch, serialize_filter_batch
 
 MAIN = ["main"]
 
@@ -73,22 +73,7 @@ def _join_keys_pushdown_filters_bytes(column_name: str, keys_column: str) -> byt
             }
         ],
     }
-    spec_field = pa.field("filter_spec", pa.string(), nullable=False)
-    schema = pa.schema(
-        [spec_field],
-        metadata={
-            b"vgi_filter_encoding": b"vgi.filters.v2",
-            b"vgi_filter_version": b"2",
-            b"vgi_evaluation_context": b"vgi.none.v1",
-        },
-    )
-    batch = pa.record_batch({"filter_spec": [json.dumps(document)]}, schema=schema)
-
-    sink = pa.BufferOutputStream()
-    writer = pa.ipc.new_stream(sink, batch.schema)
-    writer.write_batch(batch)
-    writer.close()
-    return sink.getvalue().to_pybytes()
+    return serialize_filter_batch(build_filter_batch(document))
 
 
 class TestBind:

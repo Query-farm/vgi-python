@@ -16,8 +16,9 @@ Protocol implementers should begin with the normative [Filter Encoding v2](vgi-f
 runtime-artifact extension only when implementing one of its negotiated algorithms. Engine adapters should then use
 the relevant implementation guide without treating engine-private classes as wire types.
 
-The language-neutral filter corpus is scaffolded at `conformance/filter-v2/`. It intentionally contains no binary
-cases yet; its manifest will become the shared inventory consumed by every SDK once normative vectors are added.
+The language-neutral filter corpus at `conformance/filter-v2/` contains structural JSON cases and executable Arrow
+IPC vectors. Its worker runner sends the portable cases through the public VGI client and can target any SDK's
+standard example worker.
 
 The [filter-pushdown user guide](../filter-pushdown.md) explains how Python function authors opt in. User-facing APIs
 and implementation status belong there; wire-level requirements belong in the normative specification.

@@ -8,4 +8,5 @@ The canonical protocol documents live in [`docs/protocol/`](docs/protocol/index.
 - [DuckDB filter adapter — informative implementation guide](docs/protocol/vgi-duckdb-filter-adapter.md)
 - [DuckDB 2.0 protocol design/audit report — informative](docs/protocol/vgi-protocol-proposed-changes.md)
 
-The language-neutral conformance corpus scaffold is in [`conformance/filter-v2/`](conformance/filter-v2/README.md).
+The executable language-neutral conformance corpus and retargetable worker runner are in
+[`conformance/filter-v2/`](conformance/filter-v2/README.md).
