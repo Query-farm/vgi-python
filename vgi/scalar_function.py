@@ -114,11 +114,11 @@ class BindParameters:
         arguments_schema: Schema describing the input columns.
         settings: DuckDB settings as a single-row `RecordBatch`, or None.
         secrets: [`SecretsAccessor`][] for accessing resolved and dynamic secrets.
-        argument_names: Resolved names aligned with the complete logical
-            argument order, or ``None`` when unavailable.
         auth_context: Authentication context for the current request.
         attach_opaque_data: Catalog attach ID, if the function was invoked through an ATTACHed catalog.
         transaction_opaque_data: Catalog transaction ID, if invoked inside a catalog transaction.
+        argument_names: Resolved names aligned with the complete logical
+            argument order, or ``None`` when unavailable.
 
     """
 

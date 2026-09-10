@@ -51,7 +51,7 @@ def _invoke(client: Client) -> dict[str, Any]:
     output = list(
         client.scalar_function(
             function_name="tailnet_auth_snapshot",
-            schema_name="main",
+            schema_path=["main"],
             arguments=Arguments(positional=(pa.scalar("value"),)),
             input=iter((batch,)),
         )

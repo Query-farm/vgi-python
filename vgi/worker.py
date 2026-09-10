@@ -1882,9 +1882,9 @@ class Worker:
             function_name: The name of the candidate function
             arguments: The arguments that were used to call the function
             input_schema: The input_schema that is passed to the function,
+            candidates: Sequence of function classes with the same name.
             argument_names: Resolved names aligned with the complete logical
                 argument order, or None when unavailable.
-            candidates: Sequence of function classes with the same name.
             schema_registry: The worker's ``(schema, name)`` index, used only to
                 turn a cross-schema tie into an actionable error message.
 

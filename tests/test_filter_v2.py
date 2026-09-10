@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
+from typing import cast
 
 import pyarrow as pa
 import pytest
@@ -22,7 +24,7 @@ from vgi import (
     deserialize_filters,
 )
 
-_METADATA = {
+_METADATA: dict[bytes, bytes] = {
     b"vgi_filter_encoding": b"vgi.filters.v2",
     b"vgi_filter_version": b"2",
     b"vgi_evaluation_context": b"vgi.none.v1",
@@ -39,7 +41,7 @@ def _document(predicates: list[dict[str, object]]) -> dict[str, object]:
 
 
 def _predicate(
-    expression: dict[str, object],
+    expression: Mapping[str, object],
     *,
     predicate_id: str = "query:0",
     mode: str = "required",
@@ -49,19 +51,20 @@ def _predicate(
         "revision": 0,
         "mode": mode,
         "source": "query",
-        "expression": expression,
+        "expression": dict(expression),
     }
 
 
 def _batch(
     document: dict[str, object] | str,
     *payload: tuple[pa.Field, object],  # type: ignore[type-arg]
-    metadata: dict[bytes, bytes] | None = None,
+    metadata: Mapping[bytes, bytes] | None = None,
 ) -> pa.RecordBatch:
     text = document if isinstance(document, str) else json.dumps(document, separators=(",", ":"))
     fields = [pa.field("filter_spec", pa.string(), nullable=False), *(field for field, _ in payload)]
     arrays = [pa.array([text]), *(pa.array([value], type=field.type) for field, value in payload)]
-    return pa.RecordBatch.from_arrays(arrays, schema=pa.schema(fields, metadata=metadata or _METADATA))
+    schema_metadata = cast("dict[bytes | str, bytes | str]", dict(metadata or _METADATA))
+    return pa.RecordBatch.from_arrays(arrays, schema=pa.schema(fields, metadata=schema_metadata))
 
 
 def _delta(updates: list[dict[str, object]], *payload: tuple[pa.Field, object]) -> pa.RecordBatch:  # type: ignore[type-arg]
