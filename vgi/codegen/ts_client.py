@@ -176,6 +176,13 @@ def _opaque_tag_for(inner: typing.Any) -> str | None:
 # --------------------------------------------------------------------------- #
 
 
+def _emit_array_type(element_type: str) -> str:
+    """Return an array type without changing a union element's precedence."""
+    if " | " in element_type:
+        return f"({element_type})[]"
+    return f"{element_type}[]"
+
+
 def _emit_type(t: typing.Any, ctx: _Ctx) -> str:
     """Convert a Python type hint to a TS type expression (side-effect: registers dataclasses/enums)."""
     t, arrow_meta = _unwrap(t)
@@ -225,7 +232,7 @@ def _emit_type(t: typing.Any, ctx: _Ctx) -> str:
 
     if origin is list:
         (inner,) = typing.get_args(t)
-        return f"{_emit_type(inner, ctx)}[]"
+        return _emit_array_type(_emit_type(inner, ctx))
     if origin is dict:
         k, v = typing.get_args(t)
         return f"Record<{_emit_type(k, ctx)}, {_emit_type(v, ctx)}>"
@@ -233,7 +240,7 @@ def _emit_type(t: typing.Any, ctx: _Ctx) -> str:
         args = typing.get_args(t)
         # Handle `tuple[X, ...]` (homogeneous)
         if len(args) == 2 and args[1] is Ellipsis:
-            return f"{_emit_type(args[0], ctx)}[]"
+            return _emit_array_type(_emit_type(args[0], ctx))
         return "[" + ", ".join(_emit_type(a, ctx) for a in args) + "]"
     if origin is typing.Union or origin is pytypes.UnionType:
         return " | ".join(_emit_type(a, ctx) for a in typing.get_args(t))
