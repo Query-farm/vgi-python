@@ -8,8 +8,9 @@
 # Ported from vgi-go's harness. The Python differences:
 #   * The "worker binaries" are console scripts installed into the project venv
 #     by `uv sync --all-extras` (the vgi-fixtures workspace member); the C++
-#     client spawns them as subprocesses. We use their absolute .venv/bin paths
-#     so each spawn skips `uv run`'s resolve overhead.
+#     client launches them from their absolute .venv/bin paths. The default
+#     launcher transport keeps one warm process instead of paying Python startup
+#     for every DuckDB connection.
 #   * Every per-catalog worker is the same Python program with a different
 #     entrypoint; the base `WorkerClass.main()` understands stdin/stdout,
 #     `--http`, and the launcher's `--unix`, so one binary covers every lane.
@@ -27,7 +28,7 @@
 #   HAYBARN_UNITTEST  path to the haybarn-unittest binary
 # Optional:
 #   BIN_DIR           dir holding the fixture console scripts (default: $REPO/.venv/bin)
-#   TRANSPORT         stdio | shm | launch | http   (default: stdio)
+#   TRANSPORT         stdio | shm | launch | http   (default: launch)
 #   VGI_RPC_SHM_SIZE_BYTES  shm side-channel segment size (the shm lane)
 #   STAGE             scratch dir for the preprocessed test tree (default: mktemp)
 set -euo pipefail
@@ -39,7 +40,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 BIN_DIR="${BIN_DIR:-$REPO/.venv/bin}"
 STAGE="${STAGE:-$(mktemp -d)}"
-TRANSPORT="${TRANSPORT:-stdio}"
+TRANSPORT="${TRANSPORT:-launch}"
 INTEGRATION="$VGI_SRC/test/sql/integration"
 [ -d "$INTEGRATION" ] || { echo "::error::no test/sql/integration under VGI_SRC=$VGI_SRC"; exit 1; }
 
@@ -232,7 +233,7 @@ export VGI_SIMPLE_WRITABLE_WORKER="${LAUNCH_PREFIX}${SIMPLE_WRITABLE}"
 
 case "$TRANSPORT" in
   stdio)
-    # Subprocess transport (the primary lane) — the only lane that spawns a
+    # Subprocess transport — the only lane that spawns a
     # fresh worker process per DuckDB connection, and so the only one that can
     # host the crash / pool-recovery tests below.
     export VGI_TEST_WORKER="$WORKER"

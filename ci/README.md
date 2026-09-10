@@ -45,10 +45,11 @@ suite against the Python worker (see the project `CLAUDE.md`).
 
 ## Transport lanes
 
-`run-integration.sh` honours `TRANSPORT=stdio|shm|launch|http` (the workflow
-runs them as a matrix):
+`run-integration.sh` honours `TRANSPORT=stdio|shm|launch|http` and defaults to
+`launch` when the variable is omitted (the workflow runs every lane explicitly
+as a matrix):
 
-- **`stdio`** — the subprocess transport (the primary lane); the whole suite.
+- **`stdio`** — the subprocess compatibility lane; the whole suite.
   Also boots the versioned and versioned-tables workers as background HTTP
   servers (`VGI_VERSIONED_HTTP_WORKER` / `VGI_VERSIONED_TABLES_HTTP_WORKER`) so
   the `attach/versioned_tables_*_http` and `versioning_http` tests run.
@@ -62,7 +63,7 @@ runs them as a matrix):
   via the `__transport_options__` handshake and carried in POSIX shm rather than
   in the pipe or socket — and engages identically over the launcher (verified:
   the same 18 `[shm]` transfers under `VGI_RPC_SHM_DEBUG=1` on both).
-- **`launch`** — the AF_UNIX launcher transport; the whole suite, with *every*
+- **`launch`** — the default and primary AF_UNIX launcher transport; the whole suite, with *every*
   `VGI_*_WORKER` fronted by `launch:` so traffic flows through the C++ launcher
   (`ResolveLauncherSocketPath` → AF_UNIX → `UnixSocketWorker`). Mirrors the vgi
   Makefile's `test_launcher`: the point is that the launcher path produces

@@ -19,12 +19,16 @@
 #   --integration-only   skip pytest
 #   --quiet              don't print summaries to stdout
 #   --show               print cached summaries WITHOUT re-running
+#
+# Environment:
+#   VGI_INTEGRATION_TRANSPORT  launch (default) | stdio
 set -uo pipefail
 
 # Repo locations (override for non-default checkouts).
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VGI_PYTHON_DIR="${VGI_PYTHON_DIR:-$REPO_ROOT}"
 VGI_CPP_DIR="${VGI_CPP_DIR:-$HOME/Development/vgi}"
+VGI_INTEGRATION_TRANSPORT="${VGI_INTEGRATION_TRANSPORT:-launch}"
 
 CACHE=/tmp/vgi-test-cache
 mkdir -p "$CACHE"
@@ -46,7 +50,7 @@ for arg in "$@"; do
     --integration-only) run_pytest=0 ;;
     --quiet) quiet=1 ;;
     --show) show_only=1 ;;
-    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
     *) echo "unknown flag: $arg" >&2; exit 2 ;;
   esac
 done
@@ -186,11 +190,25 @@ run_pytest_job() {
 
 run_integration_job() {
   cd "$VGI_CPP_DIR" || exit 99
-  # `~[.]` excludes Catch2-hidden tests, i.e. `*.test_slow` files. These
-  # tend to assert best-effort behavior (e.g. `on_cancel` firing) that
-  # gets flaky under -j 8 contention; run them manually when needed.
-  VGI_TEST_WORKER="uv run --project $VGI_PYTHON_DIR vgi-fixture-worker" \
-    timeout 600 ./build/release/test/unittest -j 8 "test/sql/integration/*" "~[.]" >"$INT_LOG" 2>&1
+  local worker="uv run --project $VGI_PYTHON_DIR vgi-fixture-worker"
+  case "$VGI_INTEGRATION_TRANSPORT" in
+    launch)
+      worker="launch:$worker"
+      export VGI_REQUIRE_LAUNCHER_TRANSPORT=1
+      ;;
+    stdio)
+      unset VGI_REQUIRE_LAUNCHER_TRANSPORT
+      ;;
+    *)
+      echo "unsupported VGI_INTEGRATION_TRANSPORT=$VGI_INTEGRATION_TRANSPORT (expected launch or stdio)" >&2
+      return 2
+      ;;
+  esac
+  # `~[.]` excludes Catch2-hidden tests, i.e. `*.test_slow` files. The
+  # launcher keeps one Python worker warm while unittest advances serially,
+  # avoiding both repeated startup and cross-test state contention.
+  VGI_TEST_WORKER="$worker" \
+    timeout 600 ./build/release/test/unittest "test/sql/integration/*" "~[.]" >"$INT_LOG" 2>&1
   local rc=$?
   summarize_integration "$INT_LOG" "$INT_SUMMARY" "$INT_FAILURES"
   echo "exit=$rc" >>"$INT_SUMMARY"
@@ -206,10 +224,15 @@ if [[ "$run_integration" == 1 ]]; then
   pids+=($!)
 fi
 
+exit_code=0
 for pid in "${pids[@]}"; do
-  wait "$pid"
+  if ! wait "$pid"; then
+    exit_code=1
+  fi
 done
 
 if [[ "$quiet" == 0 ]]; then
   print_summary
 fi
+
+exit "$exit_code"
