@@ -1477,10 +1477,12 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         """
         return None
 
-    @staticmethod
+    @classmethod
     def pushdown_filters(
+        cls,
         pushdown_filters: pa.RecordBatch,
         join_keys: list[pa.RecordBatch] | None = None,
+        output_schema: pa.Schema | None = None,
     ) -> PushdownFilters | None:
         """Get deserialized pushdown filters, or None if not present.
 
@@ -1497,6 +1499,8 @@ class TableFunctionBase[TArgs](vgi.function.Function):
                 one per IN filter column. Available via
                 ``get_join_keys_batch()`` / ``get_join_keys_batches()``
                 on the returned `[`PushdownFilters`][]`.
+            output_schema: Unprojected bind output schema for strict validation
+                of authoritative v2 column indexes and names.
 
         Returns:
             `PushdownFilters` container with parsed filter AST, or None.
@@ -1506,7 +1510,20 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             return None
         from vgi.table_filter_pushdown import deserialize_filters
 
-        return deserialize_filters(pushdown_filters, join_keys=join_keys)
+        metadata = cls.get_metadata()
+        extension_functions = frozenset(
+            (value.namespace, value.name, value.version) for value in metadata.additional_filter_functions
+        )
+        evaluation_capabilities = tuple(
+            (value.profile, value.provider_fingerprint) for value in metadata.filter_evaluation_contexts
+        )
+        return deserialize_filters(
+            pushdown_filters,
+            join_keys=join_keys,
+            output_schema=output_schema,
+            extension_functions=extension_functions,
+            evaluation_capabilities=evaluation_capabilities,
+        )
 
     @classmethod
     def _should_auto_apply_filters(cls) -> bool:

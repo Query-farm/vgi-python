@@ -1,0 +1,755 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://query.farm/vgi/conformance/filter-v2/filter-v2.schema.json",
+  "title": "VGI Filter Encoding v2 document",
+  "description": "Structural schema for vgi.filters.v2 snapshot and delta JSON documents. Arrow payload, type resolution, capability, stateful revision, and evaluation rules require protocol-level validation in addition to this schema.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/snapshot"
+    },
+    {
+      "$ref": "#/$defs/delta"
+    }
+  ],
+  "$defs": {
+    "uint64": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "index": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "predicateId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source": {
+      "enum": [
+        "query",
+        "join",
+        "top_n",
+        "split_refinement",
+        "other"
+      ]
+    },
+    "extensionIdentity": {
+      "type": "object",
+      "required": [
+        "namespace",
+        "name",
+        "version"
+      ],
+      "properties": {
+        "namespace": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$"
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "columnRef": {
+      "type": "object",
+      "required": [
+        "node",
+        "column_index",
+        "column_name"
+      ],
+      "properties": {
+        "node": {
+          "const": "column_ref"
+        },
+        "column_index": {
+          "$ref": "#/$defs/index"
+        },
+        "column_name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "fieldRef": {
+      "type": "object",
+      "required": [
+        "node",
+        "expression",
+        "field_index",
+        "field_name"
+      ],
+      "properties": {
+        "node": {
+          "const": "field_ref"
+        },
+        "expression": {
+          "$ref": "#/$defs/coreExpression"
+        },
+        "field_index": {
+          "$ref": "#/$defs/index"
+        },
+        "field_name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "literal": {
+      "type": "object",
+      "required": [
+        "node",
+        "value_ref"
+      ],
+      "properties": {
+        "node": {
+          "const": "literal"
+        },
+        "value_ref": {
+          "$ref": "#/$defs/index"
+        }
+      },
+      "additionalProperties": false
+    },
+    "comparison": {
+      "type": "object",
+      "required": [
+        "node",
+        "op",
+        "left",
+        "right"
+      ],
+      "properties": {
+        "node": {
+          "const": "comparison"
+        },
+        "op": {
+          "enum": [
+            "eq",
+            "ne",
+            "lt",
+            "le",
+            "gt",
+            "ge",
+            "distinct_from",
+            "not_distinct_from"
+          ]
+        },
+        "left": {
+          "$ref": "#/$defs/coreExpression"
+        },
+        "right": {
+          "$ref": "#/$defs/coreExpression"
+        }
+      },
+      "additionalProperties": false
+    },
+    "andExpression": {
+      "type": "object",
+      "required": [
+        "node",
+        "children"
+      ],
+      "properties": {
+        "node": {
+          "const": "and"
+        },
+        "children": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "$ref": "#/$defs/coreExpression"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "orExpression": {
+      "type": "object",
+      "required": [
+        "node",
+        "children"
+      ],
+      "properties": {
+        "node": {
+          "const": "or"
+        },
+        "children": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "$ref": "#/$defs/coreExpression"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "notExpression": {
+      "type": "object",
+      "required": [
+        "node",
+        "expression"
+      ],
+      "properties": {
+        "node": {
+          "const": "not"
+        },
+        "expression": {
+          "$ref": "#/$defs/coreExpression"
+        }
+      },
+      "additionalProperties": false
+    },
+    "isNull": {
+      "type": "object",
+      "required": [
+        "node",
+        "expression",
+        "negated"
+      ],
+      "properties": {
+        "node": {
+          "const": "is_null"
+        },
+        "expression": {
+          "$ref": "#/$defs/coreExpression"
+        },
+        "negated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "literalSet": {
+      "type": "object",
+      "required": [
+        "kind",
+        "value_ref"
+      ],
+      "properties": {
+        "kind": {
+          "const": "literal"
+        },
+        "value_ref": {
+          "$ref": "#/$defs/index"
+        }
+      },
+      "additionalProperties": false
+    },
+    "externalSet": {
+      "type": "object",
+      "required": [
+        "kind",
+        "batch_index",
+        "column_index",
+        "column_name"
+      ],
+      "properties": {
+        "kind": {
+          "const": "external"
+        },
+        "batch_index": {
+          "$ref": "#/$defs/index"
+        },
+        "column_index": {
+          "$ref": "#/$defs/index"
+        },
+        "column_name": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "inExpression": {
+      "type": "object",
+      "required": [
+        "node",
+        "expression",
+        "set",
+        "negated"
+      ],
+      "properties": {
+        "node": {
+          "const": "in"
+        },
+        "expression": {
+          "$ref": "#/$defs/coreExpression"
+        },
+        "set": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/literalSet"
+            },
+            {
+              "$ref": "#/$defs/externalSet"
+            }
+          ]
+        },
+        "negated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "cast": {
+      "type": "object",
+      "required": [
+        "node",
+        "expression",
+        "type_ref"
+      ],
+      "properties": {
+        "node": {
+          "const": "cast"
+        },
+        "expression": {
+          "$ref": "#/$defs/coreExpression"
+        },
+        "type_ref": {
+          "$ref": "#/$defs/index"
+        }
+      },
+      "additionalProperties": false
+    },
+    "arithmetic": {
+      "type": "object",
+      "required": [
+        "node",
+        "op",
+        "left",
+        "right"
+      ],
+      "properties": {
+        "node": {
+          "const": "arithmetic"
+        },
+        "op": {
+          "enum": [
+            "add",
+            "subtract",
+            "multiply",
+            "divide",
+            "modulo"
+          ]
+        },
+        "left": {
+          "$ref": "#/$defs/coreExpression"
+        },
+        "right": {
+          "$ref": "#/$defs/coreExpression"
+        }
+      },
+      "additionalProperties": false
+    },
+    "negate": {
+      "type": "object",
+      "required": [
+        "node",
+        "expression"
+      ],
+      "properties": {
+        "node": {
+          "const": "negate"
+        },
+        "expression": {
+          "$ref": "#/$defs/coreExpression"
+        }
+      },
+      "additionalProperties": false
+    },
+    "standardCall": {
+      "type": "object",
+      "required": [
+        "node",
+        "function",
+        "arguments"
+      ],
+      "properties": {
+        "node": {
+          "const": "call"
+        },
+        "function": {
+          "enum": [
+            "starts_with",
+            "ends_with",
+            "contains",
+            "list_contains"
+          ]
+        },
+        "arguments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/coreExpression"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "extensionCall": {
+      "type": "object",
+      "required": [
+        "node",
+        "function",
+        "arguments"
+      ],
+      "properties": {
+        "node": {
+          "const": "call"
+        },
+        "function": {
+          "$ref": "#/$defs/extensionIdentity"
+        },
+        "arguments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/coreExpression"
+          }
+        },
+        "options": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "call": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/standardCall"
+        },
+        {
+          "$ref": "#/$defs/extensionCall"
+        }
+      ]
+    },
+    "runtimeFilter": {
+      "type": "object",
+      "required": [
+        "node",
+        "algorithm",
+        "input",
+        "artifact_ref",
+        "null_handling"
+      ],
+      "properties": {
+        "node": {
+          "const": "runtime_filter"
+        },
+        "algorithm": {
+          "$ref": "#/$defs/extensionIdentity"
+        },
+        "input": {
+          "$ref": "#/$defs/coreExpression"
+        },
+        "artifact_ref": {
+          "$ref": "#/$defs/index"
+        },
+        "null_handling": {
+          "enum": [
+            "pass",
+            "reject"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "coreExpression": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/columnRef"
+        },
+        {
+          "$ref": "#/$defs/fieldRef"
+        },
+        {
+          "$ref": "#/$defs/literal"
+        },
+        {
+          "$ref": "#/$defs/comparison"
+        },
+        {
+          "$ref": "#/$defs/andExpression"
+        },
+        {
+          "$ref": "#/$defs/orExpression"
+        },
+        {
+          "$ref": "#/$defs/notExpression"
+        },
+        {
+          "$ref": "#/$defs/isNull"
+        },
+        {
+          "$ref": "#/$defs/inExpression"
+        },
+        {
+          "$ref": "#/$defs/cast"
+        },
+        {
+          "$ref": "#/$defs/arithmetic"
+        },
+        {
+          "$ref": "#/$defs/negate"
+        },
+        {
+          "$ref": "#/$defs/call"
+        }
+      ]
+    },
+    "expression": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/coreExpression"
+        },
+        {
+          "$ref": "#/$defs/runtimeFilter"
+        }
+      ]
+    },
+    "corePredicate": {
+      "type": "object",
+      "required": [
+        "id",
+        "revision",
+        "mode",
+        "source",
+        "expression"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/predicateId"
+        },
+        "revision": {
+          "$ref": "#/$defs/uint64"
+        },
+        "mode": {
+          "enum": [
+            "required",
+            "advisory"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "expression": {
+          "$ref": "#/$defs/coreExpression"
+        }
+      },
+      "additionalProperties": false
+    },
+    "runtimePredicate": {
+      "type": "object",
+      "required": [
+        "id",
+        "revision",
+        "mode",
+        "source",
+        "expression"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/predicateId"
+        },
+        "revision": {
+          "$ref": "#/$defs/uint64"
+        },
+        "mode": {
+          "const": "advisory"
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "expression": {
+          "$ref": "#/$defs/runtimeFilter"
+        }
+      },
+      "additionalProperties": false
+    },
+    "snapshotPredicate": {
+      "oneOf": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/corePredicate"
+            },
+            {
+              "properties": {
+                "revision": {
+                  "const": 0
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/runtimePredicate"
+            },
+            {
+              "properties": {
+                "revision": {
+                  "const": 0
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "deltaUpsert": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "operation",
+            "id",
+            "revision",
+            "mode",
+            "source",
+            "expression"
+          ],
+          "properties": {
+            "operation": {
+              "const": "upsert"
+            },
+            "id": {
+              "$ref": "#/$defs/predicateId"
+            },
+            "revision": {
+              "$ref": "#/$defs/uint64"
+            },
+            "mode": {
+              "const": "advisory"
+            },
+            "source": {
+              "$ref": "#/$defs/source"
+            },
+            "expression": {
+              "$ref": "#/$defs/coreExpression"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "operation",
+            "id",
+            "revision",
+            "mode",
+            "source",
+            "expression"
+          ],
+          "properties": {
+            "operation": {
+              "const": "upsert"
+            },
+            "id": {
+              "$ref": "#/$defs/predicateId"
+            },
+            "revision": {
+              "$ref": "#/$defs/uint64"
+            },
+            "mode": {
+              "const": "advisory"
+            },
+            "source": {
+              "$ref": "#/$defs/source"
+            },
+            "expression": {
+              "$ref": "#/$defs/runtimeFilter"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "deltaRemove": {
+      "type": "object",
+      "required": [
+        "operation",
+        "id",
+        "revision"
+      ],
+      "properties": {
+        "operation": {
+          "const": "remove"
+        },
+        "id": {
+          "$ref": "#/$defs/predicateId"
+        },
+        "revision": {
+          "$ref": "#/$defs/uint64"
+        }
+      },
+      "additionalProperties": false
+    },
+    "snapshot": {
+      "type": "object",
+      "required": [
+        "encoding",
+        "semantics",
+        "kind",
+        "predicates"
+      ],
+      "properties": {
+        "encoding": {
+          "const": "vgi.filters.v2"
+        },
+        "semantics": {
+          "const": "vgi.duckdb.standard.v1"
+        },
+        "kind": {
+          "const": "snapshot"
+        },
+        "predicates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/snapshotPredicate"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "delta": {
+      "type": "object",
+      "required": [
+        "encoding",
+        "semantics",
+        "kind",
+        "updates"
+      ],
+      "properties": {
+        "encoding": {
+          "const": "vgi.filters.v2"
+        },
+        "semantics": {
+          "const": "vgi.duckdb.standard.v1"
+        },
+        "kind": {
+          "const": "delta"
+        },
+        "updates": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/deltaUpsert"
+              },
+              {
+                "$ref": "#/$defs/deltaRemove"
+              }
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -43,17 +43,46 @@ def client(client_transport: Any) -> Any:
 
 
 def _join_keys_pushdown_filters_bytes(column_name: str, keys_column: str) -> bytes:
-    """Build `pushdown_filters` IPC bytes containing one `join_keys` filter spec.
+    """Build v2 `pushdown_filters` IPC bytes containing one external IN set.
 
-    Unlike `constant`/`in` specs, a `join_keys` spec carries no `value_ref` —
-    the actual key values travel separately as `Client.table_function`'s own
-    `join_keys=` argument, resolved worker-side by matching `keys_column`
-    against each join-key batch's column name (see
-    `PushdownFilters.get_join_keys_column`).
+    The actual key values travel separately as `Client.table_function`'s own
+    `join_keys=` argument. V2 resolves authoritative batch/column indexes and
+    validates the redundant column name.
     """
-    spec = {"column_name": column_name, "column_index": 0, "type": "join_keys", "keys_column": keys_column}
-    spec_field = pa.field("filter_spec", pa.string(), metadata={b"vgi_filter_version": b"1"})
-    batch = pa.record_batch({"filter_spec": [json.dumps([spec])]}, schema=pa.schema([spec_field]))
+    document = {
+        "encoding": "vgi.filters.v2",
+        "semantics": "vgi.duckdb.standard.v1",
+        "kind": "snapshot",
+        "predicates": [
+            {
+                "id": "join:0",
+                "revision": 0,
+                "mode": "advisory",
+                "source": "join",
+                "expression": {
+                    "node": "in",
+                    "expression": {"node": "column_ref", "column_index": 0, "column_name": column_name},
+                    "set": {
+                        "kind": "external",
+                        "batch_index": 0,
+                        "column_index": 0,
+                        "column_name": keys_column,
+                    },
+                    "negated": False,
+                },
+            }
+        ],
+    }
+    spec_field = pa.field("filter_spec", pa.string(), nullable=False)
+    schema = pa.schema(
+        [spec_field],
+        metadata={
+            b"vgi_filter_encoding": b"vgi.filters.v2",
+            b"vgi_filter_version": b"2",
+            b"vgi_evaluation_context": b"vgi.none.v1",
+        },
+    )
+    batch = pa.record_batch({"filter_spec": [json.dumps(document)]}, schema=schema)
 
     sink = pa.BufferOutputStream()
     writer = pa.ipc.new_stream(sink, batch.schema)

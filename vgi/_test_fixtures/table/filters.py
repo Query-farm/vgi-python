@@ -19,7 +19,7 @@ from vgi._test_fixtures.table._common import (
 )
 from vgi.arguments import Arg
 from vgi.invocation import GlobalInitResponse
-from vgi.metadata import FunctionExample
+from vgi.metadata import FilterFunctionCapability, FunctionExample
 from vgi.schema_utils import schema
 from vgi.table_filter_pushdown import PushdownFilters
 from vgi.table_function import (
@@ -149,7 +149,11 @@ class FilterEchoFunction(TableFunctionGenerator[FilterEchoFunctionArgs, FilterEc
         assert params.init_call is not None
         pf = params.init_call.pushdown_filters
         jk = params.init_call.join_keys
-        filters = cls.pushdown_filters(pf, join_keys=jk) if pf is not None else None
+        filters = (
+            cls.pushdown_filters(pf, join_keys=jk, output_schema=params.init_call.output_schema)
+            if pf is not None
+            else None
+        )
         return FilterEchoState(
             remaining=params.args.count,
             filter_str=_format_pushed_filters(filters),
@@ -257,7 +261,11 @@ class ValuePruneFunction(TableFunctionGenerator[_ValuePruneArgs, _ValuePruneStat
         count = params.args.count
         pf = params.init_call.pushdown_filters
         jk = params.init_call.join_keys
-        filters = cls.pushdown_filters(pf, join_keys=jk) if pf is not None else None
+        filters = (
+            cls.pushdown_filters(pf, join_keys=jk, output_schema=params.init_call.output_schema)
+            if pf is not None
+            else None
+        )
         discrete = filters.get_column_values("n") if filters is not None else None
         if discrete is not None:
             resolved_vals = sorted(v for v in discrete.to_pylist() if v is not None)
@@ -360,7 +368,11 @@ class FilteredColumnsEchoFunction(TableFunctionGenerator[_FilteredColumnsEchoArg
         assert params.init_call is not None
         pf = params.init_call.pushdown_filters
         jk = params.init_call.join_keys
-        filters = cls.pushdown_filters(pf, join_keys=jk) if pf is not None else None
+        filters = (
+            cls.pushdown_filters(pf, join_keys=jk, output_schema=params.init_call.output_schema)
+            if pf is not None
+            else None
+        )
         if filters is not None:
             filtered_cols = ",".join(sorted(filters.filtered_columns))
             has_n = filters.has_filter_for_column("n")
@@ -622,7 +634,9 @@ class SpatialFilterExampleFunction(TableFunctionGenerator[_SpatialFilterArgs, _S
         filter_pushdown = True
         auto_apply_filters = True
         projection_pushdown = True
-        supported_expression_filters = ["&&", "st_intersects_extent"]
+        additional_filter_functions = [
+            FilterFunctionCapability(namespace="duckdb.spatial", name="intersects_extent", version=1)
+        ]
         examples = [
             FunctionExample(
                 sql="SELECT * FROM spatial_filter_example(100)",
@@ -840,7 +854,6 @@ class ExpressionFilterTestFunction(TableFunctionGenerator[_ExprFilterTestArgs, _
         filter_pushdown = True
         auto_apply_filters = True
         projection_pushdown = True
-        supported_expression_filters = ["list_contains", "prefix", "starts_with", "contains"]
 
     FIXED_SCHEMA: ClassVar[pa.Schema] = _EXPR_FILTER_TEST_SCHEMA
 
@@ -996,7 +1009,11 @@ class FilterEchoPartitionedFunction(TableFunctionGenerator[_FilterEchoPartitione
         assert params.init_call is not None
         pf = params.init_call.pushdown_filters
         jk = params.init_call.join_keys
-        filters = cls.pushdown_filters(pf, join_keys=jk) if pf is not None else None
+        filters = (
+            cls.pushdown_filters(pf, join_keys=jk, output_schema=params.init_call.output_schema)
+            if pf is not None
+            else None
+        )
         return _FilterEchoPartitionedState(filter_str=_format_pushed_filters(filters))
 
     @classmethod
@@ -1041,7 +1058,7 @@ class FilterEchoPartitionedFunction(TableFunctionGenerator[_FilterEchoPartitione
 # echo, but is invoked with no positional args (the catalog scan route in the
 # fixture worker passes none) so a `SELECT ... FROM example.data.filter_echo_table`
 # — and a VIEW over it — can be characterized for filter pushdown. Crucially it
-# declares supported_expression_filters so a `col LIKE 'abc%'` predicate (which
+# advertises the standard v2 semantic profile so a `col LIKE 'abc%'` predicate (which
 # DuckDB lowers to a prefix/starts_with expression filter) actually reaches the
 # worker and shows up in the pushed_filters column. See
 # test/sql/integration/table/filter_pushdown_through_view.test.
@@ -1096,7 +1113,6 @@ class FilterEchoTableScanFunction(TableFunctionGenerator[_EmptyArgs, _FilterEcho
         filter_pushdown = True
         auto_apply_filters = True
         projection_pushdown = True
-        supported_expression_filters = ["prefix", "starts_with"]
 
     FIXED_SCHEMA: ClassVar[pa.Schema] = _FILTER_ECHO_TABLE_SCHEMA
 
@@ -1106,7 +1122,11 @@ class FilterEchoTableScanFunction(TableFunctionGenerator[_EmptyArgs, _FilterEcho
         assert params.init_call is not None
         pf = params.init_call.pushdown_filters
         jk = params.init_call.join_keys
-        filters = cls.pushdown_filters(pf, join_keys=jk) if pf is not None else None
+        filters = (
+            cls.pushdown_filters(pf, join_keys=jk, output_schema=params.init_call.output_schema)
+            if pf is not None
+            else None
+        )
         return _FilterEchoTableState(filter_str=_format_pushed_filters(filters))
 
     @classmethod

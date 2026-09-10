@@ -117,7 +117,11 @@ def _pushed_filters_str(params: ProcessParams[Any]) -> str:
     assert params.init_call is not None
     pf = params.init_call.pushdown_filters
     jk = params.init_call.join_keys
-    filters = TableFunctionGenerator.pushdown_filters(pf, join_keys=jk) if pf is not None else None
+    filters = (
+        TableFunctionGenerator.pushdown_filters(pf, join_keys=jk, output_schema=params.init_call.output_schema)
+        if pf is not None
+        else None
+    )
     return _format_pushed_filters(filters)
 
 

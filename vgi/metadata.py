@@ -42,10 +42,11 @@ import re
 import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from enum import Enum, auto
+from enum import Enum, StrEnum, auto
 from typing import TYPE_CHECKING, Annotated, Any, get_args, get_origin, get_type_hints
 
 import pyarrow as pa
+from vgi_rpc import ArrowSerializableDataclass
 
 from vgi.arguments import _MISSING, AnyArrow, Secret, SecretLookupEntry, TableInput
 
@@ -65,10 +66,14 @@ __all__ = [
     "OrderPreservation",
     "OrderDependence",
     "DistinctDependence",
+    "FilterSemanticProfile",
     # Data classes
     "ParameterInfo",
     "FunctionExample",
     "ResolvedMetadata",
+    "FilterFunctionCapability",
+    "RuntimeFilterAlgorithmCapability",
+    "EvaluationContextCapability",
     # Resolution
     "resolve_metadata",
     "extract_parameters",
@@ -110,6 +115,92 @@ class CatalogFunctionType(Enum):
     ``PhysicalVgiTableBufferingFunction`` operator instead of the streaming
     ``in_out_function`` registration. The class hierarchy is the dispatch
     key — set automatically for ``TableBufferingFunction`` subclasses."""
+
+
+class FilterSemanticProfile(StrEnum):
+    """Registered expression-semantics profiles supported by this SDK."""
+
+    DUCKDB_STANDARD_V1 = "vgi.duckdb.standard.v1"
+
+
+@dataclass(frozen=True, slots=True)
+class FilterFunctionCapability(ArrowSerializableDataclass):
+    """Capability for one versioned extension filter function."""
+
+    namespace: str
+    name: str
+    version: int
+
+    def __post_init__(self) -> None:
+        """Validate the stable identity fields."""
+        _validate_filter_capability_identity(self.namespace, self.name, self.version)
+
+    def to_dict(self) -> dict[str, object]:
+        """Convert the capability to its Arrow/JSON object representation."""
+        return {"namespace": self.namespace, "name": self.name, "version": self.version}
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> FilterFunctionCapability:
+        """Construct a capability from its Arrow/JSON object representation."""
+        return cls(namespace=value["namespace"], name=value["name"], version=value["version"])
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeFilterAlgorithmCapability(ArrowSerializableDataclass):
+    """Capability for one versioned runtime-filter artifact algorithm."""
+
+    namespace: str
+    name: str
+    version: int
+
+    def __post_init__(self) -> None:
+        """Validate the stable identity fields."""
+        _validate_filter_capability_identity(self.namespace, self.name, self.version)
+
+    def to_dict(self) -> dict[str, object]:
+        """Convert the capability to its Arrow/JSON object representation."""
+        return {"namespace": self.namespace, "name": self.name, "version": self.version}
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> RuntimeFilterAlgorithmCapability:
+        """Construct a capability from its Arrow/JSON object representation."""
+        return cls(namespace=value["namespace"], name=value["name"], version=value["version"])
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationContextCapability(ArrowSerializableDataclass):
+    """Capability for one immutable evaluation-context profile."""
+
+    profile: str
+    provider_fingerprint: str | None = None
+
+    def __post_init__(self) -> None:
+        """Validate the profile and optional opaque fingerprint."""
+        if self.profile != "vgi.duckdb.session.v1":
+            raise ValueError(f"unknown filter evaluation-context profile: {self.profile!r}")
+        if self.provider_fingerprint is not None and (
+            not self.provider_fingerprint or len(self.provider_fingerprint.encode("utf-8")) > 256
+        ):
+            raise ValueError("provider_fingerprint must be nonempty and at most 256 UTF-8 bytes")
+
+    def to_dict(self) -> dict[str, object]:
+        """Convert the capability to its Arrow/JSON object representation."""
+        return {"profile": self.profile, "provider_fingerprint": self.provider_fingerprint}
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> EvaluationContextCapability:
+        """Construct a capability from its Arrow/JSON object representation."""
+        return cls(profile=value["profile"], provider_fingerprint=value.get("provider_fingerprint"))
+
+
+def _validate_filter_capability_identity(namespace: str, name: str, version: int) -> None:
+    """Validate a namespaced v2 capability identity."""
+    if not re.fullmatch(r"[a-z][a-z0-9]*(?:\.[a-z][a-z0-9_]*)*", namespace):
+        raise ValueError(f"invalid filter capability namespace: {namespace!r}")
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
+        raise ValueError(f"invalid filter capability name: {name!r}")
+    if isinstance(version, bool) or not isinstance(version, int) or not 1 <= version < 2**64:
+        raise ValueError("filter capability version must be a positive uint64")
 
 
 class FunctionStability(Enum):
@@ -386,8 +477,11 @@ class ResolvedMetadata:
             scan is rewritten into a SEMI join on the rowid virtual column).
             Requires a unique, deterministic, snapshot-stable rowid column plus
             projection and filter pushdown.
-        supported_expression_filters: Names of expression-filter classes the
-            function can accept pushed down.
+        filter_semantic_profiles: V2 expression-semantics profiles implemented.
+        additional_filter_functions: Versioned extension filter functions.
+        runtime_filter_algorithms: Versioned runtime-filter artifact algorithms.
+        filter_evaluation_contexts: Session-context profiles the worker can
+            reproduce exactly.
         preserves_order: Whether the function preserves input row order.
         max_workers: Maximum parallel workers, or ``None`` for unbounded.
         supports_batch_index: Whether the function opts into per-batch
@@ -463,7 +557,10 @@ class ResolvedMetadata:
     # column (is_row_id) plus projection_pushdown + filter_pushdown. See the C++
     # extension's late-materialization gating for the worker contract.
     late_materialization: bool = False
-    supported_expression_filters: list[str] = field(default_factory=list)
+    filter_semantic_profiles: list[str] = field(default_factory=list)
+    additional_filter_functions: list[FilterFunctionCapability] = field(default_factory=list)
+    runtime_filter_algorithms: list[RuntimeFilterAlgorithmCapability] = field(default_factory=list)
+    filter_evaluation_contexts: list[EvaluationContextCapability] = field(default_factory=list)
     preserves_order: OrderPreservation = OrderPreservation.PRESERVES_ORDER
     max_workers: int | None = None
     supports_batch_index: bool = False
@@ -538,7 +635,10 @@ class ResolvedMetadata:
             "filter_pushdown": self.filter_pushdown,
             "sampling_pushdown": self.sampling_pushdown,
             "late_materialization": self.late_materialization,
-            "supported_expression_filters": self.supported_expression_filters,
+            "filter_semantic_profiles": self.filter_semantic_profiles,
+            "additional_filter_functions": [value.to_dict() for value in self.additional_filter_functions],
+            "runtime_filter_algorithms": [value.to_dict() for value in self.runtime_filter_algorithms],
+            "filter_evaluation_contexts": [value.to_dict() for value in self.filter_evaluation_contexts],
             "preserves_order": self.preserves_order.name,
             "max_workers": self.max_workers,
             "supports_batch_index": self.supports_batch_index,
@@ -579,7 +679,16 @@ class ResolvedMetadata:
             filter_pushdown=d.get("filter_pushdown", False),
             sampling_pushdown=d.get("sampling_pushdown", False),
             late_materialization=d.get("late_materialization", False),
-            supported_expression_filters=d.get("supported_expression_filters", []),
+            filter_semantic_profiles=d.get("filter_semantic_profiles", []),
+            additional_filter_functions=[
+                FilterFunctionCapability.from_dict(value) for value in d.get("additional_filter_functions", [])
+            ],
+            runtime_filter_algorithms=[
+                RuntimeFilterAlgorithmCapability.from_dict(value) for value in d.get("runtime_filter_algorithms", [])
+            ],
+            filter_evaluation_contexts=[
+                EvaluationContextCapability.from_dict(value) for value in d.get("filter_evaluation_contexts", [])
+            ],
             preserves_order=OrderPreservation[d.get("preserves_order", "PRESERVES_ORDER")],
             max_workers=d.get("max_workers"),
             supports_batch_index=d.get("supports_batch_index", False),
@@ -984,7 +1093,10 @@ _VALID_META_ATTRIBUTES: frozenset[str] = frozenset(
         "filter_pushdown",
         "sampling_pushdown",
         "late_materialization",  # Participate in DuckDB late-materialization rewrite
-        "supported_expression_filters",
+        "filter_semantic_profiles",
+        "additional_filter_functions",
+        "runtime_filter_algorithms",
+        "filter_evaluation_contexts",
         "auto_apply_filters",  # Auto-apply pushdown filters to output batches
         "preserves_order",
         "max_workers",
@@ -1232,6 +1344,10 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
             )
             existing_secret_types.add(secret.secret_type)
 
+    runtime_filter_algorithms = attrs.get("runtime_filter_algorithms", [])
+    if runtime_filter_algorithms:
+        raise ValueError("Python SDK has no registered runtime-filter artifact evaluator to advertise")
+
     return ResolvedMetadata(
         name=name,
         class_name=class_name,
@@ -1250,7 +1366,16 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         filter_pushdown=attrs.get("filter_pushdown", False),
         sampling_pushdown=attrs.get("sampling_pushdown", False),
         late_materialization=bool(attrs.get("late_materialization", False)),
-        supported_expression_filters=attrs.get("supported_expression_filters", []),
+        filter_semantic_profiles=[
+            value.value if isinstance(value, FilterSemanticProfile) else value
+            for value in attrs.get(
+                "filter_semantic_profiles",
+                [FilterSemanticProfile.DUCKDB_STANDARD_V1] if attrs.get("filter_pushdown", False) else [],
+            )
+        ],
+        additional_filter_functions=attrs.get("additional_filter_functions", []),
+        runtime_filter_algorithms=runtime_filter_algorithms,
+        filter_evaluation_contexts=attrs.get("filter_evaluation_contexts", []),
         preserves_order=attrs.get("preserves_order", OrderPreservation.PRESERVES_ORDER),
         max_workers=attrs.get("max_workers"),
         supports_batch_index=bool(attrs.get("supports_batch_index", False)),
@@ -1407,6 +1532,21 @@ _PARAMETER_STRUCT = pa.struct(
     ]
 )
 
+_FILTER_IDENTITY_STRUCT = pa.struct(
+    [
+        pa.field("namespace", pa.string(), nullable=False),
+        pa.field("name", pa.string(), nullable=False),
+        pa.field("version", pa.uint64(), nullable=False),
+    ]
+)
+
+_EVALUATION_CONTEXT_CAPABILITY_STRUCT = pa.struct(
+    [
+        pa.field("profile", pa.string(), nullable=False),
+        pa.field("provider_fingerprint", pa.string(), nullable=True),
+    ]
+)
+
 # Schema for serializing function metadata
 _METADATA_SCHEMA = pa.schema(
     [
@@ -1427,7 +1567,10 @@ _METADATA_SCHEMA = pa.schema(
         pa.field("filter_pushdown", pa.bool_()),
         pa.field("sampling_pushdown", pa.bool_()),
         pa.field("late_materialization", pa.bool_()),
-        pa.field("supported_expression_filters", pa.list_(pa.string())),
+        pa.field("filter_semantic_profiles", pa.list_(pa.string())),
+        pa.field("additional_filter_functions", pa.list_(_FILTER_IDENTITY_STRUCT)),
+        pa.field("runtime_filter_algorithms", pa.list_(_FILTER_IDENTITY_STRUCT)),
+        pa.field("filter_evaluation_contexts", pa.list_(_EVALUATION_CONTEXT_CAPABILITY_STRUCT)),
         pa.field("preserves_order", pa.string()),
         pa.field("max_workers", pa.int32(), nullable=True),
         pa.field("supports_batch_index", pa.bool_()),
@@ -1450,7 +1593,17 @@ _METADATA_SCHEMA = pa.schema(
 
 # Fields that contain lists and need None -> [] conversion during deserialization
 _LIST_FIELDS: frozenset[str] = frozenset(
-    {"examples", "categories", "parameters", "required_settings", "required_secrets", "supported_expression_filters"}
+    {
+        "examples",
+        "categories",
+        "parameters",
+        "required_settings",
+        "required_secrets",
+        "filter_semantic_profiles",
+        "additional_filter_functions",
+        "runtime_filter_algorithms",
+        "filter_evaluation_contexts",
+    }
 )
 
 # Fields that contain maps and need None -> {} conversion during deserialization

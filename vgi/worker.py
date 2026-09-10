@@ -620,12 +620,19 @@ def run_table_buffering_finalize_tick(state: Any, out: Any, ctx: Any) -> None:
     # accepts none of those). This is what lets a buffered finalize advertise
     # ``vgi.cache.*`` for the exchange-mode result cache. Optionally wrap again in the
     # filtering collector when auto-apply-filters is on.
-    auto_apply = state.pushdown_filters is not None and func_cls._should_auto_apply_filters()
+    pushdown_obj = None
+    if state.pushdown_filters is not None:
+        pushdown_obj = func_cls.pushdown_filters(
+            state.pushdown_filters,
+            join_keys=state.join_keys,
+            output_schema=state.output_schema,
+        )
+        params = _dc_mod.replace(params, current_pushdown_filters=pushdown_obj)
+
+    auto_apply = pushdown_obj is not None and func_cls._should_auto_apply_filters()
     effective_out: Any = _TrackingOutputCollector(out)
     if auto_apply:
-        pushdown_obj = func_cls.pushdown_filters(state.pushdown_filters)
-        if pushdown_obj is not None:
-            effective_out = _FilteringOutputCollector(effective_out, func_cls, pushdown_obj)
+        effective_out = _FilteringOutputCollector(effective_out, func_cls, pushdown_obj)
 
     if not state.state_initialized:
         user_state: Any = func_cls.initial_finalize_state(
@@ -4198,6 +4205,8 @@ class Worker:
                     # filters consistently with the C++ Sink+Source contract.
                     projection_ids=request.projection_ids,
                     pushdown_filters=request.pushdown_filters,
+                    output_schema=request.output_schema,
+                    join_keys=request.join_keys,
                 )
                 input_schema = None
             else:
@@ -4225,6 +4234,13 @@ class Worker:
                 auth_context=ctx.auth,
                 attach_opaque_data=attach_catalog_bytes(attach_plaintext),
             )
+            if request.pushdown_filters is not None:
+                current_filters = type(instance).pushdown_filters(
+                    request.pushdown_filters,
+                    join_keys=request.join_keys,
+                    output_schema=request.output_schema,
+                )
+                params = dataclasses.replace(params, current_pushdown_filters=current_filters)
 
             if request.phase == TableInOutFunctionInitPhase.INPUT:
                 user_state = type(instance).initial_state(params)
@@ -4321,6 +4337,13 @@ class Worker:
                 # resolved lazily, per split, long after this frame.
                 signing_key=self._signing_key,
             )
+            if request.pushdown_filters is not None:
+                current_filters = type(instance).pushdown_filters(
+                    request.pushdown_filters,
+                    join_keys=request.join_keys,
+                    output_schema=request.output_schema,
+                )
+                params = dataclasses.replace(params, current_pushdown_filters=current_filters)
             user_state = type(instance).initial_state(params)
             state = TableProducerState(
                 _call=call_state,

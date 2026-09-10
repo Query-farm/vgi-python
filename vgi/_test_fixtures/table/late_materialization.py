@@ -196,7 +196,11 @@ class LateMaterializationFunction(TableFunctionGenerator[LateMaterializationFunc
         init_witness = "rid:in=0;rng=none"
         ic = params.init_call
         if ic is not None and ic.pushdown_filters is not None:
-            init_filters = cls.pushdown_filters(ic.pushdown_filters, join_keys=ic.join_keys)
+            init_filters = cls.pushdown_filters(
+                ic.pushdown_filters,
+                join_keys=ic.join_keys,
+                output_schema=ic.output_schema,
+            )
             init_witness = _rowid_pushdown_witness(init_filters)
         return LateMaterializationState(remaining=params.args.count, witness=init_witness)
 

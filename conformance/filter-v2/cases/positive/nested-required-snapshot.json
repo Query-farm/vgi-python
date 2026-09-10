@@ -1,0 +1,32 @@
+{
+  "encoding": "vgi.filters.v2",
+  "semantics": "vgi.duckdb.standard.v1",
+  "kind": "snapshot",
+  "predicates": [
+    {
+      "id": "query:nested-null",
+      "revision": 0,
+      "mode": "required",
+      "source": "query",
+      "expression": {
+        "node": "is_null",
+        "expression": {
+          "node": "field_ref",
+          "expression": {
+            "node": "field_ref",
+            "expression": {
+              "node": "column_ref",
+              "column_index": 1,
+              "column_name": "address"
+            },
+            "field_index": 2,
+            "field_name": "location"
+          },
+          "field_index": 0,
+          "field_name": "latitude"
+        },
+        "negated": false
+      }
+    }
+  ]
+}

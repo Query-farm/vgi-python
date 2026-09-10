@@ -1055,7 +1055,11 @@ class SplitDynamicFilterFunction(TableFunctionGenerator[SplitSequenceArgs, Split
             init = params.init_call
             merged = None
             if init is not None and init.pushdown_filters is not None:
-                merged = cls.pushdown_filters(init.pushdown_filters, join_keys=init.join_keys)
+                merged = cls.pushdown_filters(
+                    init.pushdown_filters,
+                    join_keys=init.join_keys,
+                    output_schema=init.output_schema,
+                )
             if merged is None:
                 merged = params.current_pushdown_filters
             filter_str = _render_filters_canonical(merged)

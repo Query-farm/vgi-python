@@ -1,0 +1,7 @@
+{
+  "encoding": "vgi.filters.v2",
+  "semantics": "vgi.duckdb.standard.v1",
+  "kind": "snapshot",
+  "predicates": [],
+  "filters": []
+}

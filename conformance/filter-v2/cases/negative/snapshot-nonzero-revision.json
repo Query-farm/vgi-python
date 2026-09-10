@@ -1,0 +1,22 @@
+{
+  "encoding": "vgi.filters.v2",
+  "semantics": "vgi.duckdb.standard.v1",
+  "kind": "snapshot",
+  "predicates": [
+    {
+      "id": "query:bad-revision",
+      "revision": 1,
+      "mode": "required",
+      "source": "query",
+      "expression": {
+        "node": "is_null",
+        "expression": {
+          "node": "column_ref",
+          "column_index": 0,
+          "column_name": "deleted_at"
+        },
+        "negated": false
+      }
+    }
+  ]
+}

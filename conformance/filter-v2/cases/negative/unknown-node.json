@@ -1,0 +1,17 @@
+{
+  "encoding": "vgi.filters.v2",
+  "semantics": "vgi.duckdb.standard.v1",
+  "kind": "snapshot",
+  "predicates": [
+    {
+      "id": "query:unknown",
+      "revision": 0,
+      "mode": "required",
+      "source": "query",
+      "expression": {
+        "node": "engine_expression",
+        "sql": "a = 1"
+      }
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "encoding": "vgi.filters.v2",
+  "semantics": "vgi.duckdb.standard.v1",
+  "kind": "delta",
+  "updates": [
+    {
+      "operation": "remove",
+      "id": "join:build-side-3",
+      "revision": 5,
+      "expression": {
+        "node": "literal",
+        "value_ref": 0
+      }
+    }
+  ]
+}

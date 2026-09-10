@@ -21,7 +21,6 @@ Filter Types:
 from __future__ import annotations
 
 import dataclasses
-import json
 import logging
 import os
 import threading
@@ -31,6 +30,48 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pyarrow as pa
 import pyarrow.compute as pc
+
+from vgi.filter_v2 import (
+    FILTER_VERSION,
+    EvaluationContext,
+    deserialize_snapshot,
+)
+from vgi.filter_v2 import (
+    BooleanExpression as V2BooleanExpression,
+)
+from vgi.filter_v2 import (
+    ColumnRef as V2ColumnRef,
+)
+from vgi.filter_v2 import (
+    Comparison as V2Comparison,
+)
+from vgi.filter_v2 import (
+    ComparisonOperator as V2ComparisonOperator,
+)
+from vgi.filter_v2 import (
+    FilterExpression as V2FilterExpression,
+)
+from vgi.filter_v2 import (
+    FilterState as V2FilterState,
+)
+from vgi.filter_v2 import (
+    In as V2In,
+)
+from vgi.filter_v2 import (
+    IsNull as V2IsNull,
+)
+from vgi.filter_v2 import (
+    Literal as V2Literal,
+)
+from vgi.filter_v2 import (
+    RuntimeFilter as V2RuntimeFilter,
+)
+from vgi.filter_v2 import (
+    evaluate_expression as evaluate_v2_expression,
+)
+from vgi.filter_v2 import (
+    expression_columns as v2_expression_columns,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -58,7 +99,7 @@ def _log_debug(event: str, **kwargs: Any) -> None:
 
 
 # Supported filter protocol version
-_SUPPORTED_VERSION = "1"
+_SUPPORTED_VERSION = FILTER_VERSION
 
 
 def _strip_extension(x: Any) -> Any:
@@ -166,6 +207,7 @@ __all__ = [
     "OrFilter",
     "StructFilter",
     "ExpressionFilter",
+    "V2ExpressionFilter",
     # Expression node classes
     "ExpressionNode",
     "ColumnRefNode",
@@ -964,6 +1006,28 @@ class ExpressionFilter(Filter):
         return f"ExpressionFilter({self.column_name}: {self.expr.to_sql(self.column_name)})"
 
 
+@dataclass(frozen=True, slots=True)
+class V2ExpressionFilter(Filter):
+    """Ergonomic view over a v2 expression that is not a legacy leaf shape.
+
+    Attributes:
+        expression: Typed v2 expression tree.
+        evaluation_context: Immutable context used by the reference evaluator.
+
+    """
+
+    expression: V2FilterExpression
+    evaluation_context: EvaluationContext
+
+    def evaluate(self, batch: pa.RecordBatch) -> pa.BooleanArray:
+        """Evaluate this expression with the v2 reference evaluator."""
+        return evaluate_v2_expression(self.expression, batch, self.evaluation_context)
+
+    def __repr__(self) -> str:
+        """Return a concise v2 expression representation."""
+        return f"V2ExpressionFilter({self.expression!r})"
+
+
 # =============================================================================
 # Column Bounds Helper
 # =============================================================================
@@ -1045,6 +1109,27 @@ class PushdownFilters:
     filters: tuple[Filter, ...]
     version: str = _SUPPORTED_VERSION
     join_keys_batches: list[pa.RecordBatch] | None = None
+    _v2_state: V2FilterState | None = dataclasses.field(default=None, repr=False, compare=False)
+
+    @property
+    def predicates(self) -> tuple[Any, ...]:
+        """Return independently identified v2 predicates, if wire-decoded."""
+        return self._v2_state.predicates if self._v2_state is not None else ()
+
+    @property
+    def evaluation_context(self) -> EvaluationContext | None:
+        """Return the immutable v2 evaluation context, if wire-decoded."""
+        return self._v2_state.evaluation_context if self._v2_state is not None else None
+
+    def apply_delta(self, batch: pa.RecordBatch) -> PushdownFilters:
+        """Validate and atomically apply one revisioned v2 delta."""
+        if self._v2_state is None:
+            raise FilterDeserializationError("cannot apply a v2 delta without snapshot state")
+        try:
+            state = self._v2_state.apply_delta(batch)
+        except ValueError as exc:
+            raise FilterDeserializationError(f"Failed to parse filter delta: {exc}") from exc
+        return _pushdown_from_v2_state(state)
 
     def get_join_keys_batch(self) -> pa.RecordBatch | None:
         """Return a merged join keys batch for temp table registration.
@@ -1110,6 +1195,9 @@ class PushdownFilters:
             Boolean array with True for rows that pass all filters.
 
         """
+        if self._v2_state is not None:
+            return self._v2_state.evaluate(batch)
+
         # Debug bookkeeping is guarded at the call site: the pc.sum() passes
         # and filter reprs (InFilter materializes its whole IN set) are pure
         # instrumentation and must cost nothing when VGI_FILTER_DEBUG is off.
@@ -1550,9 +1638,8 @@ def _filter_to_sql(
 
         case AndFilter(children=children):
             # An empty conjunction is the identity for AND: it constrains nothing.
-            # `_parse_filter` no longer produces one, but a hand-built filter still
-            # can, and `f"({' AND '.join([])})"` would emit the syntactically
-            # invalid `WHERE ()`.
+            # A hand-built helper can still contain no children, and rendering
+            # an empty join would otherwise emit the invalid `WHERE ()`.
             if not children:
                 return "TRUE", []
             parts: list[str] = []
@@ -1602,14 +1689,24 @@ def _filter_to_sql(
 def deserialize_filters(
     batch: pa.RecordBatch,
     join_keys: list[pa.RecordBatch] | None = None,
+    output_schema: pa.Schema | None = None,
+    *,
+    extension_functions: frozenset[tuple[str, str, int]] = frozenset(),
+    evaluation_capabilities: tuple[tuple[str, str | None], ...] = (),
 ) -> PushdownFilters:
-    """Deserialize Arrow IPC bytes to typed AST.
+    """Strictly deserialize a VGI Filter Encoding v2 snapshot.
 
     Args:
         batch: Arrow `RecordBatch` containing the serialized filters.
         join_keys: Optional list of single-column Arrow RecordBatches, one per
             IN filter column. Each batch may have a different row count.
-            Referenced by ``join_keys`` filter type entries in the filter spec.
+            Referenced by external ``in`` set entries in the filter document.
+        output_schema: Unprojected BindResponse output schema used to validate
+            authoritative column indexes and their redundant names.
+        extension_functions: Exact extension-function identities advertised by
+            the consuming table function.
+        evaluation_capabilities: Advertised context profiles and optional
+            provider fingerprints.
 
     Returns:
         [`PushdownFilters`][] container with parsed filter AST.
@@ -1619,333 +1716,75 @@ def deserialize_filters(
         [`FilterVersionError`][]: If version is unsupported.
 
     """
-    # Validate version
-    metadata = batch.schema.field(0).metadata
-    if metadata is None:
-        raise FilterVersionError("Missing vgi_filter_version metadata")
-    version = metadata.get(b"vgi_filter_version", b"").decode()
-    if version != _SUPPORTED_VERSION:
-        raise FilterVersionError(f"Unsupported filter version: {version!r}")
-
-    _log_debug("deserialize_version", version=version)
-
-    # Parse JSON spec
     try:
-        filter_specs = json.loads(batch.column(0)[0].as_py())
-    except Exception as e:
-        _log_debug("deserialize_json_error", error=str(e))
-        raise FilterDeserializationError(f"Failed to parse filter JSON: {e}") from e
-
-    _log_debug("deserialize_specs", num_filters=len(filter_specs), specs=filter_specs)
-
-    # Value resolver - returns scalar for value_ref N from column N+1
-    def get_value(ref: int) -> pa.Scalar[Any]:
-        value = batch.column(ref + 1)[0]
-        _log_debug(
-            "deserialize_value_ref",
-            ref=ref,
-            column_index=ref + 1,
-            value_type=str(value.type),
-            value=str(value),
+        state = deserialize_snapshot(
+            batch,
+            output_schema=output_schema,
+            join_keys=join_keys,
+            extension_functions=extension_functions,
+            evaluation_capabilities=evaluation_capabilities,
         )
-        return value  # type: ignore[no-any-return]
+    except ValueError as exc:
+        message = str(exc)
+        if message.startswith(("unsupported filter encoding", "unsupported filter version")) or message in {
+            "missing schema metadata 'vgi_filter_encoding'",
+            "missing schema metadata 'vgi_filter_version'",
+        }:
+            raise FilterVersionError(message) from exc
+        raise FilterDeserializationError(f"Failed to parse filters: {message}") from exc
+    return _pushdown_from_v2_state(state)
 
-    def get_field(ref: int) -> pa.Field[Any]:
-        """Get the Arrow field for a value_ref (column ref+1 in the batch).
 
-        Args:
-            ref: The value_ref index from the filter spec.
+def _pushdown_from_v2_state(state: V2FilterState) -> PushdownFilters:
+    """Create compatibility helper views over an immutable v2 state."""
+    filters = tuple(
+        view
+        for predicate in state.predicates
+        if not (isinstance(predicate.expression, V2RuntimeFilter) and not predicate.expression.supported)
+        if (view := _v2_filter_view(predicate.expression, state.evaluation_context)) is not None
+    )
+    return PushdownFilters(
+        filters=filters,
+        version=FILTER_VERSION,
+        join_keys_batches=list(state.join_keys) or None,
+        _v2_state=state,
+    )
 
-        Returns:
-            The Arrow field for column ``ref + 1`` in the batch.
 
-        """
-        return batch.schema.field(ref + 1)
-
-    def get_join_keys_column(column_name: str) -> pa.Array[Any] | None:
-        """Resolve a column from the join keys batches by name.
-
-        Args:
-            column_name: Name of the join-key column to look up.
-
-        Returns:
-            The matching column array, or None if not found.
-
-        """
-        if not join_keys:
-            return None
-        for keys_batch in join_keys:
-            try:
-                return keys_batch.column(column_name)
-            except KeyError:
-                continue
+def _v2_filter_view(expression: V2FilterExpression, context: EvaluationContext) -> Filter | None:
+    """Project common v2 shapes into the longstanding convenience classes."""
+    if isinstance(expression, V2Comparison):
+        operands = (expression.left, expression.right)
+        if isinstance(operands[0], V2ColumnRef) and isinstance(operands[1], V2Literal):
+            mapping = {
+                V2ComparisonOperator.EQ: ComparisonOp.EQ,
+                V2ComparisonOperator.NE: ComparisonOp.NE,
+                V2ComparisonOperator.LT: ComparisonOp.LT,
+                V2ComparisonOperator.LE: ComparisonOp.LE,
+                V2ComparisonOperator.GT: ComparisonOp.GT,
+                V2ComparisonOperator.GE: ComparisonOp.GE,
+            }
+            if op := mapping.get(expression.op):
+                return ConstantFilter(operands[0].column_name, operands[0].column_index, op, operands[1].value)
+    if isinstance(expression, V2IsNull) and isinstance(expression.expression, V2ColumnRef):
+        ref = expression.expression
+        if expression.negated:
+            return IsNotNullFilter(ref.column_name, ref.column_index)
+        return IsNullFilter(ref.column_name, ref.column_index)
+    if isinstance(expression, V2In) and isinstance(expression.expression, V2ColumnRef):
+        ref = expression.expression
+        if not expression.negated:
+            values = expression.set.values
+            return InFilter(ref.column_name, ref.column_index, values)
+    if isinstance(expression, V2BooleanExpression):
+        children = tuple(_v2_filter_view(child, context) for child in expression.children)
+        if all(child is not None for child in children):
+            typed_children = cast("tuple[Filter, ...]", children)
+            first = typed_children[0]
+            if expression.node == "and":
+                return AndFilter(first.column_name, first.column_index, typed_children)
+            return OrFilter(first.column_name, first.column_index, typed_children)
+    columns = v2_expression_columns(expression)
+    if not columns:
         return None
-
-    # Parse filters
-    try:
-        parsed: list[Filter] = []
-        for spec in filter_specs:
-            f = _parse_filter(spec, get_value, get_field, get_join_keys_column)
-            if f is not None:
-                parsed.append(f)
-        filters = tuple(parsed)
-    except Exception as e:
-        _log_debug("deserialize_parse_error", error=str(e))
-        raise FilterDeserializationError(f"Failed to parse filters: {e}") from e
-
-    _log_debug(
-        "deserialize_complete",
-        num_filters=len(filters),
-        filter_types=[type(f).__name__ for f in filters],
-        columns=[f.column_name for f in filters],
-    )
-
-    return PushdownFilters(filters=filters, version=version, join_keys_batches=join_keys)
-
-
-def _parse_filter(
-    spec: dict[str, Any],
-    get_value: Callable[[int], pa.Scalar[Any]],
-    get_field: Callable[[int], pa.Field[Any]],
-    get_join_keys_column: Callable[[str], pa.Array[Any] | None] | None = None,
-) -> Filter | None:
-    """Parse a single filter spec into a typed [`Filter`][] object.
-
-    Args:
-        spec: Filter specification dict from JSON.
-        get_value: Function to get Arrow scalar by value_ref index.
-        get_field: Function to get Arrow field by value_ref index (for extension metadata).
-        get_join_keys_column: Function to resolve a column from the join keys batch by name.
-            Returns None if no join keys batch or column not found.
-
-    Returns:
-        Typed `Filter` object, or None if the filter references missing join keys.
-
-    Raises:
-        [`FilterDeserializationError`][]: If filter type is unknown.
-
-    """
-    column_name = spec["column_name"]
-    column_index = spec["column_index"]
-    filter_type = spec["type"]
-
-    _log_debug(
-        "parse_filter_start",
-        filter_type=filter_type,
-        column_name=column_name,
-        column_index=column_index,
-    )
-
-    if filter_type == FilterType.CONSTANT.value:
-        op = ComparisonOp(spec["op"])
-        value = get_value(spec["value_ref"])
-        result = ConstantFilter(
-            column_name=column_name,
-            column_index=column_index,
-            op=op,
-            value=value,
-        )
-        _log_debug(
-            "parse_filter_constant",
-            column=column_name,
-            op=op.value,
-            value=str(value),
-            value_type=str(value.type),
-        )
-        return result
-
-    elif filter_type == FilterType.IS_NULL.value:
-        _log_debug("parse_filter_is_null", column=column_name)
-        return IsNullFilter(column_name=column_name, column_index=column_index)
-
-    elif filter_type == FilterType.IS_NOT_NULL.value:
-        _log_debug("parse_filter_is_not_null", column=column_name)
-        return IsNotNullFilter(column_name=column_name, column_index=column_index)
-
-    elif filter_type == FilterType.IN.value:
-        # value_ref points to a list column; extract the list's values as an array
-        list_scalar = get_value(spec["value_ref"])
-        # ListScalar.values gives us the underlying array
-        # pyarrow-stubs doesn't type ListScalar.values correctly
-        values_array: pa.Array[Any] = list_scalar.values  # type: ignore[attr-defined]
-        if _FILTER_DEBUG:
-            # Guarded: to_pylist() materializes the whole IN set to Python
-            # objects, and deserialization re-runs per dynamic-filter tick.
-            _log_debug(
-                "parse_filter_in",
-                column=column_name,
-                num_values=len(values_array),
-                values=values_array.to_pylist(),
-                value_type=str(values_array.type),
-            )
-        return InFilter(
-            column_name=column_name,
-            column_index=column_index,
-            values=values_array,
-        )
-
-    elif filter_type == FilterType.JOIN_KEYS.value:
-        keys_column_name = spec["keys_column"]
-        join_values: pa.Array[Any] | None = get_join_keys_column(keys_column_name) if get_join_keys_column else None
-        if join_values is None:
-            _log_debug(
-                "parse_filter_join_keys_missing",
-                column=column_name,
-                keys_column=keys_column_name,
-            )
-            return None  # graceful degradation — DuckDB filters client-side
-        _log_debug(
-            "parse_filter_join_keys",
-            column=column_name,
-            keys_column=keys_column_name,
-            num_values=len(join_values),
-            value_type=str(join_values.type),
-        )
-        return InFilter(
-            column_name=column_name,
-            column_index=column_index,
-            values=join_values,
-        )
-
-    elif filter_type == FilterType.AND.value:
-        _log_debug(
-            "parse_filter_and_start",
-            column=column_name,
-            num_children=len(spec["children"]),
-        )
-        children = tuple(
-            f
-            for c in spec["children"]
-            if (f := _parse_filter(c, get_value, get_field, get_join_keys_column)) is not None
-        )
-        if not children:
-            # Every conjunct degraded (e.g. an AND of join-key filters whose keys
-            # column never resolved). Dropping conjuncts from an AND is safe — it
-            # only weakens the filter — but an AndFilter with no children imposes
-            # no constraint at all, and rendering it yields the syntactically
-            # invalid `WHERE ()`. Report "no usable filter" instead, exactly as
-            # the OR branch does, and let DuckDB filter client-side.
-            _log_debug("parse_filter_and_all_children_missing", column=column_name)
-            return None
-        _log_debug("parse_filter_and_complete", column=column_name)
-        return AndFilter(
-            column_name=column_name,
-            column_index=column_index,
-            children=children,
-        )
-
-    elif filter_type == FilterType.OR.value:
-        _log_debug(
-            "parse_filter_or_start",
-            column=column_name,
-            num_children=len(spec["children"]),
-        )
-        parsed_children: list[Filter] = []
-        for c in spec["children"]:
-            child = _parse_filter(c, get_value, get_field, get_join_keys_column)
-            if child is None:
-                # Dropping a child from OR would strengthen the filter (fewer rows pass),
-                # which is wrong for graceful degradation. Drop the entire OR instead.
-                _log_debug("parse_filter_or_child_missing", column=column_name)
-                return None
-            parsed_children.append(child)
-        children = tuple(parsed_children)
-        _log_debug("parse_filter_or_complete", column=column_name)
-        return OrFilter(
-            column_name=column_name,
-            column_index=column_index,
-            children=children,
-        )
-
-    elif filter_type == FilterType.STRUCT.value:
-        child_name = spec["child_name"]
-        _log_debug(
-            "parse_filter_struct_start",
-            column=column_name,
-            child_name=child_name,
-        )
-        child_filter = _parse_filter(spec["child_filter"], get_value, get_field, get_join_keys_column)
-        if child_filter is None:
-            return None
-        _log_debug("parse_filter_struct_complete", column=column_name)
-        return StructFilter(
-            column_name=column_name,
-            column_index=column_index,
-            child_index=spec["child_index"],
-            child_name=child_name,
-            child_filter=child_filter,
-        )
-
-    elif filter_type == FilterType.EXPRESSION.value:
-        _log_debug("parse_filter_expression_start", column=column_name)
-        expr = _parse_expression_node(spec["expr"], get_value, get_field)
-        _log_debug("parse_filter_expression_complete", column=column_name)
-        return ExpressionFilter(
-            column_name=column_name,
-            column_index=column_index,
-            expr=expr,
-        )
-
-    else:
-        _log_debug("parse_filter_unknown", filter_type=filter_type)
-        raise FilterDeserializationError(f"Unknown filter type: {filter_type}")
-
-
-def _parse_expression_node(
-    spec: dict[str, Any],
-    get_value: Callable[[int], pa.Scalar[Any]],
-    get_field: Callable[[int], pa.Field[Any]],
-) -> ExpressionNode:
-    """Parse a single expression node from a JSON spec.
-
-    Args:
-        spec: Expression node specification dict from JSON.
-        get_value: Function to get Arrow scalar by value_ref index.
-        get_field: Function to get Arrow field by value_ref index (for extension metadata).
-
-    Returns:
-        Typed [`ExpressionNode`][].
-
-    Raises:
-        [`FilterDeserializationError`][]: If expression node type is unknown.
-
-    """
-    expr_type = spec["expr_type"]
-
-    if expr_type == ExpressionNodeType.COLUMN_REF.value:
-        return ColumnRefNode(expr_type=ExpressionNodeType.COLUMN_REF, index=spec["index"])
-
-    elif expr_type == ExpressionNodeType.CONSTANT.value:
-        ref = spec["value_ref"]
-        return ConstantNode(
-            expr_type=ExpressionNodeType.CONSTANT,
-            value=get_value(ref),
-            field=get_field(ref),
-        )
-
-    elif expr_type == ExpressionNodeType.FUNCTION.value:
-        children = tuple(_parse_expression_node(c, get_value, get_field) for c in spec["children"])
-        return FunctionNode(
-            expr_type=ExpressionNodeType.FUNCTION,
-            function_name=spec["function_name"],
-            children=children,
-        )
-
-    elif expr_type == ExpressionNodeType.COMPARISON.value:
-        return ComparisonNode(
-            expr_type=ExpressionNodeType.COMPARISON,
-            op=ComparisonOp(spec["op"]),
-            left=_parse_expression_node(spec["left"], get_value, get_field),
-            right=_parse_expression_node(spec["right"], get_value, get_field),
-        )
-
-    elif expr_type == ExpressionNodeType.CONJUNCTION.value:
-        children = tuple(_parse_expression_node(c, get_value, get_field) for c in spec["children"])
-        return ConjunctionNode(
-            expr_type=ExpressionNodeType.CONJUNCTION,
-            conjunction_type=spec["conjunction_type"],
-            children=children,
-        )
-
-    else:
-        raise FilterDeserializationError(f"Unknown expression node type: {expr_type}")
+    return V2ExpressionFilter(columns[0].column_name, columns[0].column_index, expression, context)

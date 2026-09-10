@@ -1,166 +1,80 @@
-# Filter Pushdown Protocol
+# Filter pushdown
 
-Filter pushdown allows VGI **table functions** to receive SQL WHERE clause predicates. Workers can apply filters during data generation, reducing transferred data.
+Filter pushdown lets a VGI table function receive predicates from the calling engine and use them to avoid generating,
+reading, or transferring rows that cannot contribute to the result.
 
-VGI uses a **hybrid JSON + Arrow** format:
-- **JSON** describes filter structure (operators, column references)
-- **Arrow columns** store filter values (preserves exact types)
+This page is an informative Python user guide. The proposed wire contract is
+[VGI Filter Encoding v2](protocol/vgi-filter-encoding-v2-spec.md). Its required/advisory correctness rules, expression
+semantics, validation limits, and Arrow container layout are normative and take precedence over this guide. The
+[DuckDB adapter guide](protocol/vgi-duckdb-filter-adapter.md) explains how DuckDB 1.5 and 2.0 expressions map to that
+engine-neutral contract.
 
-## Transport
+!!! note "Implementation status"
 
-Filters are sent in **Stream 3 (InitInput)** as a binary field containing Arrow IPC bytes:
+    Filter Encoding v2 is currently a proposed specification. The Python SDK implements its strict typed decoder,
+    snapshot/delta state machine, and DuckDB reference evaluator. The longstanding convenience filter classes remain
+    available as read-only views over common v2 expression shapes; the typed classes in `vgi.filter_v2` are the wire
+    model.
 
-```
-InitInput Schema:
-├── projection_ids: list<int32>
-└── filters: binary (nullable)    -- Arrow IPC bytes
-```
+## Opt in
 
-Table functions must declare `filter_pushdown: true` in metadata to receive filters.
-
-## Format
-
-The Arrow RecordBatch contains:
-
-| Column | Name | Type | Content |
-|--------|------|------|---------|
-| 0 | `filter_spec` | string | JSON array of filters |
-| 1+ | `_val_0`, `_val_1`, ... | varies | Values referenced by filters |
-
-**Version metadata** on `filter_spec` field: `{"vgi_filter_version": "1"}`
-
-## Example
-
-SQL: `WHERE salary > 50000 AND name = 'Alice'`
-
-**RecordBatch:**
-```
-filter_spec: "[{...}, {...}]"   (string)
-_val_0: 50000                   (int64)
-_val_1: "Alice"                 (string)
-```
-
-**filter_spec JSON:**
-```json
-[
-  {"column_name": "salary", "column_index": 2, "type": "constant", "op": "gt", "value_ref": 0},
-  {"column_name": "name", "column_index": 0, "type": "constant", "op": "eq", "value_ref": 1}
-]
-```
-
-The `value_ref` points to value columns: `value_ref: 0` → column `_val_0` (index 1 in batch).
-
-## Filter Types
-
-### constant
-Comparison filter: `col > value`
-
-```json
-{"column_name": "age", "column_index": 1, "type": "constant", "op": "ge", "value_ref": 0}
-```
-
-**Operators:** `eq` (=), `ne` (!=), `gt` (>), `ge` (>=), `lt` (<), `le` (<=)
-
-### is_null / is_not_null
-NULL check: `col IS NULL` or `col IS NOT NULL`
-
-```json
-{"column_name": "email", "column_index": 3, "type": "is_null"}
-```
-
-### in
-Set membership: `col IN (v1, v2, v3)`
-
-```json
-{"column_name": "status", "column_index": 4, "type": "in", "value_ref": 0}
-```
-
-The value column is a list type containing all IN values: `_val_0: ["active", "pending", "review"]`
-
-### and / or
-Conjunction combining multiple filters on same column:
-
-```json
-{"column_name": "age", "column_index": 1, "type": "and", "children": [
-  {"column_name": "age", "column_index": 1, "type": "constant", "op": "ge", "value_ref": 0},
-  {"column_name": "age", "column_index": 1, "type": "constant", "op": "lt", "value_ref": 1}
-]}
-```
-
-### struct
-Nested field filter: `address.city = 'Seattle'`
-
-```json
-{"column_name": "address", "column_index": 5, "type": "struct",
- "child_index": 1, "child_name": "city",
- "child_filter": {"column_name": "address", "column_index": 5, "type": "constant", "op": "eq", "value_ref": 0}}
-```
-
-## Unsupported Filter Types
-
-Some DuckDB filter types cannot be serialized for pushdown. When these are encountered, VGI skips filter pushdown entirely and the `filters` field is null:
-
-- **DynamicFilter** - Created by TOP-N queries (`ORDER BY ... LIMIT N`). The filter value mutates during query execution.
-- **BloomFilter** - Created by join optimization. Contains a large binary buffer.
-- **ExpressionFilter** - Created by complex predicates like `UPPER(col) = 'X'`. Contains expression trees that may reference functions unavailable in the worker.
-
-## Deserialization
+A table function advertises pushdown support in its metadata:
 
 ```python
-import pyarrow as pa
-import json
-
-def deserialize_filters(ipc_bytes: bytes):
-    reader = pa.ipc.open_stream(ipc_bytes)
-    batch = reader.read_next_batch()
-
-    # Check version
-    version = batch.schema.field(0).metadata.get(b"vgi_filter_version", b"").decode()
-    assert version == "1", f"Unknown filter version: {version}"
-
-    # Parse filters
-    filters = json.loads(batch.column(0)[0].as_py())
-
-    # Get value by ref: value_ref N → column N+1
-    # Returns Arrow scalar to preserve exact type
-    def get_value(ref: int) -> pa.Scalar:
-        return batch.column(ref + 1)[0]
-
-    return filters, get_value
+class Meta:
+    filter_pushdown = True
 ```
 
-## JSON Schema
+Advertising support is a correctness promise. A required predicate must be applied completely and exactly or the
+request must fail. An advisory predicate may be ignored, because the calling engine retains its exact local residual,
+but any pruning performed from it must be conservative.
 
-```json
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://vgi-protocol.dev/filter-pushdown/v1",
-  "title": "VGI Filter Specification",
-  "type": "array",
-  "items": {"$ref": "#/$defs/filter"},
+For functions that produce Arrow batches in Python, the framework can apply supported filters automatically:
 
-  "$defs": {
-    "filter": {
-      "type": "object",
-      "required": ["column_name", "column_index", "type"],
-      "properties": {
-        "column_name": {"type": "string"},
-        "column_index": {"type": "integer", "minimum": 0},
-        "type": {"enum": ["constant", "is_null", "is_not_null", "in", "and", "or", "struct"]},
-        "op": {"enum": ["eq", "ne", "gt", "ge", "lt", "le"]},
-        "value_ref": {"type": "integer", "minimum": 0},
-        "children": {"type": "array", "items": {"$ref": "#/$defs/filter"}},
-        "child_index": {"type": "integer", "minimum": 0},
-        "child_name": {"type": "string"},
-        "child_filter": {"$ref": "#/$defs/filter"}
-      }
-    }
-  }
-}
+```python
+class Meta:
+    filter_pushdown = True
+    auto_apply_filters = True
 ```
 
-## Worker Implementation Notes
+Automatic filtering is the simplest safe choice when the function first materializes complete batches locally. It is
+less useful when the worker can translate the predicate into a database query, file scan, API request, or partition
+selection and avoid reading the rows in the first place.
 
-- **Partial application OK**: Apply filters you can handle; DuckDB always re-verifies results
-- **Unsupported filters**: Return all rows for that column, let DuckDB filter locally
-- **Type fidelity**: Values preserve exact Arrow types (decimal, timestamp with timezone, nested types)
+## Handle filters manually
+
+Custom implementations can inspect `params.current_pushdown_filters` during processing. This value reflects the
+initial predicate and any accepted runtime update delivered before the current output batch. Use it to:
+
+- translate a supported predicate into a deeper data source;
+- derive bounds or exact values for partition pruning;
+- choose an index or lookup strategy; or
+- apply the complete predicate to a batch before emitting it.
+
+Treat translation as an optimization boundary. Never discard unsupported children from `OR`, `NOT`, or another
+indivisible subtree, and never turn an advisory approximation into an exact claim. If a required expression cannot be
+represented or evaluated exactly, fail before emitting rows.
+
+## Projection and column identity
+
+Filters identify columns against the unprojected bind output schema. A filtered column can therefore be required for
+evaluation even when the user's final projection omits it. Apply required filtering before dropping helper columns or
+projecting the emitted batch.
+
+Column names validate the mapping; indexes are authoritative. A dot inside a name is part of that identifier and is
+not a nesting separator.
+
+## Runtime filters
+
+Dynamic join or Top-N pruning is advisory and versioned. The optional
+[runtime-filter artifact specification](protocol/vgi-runtime-filter-artifacts.md) defines capability-gated Bloom and
+prefix-range transport. Those algorithms are not part of base filter-v2 conformance, and an implementation must not
+advertise an algorithm until it implements and validates that algorithm's complete immutable artifact contract.
+
+## Further reading
+
+- [Filter Encoding v2 specification](protocol/vgi-filter-encoding-v2-spec.md) — normative wire contract
+- [Runtime-filter artifacts](protocol/vgi-runtime-filter-artifacts.md) — proposed optional normative extension
+- [DuckDB filter adapter](protocol/vgi-duckdb-filter-adapter.md) — informative engine mapping
+- [Pushdown and statistics](how-to/pushdown-and-statistics.md) — optimizer integration patterns
+- [Filter API reference](api/filters.md) — current Python API

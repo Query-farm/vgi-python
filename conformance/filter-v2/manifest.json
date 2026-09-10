@@ -1,0 +1,74 @@
+{
+  "manifest_version": 1,
+  "vgi_protocol_version": "2.0.0",
+  "filter_encoding": "vgi.filters.v2",
+  "status": "proposed",
+  "schema": "filter-v2.schema.json",
+  "cases": [
+    {
+      "id": "structural.empty-snapshot",
+      "document": "cases/positive/empty-snapshot.json",
+      "expected": "valid"
+    },
+    {
+      "id": "structural.nested-required-snapshot",
+      "document": "cases/positive/nested-required-snapshot.json",
+      "expected": "valid"
+    },
+    {
+      "id": "structural.advisory-upsert-delta",
+      "document": "cases/positive/advisory-upsert-delta.json",
+      "expected": "valid"
+    },
+    {
+      "id": "structural.remove-delta",
+      "document": "cases/positive/remove-delta.json",
+      "expected": "valid"
+    },
+    {
+      "id": "structural.runtime-filter-snapshot",
+      "document": "cases/positive/runtime-filter-snapshot.json",
+      "expected": "valid"
+    },
+    {
+      "id": "structural.and-too-few-children",
+      "document": "cases/negative/and-too-few-children.json",
+      "expected": "invalid"
+    },
+    {
+      "id": "structural.delta-required-upsert",
+      "document": "cases/negative/delta-required-upsert.json",
+      "expected": "invalid"
+    },
+    {
+      "id": "structural.nested-runtime-filter",
+      "document": "cases/negative/nested-runtime-filter.json",
+      "expected": "invalid"
+    },
+    {
+      "id": "structural.remove-with-expression",
+      "document": "cases/negative/remove-with-expression.json",
+      "expected": "invalid"
+    },
+    {
+      "id": "structural.required-runtime-filter",
+      "document": "cases/negative/required-runtime-filter.json",
+      "expected": "invalid"
+    },
+    {
+      "id": "structural.snapshot-nonzero-revision",
+      "document": "cases/negative/snapshot-nonzero-revision.json",
+      "expected": "invalid"
+    },
+    {
+      "id": "structural.unknown-document-property",
+      "document": "cases/negative/unknown-document-property.json",
+      "expected": "invalid"
+    },
+    {
+      "id": "structural.unknown-node",
+      "document": "cases/negative/unknown-node.json",
+      "expected": "invalid"
+    }
+  ]
+}

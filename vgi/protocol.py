@@ -1821,6 +1821,19 @@ class _TrackingOutputCollector:
         return getattr(self._inner, name)
 
 
+def _apply_filter_delta_bytes(current: Any, filter_bytes: bytes) -> Any:
+    """Decode one IPC delta and apply it to existing immutable filter state."""
+    if current is None:
+        raise ValueError("dynamic filter delta received without an initial snapshot")
+    if len(filter_bytes) > (17 << 20):
+        raise ValueError("dynamic filter IPC payload exceeds the encoded-size limit")
+    table = pa.ipc.open_stream(filter_bytes).read_all()
+    batches = table.to_batches()
+    if len(batches) != 1:
+        raise ValueError("dynamic filter metadata must contain exactly one RecordBatch")
+    return current.apply_delta(batches[0])
+
+
 @dataclass
 class TableProducerState(_VgiCallStateHolder, ProducerState):
     """Producer state for table function streams.
@@ -1849,6 +1862,7 @@ class TableProducerState(_VgiCallStateHolder, ProducerState):
     _user_state: Annotated[Any, Transient()] = field(default=None, repr=False)
     _pushdown_filters: Annotated[Any, Transient()] = field(default=None, repr=False)  # PushdownFilters | None
     _auto_apply: Annotated[bool, Transient()] = field(default=False, repr=False)
+    _filter_delta_history: list[bytes] = field(default_factory=list, repr=False)
     _vgi_tracer: Annotated[VgiTracer, Transient()] = field(default_factory=get_noop_tracer, repr=False)
     # Conditional-revalidation validators read off the first tick's custom_metadata
     # and surfaced to the generator via ProcessParams (M6). None on a normal call.
@@ -1856,14 +1870,15 @@ class TableProducerState(_VgiCallStateHolder, ProducerState):
     _if_modified_since: Annotated[str | None, Transient()] = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
-        """Resolve pushdown filters if auto_apply_filters is enabled."""
-        if self._func_cls is not None and self._func_cls._should_auto_apply_filters():
-            self._auto_apply = True
+        """Resolve pushdown filters for both manual and automatic consumers."""
+        if self._func_cls is not None:
+            self._auto_apply = self._func_cls._should_auto_apply_filters()
             init_call = self._params.init_call if self._params is not None else None
             if init_call is not None and init_call.pushdown_filters is not None:
                 self._pushdown_filters = self._func_cls.pushdown_filters(
                     init_call.pushdown_filters,
                     join_keys=init_call.join_keys,
+                    output_schema=init_call.output_schema,
                 )
 
     def _to_row_dict(self) -> dict[str, object]:
@@ -1910,6 +1925,18 @@ class TableProducerState(_VgiCallStateHolder, ProducerState):
             ),
             attach_opaque_data=attach_catalog_bytes(self._attach_pt),
         )
+        # Re-derive pushdown filters before any fallback initial_state() call so
+        # manual consumers see the same required/current state after HTTP rehydrate.
+        self._auto_apply = func_cls._should_auto_apply_filters()
+        if self._call.init_call.pushdown_filters is not None:
+            self._pushdown_filters = func_cls.pushdown_filters(
+                self._call.init_call.pushdown_filters,
+                join_keys=self._call.init_call.join_keys,
+                output_schema=self._call.init_call.output_schema,
+            )
+            for filter_bytes in self._filter_delta_history:
+                self._pushdown_filters = _apply_filter_delta_bytes(self._pushdown_filters, filter_bytes)
+            self._params = dataclasses.replace(self._params, current_pushdown_filters=self._pushdown_filters)
         # Restore _user_state from serialized bytes if available
         if self._user_state_bytes is not None:
             state_type = _resolve_state_type(func_cls)
@@ -1921,14 +1948,6 @@ class TableProducerState(_VgiCallStateHolder, ProducerState):
                 self._user_state = func_cls.initial_state(self._params)
         else:
             self._user_state = func_cls.initial_state(self._params)
-        # Re-derive pushdown filters (triggers same logic as __post_init__)
-        if func_cls._should_auto_apply_filters():
-            self._auto_apply = True
-            if self._call.init_call.pushdown_filters is not None:
-                self._pushdown_filters = func_cls.pushdown_filters(
-                    self._call.init_call.pushdown_filters,
-                    join_keys=self._call.init_call.join_keys,
-                )
 
     def process(self, input: AnnotatedBatch, out: OutputCollector, ctx: CallContext) -> None:
         """Process tick batch — check for dynamic filter updates, then produce."""
@@ -1950,17 +1969,11 @@ class TableProducerState(_VgiCallStateHolder, ProducerState):
         """Decode and apply dynamic filter update from tick metadata."""
         import base64
 
-        from vgi.table_filter_pushdown import deserialize_filters
-
-        try:
-            filter_bytes = base64.b64decode(encoded_filters)
-            table = pa.ipc.open_stream(filter_bytes).read_all()
-            if table.num_rows > 0:
-                filter_batch = table.to_batches()[0]
-                new_filters = deserialize_filters(filter_batch)
-                self._pushdown_filters = new_filters
-        except Exception:
-            _log.warning("Failed to deserialize dynamic filter from tick metadata", exc_info=True)
+        if len(encoded_filters) > (24 << 20):
+            raise ValueError("base64 dynamic filter metadata exceeds the encoded-size limit")
+        filter_bytes = base64.b64decode(encoded_filters, validate=True)
+        self._pushdown_filters = _apply_filter_delta_bytes(self._pushdown_filters, filter_bytes)
+        self._filter_delta_history.append(filter_bytes)
 
     def produce(self, out: OutputCollector, ctx: CallContext) -> None:
         """Produce the next output batch from the table function."""
@@ -2033,17 +2046,19 @@ class TableInOutExchangeState(_VgiCallStateHolder, ExchangeState):
     _user_state: Annotated[Any, Transient()] = field(default=None, repr=False)
     _pushdown_filters: Annotated[Any, Transient()] = field(default=None, repr=False)  # PushdownFilters | None
     _auto_apply: Annotated[bool, Transient()] = field(default=False, repr=False)
+    _filter_delta_history: list[bytes] = field(default_factory=list, repr=False)
     _vgi_tracer: Annotated[VgiTracer, Transient()] = field(default_factory=get_noop_tracer, repr=False)
 
     def __post_init__(self) -> None:
-        """Resolve pushdown filters if auto_apply_filters is enabled."""
-        if self._func_cls is not None and self._func_cls._should_auto_apply_filters():
-            self._auto_apply = True
+        """Resolve pushdown filters for both manual and automatic consumers."""
+        if self._func_cls is not None:
+            self._auto_apply = self._func_cls._should_auto_apply_filters()
             init_call = self._params.init_call if self._params is not None else None
             if init_call is not None and init_call.pushdown_filters is not None:
                 self._pushdown_filters = self._func_cls.pushdown_filters(
                     init_call.pushdown_filters,
                     join_keys=init_call.join_keys,
+                    output_schema=init_call.output_schema,
                 )
 
     def _to_row_dict(self) -> dict[str, object]:
@@ -2090,6 +2105,16 @@ class TableInOutExchangeState(_VgiCallStateHolder, ExchangeState):
             ),
             attach_opaque_data=attach_catalog_bytes(self._attach_pt),
         )
+        self._auto_apply = func_cls._should_auto_apply_filters()
+        if self._call.init_call.pushdown_filters is not None:
+            self._pushdown_filters = func_cls.pushdown_filters(
+                self._call.init_call.pushdown_filters,
+                join_keys=self._call.init_call.join_keys,
+                output_schema=self._call.init_call.output_schema,
+            )
+            for filter_bytes in self._filter_delta_history:
+                self._pushdown_filters = _apply_filter_delta_bytes(self._pushdown_filters, filter_bytes)
+            self._params = dataclasses.replace(self._params, current_pushdown_filters=self._pushdown_filters)
         # Restore _user_state from serialized bytes if available
         if self._user_state_bytes is not None:
             state_type = _resolve_state_type(func_cls)
@@ -2099,17 +2124,24 @@ class TableInOutExchangeState(_VgiCallStateHolder, ExchangeState):
                 self._user_state = func_cls.initial_state(self._params)
         else:
             self._user_state = func_cls.initial_state(self._params)
-        if func_cls._should_auto_apply_filters():
-            self._auto_apply = True
-            if self._call.init_call.pushdown_filters is not None:
-                self._pushdown_filters = func_cls.pushdown_filters(
-                    self._call.init_call.pushdown_filters,
-                    join_keys=self._call.init_call.join_keys,
-                )
 
     def exchange(self, input: AnnotatedBatch, out: OutputCollector, ctx: CallContext) -> None:
         """Process one input batch through the table-in-out function."""
-        params = dataclasses.replace(self._params, auth_context=ctx.auth)
+        if input.custom_metadata is not None:
+            encoded = input.custom_metadata.get(b"vgi_pushdown_filters")
+            if encoded is not None:
+                import base64
+
+                if len(encoded) > (24 << 20):
+                    raise ValueError("base64 dynamic filter metadata exceeds the encoded-size limit")
+                filter_bytes = base64.b64decode(encoded, validate=True)
+                self._pushdown_filters = _apply_filter_delta_bytes(self._pushdown_filters, filter_bytes)
+                self._filter_delta_history.append(filter_bytes)
+        params = dataclasses.replace(
+            self._params,
+            auth_context=ctx.auth,
+            current_pushdown_filters=self._pushdown_filters,
+        )
         # Conditional-revalidation validators (exchange-mode result cache): the client
         # holds a stale cached result for THIS input unit and asks the worker to confirm
         # freshness cheaply. Surfaced on params so process() can answer with a 0-row
@@ -2271,6 +2303,9 @@ class TableBufferingFinalizeState(ProducerState):
         pushdown_filters: Serialized filter predicates carried from the InitRequest,
             wire-serialized on every tick so a rehydrated worker still applies them;
             ``None`` when no filters apply.
+        output_schema: Unprojected bind output schema used to validate v2 filter
+            column references on every rehydrated finalize tick.
+        join_keys: Exact external IN key batches carried with the filter state.
     """
 
     function_name: str = ""
@@ -2282,6 +2317,8 @@ class TableBufferingFinalizeState(ProducerState):
     attach_opaque_data: bytes | None = None
     projection_ids: list[int] | None = None
     pushdown_filters: Annotated[pa.RecordBatch | None, ArrowType(pa.large_binary())] = None
+    output_schema: Annotated[pa.Schema | None, ArrowType(pa.binary())] = None
+    join_keys: Annotated[list[pa.RecordBatch] | None, ArrowType(pa.list_(pa.large_binary()))] = None
 
     def produce(self, out: OutputCollector, ctx: CallContext) -> None:
         """Drive one tick of the user's finalize() callback."""

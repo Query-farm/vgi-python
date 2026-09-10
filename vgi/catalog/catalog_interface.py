@@ -41,13 +41,34 @@ from vgi.arguments import Arguments, SecretLookupEntry
 from vgi.exceptions import CatalogReadOnlyError
 from vgi.metadata import (
     DistinctDependence,
+    EvaluationContextCapability,
+    FilterFunctionCapability,
     FunctionStability,
     NullHandling,
     OrderDependence,
     OrderPreservation,
     PartitionKind,
+    RuntimeFilterAlgorithmCapability,
 )
 from vgi.schema_path import SchemaKey, SchemaPath, schema_path_display, schema_path_key
+
+_FILTER_IDENTITY_LIST_TYPE = pa.list_(
+    pa.struct(
+        [
+            pa.field("namespace", pa.string(), nullable=False),
+            pa.field("name", pa.string(), nullable=False),
+            pa.field("version", pa.uint64(), nullable=False),
+        ]
+    )
+)
+_FILTER_CONTEXT_LIST_TYPE = pa.list_(
+    pa.struct(
+        [
+            pa.field("profile", pa.string(), nullable=False),
+            pa.field("provider_fingerprint", pa.string(), nullable=True),
+        ]
+    )
+)
 
 __all__ = [
     # Re-exported from vgi.metadata
@@ -690,8 +711,10 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
             DuckDB extension only honours this when the table also exposes a
             rowid virtual column plus filter/projection pushdown — see
             GetScanFunctionImpl in the C++ vgi_table_entry.cpp.
-        supported_expression_filters: Expression-filter classes the function can
-            accept pushed down.
+        filter_semantic_profiles: V2 expression semantics profiles.
+        additional_filter_functions: Versioned extension filter functions.
+        runtime_filter_algorithms: Versioned runtime-filter artifact algorithms.
+        filter_evaluation_contexts: Reproducible evaluation-context profiles.
         order_preservation: Whether the function preserves input ordering.
         max_workers: Maximum parallel workers. Uses ArrowType to specify int32
             instead of the default int64.
@@ -782,7 +805,16 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     filter_pushdown: bool | None = None
     sampling_pushdown: bool | None = None
     late_materialization: bool | None = None
-    supported_expression_filters: list[str] = field(default_factory=list)
+    filter_semantic_profiles: list[str] = field(default_factory=list)
+    additional_filter_functions: Annotated[list[FilterFunctionCapability], ArrowType(_FILTER_IDENTITY_LIST_TYPE)] = (
+        field(default_factory=list)
+    )
+    runtime_filter_algorithms: Annotated[
+        list[RuntimeFilterAlgorithmCapability], ArrowType(_FILTER_IDENTITY_LIST_TYPE)
+    ] = field(default_factory=list)
+    filter_evaluation_contexts: Annotated[list[EvaluationContextCapability], ArrowType(_FILTER_CONTEXT_LIST_TYPE)] = (
+        field(default_factory=list)
+    )
     order_preservation: OrderPreservation | None = None
     max_workers: Annotated[int | None, ArrowType(pa.int32())] = None
     supports_batch_index: bool = False
@@ -3438,7 +3470,10 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             filter_pushdown=None if is_scalar else meta.filter_pushdown,
             sampling_pushdown=None if is_scalar else meta.sampling_pushdown,
             late_materialization=None if is_scalar else meta.late_materialization,
-            supported_expression_filters=[] if is_scalar else meta.supported_expression_filters,
+            filter_semantic_profiles=[] if is_scalar else meta.filter_semantic_profiles,
+            additional_filter_functions=[] if is_scalar else meta.additional_filter_functions,
+            runtime_filter_algorithms=[] if is_scalar else meta.runtime_filter_algorithms,
+            filter_evaluation_contexts=[] if is_scalar else meta.filter_evaluation_contexts,
             order_preservation=None if is_scalar else meta.preserves_order,
             max_workers=None if is_scalar else meta.max_workers,
             supports_batch_index=False if is_scalar else meta.supports_batch_index,

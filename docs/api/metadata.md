@@ -15,4 +15,8 @@ invocation types model the request/response lifecycle on the wire. See the
 
 ## Protocol
 
+::: vgi.protocol.CatalogAttachRequest.client_capabilities
+    options:
+      heading_level: 3
+
 ::: vgi.protocol

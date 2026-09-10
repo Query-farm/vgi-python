@@ -1,0 +1,22 @@
+{
+  "encoding": "vgi.filters.v2",
+  "semantics": "vgi.duckdb.standard.v1",
+  "kind": "snapshot",
+  "predicates": [
+    {
+      "id": "query:short-and",
+      "revision": 0,
+      "mode": "required",
+      "source": "query",
+      "expression": {
+        "node": "and",
+        "children": [
+          {
+            "node": "literal",
+            "value_ref": 0
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "encoding": "vgi.filters.v2",
+  "semantics": "vgi.duckdb.standard.v1",
+  "kind": "snapshot",
+  "predicates": [
+    {
+      "id": "join:negated-runtime-filter",
+      "revision": 0,
+      "mode": "advisory",
+      "source": "join",
+      "expression": {
+        "node": "not",
+        "expression": {
+          "node": "runtime_filter",
+          "algorithm": {
+            "namespace": "duckdb.runtime_filter",
+            "name": "prefix_range",
+            "version": 1
+          },
+          "input": {
+            "node": "column_ref",
+            "column_index": 2,
+            "column_name": "customer_id"
+          },
+          "artifact_ref": 0,
+          "null_handling": "pass"
+        }
+      }
+    }
+  ]
+}
