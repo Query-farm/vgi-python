@@ -422,13 +422,10 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
         check_constraints: SQL CHECK constraint expressions.
         primary_key_constraints: Column-index groups forming the primary key.
         foreign_key_constraints: Serialized foreign-key constraint specs.
-        supports_insert: Write-support flag — whether the table supports INSERT.
-        supports_update: Write-support flag — whether the table supports UPDATE.
-        supports_delete: Write-support flag — whether the table supports DELETE.
-        supports_returning: When False (the default), the C++ extension rejects
-            INSERT/UPDATE/DELETE ... RETURNING at plan time with a
-            BinderException. Workers that can emit the affected rows from their
-            write functions must opt in by setting this to True.
+        write_result_modes: Maximum result mode supported for each writable
+            operation. Keys are ``insert``, ``update``, and ``delete``; a missing
+            key means the operation is unsupported. Values are ordered
+            ``count < rows < changes`` and promise every lower mode.
         supports_column_statistics: Statistics capability flag — indicates this
             table can provide column statistics.
         scan_function: Optional inlined function-discovery result. When
@@ -503,10 +500,9 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     )
     foreign_key_constraints: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))] = field(default_factory=list)
 
-    supports_insert: bool = False
-    supports_update: bool = False
-    supports_delete: bool = False
-    supports_returning: bool = False
+    write_result_modes: Annotated[dict[str, str], ArrowType(pa.map_(pa.string(), pa.string()))] = field(
+        default_factory=dict
+    )
 
     supports_column_statistics: bool = False
 

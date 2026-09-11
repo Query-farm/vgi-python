@@ -21,6 +21,7 @@ from typing import Protocol
 from vgi_rpc.rpc import ExchangeState, ProducerState, Stream
 
 from vgi.schema_path import SchemaPath
+from vgi.write_results import WriteResultMode
 
 
 class TransactorProtocol(Protocol):
@@ -60,7 +61,7 @@ class TransactorProtocol(Protocol):
         tx_id: bytes,
         table_name: str,
         schema_path: SchemaPath | None = None,
-        returning: bool = False,
+        result_mode: WriteResultMode = "count",
     ) -> Stream[ExchangeState]:
         """Insert rows into a table via lockstep exchange."""
         ...
@@ -71,7 +72,7 @@ class TransactorProtocol(Protocol):
         tx_id: bytes,
         table_name: str,
         schema_path: SchemaPath | None = None,
-        returning: bool = False,
+        result_mode: WriteResultMode = "count",
     ) -> Stream[ExchangeState]:
         """Delete rows from a table via lockstep exchange."""
         ...
@@ -83,7 +84,7 @@ class TransactorProtocol(Protocol):
         table_name: str,
         schema_path: SchemaPath | None = None,
         columns: list[str] | None = None,
-        returning: bool = False,
+        result_mode: WriteResultMode = "count",
     ) -> Stream[ExchangeState]:
         """Update rows in a table via lockstep exchange."""
         ...

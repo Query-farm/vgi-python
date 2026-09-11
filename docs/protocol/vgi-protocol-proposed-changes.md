@@ -453,7 +453,34 @@ Triggers are different. Supporting a trigger in a virtual catalog would require 
 
 The same principle applies to secure views, composable COPY, remote-plan pushdown, coordinate systems, and any catalog object VGI does not currently virtualize: they are not protocol requirements simply because DuckDB implements them. They should be gated through explicit catalog capabilities and fail early.
 
-### 6.1 New catalog kinds in DuckDB 2.0
+### 6.1 Writable result modes and OLD/NEW images
+
+VGI 2.0 replaces the four `TableInfo` booleans `supports_insert`,
+`supports_update`, `supports_delete`, and `supports_returning` with one required,
+non-null Arrow map:
+
+```text
+write_result_modes: map<utf8, utf8>
+```
+
+The only operation keys are `insert`, `update`, and `delete`; absence means the
+operation is unsupported. Each value is the maximum supported mode in the
+ordered lattice `count < rows < changes`, and therefore promises every lower
+mode. Duplicate keys and unknown operations or modes are protocol errors.
+
+The serialized `write_options` batch replaces `return_chunks: bool` with the
+required `result_mode: utf8`. `count` returns `(count int64 not null)`. `rows`
+returns NEW rows for INSERT/UPDATE and OLD rows for DELETE. `changes` returns
+two nullable structs, `old` and `new`, each shaped exactly like the table:
+INSERT populates only `new`, DELETE only `old`, and UPDATE both. The operation
+is known from the invoked write function and is not repeated in each result row.
+
+The DuckDB 1.5 adapter requests `count` for ordinary DML and `rows` for DML with
+RETURNING. It validates and preserves `changes` capability metadata but never
+requests that mode. A DuckDB 2.0 adapter can request `changes` when trigger
+planning needs OLD/NEW images without another protocol revision.
+
+### 6.2 New catalog kinds in DuckDB 2.0
 
 The `CatalogType` enum has exactly two additions relative to DuckDB 1.5.5:
 
@@ -464,7 +491,7 @@ The `CatalogType` enum has exactly two additions relative to DuckDB 1.5.5:
 
 Nested schemas are recursively contained `SCHEMA_ENTRY` objects, not another kind. Secure views remain `VIEW_ENTRY`; changes to aggregate-state representation belong to the logical type system rather than the catalog enum.
 
-### 6.2 How native DuckDB stores triggers
+### 6.3 How native DuckDB stores triggers
 
 Triggers are first-class `TriggerCatalogEntry` objects, but they do not live in the schema's ordinary catalog set. Each `DuckTableEntry` owns a separate transactional `CatalogSet`:
 
@@ -496,7 +523,7 @@ The dependency manager has special trigger identity/lookup handling because sche
 
 At bind time DuckDB scans the table's triggers and expands them into the DML plan. Statement triggers form a materialized CTE chain (BEFORE actions, base DML, AFTER actions), including materialized OLD/NEW transition tables when requested. Supported row triggers use `LogicalTrigger` and correlated `NEW.col`/`OLD.col` bindings. The current catalog set yields triggers in case-insensitive alphabetical name order.
 
-### 6.3 DuckDB changes needed by custom table implementations
+### 6.4 DuckDB changes needed by custom table implementations
 
 DuckDB 2.0 already exposes virtual `TableCatalogEntry::CreateTrigger`, `ScanTriggers`, and `GetTrigger` hooks, and its trigger binder consumes the generic scan hook. Two remaining native-table assumptions should be fixed upstream:
 
@@ -509,7 +536,7 @@ Upstream PR: [duckdb/duckdb#25539 — Support triggers on custom table catalog e
 
 The `ScanTriggers` contract also implies that returned catalog entries remain alive beyond the callback: both trigger selection and introspection retain references. VGI should materialize trigger entries in a table-owned metadata cache, invalidated through the existing catalog-version mechanism, rather than returning callback-local objects.
 
-### 6.4 Proposed VGI trigger protocol
+### 6.5 Proposed VGI trigger protocol
 
 The remote VGI catalog should be authoritative for persistent trigger definitions. Keeping definitions only in a local extension cache would lose them on detach and would give different clients inconsistent catalogs.
 
@@ -529,13 +556,22 @@ TriggerInfo
     for_each: statement | row
     referencing_new_table: optional<string>
     referencing_old_table: optional<string>
-    action_sql: string
+    definitions: map<string, string>
     dependencies: list<TriggerDependency>
     comment: optional<string>
     tags: map<string, string>
 ```
 
-Use structured fields plus DuckDB-dialect action SQL. Do not put DuckDB's binary `QueryNode` serialization on the VGI wire: it is an internal, version-coupled representation. The local extension can parse the action and create cached `TriggerCatalogEntry` objects. Each resolved dependency should carry its qualified object reference plus ownership, drop-blocking, and alter-blocking flags so the remote catalog can enforce DDL integrity across clients.
+Use structured fields plus engine-specific textual definitions keyed by stable
+lowercase engine identifiers such as `duckdb`, `datafusion`, `spark`, and
+`sqlite`. An engine executes only its matching definition; a missing entry means
+that trigger is unavailable on that engine, with no implicit SQL-dialect
+fallback. Do not put DuckDB's binary `QueryNode` serialization on the VGI wire:
+it is an internal, version-coupled representation. The DuckDB extension parses
+the `duckdb` definition and creates cached `TriggerCatalogEntry` objects. Each
+resolved dependency should carry its qualified object reference plus ownership,
+drop-blocking, and alter-blocking flags so the remote catalog can enforce DDL
+integrity across clients.
 
 Suggested methods:
 
@@ -545,7 +581,10 @@ Suggested methods:
 - `catalog_table_trigger_drop`
 - optional trigger comment/tag alteration
 
-Add explicit catalog/table capability metadata such as `supports_triggers`. A trigger-capable table must also support exact affected-row RETURNING, because DuckDB's statement-trigger expansion internally materializes base DML with `RETURNING *` even when the user did not write a RETURNING clause. UPDATE must additionally expose captured OLD columns before OLD transition tables can be enabled.
+Add explicit catalog/table capability metadata such as `supports_triggers`. A
+DuckDB-managed trigger-capable table must advertise `changes` for every event it
+uses, because DuckDB's statement-trigger expansion needs exact OLD/NEW images
+even when the user did not write a RETURNING clause.
 
 All base and trigger-body writes must use the same VGI transaction token and roll back atomically. Stable statement/sub-operation identifiers are recommended so transport retries cannot apply a trigger side effect twice. Trigger support should be rejected when the VGI catalog cannot provide transactional atomicity.
 
@@ -673,4 +712,11 @@ The first protocol-breaking phase is now implemented in Python:
 
 `CatalogAttachResult.default_schema` intentionally remains a scalar root-schema identifier for the reason described in section 2.
 
-This phase does **not** implement the other proposed protocol areas: `vgi.filters.v2`, logical-type identity annotations, trigger RPCs, or standalone window-function catalog entries. The sibling C++, C#, Go, Java, Rust, and TypeScript schema-path migrations were completed afterward. The vendored browser `vgi-client.js` remains generated from the TypeScript SDK and must never be edited manually in the Python repository.
+The writable-result phase replaces the legacy write booleans and
+`return_chunks` option with the `write_result_modes`/`result_mode` contract from
+section 6.1. Python implements and directly tests all three modes. The DuckDB
+1.5 extension consumes only `count` and `rows`; `changes` is reserved for the
+future DuckDB 2.0 trigger adapter. Trigger catalog metadata and RPCs remain
+unimplemented.
+
+This phase does **not** implement the other proposed protocol areas: logical-type identity annotations, trigger RPCs, or standalone window-function catalog entries. The sibling C++, C#, Go, Java, Rust, and TypeScript schema migrations are maintained in their corresponding repositories. The vendored browser `vgi-client.js` remains generated from the TypeScript SDK and must never be edited manually in the Python repository.

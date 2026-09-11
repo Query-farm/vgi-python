@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Annotated
 import pyarrow as pa
 from vgi_rpc import AnnotatedBatch, ArrowSerializableDataclass, Transient
 
-from vgi.schema_utils import schema
 from vgi.table_function import BindParams, ProcessParams
 
 if TYPE_CHECKING:
@@ -24,6 +23,7 @@ if TYPE_CHECKING:
 
 from vgi.transactor.client import TransactorClient
 from vgi.transactor.protocol import TransactorProtocol
+from vgi.write_results import WriteResultMode, coerce_write_result_mode
 
 __all__ = [
     "TransactorProxy",
@@ -32,17 +32,17 @@ __all__ = [
 ]
 
 # Output schema for write functions returning affected row counts.
-_COUNT_SCHEMA = schema(count=pa.int64())
+_COUNT_SCHEMA = pa.schema([pa.field("count", pa.int64(), nullable=False)])
 
 # DuckDB's native rowid pseudocolumn, marked with is_row_id metadata so the
 # C++ extension knows which column carries the physical row identifier.
 _ROWID_FIELD = pa.field("rowid", pa.int64(), metadata={b"is_row_id": b""})
 
 
-def _parse_write_options(bind_call: BindRequest) -> dict[str, bool | str | list[str]]:
+def _parse_write_options(bind_call: BindRequest) -> dict[str, str | list[str]]:
     """Parse the write_options RecordBatch from the bind call's named arguments."""
-    defaults: dict[str, bool | str | list[str]] = {
-        "return_chunks": False,
+    defaults: dict[str, str | list[str]] = {
+        "result_mode": "count",
         "on_conflict": "throw",
         "on_conflict_columns": [],
     }
@@ -56,8 +56,8 @@ def _parse_write_options(bind_call: BindRequest) -> dict[str, bool | str | list[
     options_bytes = val.as_py()
     batch, _ = deserialize_record_batch(options_bytes)
     result = dict(defaults)
-    if "return_chunks" in batch.schema.names:
-        result["return_chunks"] = batch.column("return_chunks")[0].as_py()
+    if "result_mode" in batch.schema.names:
+        result["result_mode"] = coerce_write_result_mode(batch.column("result_mode")[0].as_py())
     if "on_conflict" in batch.schema.names:
         result["on_conflict"] = batch.column("on_conflict")[0].as_py()
     if "on_conflict_columns" in batch.schema.names:
@@ -65,10 +65,10 @@ def _parse_write_options(bind_call: BindRequest) -> dict[str, bool | str | list[
     return result
 
 
-def _is_returning(params: BindParams[None]) -> bool:
-    """Check if the C++ operator requested RETURNING rows."""
+def _result_mode(params: BindParams[None]) -> WriteResultMode:
+    """Return the exact writable result mode requested by the client."""
     opts = _parse_write_options(params.bind_call)
-    return bool(opts.get("return_chunks", False))
+    return coerce_write_result_mode(str(opts["result_mode"]))
 
 
 def _get_tx_id(params: ProcessParams[None]) -> bytes:

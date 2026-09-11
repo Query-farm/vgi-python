@@ -24,7 +24,7 @@ pytestmark = pytest.mark.skip(reason="Transactor/write subsystem disabled — se
 # Helpers
 # ============================================================================
 
-_COUNT_SCHEMA = schema(count=pa.int64())
+_COUNT_SCHEMA = pa.schema([pa.field("count", pa.int64(), nullable=False)])
 _FILTER_METADATA = {b"vgi_filter_version": b"1"}
 
 
@@ -66,7 +66,7 @@ def _insert_into(
     t: TransactorImpl, tx_id: bytes, table_name: str, rows: list[tuple[int, str]], *, returning: bool = False
 ) -> pa.RecordBatch:
     """Insert rows into an arbitrary table and return the response batch."""
-    stream = t.insert(tx_id=tx_id, table_name=table_name, returning=returning)
+    stream = t.insert(tx_id=tx_id, table_name=table_name, result_mode="rows" if returning else "count")
     batch = pa.record_batch(
         {"id": [r[0] for r in rows], "name": [r[1] for r in rows]},
         schema=schema(id=pa.int64(), name=pa.string()),
@@ -79,7 +79,7 @@ def _insert_into(
 
 def _insert(t: TransactorImpl, tx_id: bytes, rows: list[tuple[int, str]], *, returning: bool = False) -> pa.RecordBatch:
     """Insert rows via the transactor and return the response batch."""
-    stream = t.insert(tx_id=tx_id, table_name="data", returning=returning)
+    stream = t.insert(tx_id=tx_id, table_name="data", result_mode="rows" if returning else "count")
     batch = pa.record_batch(
         {"id": [r[0] for r in rows], "name": [r[1] for r in rows]},
         schema=schema(id=pa.int64(), name=pa.string()),
@@ -119,7 +119,7 @@ def _scan(
 
 def _delete(t: TransactorImpl, tx_id: bytes, rowids: list[int], *, returning: bool = False) -> pa.RecordBatch:
     """Delete rows by rowid, return the response batch."""
-    stream = t.delete(tx_id=tx_id, table_name="data", returning=returning)
+    stream = t.delete(tx_id=tx_id, table_name="data", result_mode="rows" if returning else "count")
     batch = pa.record_batch({"rowid": rowids}, schema=schema(rowid=pa.int64()))
     out = OutputCollector(stream.output_schema, producer_mode=False)
     assert isinstance(stream.state, ExchangeState)
@@ -136,7 +136,12 @@ def _update(
     t: TransactorImpl, tx_id: bytes, rowids: list[int], names: list[str], *, returning: bool = False
 ) -> pa.RecordBatch:
     """Update name column by rowid, return the response batch."""
-    stream = t.update(tx_id=tx_id, table_name="data", columns=["name"], returning=returning)
+    stream = t.update(
+        tx_id=tx_id,
+        table_name="data",
+        columns=["name"],
+        result_mode="rows" if returning else "count",
+    )
     batch = pa.record_batch(
         {"name": names, "rowid": rowids},
         schema=schema(name=pa.string(), rowid=pa.int64()),
