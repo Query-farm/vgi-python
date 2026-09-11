@@ -41,6 +41,7 @@ from vgi.catalog.catalog_interface import (
 from vgi.invocation import BindResponse, FunctionType
 from vgi.metadata import CatalogFunctionType
 from vgi.schema_path import SchemaPath, schema_path_display, schema_path_key
+from vgi.write_results import validate_write_result_modes
 
 if TYPE_CHECKING:
     from vgi.function import Function
@@ -268,6 +269,9 @@ class Table:
         delete_function: [`TableInOutGenerator`][] class backing DELETE. Requires
             a scan ``function`` to provide row IDs. ``None`` means DELETE is
             unsupported.
+        write_result_modes: Maximum result mode for each configured write
+            function. Omitted operations default to ``count``. Modes are ordered
+            ``count < rows < changes``.
         not_null: Tuple of column names with NOT NULL constraints.
         unique: Tuple of column name tuples for UNIQUE constraints.
         check: Tuple of SQL expressions for CHECK constraints.
@@ -332,6 +336,7 @@ class Table:
     insert_function: type[TableInOutGenerator[Any, Any]] | None = None
     update_function: type[TableInOutGenerator[Any, Any]] | None = None
     delete_function: type[TableInOutGenerator[Any, Any]] | None = None
+    write_result_modes: dict[str, str] = field(default_factory=dict)
     not_null: tuple[str, ...] = ()
     unique: tuple[tuple[str, ...], ...] = ()
     check: tuple[str, ...] = ()
@@ -387,6 +392,19 @@ class Table:
                         f"escaping @bind_fixed_schema's contract. Either remove the "
                         f"override or leave inline_bind=False."
                     )
+
+        modes = validate_write_result_modes(self.write_result_modes)
+        functions = {
+            "insert": self.insert_function,
+            "update": self.update_function,
+            "delete": self.delete_function,
+        }
+        for operation in modes:
+            if functions[operation] is None:
+                raise ValueError(
+                    f"Table '{self.name}': write_result_modes declares {operation!r} "
+                    f"without a corresponding {operation}_function"
+                )
 
         # Resolve columns to validate constraints
         resolved = self._get_resolved_columns()
@@ -650,9 +668,15 @@ class Table:
             check_constraints=list(self.check),
             primary_key_constraints=self._resolve_primary_key_indices(),
             foreign_key_constraints=self._serialize_foreign_keys(schema_path),
-            supports_insert=self.insert_function is not None,
-            supports_update=self.update_function is not None,
-            supports_delete=self.delete_function is not None,
+            write_result_modes={
+                operation: self.write_result_modes.get(operation, "count")
+                for operation, function in (
+                    ("insert", self.insert_function),
+                    ("update", self.update_function),
+                    ("delete", self.delete_function),
+                )
+                if function is not None
+            },
             supports_column_statistics=bool(self.statistics),
             comment=self.comment,
             tags=dict(self.tags),

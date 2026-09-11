@@ -528,9 +528,7 @@ class SchemaReconcileCatalog(ReadOnlyCatalogInterface):
             not_null_constraints=[],
             unique_constraints=[],
             check_constraints=[],
-            supports_insert=True,
-            supports_update=True,
-            supports_delete=True,
+            write_result_modes={"insert": "changes", "update": "changes", "delete": "changes"},
         )
 
     def schemas(

@@ -27,12 +27,14 @@ from vgi._test_fixtures.writable.table import (
     _get_attach_opaque_data,
     _get_pushdown_filters,
     _get_tx_id,
-    _is_returning,
+    _parse_write_options,
+    _result_mode,
     transactor_proxy,
 )
 from vgi.invocation import BindResponse, GlobalInitResponse
 from vgi.table_function import BindParams, InitParams, ProcessParams, TableFunctionGenerator
 from vgi.table_in_out_function import TableInOutGenerator
+from vgi.write_results import WriteResultMode, coerce_write_result_mode, write_result_schema
 
 __all__ = [
     "GenericTableDelete",
@@ -141,15 +143,16 @@ class _GenericWriteBase(TableInOutGenerator[None, None]):
 
     @classmethod
     def on_bind(cls, params: BindParams[None]) -> BindResponse:
-        """Bind: query transactor for table schema to use for RETURNING."""
+        """Bind using the exact result schema requested by the client."""
         table_name = _get_table_name_from_bind(params)
-        if _is_returning(params):
+        result_mode = _result_mode(params)
+        if result_mode != "count":
             attach_opaque_data = params.attach_opaque_data  # unwrapped plaintext
             tx_id = params.bind_call.transaction_opaque_data
             assert attach_opaque_data is not None and tx_id is not None
             table_schema = _get_table_schema_from_transactor(table_name, attach_opaque_data, tx_id)
             user_fields = [f for f in table_schema if f.name not in ("rowid", "row_id")]
-            return BindResponse(output_schema=pa.schema(user_fields))
+            return BindResponse(output_schema=write_result_schema(result_mode, pa.schema(user_fields)))
         return BindResponse(output_schema=_COUNT_SCHEMA)
 
     @classmethod
@@ -159,7 +162,7 @@ class _GenericWriteBase(TableInOutGenerator[None, None]):
         attach_opaque_data: bytes,
         tx_id: bytes,
         table_name: str,
-        returning: bool,
+        result_mode: WriteResultMode,
         batch: pa.RecordBatch,
     ) -> Any:
         """Open a write stream. Override for operations needing extra args."""
@@ -167,7 +170,7 @@ class _GenericWriteBase(TableInOutGenerator[None, None]):
             attach_opaque_data=attach_opaque_data,
             tx_id=tx_id,
             table_name=table_name,
-            returning=returning,
+            result_mode=result_mode,
         )
 
     @classmethod
@@ -176,9 +179,10 @@ class _GenericWriteBase(TableInOutGenerator[None, None]):
         table_name = _get_table_name_from_process(params)
         attach_opaque_data = _get_attach_opaque_data(params)
         tx_id = _get_tx_id(params)
-        returning = params.output_schema != _COUNT_SCHEMA
+        assert params.init_call is not None
+        result_mode = coerce_write_result_mode(str(_parse_write_options(params.init_call.bind_call)["result_mode"]))
         proxy = transactor_proxy._get_proxy()
-        with cls._open_stream(proxy, attach_opaque_data, tx_id, table_name, returning, batch) as stream:
+        with cls._open_stream(proxy, attach_opaque_data, tx_id, table_name, result_mode, batch) as stream:
             response = stream.exchange(AnnotatedBatch(batch=batch))
             out.emit(response.batch)
 
@@ -211,7 +215,7 @@ class GenericTableUpdate(_GenericWriteBase):
         attach_opaque_data: bytes,
         tx_id: bytes,
         table_name: str,
-        returning: bool,
+        result_mode: WriteResultMode,
         batch: pa.RecordBatch,
     ) -> Any:
         """Open an update stream with column list derived from the batch."""
@@ -221,7 +225,7 @@ class GenericTableUpdate(_GenericWriteBase):
             tx_id=tx_id,
             table_name=table_name,
             columns=update_cols,
-            returning=returning,
+            result_mode=result_mode,
         )
 
 

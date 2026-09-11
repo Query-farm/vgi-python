@@ -129,10 +129,15 @@ from vgi.table_in_out_function import (
     TableInOutGenerator,
 )
 from vgi.worker import Worker
+from vgi.write_results import WriteOperation, WriteResultMode, write_changes_batch, write_result_schema
 
 __all__ = [
     "AggregateBindParams",
     "AggregateFunction",
+    "WriteOperation",
+    "WriteResultMode",
+    "write_result_schema",
+    "write_changes_batch",
     "AnyArrow",
     "AnyArrowValue",
     "Arg",

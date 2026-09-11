@@ -44,6 +44,7 @@ from vgi.catalog.descriptors import Catalog, ForeignKeyDef, Index, Macro, Schema
 from vgi.catalog.secret_type import SecretTypeSpec
 from vgi.catalog.setting import Setting, SettingSpec
 from vgi.catalog.storage import CatalogStorage, CatalogStorageSqlite
+from vgi.write_results import WriteOperation, WriteResultMode, write_changes_batch, write_result_schema
 
 __all__ = [
     # Type aliases
@@ -89,6 +90,10 @@ __all__ = [
     "Sql",
     "Table",
     "View",
+    "WriteOperation",
+    "WriteResultMode",
+    "write_result_schema",
+    "write_changes_batch",
     # Interfaces
     "CatalogInterface",
     "ReadOnlyCatalogInterface",

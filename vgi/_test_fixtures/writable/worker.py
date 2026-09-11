@@ -907,10 +907,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
             check_constraints=check_constraints,
             primary_key_constraints=primary_key_constraints,
             foreign_key_constraints=foreign_key_constraints,
-            supports_insert=True,
-            supports_update=True,
-            supports_delete=True,
-            supports_returning=True,
+            write_result_modes={"insert": "changes", "update": "changes", "delete": "changes"},
             comment=table_comment,
             tags={},
         )

@@ -31,13 +31,14 @@ from vgi.schema_path import SchemaPath, schema_path_key, sql_qualified_name
 from vgi.schema_utils import schema
 from vgi.transactor._duckdb_compat import subcursor
 from vgi.transactor.protocol import TransactorProtocol
+from vgi.write_results import WriteResultMode, coerce_write_result_mode, write_changes_batch, write_result_schema
 
 if TYPE_CHECKING:
     import duckdb
 
 logger = logging.getLogger("vgi.transactor")
 
-_COUNT_SCHEMA = schema(count=pa.int64())
+_COUNT_SCHEMA = pa.schema([pa.field("count", pa.int64(), nullable=False)])
 
 
 class TransactorImpl:
@@ -178,7 +179,7 @@ class TransactorImpl:
         tx_id: bytes,
         table_name: str,
         schema_path: SchemaPath | None = None,
-        returning: bool = False,
+        result_mode: WriteResultMode = "count",
     ) -> Stream[StreamState]:
         """Create an insert exchange stream."""
         conn = self._get_tx_conn(attach_opaque_data, tx_id)
@@ -188,13 +189,14 @@ class TransactorImpl:
 
         input_fields = [f for f in table_schema if f.name != "rowid"]
         input_schema = pa.schema(input_fields)
-        output_schema = input_schema if returning else _COUNT_SCHEMA
+        mode = coerce_write_result_mode(result_mode)
+        output_schema = write_result_schema(mode, input_schema)
 
         sub = subcursor(conn)
         state = _InsertState(
             conn=sub,
             qualified_name=qualified,
-            returning=returning,
+            result_mode=mode,
             table_schema=input_schema,
             tx_lock=tx_lock,
         )
@@ -206,7 +208,7 @@ class TransactorImpl:
         tx_id: bytes,
         table_name: str,
         schema_path: SchemaPath | None = None,
-        returning: bool = False,
+        result_mode: WriteResultMode = "count",
     ) -> Stream[StreamState]:
         """Create a delete exchange stream."""
         conn = self._get_tx_conn(attach_opaque_data, tx_id)
@@ -217,11 +219,12 @@ class TransactorImpl:
         input_schema = schema(rowid=pa.int64())
         ret_fields = [f for f in table_schema if f.name != "rowid"]
         ret_schema = pa.schema(ret_fields)
-        output_schema = ret_schema if returning else _COUNT_SCHEMA
+        mode = coerce_write_result_mode(result_mode)
+        output_schema = write_result_schema(mode, ret_schema)
 
         sub = subcursor(conn)
         state = _DeleteState(
-            conn=sub, qualified_name=qualified, returning=returning, table_schema=ret_schema, tx_lock=tx_lock
+            conn=sub, qualified_name=qualified, result_mode=mode, table_schema=ret_schema, tx_lock=tx_lock
         )
         return Stream(output_schema=output_schema, state=state, input_schema=input_schema)
 
@@ -232,7 +235,7 @@ class TransactorImpl:
         table_name: str,
         schema_path: SchemaPath | None = None,
         columns: list[str] | None = None,
-        returning: bool = False,
+        result_mode: WriteResultMode = "count",
     ) -> Stream[StreamState]:
         """Create an update exchange stream."""
         conn = self._get_tx_conn(attach_opaque_data, tx_id)
@@ -249,11 +252,12 @@ class TransactorImpl:
 
         ret_fields = [f for f in table_schema if f.name != "rowid"]
         ret_schema = pa.schema(ret_fields)
-        output_schema = ret_schema if returning else _COUNT_SCHEMA
+        mode = coerce_write_result_mode(result_mode)
+        output_schema = write_result_schema(mode, ret_schema)
 
         sub = subcursor(conn)
         state = _UpdateState(
-            conn=sub, qualified_name=qualified, returning=returning, table_schema=ret_schema, tx_lock=tx_lock
+            conn=sub, qualified_name=qualified, result_mode=mode, table_schema=ret_schema, tx_lock=tx_lock
         )
         return Stream(output_schema=output_schema, state=state, input_schema=input_schema)
 
@@ -578,23 +582,38 @@ class _DmlState(ExchangeState):
         self,
         conn: duckdb.DuckDBPyConnection,
         qualified_name: str,
-        returning: bool,
+        result_mode: WriteResultMode,
         table_schema: pa.Schema,
         tx_lock: threading.Lock,
     ) -> None:
         self.conn = conn
         self.qualified_name = qualified_name
-        self.returning = returning
+        self.result_mode = result_mode
         self.table_schema = table_schema
         self.tx_lock = tx_lock
 
-    def _emit_result(self, result_batch: pa.RecordBatch, out: OutputCollector) -> None:
-        if self.returning:
+    def _emit_result(
+        self,
+        result_batch: pa.RecordBatch,
+        out: OutputCollector,
+        *,
+        old_batch: pa.RecordBatch | None = None,
+        new_batch: pa.RecordBatch | None = None,
+    ) -> None:
+        if self.result_mode == "rows":
             out.emit(
                 result_batch
                 if result_batch.num_rows > 0
                 else pa.record_batch({c: [] for c in self.table_schema.names}, schema=self.table_schema)
             )
+        elif self.result_mode == "changes":
+            row_count = max(
+                old_batch.num_rows if old_batch is not None else 0,
+                new_batch.num_rows if new_batch is not None else 0,
+            )
+            old_rows = old_batch.to_pylist() if old_batch is not None else [None] * row_count
+            new_rows = new_batch.to_pylist() if new_batch is not None else [None] * row_count
+            out.emit(write_changes_batch(self.table_schema, old_rows, new_rows))
         else:
             count = result_batch.column("Count")[0].as_py() if result_batch.num_rows > 0 else 0
             out.emit(pa.record_batch({"count": [count]}, schema=_COUNT_SCHEMA))
@@ -609,14 +628,14 @@ class _InsertState(_DmlState):
             col_names = ", ".join(batch.schema.names)
             view_name = _unique_batch_name("insert")
             sql = f"INSERT INTO {self.qualified_name} ({col_names}) SELECT * FROM {view_name}"  # noqa: S608
-            if self.returning:
+            if self.result_mode != "count":
                 ret_cols = ", ".join(self.table_schema.names)
                 sql += f" RETURNING {ret_cols}"
             self.conn.register(view_name, batch)
             result = self.conn.execute(sql)
             result_batch = _read_result_batch(result)
             self.conn.unregister(view_name)
-        self._emit_result(result_batch, out)
+        self._emit_result(result_batch, out, new_batch=result_batch)
 
 
 class _DeleteState(_DmlState):
@@ -627,7 +646,7 @@ class _DeleteState(_DmlState):
             batch = input.batch
             view_name = _unique_batch_name("delete")
             self.conn.register(view_name, batch)
-            if self.returning:
+            if self.result_mode != "count":
                 ret_cols = ", ".join(f"{self.qualified_name}.{c}" for c in self.table_schema.names)
                 select_sql = (
                     f"SELECT {ret_cols} FROM {self.qualified_name} "  # noqa: S608
@@ -645,7 +664,7 @@ class _DeleteState(_DmlState):
                 )
                 result_batch = _read_result_batch(result)
             self.conn.unregister(view_name)
-        self._emit_result(result_batch, out)
+        self._emit_result(result_batch, out, old_batch=result_batch)
 
 
 class _UpdateState(_DmlState):
@@ -657,18 +676,32 @@ class _UpdateState(_DmlState):
             view_name = _unique_batch_name("update")
             update_cols = [name for name in batch.schema.names if name != "rowid"]
             set_clause = ", ".join(f"{col} = {view_name}.{col}" for col in update_cols)
+            self.conn.register(view_name, batch)
+            old_batch = None
+            change_select_sql = None
+            if self.result_mode == "changes":
+                ret_cols = ", ".join(f"{self.qualified_name}.{c}" for c in self.table_schema.names)
+                change_select_sql = (
+                    f"SELECT {ret_cols} FROM {self.qualified_name} "  # noqa: S608
+                    f"JOIN {view_name} ON {self.qualified_name}.rowid = {view_name}.rowid "
+                    f"ORDER BY {self.qualified_name}.rowid"
+                )
+                old_batch = _read_result_batch(self.conn.execute(change_select_sql))
             sql = (
                 f"UPDATE {self.qualified_name} SET {set_clause} "  # noqa: S608
                 f"FROM {view_name} WHERE {self.qualified_name}.rowid = {view_name}.rowid"
             )
-            if self.returning:
+            if self.result_mode == "rows":
                 ret_cols = ", ".join(self.table_schema.names)
                 sql += f" RETURNING {ret_cols}"
-            self.conn.register(view_name, batch)
             result = self.conn.execute(sql)
             result_batch = _read_result_batch(result)
+            new_batch = result_batch if self.result_mode == "rows" else None
+            if change_select_sql is not None:
+                new_batch = _read_result_batch(self.conn.execute(change_select_sql))
+                result_batch = new_batch
             self.conn.unregister(view_name)
-        self._emit_result(result_batch, out)
+        self._emit_result(result_batch, out, old_batch=old_batch, new_batch=new_batch)
 
 
 class _ScanState(ProducerState):

@@ -129,11 +129,11 @@ class TestTableDescriptorWriteFields:
             )
 
 
-class TestTableInfoWriteFlags:
-    """TableInfo serialization includes write support flags."""
+class TestTableInfoWriteResultModes:
+    """TableInfo serializes per-operation maximum result modes."""
 
-    def test_write_flags_set_when_functions_present(self) -> None:
-        """Write flags are True when corresponding functions are set."""
+    def test_count_modes_inferred_when_functions_present(self) -> None:
+        """Configured functions default to the count result mode."""
         table = Table(
             name="t",
             function=WritableTableScan,
@@ -142,35 +142,63 @@ class TestTableInfoWriteFlags:
             delete_function=WritableTableDelete,
         )
         info = table.to_table_info(["main"])
-        assert info.supports_insert is True
-        assert info.supports_update is True
-        assert info.supports_delete is True
+        assert info.write_result_modes == {"insert": "count", "update": "count", "delete": "count"}
 
-    def test_write_flags_false_by_default(self) -> None:
-        """Write flags are False when no write functions are set."""
+    def test_read_only_table_has_empty_modes(self) -> None:
+        """An empty map describes a read-only table."""
         table = Table(
             name="t",
             function=WritableTableScan,
         )
         info = table.to_table_info(["main"])
-        assert info.supports_insert is False
-        assert info.supports_update is False
-        assert info.supports_delete is False
+        assert info.write_result_modes == {}
 
-    def test_partial_write_flags(self) -> None:
-        """Only the flags for defined write functions are True."""
+    def test_partial_write_modes(self) -> None:
+        """Only operations with functions appear in the map."""
         table = Table(
             name="t",
             function=WritableTableScan,
             insert_function=WritableTableInsert,
         )
         info = table.to_table_info(["main"])
-        assert info.supports_insert is True
-        assert info.supports_update is False
-        assert info.supports_delete is False
+        assert info.write_result_modes == {"insert": "count"}
+
+    def test_explicit_maximum_modes(self) -> None:
+        """Authors can opt each configured operation into rows or changes."""
+        table = Table(
+            name="t",
+            function=WritableTableScan,
+            insert_function=WritableTableInsert,
+            update_function=WritableTableUpdate,
+            write_result_modes={"insert": "rows", "update": "changes"},
+        )
+        assert table.to_table_info(["main"]).write_result_modes == {
+            "insert": "rows",
+            "update": "changes",
+        }
+
+    @pytest.mark.parametrize("modes", [{"merge": "count"}, {"insert": "invalid"}])
+    def test_invalid_modes_rejected(self, modes: dict[str, str]) -> None:
+        """Unknown operations and modes fail at descriptor construction."""
+        with pytest.raises(ValueError):
+            Table(
+                name="t",
+                columns=pa.schema([("id", pa.int64())]),
+                insert_function=WritableTableInsert,
+                write_result_modes=modes,
+            )
+
+    def test_mode_without_function_rejected(self) -> None:
+        """Capability metadata cannot claim a missing implementation."""
+        with pytest.raises(ValueError, match="without a corresponding update_function"):
+            Table(
+                name="t",
+                columns=pa.schema([("id", pa.int64())]),
+                write_result_modes={"update": "rows"},
+            )
 
     def test_table_info_serialization_roundtrip(self) -> None:
-        """Write flags survive Arrow serialization roundtrip."""
+        """Write modes survive Arrow serialization roundtrip."""
         table = Table(
             name="t",
             function=WritableTableScan,
@@ -181,9 +209,7 @@ class TestTableInfoWriteFlags:
         info = table.to_table_info(["main"])
         data = info.serialize_to_bytes()
         restored = TableInfo.deserialize_from_bytes(data)
-        assert restored.supports_insert is True
-        assert restored.supports_update is True
-        assert restored.supports_delete is True
+        assert restored.write_result_modes == {"insert": "count", "update": "count", "delete": "count"}
 
 
 class TestReadOnlyCatalogInterfaceWriteMethods:

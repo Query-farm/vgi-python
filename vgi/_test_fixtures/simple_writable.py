@@ -13,7 +13,7 @@ Three pre-defined tables are exposed under the ``main`` schema:
 
 * ``items`` — supports INSERT/UPDATE/DELETE with RETURNING.
 * ``items_no_returning`` — supports INSERT/UPDATE/DELETE *without* RETURNING.
-  Used to exercise the supports_returning=False rejection path.
+  Used to exercise the ``count``-only RETURNING rejection path.
 * ``items_insert_only`` — supports INSERT only (no UPDATE/DELETE/RETURNING).
 
 State is held module-global, keyed by ``attach_opaque_data``. Per the
@@ -60,6 +60,7 @@ from vgi.schema_utils import schema as build_schema
 from vgi.table_function import BindParams, InitParams, ProcessParams, TableFunctionGenerator
 from vgi.table_in_out_function import TableInOutGenerator
 from vgi.worker import Worker
+from vgi.write_results import WriteResultMode, coerce_write_result_mode, write_changes_batch, write_result_schema
 
 if TYPE_CHECKING:
     from vgi.catalog.catalog_interface import (
@@ -82,7 +83,7 @@ CATALOG_NAME = "simple_writable"
 _ROWID_FIELD = pa.field("rowid", pa.int64(), metadata={b"is_row_id": b""})
 
 # Output schema for write functions returning affected row counts.
-_COUNT_SCHEMA = build_schema(count=pa.int64())
+_COUNT_SCHEMA = pa.schema([pa.field("count", pa.int64(), nullable=False)])
 
 
 # ============================================================================
@@ -116,7 +117,7 @@ def _table_specs() -> dict[str, pa.Schema]:
         "items": build_schema(id=pa.int64(), name=pa.string(), qty=pa.int64()),
         "items_no_returning": build_schema(id=pa.int64(), name=pa.string(), qty=pa.int64()),
         "items_insert_only": build_schema(id=pa.int64(), name=pa.string()),
-        # Lies: catalog advertises supports_returning=True but the insert
+        # Lies: catalog advertises rows support but the insert
         # function always emits a (count BIGINT) batch. Used by tests to verify
         # the C++ extension rejects the mismatched batch with a clean IOException
         # instead of crashing inside ArrowToDuckDB.
@@ -124,8 +125,12 @@ def _table_specs() -> dict[str, pa.Schema]:
     }
 
 
-def _table_supports_returning(name: str) -> bool:
-    return name != "items_no_returning"
+def _table_result_mode(name: str) -> str:
+    if name == "items_no_returning":
+        return "count"
+    if name == "items_broken_returning":
+        return "rows"
+    return "changes"
 
 
 def _table_supports_update_delete(name: str) -> bool:
@@ -224,25 +229,50 @@ def _attach_opaque_data_from_process(params: ProcessParams[None]) -> bytes:
     return bytes(aid)
 
 
-def _parse_write_options(params: BindParams[None]) -> dict[str, Any]:
+def _parse_write_options(params: BindParams[None] | ProcessParams[None]) -> dict[str, Any]:
     """Decode the write_options batch passed in named arguments."""
-    defaults: dict[str, Any] = {"return_chunks": False, "on_conflict": "throw", "on_conflict_columns": []}
-    if not (params.bind_call.arguments and params.bind_call.arguments.named):
+    defaults: dict[str, Any] = {"result_mode": "count", "on_conflict": "throw", "on_conflict_columns": []}
+    if isinstance(params, BindParams):
+        bind_call = params.bind_call
+    else:
+        assert params.init_call is not None
+        bind_call = params.init_call.bind_call
+    if not (bind_call.arguments and bind_call.arguments.named):
         return defaults
-    val = params.bind_call.arguments.named.get("write_options")
+    val = bind_call.arguments.named.get("write_options")
     if val is None:
         return defaults
     from vgi_rpc.utils import deserialize_record_batch
 
     batch, _ = deserialize_record_batch(val.as_py())
     out = dict(defaults)
-    if "return_chunks" in batch.schema.names:
-        out["return_chunks"] = batch.column("return_chunks")[0].as_py()
+    if "result_mode" in batch.schema.names:
+        out["result_mode"] = coerce_write_result_mode(batch.column("result_mode")[0].as_py())
     if "on_conflict" in batch.schema.names:
         out["on_conflict"] = batch.column("on_conflict")[0].as_py()
     if "on_conflict_columns" in batch.schema.names:
         out["on_conflict_columns"] = batch.column("on_conflict_columns")[0].as_py()
     return out
+
+
+def _emit_changes(
+    out: OutputCollector,
+    table_schema: pa.Schema,
+    old_rows: Sequence[tuple[Any, ...] | None],
+    new_rows: Sequence[tuple[Any, ...] | None],
+) -> None:
+    names = table_schema.names
+
+    def as_struct(row: tuple[Any, ...] | None) -> dict[str, Any] | None:
+        return None if row is None else dict(zip(names, row, strict=True))
+
+    out.emit(
+        write_changes_batch(
+            table_schema,
+            [as_struct(row) for row in old_rows],
+            [as_struct(row) for row in new_rows],
+        )
+    )
 
 
 def _user_schema_from_bind(params: BindParams[None]) -> pa.Schema:
@@ -329,9 +359,8 @@ class SimpleInsert(TableInOutGenerator[None, None]):
     @classmethod
     def on_bind(cls, params: BindParams[None]) -> BindResponse:
         opts = _parse_write_options(params)
-        if opts["return_chunks"]:
-            return BindResponse(output_schema=_user_schema_from_bind(params))
-        return BindResponse(output_schema=_COUNT_SCHEMA)
+        mode = opts["result_mode"]
+        return BindResponse(output_schema=write_result_schema(mode, _user_schema_from_bind(params)))
 
     @classmethod
     def process(
@@ -345,7 +374,7 @@ class SimpleInsert(TableInOutGenerator[None, None]):
         attach_opaque_data = _attach_opaque_data_from_process(params)
         bare = _bare_name(qualified)
         user_schema = _get_user_schema(qualified)
-        return_chunks = params.output_schema != _COUNT_SCHEMA
+        result_mode: WriteResultMode = _parse_write_options(params)["result_mode"]
 
         col_names = [f.name for f in user_schema]
         cols_sql = ", ".join(f'"{c}"' for c in col_names)
@@ -362,12 +391,14 @@ class SimpleInsert(TableInOutGenerator[None, None]):
             )
             conn.execute("COMMIT")
 
-        if return_chunks:
+        if result_mode == "rows":
             out_cols: dict[str, list[Any]] = {c: [] for c in col_names}
             for row in rows_to_insert:
                 for c, v in zip(col_names, row, strict=True):
                     out_cols[c].append(v)
             out.emit(pa.RecordBatch.from_pydict(out_cols, schema=user_schema))
+        elif result_mode == "changes":
+            _emit_changes(out, user_schema, [None] * len(rows_to_insert), rows_to_insert)
         else:
             out.emit(pa.RecordBatch.from_pydict({"count": [batch.num_rows]}, schema=_COUNT_SCHEMA))
 
@@ -381,9 +412,8 @@ class SimpleUpdate(TableInOutGenerator[None, None]):
     @classmethod
     def on_bind(cls, params: BindParams[None]) -> BindResponse:
         opts = _parse_write_options(params)
-        if opts["return_chunks"]:
-            return BindResponse(output_schema=_user_schema_from_bind(params))
-        return BindResponse(output_schema=_COUNT_SCHEMA)
+        mode = opts["result_mode"]
+        return BindResponse(output_schema=write_result_schema(mode, _user_schema_from_bind(params)))
 
     @classmethod
     def process(
@@ -397,7 +427,7 @@ class SimpleUpdate(TableInOutGenerator[None, None]):
         attach_opaque_data = _attach_opaque_data_from_process(params)
         bare = _bare_name(qualified)
         user_schema = _get_user_schema(qualified)
-        return_chunks = params.output_schema != _COUNT_SCHEMA
+        result_mode: WriteResultMode = _parse_write_options(params)["result_mode"]
 
         update_cols = [n for n in batch.schema.names if n != "rowid"]
         set_clause = ", ".join(f'"{c}"=?' for c in update_cols)
@@ -405,23 +435,31 @@ class SimpleUpdate(TableInOutGenerator[None, None]):
         select_list = ", ".join(f'"{c}"' for c in user_col_names)
 
         rowid_col = batch.column("rowid")
+        old_rows: list[tuple[Any, ...]] = []
         updated: list[tuple[Any, ...]] = []
         with _connect(attach_opaque_data) as conn:
             conn.execute("BEGIN")
             for i in range(batch.num_rows):
                 rowid = rowid_col[i].as_py()
+                old_row = conn.execute(f'SELECT {select_list} FROM "{bare}" WHERE rowid=?', (rowid,)).fetchone()
+                if old_row is None:
+                    conn.execute("ROLLBACK")
+                    raise ValueError(f"Update target rowid {rowid} not in table {qualified}")
                 values = tuple(batch.column(c)[i].as_py() for c in update_cols)
                 cur = conn.execute(f'UPDATE "{bare}" SET {set_clause} WHERE rowid=?', (*values, rowid))
                 if cur.rowcount == 0:
                     conn.execute("ROLLBACK")
                     raise ValueError(f"Update target rowid {rowid} not in table {qualified}")
                 row = conn.execute(f'SELECT {select_list} FROM "{bare}" WHERE rowid=?', (rowid,)).fetchone()
+                old_rows.append(old_row)
                 updated.append(row)
             conn.execute("COMMIT")
 
-        if return_chunks:
+        if result_mode == "rows":
             cols = {c: [row[i] for row in updated] for i, c in enumerate(user_col_names)}
             out.emit(pa.RecordBatch.from_pydict(cols, schema=user_schema))
+        elif result_mode == "changes":
+            _emit_changes(out, user_schema, old_rows, updated)
         else:
             out.emit(pa.RecordBatch.from_pydict({"count": [batch.num_rows]}, schema=_COUNT_SCHEMA))
 
@@ -435,9 +473,8 @@ class SimpleDelete(TableInOutGenerator[None, None]):
     @classmethod
     def on_bind(cls, params: BindParams[None]) -> BindResponse:
         opts = _parse_write_options(params)
-        if opts["return_chunks"]:
-            return BindResponse(output_schema=_user_schema_from_bind(params))
-        return BindResponse(output_schema=_COUNT_SCHEMA)
+        mode = opts["result_mode"]
+        return BindResponse(output_schema=write_result_schema(mode, _user_schema_from_bind(params)))
 
     @classmethod
     def process(
@@ -451,7 +488,7 @@ class SimpleDelete(TableInOutGenerator[None, None]):
         attach_opaque_data = _attach_opaque_data_from_process(params)
         bare = _bare_name(qualified)
         user_schema = _get_user_schema(qualified)
-        return_chunks = params.output_schema != _COUNT_SCHEMA
+        result_mode: WriteResultMode = _parse_write_options(params)["result_mode"]
 
         user_col_names = [f.name for f in user_schema]
         select_list = ", ".join(f'"{c}"' for c in user_col_names)
@@ -470,9 +507,11 @@ class SimpleDelete(TableInOutGenerator[None, None]):
                 deleted.append(row)
             conn.execute("COMMIT")
 
-        if return_chunks:
+        if result_mode == "rows":
             cols = {c: [row[i] for row in deleted] for i, c in enumerate(user_col_names)}
             out.emit(pa.RecordBatch.from_pydict(cols, schema=user_schema))
+        elif result_mode == "changes":
+            _emit_changes(out, user_schema, deleted, [None] * len(deleted))
         else:
             out.emit(pa.RecordBatch.from_pydict({"count": [batch.num_rows]}, schema=_COUNT_SCHEMA))
 
@@ -491,7 +530,7 @@ class BrokenReturningInsert(TableInOutGenerator[None, None]):
 
     @classmethod
     def on_bind(cls, params: BindParams[None]) -> BindResponse:
-        # Always advertise the count surface, even when return_chunks=True.
+        # Always advertise the count surface, even when result_mode=rows.
         # The C++ side will see this at bind via the worker's output schema and
         # tries to route the responses through ArrowToDuckDB on the table-row
         # schema — that mismatch is what we want to catch at runtime.
@@ -524,7 +563,7 @@ class BrokenReturningInsert(TableInOutGenerator[None, None]):
                 rows_to_insert,
             )
             conn.execute("COMMIT")
-        # Always emit count, regardless of return_chunks — that's the bug.
+        # Always emit count, regardless of result_mode — that's the bug.
         out.emit(pa.RecordBatch.from_pydict({"count": [batch.num_rows]}, schema=_COUNT_SCHEMA))
 
 
@@ -619,10 +658,11 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
             check_constraints=[],
             primary_key_constraints=[],
             foreign_key_constraints=[],
-            supports_insert=True,
-            supports_update=ud,
-            supports_delete=ud,
-            supports_returning=_table_supports_returning(name),
+            write_result_modes={
+                operation: _table_result_mode(name)
+                for operation, supported in (("insert", True), ("update", ud), ("delete", ud))
+                if supported
+            },
         )
 
     def table_get(
