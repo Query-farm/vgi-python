@@ -63,6 +63,7 @@ __all__ = [
     "FunctionStability",
     "CatalogFunctionType",
     "NullHandling",
+    "ArgumentMonotonicity",
     "OrderPreservation",
     "OrderDependence",
     "DistinctDependence",
@@ -230,6 +231,32 @@ class NullHandling(Enum):
 
     SPECIAL = auto()
     """Function handles NULLs specially (e.g., COALESCE, IFNULL)."""
+
+
+class ArgumentMonotonicity(Enum):
+    """Monotonicity of a scalar function in one argument.
+
+    Each declaration describes how the result changes as that argument changes
+    while every other argument is held constant.
+    """
+
+    UNKNOWN = auto()
+    """No monotonicity claim is made for this argument."""
+
+    CONSTANT = auto()
+    """The result does not change with this argument."""
+
+    NON_DECREASING = auto()
+    """Increasing the argument cannot decrease the result."""
+
+    STRICTLY_INCREASING = auto()
+    """Increasing the argument strictly increases the result."""
+
+    NON_INCREASING = auto()
+    """Increasing the argument cannot increase the result."""
+
+    STRICTLY_DECREASING = auto()
+    """Increasing the argument strictly decreases the result."""
 
 
 class OrderPreservation(Enum):
@@ -464,6 +491,10 @@ class ResolvedMetadata:
             descriptors.
         stability: Scalar evaluation stability (CONSISTENT, VOLATILE, …).
         null_handling: Whether NULL inputs are passed through or handled.
+        argument_monotonicity: Optional scalar-only properties aligned with the
+            ordered argument declarations. A vararg is one declaration slot;
+            named invocation order does not affect this list. ``None`` means no
+            claims.
         required_settings: DuckDB settings the function needs at runtime.
         required_secrets: Secrets the function needs (each entry carries
             secret_type, optional secret_name, optional scope).
@@ -539,6 +570,7 @@ class ResolvedMetadata:
     # Behavior (all functions)
     stability: FunctionStability = FunctionStability.CONSISTENT
     null_handling: NullHandling = NullHandling.DEFAULT
+    argument_monotonicity: list[ArgumentMonotonicity] | None = None
 
     # settings required by the function
     required_settings: list[str] = field(default_factory=list)
@@ -629,6 +661,9 @@ class ResolvedMetadata:
             "parameters": [p.to_dict() for p in self.parameters],
             "stability": self.stability.name,
             "null_handling": self.null_handling.name,
+            "argument_monotonicity": (
+                [value.name for value in self.argument_monotonicity] if self.argument_monotonicity is not None else None
+            ),
             "required_settings": self.required_settings,
             "required_secrets": [e.to_dict() for e in self.required_secrets],
             "projection_pushdown": self.projection_pushdown,
@@ -673,6 +708,11 @@ class ResolvedMetadata:
             parameters=[ParameterInfo.from_dict(p) for p in d.get("parameters", [])],
             stability=FunctionStability[d.get("stability", "CONSISTENT")],
             null_handling=NullHandling[d.get("null_handling", "DEFAULT")],
+            argument_monotonicity=(
+                [ArgumentMonotonicity[value] for value in d["argument_monotonicity"]]
+                if d.get("argument_monotonicity") is not None
+                else None
+            ),
             required_settings=d.get("required_settings", []),
             required_secrets=[SecretLookupEntry.from_dict(e) for e in d.get("required_secrets", [])],
             projection_pushdown=d.get("projection_pushdown", False),
@@ -1086,6 +1126,7 @@ _VALID_META_ATTRIBUTES: frozenset[str] = frozenset(
         "tags",
         "stability",
         "null_handling",
+        "argument_monotonicity",
         "required_settings",  # settings/pragmas required by function
         "required_secrets",  # secrets required by function
         # Table function specific
@@ -1344,6 +1385,21 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
             )
             existing_secret_types.add(secret.secret_type)
 
+    argument_monotonicity = attrs.get("argument_monotonicity")
+    if argument_monotonicity is not None:
+        if function_type is not CatalogFunctionType.SCALAR:
+            raise TypeError(f"{cls.__name__}: Meta.argument_monotonicity is only valid for scalar functions")
+        if not isinstance(argument_monotonicity, list):
+            raise TypeError(f"{cls.__name__}: Meta.argument_monotonicity must be a list or None")
+        if len(argument_monotonicity) != len(parameters):
+            raise ValueError(
+                f"{cls.__name__}: Meta.argument_monotonicity has {len(argument_monotonicity)} entries "
+                f"but the function declares {len(parameters)} argument slots"
+            )
+        for index, value in enumerate(argument_monotonicity):
+            if not isinstance(value, ArgumentMonotonicity):
+                raise TypeError(f"{cls.__name__}: Meta.argument_monotonicity[{index}] must be an ArgumentMonotonicity")
+
     runtime_filter_algorithms = attrs.get("runtime_filter_algorithms", [])
     if runtime_filter_algorithms:
         raise ValueError("Python SDK has no registered runtime-filter artifact evaluator to advertise")
@@ -1360,6 +1416,7 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         parameters=parameters,
         stability=attrs.get("stability", FunctionStability.CONSISTENT),
         null_handling=attrs.get("null_handling", NullHandling.DEFAULT),
+        argument_monotonicity=argument_monotonicity,
         required_settings=meta_required_settings,
         required_secrets=meta_required_secrets,
         projection_pushdown=attrs.get("projection_pushdown", False),
@@ -1561,6 +1618,7 @@ _METADATA_SCHEMA = pa.schema(
         pa.field("parameters", pa.list_(_PARAMETER_STRUCT)),
         pa.field("stability", pa.string()),
         pa.field("null_handling", pa.string()),
+        pa.field("argument_monotonicity", pa.list_(pa.string()), nullable=True),
         pa.field("required_settings", pa.list_(pa.string())),
         pa.field("required_secrets", pa.list_(_SECRET_REQUIREMENT_STRUCT)),
         pa.field("projection_pushdown", pa.bool_()),

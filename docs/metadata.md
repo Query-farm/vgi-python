@@ -82,6 +82,7 @@ info = SumValuesFunction.describe()
 | `max_workers` | `int\|None` | `None` (unlimited) | Max parallel workers |
 | `stability` | `FunctionStability` | `CONSISTENT` | Output determinism |
 | `null_handling` | `NullHandling` | `DEFAULT` | NULL input behavior |
+| `argument_monotonicity` | `list[ArgumentMonotonicity]\|None` | `None` | Scalar-only monotonicity claims in argument declaration order |
 | `required_settings` | `list[str]` | `[]` | Required DuckDB settings |
 | `projection_pushdown` | `bool` | `True` | Enable column pruning |
 | `filter_pushdown` | `bool` | `False` | Enable filter pushdown |
@@ -89,6 +90,14 @@ info = SumValuesFunction.describe()
 | `order_dependent` | `OrderDependence` | `NOT_ORDER_DEPENDENT` | Aggregate order sensitivity |
 | `distinct_dependent` | `DistinctDependence` | `NOT_DISTINCT_DEPENDENT` | Aggregate DISTINCT sensitivity |
 | `output_type` | `pa.DataType\|AnyArrow` | Required for ScalarFunction | Scalar output type |
+
+`argument_monotonicity` is only valid on scalar functions. When present, it
+contains exactly one entry for every field in the function's argument schema.
+Fixed, defaulted, and constant parameters each occupy one entry, and a vararg
+declaration also occupies one entry regardless of how many values a call
+supplies. The ordering is the declaration order, so named SQL calls do not
+reorder the metadata. Use `None` to make no claims; use
+`ArgumentMonotonicity.UNKNOWN` for an explicitly unknown individual slot.
 
 ## Metadata Inheritance
 

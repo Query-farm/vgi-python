@@ -40,6 +40,7 @@ from vgi_rpc.utils import deserialize_record_batch, serialize_record_batch_bytes
 from vgi.arguments import Arguments, SecretLookupEntry
 from vgi.exceptions import CatalogReadOnlyError
 from vgi.metadata import (
+    ArgumentMonotonicity,
     DistinctDependence,
     EvaluationContextCapability,
     FilterFunctionCapability,
@@ -696,6 +697,10 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
             functions).
         null_handling: Scalar function behavior field (None for non-scalar
             functions).
+        argument_monotonicity: Scalar-only properties aligned with the ordered
+            fields in ``arguments``. A present list has exactly one entry per
+            declaration slot, including one for a vararg declaration. ``None``
+            means no claims.
         description: Intrinsic documentation from function metadata
             (``Meta.description``). ``comment`` (inherited from the base
             object) is a separate, shorter operator-facing note from
@@ -801,6 +806,7 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
 
     stability: FunctionStability | None = None
     null_handling: NullHandling | None = None
+    argument_monotonicity: Annotated[list[ArgumentMonotonicity] | None, ArrowType(pa.list_(pa.string()))] = None
 
     description: str = ""
     examples: list[CatalogExample] = field(default_factory=list)
@@ -856,6 +862,22 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     required_settings: list[str] = field(default_factory=list)
 
     required_secrets: list[SecretLookupEntry] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        """Validate scalar-only argument monotonicity claims."""
+        if self.argument_monotonicity is None:
+            return
+        if self.function_type is not FunctionType.SCALAR:
+            raise ValueError("argument_monotonicity is only valid for scalar functions")
+        argument_schema = pa.ipc.read_schema(pa.py_buffer(self.arguments))
+        if len(self.argument_monotonicity) != len(argument_schema):
+            raise ValueError(
+                f"argument_monotonicity has {len(self.argument_monotonicity)} entries "
+                f"but arguments has {len(argument_schema)} declaration slots"
+            )
+        for index, value in enumerate(self.argument_monotonicity):
+            if not isinstance(value, ArgumentMonotonicity):
+                raise ValueError(f"argument_monotonicity[{index}] is not a valid ArgumentMonotonicity")
 
 
 @dataclass(frozen=True)
@@ -3465,6 +3487,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             # Scalar/aggregate function behavior fields
             stability=meta.stability if is_scalar else None,
             null_handling=meta.null_handling if (is_scalar or is_aggregate) else None,
+            argument_monotonicity=meta.argument_monotonicity if is_scalar else None,
             # Documentation fields
             description=meta.description or "",  # Intrinsic from Meta.description
             examples=[

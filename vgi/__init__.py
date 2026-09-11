@@ -80,6 +80,7 @@ from vgi.filter_v2_builder import (
     value_payload,
 )
 from vgi.metadata import (
+    ArgumentMonotonicity,
     CatalogFunctionType,
     EvaluationContextCapability,
     FilterFunctionCapability,
@@ -138,6 +139,7 @@ __all__ = [
     "ArgumentSpec",
     "ArgumentValidationError",
     "Arguments",
+    "ArgumentMonotonicity",
     "Auth",
     "AuthContext",
     "CallContext",

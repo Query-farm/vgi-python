@@ -10,7 +10,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from vgi.arguments import ConstParam, Param, Returns
-from vgi.metadata import FunctionExample, NullHandling
+from vgi.metadata import ArgumentMonotonicity, FunctionExample, NullHandling
 from vgi.scalar_function import ScalarFunction
 
 
@@ -87,6 +87,7 @@ class NullHandlingFunction(ScalarFunction):
         name = "null_handling"
         description = "Returns value or -5000 if null"
         null_handling = NullHandling.SPECIAL
+        argument_monotonicity = [ArgumentMonotonicity.STRICTLY_INCREASING]
         examples = [
             FunctionExample(
                 sql="SELECT null_handling(value) FROM data",

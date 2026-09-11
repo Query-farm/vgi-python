@@ -28,6 +28,7 @@ from vgi.catalog import (
     ViewInfo,
 )
 from vgi.catalog.catalog_interface import (
+    ArgumentMonotonicity,
     DistinctDependence,
     FunctionStability,
     MacroType,
@@ -575,6 +576,7 @@ class TestFunctionInfoNewFields:
         # Scalar behavior fields default to None (set by _function_to_info)
         assert info.stability is None
         assert info.null_handling is None
+        assert info.argument_monotonicity is None
 
         # Documentation fields
         assert info.examples == []
@@ -606,6 +608,7 @@ class TestFunctionInfoNewFields:
             tags={},
             stability=FunctionStability.VOLATILE,
             null_handling=NullHandling.SPECIAL,
+            argument_monotonicity=[],
             examples=[
                 CatalogExample(sql="SELECT test_func(1)"),
                 CatalogExample(sql="SELECT test_func(2)"),
@@ -634,6 +637,7 @@ class TestFunctionInfoNewFields:
         # New fields
         assert restored.stability == info.stability
         assert restored.null_handling == info.null_handling
+        assert restored.argument_monotonicity == info.argument_monotonicity
         # Examples are deserialized to CatalogExample objects
         assert len(restored.examples) == len(info.examples)
         for restored_ex, orig_ex in zip(restored.examples, info.examples, strict=True):
@@ -660,6 +664,7 @@ class TestFunctionInfoNewFields:
             tags={},
             stability=FunctionStability.CONSISTENT_WITHIN_QUERY,
             null_handling=NullHandling.SPECIAL,
+            argument_monotonicity=[],
             order_preservation=OrderPreservation.NO_ORDER_GUARANTEE,
             order_dependent=OrderDependence.ORDER_DEPENDENT,
             distinct_dependent=DistinctDependence.DISTINCT_DEPENDENT,
@@ -672,6 +677,7 @@ class TestFunctionInfoNewFields:
         row = batch.to_pydict()
         assert row["stability"][0] == "CONSISTENT_WITHIN_QUERY"
         assert row["null_handling"][0] == "SPECIAL"
+        assert row["argument_monotonicity"][0] == []
         assert row["order_preservation"][0] == "NO_ORDER_GUARANTEE"
         assert row["order_dependent"][0] == "ORDER_DEPENDENT"
         assert row["distinct_dependent"][0] == "DISTINCT_DEPENDENT"
@@ -680,9 +686,55 @@ class TestFunctionInfoNewFields:
         restored = FunctionInfo.deserialize_from_batch(batch)
         assert restored.stability == FunctionStability.CONSISTENT_WITHIN_QUERY
         assert restored.null_handling == NullHandling.SPECIAL
+        assert restored.argument_monotonicity == []
         assert restored.order_preservation == OrderPreservation.NO_ORDER_GUARANTEE
         assert restored.order_dependent == OrderDependence.ORDER_DEPENDENT
         assert restored.distinct_dependent == DistinctDependence.DISTINCT_DEPENDENT
+
+    def test_argument_monotonicity_round_trip_uses_argument_order(self) -> None:
+        """Claims use the serialized declaration order, including named slots."""
+        arguments = SerializedSchema(
+            pa.schema([pa.field("value", pa.int64()), pa.field("offset", pa.int64())]).serialize().to_pybytes()
+        )
+        info = FunctionInfo(
+            name="shift",
+            schema_path=["main"],
+            function_type=FunctionType.SCALAR,
+            arguments=arguments,
+            output_schema=empty_schema_bytes(),
+            comment=None,
+            tags={},
+            argument_monotonicity=[
+                ArgumentMonotonicity.STRICTLY_INCREASING,
+                ArgumentMonotonicity.NON_DECREASING,
+            ],
+        )
+
+        batch, _ = deserialize_record_batch(info.serialize_to_bytes())
+        assert batch.to_pydict()["argument_monotonicity"][0] == ["STRICTLY_INCREASING", "NON_DECREASING"]
+        assert FunctionInfo.deserialize_from_batch(batch).argument_monotonicity == info.argument_monotonicity
+
+    def test_argument_monotonicity_rejects_invalid_shape(self) -> None:
+        """The DTO rejects non-scalar and misaligned claims."""
+        arguments = SerializedSchema(pa.schema([pa.field("value", pa.int64())]).serialize().to_pybytes())
+        common = {
+            "name": "bad",
+            "schema_path": ["main"],
+            "arguments": arguments,
+            "output_schema": empty_schema_bytes(),
+            "comment": None,
+            "tags": {},
+            "argument_monotonicity": [ArgumentMonotonicity.UNKNOWN],
+        }
+
+        with pytest.raises(ValueError, match="only valid for scalar functions"):
+            FunctionInfo(function_type=FunctionType.TABLE, **common)
+
+        with pytest.raises(ValueError, match="1 declaration slots"):
+            FunctionInfo(
+                function_type=FunctionType.SCALAR,
+                **{**common, "argument_monotonicity": []},
+            )
 
     def test_v2_record_without_optional_fields(self) -> None:
         """Deserialize a protocol-v2 record that omits optional fields."""

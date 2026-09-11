@@ -128,6 +128,7 @@ Information about a function in a schema:
 | `arguments` | `SerializedSchema` | Argument schema as Arrow bytes |
 | `output_schema` | `SerializedSchema` | Output schema as Arrow bytes |
 | `parameter_default_values` | `pa.RecordBatch \| None` | One-row typed defaults batch containing only defaulted parameters in signature order; a present null is an explicit `NULL` default |
+| `argument_monotonicity` | `list[ArgumentMonotonicity] \| None` | Scalar-only claims aligned exactly with `arguments`; a vararg declaration occupies one slot |
 | `comment` | `str \| None` | Optional description |
 | `tags` | `dict[str, str]` | Key-value metadata |
 

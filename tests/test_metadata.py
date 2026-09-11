@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import Any
 
 import pyarrow as pa
+import pytest
 from vgi_rpc.rpc import OutputCollector
 
 from vgi import (
@@ -19,6 +20,7 @@ from vgi import (
     functions_to_arrow,
 )
 from vgi.metadata import (
+    ArgumentMonotonicity,
     arrow_to_functions,
     extract_parameters,
     resolve_metadata,
@@ -398,6 +400,90 @@ class TestHasFinalizeDetection:
                 return x
 
         assert resolve_metadata(ScalarWithFinalize).has_finalize is False
+
+
+class TestArgumentMonotonicity:
+    """Tests for scalar-only per-declaration monotonicity metadata."""
+
+    def test_scalar_metadata_round_trip(self) -> None:
+        """A unary scalar claim survives metadata resolution and Arrow IPC."""
+        from typing import Annotated
+
+        from vgi.arguments import Param, Returns
+        from vgi.scalar_function import ScalarFunction
+
+        class IdentityFunction(ScalarFunction):
+            class Meta:
+                argument_monotonicity = [ArgumentMonotonicity.STRICTLY_INCREASING]
+
+            @classmethod
+            def compute(
+                cls,
+                value: Annotated[pa.Int64Array, Param()],
+            ) -> Annotated[pa.Int64Array, Returns()]:
+                return value
+
+        metadata = resolve_metadata(IdentityFunction)
+        assert metadata.argument_monotonicity == [ArgumentMonotonicity.STRICTLY_INCREASING]
+
+        restored = arrow_to_functions(functions_to_arrow([IdentityFunction]))[0]
+        assert restored.argument_monotonicity == [ArgumentMonotonicity.STRICTLY_INCREASING]
+
+    def test_entry_count_must_match_declaration_slots(self) -> None:
+        """A list is aligned with declarations rather than a particular call."""
+        from typing import Annotated
+
+        from vgi.arguments import Param, Returns
+        from vgi.scalar_function import ScalarFunction
+
+        class BadCountFunction(ScalarFunction):
+            class Meta:
+                argument_monotonicity: list[ArgumentMonotonicity] = []
+
+            @classmethod
+            def compute(
+                cls,
+                value: Annotated[pa.Int64Array, Param()],
+            ) -> Annotated[pa.Int64Array, Returns()]:
+                return value
+
+        with pytest.raises(ValueError, match="1 argument slots"):
+            resolve_metadata(BadCountFunction)
+
+    def test_varargs_declaration_occupies_one_slot(self) -> None:
+        """Call-time vararg expansion does not expand metadata declarations."""
+        from typing import Annotated
+
+        from vgi.arguments import Param, Returns
+        from vgi.scalar_function import ScalarFunction
+
+        class VarargsFunction(ScalarFunction):
+            class Meta:
+                argument_monotonicity = [ArgumentMonotonicity.NON_DECREASING]
+
+            @classmethod
+            def compute(
+                cls,
+                values: Annotated[list[pa.Array[Any]], Param(varargs=True)],
+            ) -> Annotated[pa.Array[Any], Returns()]:
+                return values[0]
+
+        metadata = resolve_metadata(VarargsFunction)
+        assert len(metadata.parameters) == 1
+        assert metadata.parameters[0].is_varargs is True
+        assert metadata.argument_monotonicity == [ArgumentMonotonicity.NON_DECREASING]
+
+    def test_rejected_for_non_scalar_function(self) -> None:
+        """DuckDB exposes argument properties only on scalar functions."""
+
+        class BadTableFunction(TableInOutFunction):  # type: ignore[type-arg]
+            class Meta:
+                argument_monotonicity = [ArgumentMonotonicity.UNKNOWN]
+
+            data: TableInput = Arg[TableInput](0, doc="Input table")  # type: ignore[assignment]
+
+        with pytest.raises(TypeError, match="only valid for scalar functions"):
+            resolve_metadata(BadTableFunction)
 
 
 class TestArrowSerialization:

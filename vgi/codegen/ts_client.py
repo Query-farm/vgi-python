@@ -419,8 +419,6 @@ def emit(out: TextIO) -> None:
         body.write(
             f"export const decode{ts_name} = (b: Uint8Array): {ts_name} => decodeASD<{ts_name}>({schema_ref}, b);\n",
         )
-    body.write("\n")
-
     out.write("// ============================================================================\n")
     out.write(
         provenance_comment(

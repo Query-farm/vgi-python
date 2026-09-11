@@ -1,6 +1,6 @@
 # Proposed VGI protocol changes for DuckDB 2.0
 
-**Status:** design/audit report, not an implementation specification
+**Status:** design/audit report; the argument-monotonicity subsection records an accepted VGI 2.0 protocol addition
 **Audit date:** 2026-09-09
 **Filter-v2 decision:** 2026-09-09 — mandatory in VGI 2.0; no v1 compatibility path
 **DuckDB range examined:** `v1.5.5..03a1639e3bba0e50bab4c341ebc89137c86b793a` (`v2.0-cyanoptera` plus the multi-column table-function pushdown branch)
@@ -409,15 +409,30 @@ DuckDB replaces the old dynamic-to-string hook with `get_metrics` and `OperatorM
 
 ### Function metadata
 
-DuckDB 2.0 adds optimizer-facing per-argument monotonicity and strengthens fallibility handling. VGI already transports scalar stability and null handling, but not monotonicity or “can throw at runtime.” Defaults are conservative in the optimizer, so these are optional metadata additions:
+DuckDB 2.0 adds optimizer-facing per-argument monotonicity and strengthens
+fallibility handling. VGI 2.0 adds the following nullable field immediately
+after `FunctionInfo.null_handling`:
 
 ```text
-error_mode: unknown | cannot_throw | can_throw_runtime_error
-argument_monotonicity: list[unknown | constant | non_decreasing | strictly_increasing |
-                            non_increasing | strictly_decreasing]
+argument_monotonicity: list<utf8>?
 ```
 
-Do not claim `cannot_throw` for remote functions unless transport, worker code, and data-dependent errors are all covered by that guarantee.
+The allowed strings are `UNKNOWN`, `CONSTANT`, `NON_DECREASING`,
+`STRICTLY_INCREASING`, `NON_INCREASING`, and `STRICTLY_DECREASING`. This field
+is valid only for scalar functions. Null means that the function makes no
+claims. A present list contains exactly one non-null entry for every ordered
+field in `FunctionInfo.arguments`. Fixed, defaulted, and constant parameters
+each occupy a slot; a vararg declaration occupies one slot and its property
+applies independently to every expansion. The order is declaration order and
+is unaffected by `BindRequest.argument_names` or named call syntax.
+
+The DuckDB 1.5 extension validates and preserves this metadata using VGI-owned
+types, but does not apply it to the optimizer. A DuckDB 2.0 adapter can later
+map the same values to `ArgProperties` without changing the wire format.
+
+`error_mode` remains out of scope. In particular, VGI must not claim that a
+remote function cannot throw unless transport, worker code, and all
+data-dependent failures are covered by that guarantee.
 
 ## 6. Catalog and DML features to reject explicitly unless separately designed
 
