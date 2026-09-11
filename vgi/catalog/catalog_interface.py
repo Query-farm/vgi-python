@@ -73,6 +73,7 @@ _FILTER_CONTEXT_LIST_TYPE = pa.list_(
 
 __all__ = [
     # Re-exported from vgi.metadata
+    "ArgumentMonotonicity",
     "DistinctDependence",
     "FunctionStability",
     "NullHandling",

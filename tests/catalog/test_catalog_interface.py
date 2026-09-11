@@ -717,7 +717,7 @@ class TestFunctionInfoNewFields:
     def test_argument_monotonicity_rejects_invalid_shape(self) -> None:
         """The DTO rejects non-scalar and misaligned claims."""
         arguments = SerializedSchema(pa.schema([pa.field("value", pa.int64())]).serialize().to_pybytes())
-        common = {
+        common: dict[str, Any] = {
             "name": "bad",
             "schema_path": ["main"],
             "arguments": arguments,
