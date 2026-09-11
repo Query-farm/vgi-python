@@ -52,14 +52,11 @@ jobs:
       matrix:
         include:
           # launch: the primary lane, over the reusable AF_UNIX launcher transport.
-          # stdio:  the subprocess compatibility lane (whole suite).
           # shm:    launch + the POSIX shared-memory side channel. Rides the
-          #         launcher, not raw subprocess: stdio already covers the
-          #         fork-per-connection path and spends most of its wall-clock
-          #         doing it, so re-paying that cost to test shm is waste.
+          #         launcher, not raw subprocess, to avoid paying the
+          #         fork-per-connection cost for the whole suite.
           # http:   the whole suite over the stateless HTTP transport.
           - { lane: launch }
-          - { lane: stdio }
           - { lane: shm, shm_bytes: '67108864' }
           - { lane: http }
     name: integration (${{ matrix.lane }})

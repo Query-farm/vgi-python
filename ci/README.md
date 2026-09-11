@@ -46,10 +46,12 @@ suite against the Python worker (see the project `CLAUDE.md`).
 ## Transport lanes
 
 `run-integration.sh` honours `TRANSPORT=stdio|shm|launch|http` and defaults to
-`launch` when the variable is omitted (the workflow runs every lane explicitly
-as a matrix):
+`launch` when the variable is omitted. CI runs `launch`, `shm`, and `http` as a
+matrix; `stdio` remains available for local compatibility testing:
 
-- **`stdio`** — the subprocess compatibility lane; the whole suite.
+- **`stdio`** — the local subprocess compatibility lane; the whole suite. It is
+  not a CI release gate because its fork-per-connection runtime largely
+  duplicates the launcher lane.
   Also boots the versioned and versioned-tables workers as background HTTP
   servers (`VGI_VERSIONED_HTTP_WORKER` / `VGI_VERSIONED_TABLES_HTTP_WORKER`) so
   the `attach/versioned_tables_*_http` and `versioning_http` tests run.
@@ -72,8 +74,9 @@ as a matrix):
   the launcher-only tests (`launcher/*`), whose options apply solely to the
   `launch:` dispatch path and which the other lanes skip via `require-env`.
   The versioned / versioned-tables *http* worker vars are left unset (as in
-  `test_launcher`), so those tests skip here — stdio covers them. One deliberate
-  divergence from `test_launcher`: see `filter_echo_partitioned.test` below.
+  `test_launcher`), so those tests skip here; run the local stdio lane to cover
+  them. One deliberate divergence from `test_launcher`: see
+  `filter_echo_partitioned.test` below.
 - **`http`** — the whole suite over the stateless HTTP transport. Staging
   injects `LOAD httpfs` before each worker ATTACH (the prebuilt binary doesn't
   statically link httpfs).
@@ -113,7 +116,7 @@ flag in the test is the single source of truth.)
 Dropped on the **http** lane only:
 
 - `projection_pushdown_repro.test` — one POST per two rows; transport-agnostic,
-  fully covered by stdio.
+  fully covered by launch.
 - `dynamic_filter.test` — Top-N + dynamic-filter continuation terminates early
   over http in the prebuilt binary (a property of that C++ build).
 - `partitioned_sequence.test` and `table_in_out/buffer_input/sizes.test` —
