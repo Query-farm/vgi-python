@@ -148,3 +148,43 @@ class TestBlendedFootguns:
 
         with pytest.raises(TypeError, match="at least one positional Arg"):
             resolve_metadata(_NamedOnly)
+
+
+class TestBlendedAnyResolution:
+    """A blended function may declare its positional input column(s) ANY.
+
+    The ANY marker lives on the argument *spec* — the ``vgi_type=any`` field
+    metadata the client reads to learn it must take the column's type from the
+    call rather than from the declaration.
+    """
+
+    def test_any_positional_is_a_blended_input_column(self) -> None:
+        """The ANY arg resolves as a positional input column, not a bind constant."""
+        from vgi._test_fixtures.table_in_out import BlendedAnyFunction
+        from vgi.argument_spec import extract_argument_specs
+
+        m = resolve_metadata(BlendedAnyFunction)
+        assert m.input_from_args is True
+        assert m.has_finalize is False
+        (spec,) = extract_argument_specs(BlendedAnyFunction)
+        assert (spec.name, spec.position, spec.is_any_type, spec.is_varargs) == ("value", 0, True, False)
+
+    def test_any_varargs_is_a_blended_input_column(self) -> None:
+        """The varargs form keeps both markers: ANY element type and varargs."""
+        from vgi._test_fixtures.table_in_out import BlendedAnyVarargsFunction
+        from vgi.argument_spec import extract_argument_specs
+
+        assert resolve_metadata(BlendedAnyVarargsFunction).input_from_args is True
+        (spec,) = extract_argument_specs(BlendedAnyVarargsFunction)
+        assert (spec.name, spec.position, spec.is_any_type, spec.is_varargs) == ("values", 0, True, True)
+
+    def test_any_marker_survives_the_wire_schema(self) -> None:
+        """The client learns the arg is ANY from the serialized arguments schema."""
+        from vgi._test_fixtures.table_in_out import BlendedAnyFunction, BlendedAnyVarargsFunction
+        from vgi.argument_spec import argument_specs_to_schema, extract_argument_specs, schema_to_argument_specs
+
+        for function in (BlendedAnyFunction, BlendedAnyVarargsFunction):
+            specs = extract_argument_specs(function)
+            wire = schema_to_argument_specs(argument_specs_to_schema(specs))
+            assert [s.is_any_type for s in wire] == [True]
+            assert [s.is_varargs for s in wire] == [s.is_varargs for s in specs]

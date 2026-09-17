@@ -51,7 +51,7 @@ from vgi_rpc import ArrowSerializableDataclass, ArrowType
 from vgi_rpc.log import Level
 from vgi_rpc.rpc import OutputCollector
 
-from vgi.arguments import Arg, Setting, TableInput
+from vgi.arguments import AnyArrow, Arg, Setting, TableInput
 from vgi.cache_control import CacheControl
 from vgi.invocation import BindResponse
 from vgi.metadata import FunctionExample
@@ -94,6 +94,8 @@ __all__ = [
     "GeoEncode3Function",
     "RowSumFunction",
     "BlendedDropFunction",
+    "BlendedAnyFunction",
+    "BlendedAnyVarargsFunction",
     "SubstreamPartialSumFunction",
     "MultiBatchFinishFunction",
     "SumAllColumnsFunction",
@@ -1878,6 +1880,87 @@ class BlendedExplodeFunction(RowTransformFunction[_ExplodeArgs]):
         # the correlated columns. (Identity provenance is omitted for 1->1 maps —
         # the extension assumes it — but here the row count changes, so it's required.)
         cast("VgiOutputCollector", out).emit(out_batch, parent_rows=parent_rows)
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class _AnyArgs:
+    """One positional ANY-typed input column."""
+
+    value: Annotated[AnyArrow, Arg(0, doc="Input column of any type (echoed back unchanged)")]
+
+
+class BlendedAnyFunction(RowTransformFunction[_AnyArgs]):
+    """Blended 1->1 echo of a single ANY-typed input column.
+
+    Proves a blended positional arg may be declared ANY: the declared type names
+    no concrete Arrow type, so the client must build the worker's input schema
+    from the type DuckDB actually resolved for the call (a STRUCT built per row,
+    a whole-row struct, a LIST, a plain VARCHAR ...) rather than from the
+    declaration. The output column ``value`` is bound to that resolved input
+    type at bind time and the column is passed through untouched, so a test
+    asserts on DuckDB's own ``typeof(value)`` and on the round-tripped values —
+    nothing here depends on how an SDK happens to render a type name.
+    """
+
+    class Meta:
+        name = "blended_any"
+        description = "Blended 1->1 echo of one ANY-typed input column (output typed from the input)"
+        categories = ["blended", "test"]
+
+    @classmethod
+    def on_bind(cls, params: BindParams[_AnyArgs]) -> BindResponse:
+        input_schema = params.bind_call.input_schema
+        assert input_schema is not None
+        return BindResponse(output_schema=pa.schema([pa.field("value", input_schema.field(0).type)]))
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_AnyArgs],
+        state: None,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        out.emit(pa.record_batch([batch.column(0)], schema=params.output_schema))
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class _AnyVarargsArgs:
+    """N positional ANY-typed input columns, each free to be a different type."""
+
+    values: Annotated[list[AnyArrow], Arg(0, varargs=True, doc="Input columns of any types (echoed back)")]
+
+
+class BlendedAnyVarargsFunction(RowTransformFunction[_AnyVarargsArgs]):
+    """Blended 1->1 echo of N ANY-typed VARARGS input columns.
+
+    The varargs counterpart of ``blended_any``: every runtime column may resolve
+    to a different concrete type, so the client must take each column's type
+    from the call rather than from the (ANY) vararg element type. Output columns
+    are ``col0..colN-1`` — the names the client generates for varargs blended
+    input — each bound to its own resolved input type.
+    """
+
+    class Meta:
+        name = "blended_any_varargs"
+        description = "Blended 1->1 echo of N ANY-typed varargs input columns (col0..colN-1)"
+        categories = ["blended", "test"]
+
+    @classmethod
+    def on_bind(cls, params: BindParams[_AnyVarargsArgs]) -> BindResponse:
+        input_schema = params.bind_call.input_schema
+        assert input_schema is not None
+        return BindResponse(output_schema=pa.schema([pa.field(f"col{i}", f.type) for i, f in enumerate(input_schema)]))
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_AnyVarargsArgs],
+        state: None,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        out.emit(pa.record_batch(cls.input_columns(batch), schema=params.output_schema))
 
 
 class CachedExplodeFunction(RowTransformFunction[_ExplodeArgs]):

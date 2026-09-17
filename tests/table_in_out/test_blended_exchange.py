@@ -280,3 +280,73 @@ class TestHasFinalizeSkip:
         assert len(with_finalize) == 1
         assert len(without_finalize) == 1
         assert with_finalize[0].column("i").to_pylist() == without_finalize[0].column("i").to_pylist()
+
+
+class TestBlendedAny:
+    """`blended_any` / `blended_any_varargs`: positional input columns declared ANY.
+
+    An ANY arg names no concrete Arrow type, so the output type can only come from
+    the input schema the client supplies at bind. These drive that over the wire:
+    the same registration must bind to whatever type each call resolves to, and
+    echo the column back untouched (nested types and nulls included).
+    """
+
+    @pytest.mark.parametrize(
+        "array",
+        [
+            pa.array(["a", None, "c"], type=pa.string()),
+            pa.array([1, 2, None], type=pa.int32()),
+            pa.array(
+                [{"message": "lost pkg", "tier": "gold"}, None, {"message": None, "tier": "free"}],
+                type=pa.struct([("message", pa.string()), ("tier", pa.string())]),
+            ),
+            pa.array([[1, 2], [], None], type=pa.list_(pa.int64())),
+        ],
+        ids=["string", "int32", "struct", "list"],
+    )
+    def test_output_is_typed_from_the_input_and_echoed(self, fixture_worker: str, array: pa.Array[Any]) -> None:
+        """One registration, bound per call to the resolved input type."""
+        batch = pa.record_batch({"value": array})
+        bound: list[pa.Schema] = []
+
+        with Client(fixture_worker) as client:
+            results = list(
+                client.table_in_out_function(
+                    function_name="blended_any",
+                    schema_path=["main"],
+                    input=iter([batch]),
+                    bind_result_callback=lambda r: bound.append(r.output_schema),
+                    has_finalize=False,
+                )
+            )
+
+        assert [s.names for s in bound] == [["value"]]
+        assert bound[0].field("value").type == array.type
+        (out,) = results
+        assert out.column("value").type == array.type
+        # A null struct and a struct with a null field must stay distinct.
+        assert out.column("value").to_pylist() == array.to_pylist()
+
+    def test_varargs_columns_each_keep_their_own_type(self, fixture_worker: str) -> None:
+        """The vararg element type is ANY, so every runtime column types itself."""
+        batch = pa.record_batch(
+            {
+                "col0": pa.array(["a", "b"], type=pa.string()),
+                "col1": pa.array([[1], [2, 3]], type=pa.list_(pa.int32())),
+                "col2": pa.array([{"k": 1.5}, None], type=pa.struct([("k", pa.float64())])),
+            }
+        )
+
+        with Client(fixture_worker) as client:
+            (out,) = list(
+                client.table_in_out_function(
+                    function_name="blended_any_varargs",
+                    schema_path=["main"],
+                    input=iter([batch]),
+                    has_finalize=False,
+                )
+            )
+
+        assert out.schema.names == ["col0", "col1", "col2"]
+        assert out.schema.types == batch.schema.types
+        assert out.to_pylist() == batch.to_pylist()

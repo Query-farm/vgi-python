@@ -267,6 +267,8 @@ from vgi._test_fixtures.table.tt_pushdown import (
 )
 from vgi._test_fixtures.table_in_out import (
     BatchIndexBufferInputFunction,
+    BlendedAnyFunction,
+    BlendedAnyVarargsFunction,
     BlendedDropFunction,
     BlendedExplodeFunction,
     BufferEmitWideFunction,
@@ -432,6 +434,8 @@ _EXAMPLE_CATALOG = Catalog(
                 GeoEncode3Function,
                 RowSumFunction,
                 BlendedDropFunction,
+                BlendedAnyFunction,
+                BlendedAnyVarargsFunction,
                 BlendedExplodeFunction,
                 CachedExplodeFunction,
                 ProjectableBlendedFunction,
