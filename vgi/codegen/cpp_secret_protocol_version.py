@@ -58,6 +58,10 @@ def emit(out: TextIO, namespace: list[str] | None = None) -> None:
             "uv run --project ~/Development/vgi-python python -m vgi.codegen.cpp_secret_protocol_version \\",
             "  > ~/Development/vgi/src/generated/vgi_secret_protocol_version.hpp",
         ],
+        # Was dropped on the floor: `main` parsed --namespace, passed it to
+        # emit(), and emit() never forwarded it. Harmless for the default, and
+        # silently wrong for the standalone-SDK case the flag exists to serve.
+        namespace=namespace,
     )
 
 

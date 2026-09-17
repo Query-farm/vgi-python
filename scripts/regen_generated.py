@@ -34,6 +34,22 @@ _TARGETS: list[tuple[str, str, str]] = [
     ("vgi.codegen.cpp_request_builders", "src/generated/vgi_request_builders.hpp", "vgi"),
     ("vgi.codegen.cpp_constants", "src/generated/vgi_protocol_constants.hpp", "vgi"),
     ("vgi.codegen.cpp_protocol_version", "src/generated/vgi_protocol_version.hpp", "vgi"),
+    ("vgi.codegen.cpp_protocol_name", "src/generated/vgi_protocol_names.hpp", "vgi"),
+    # The secret protocol's three artifacts were checked in but never listed here,
+    # so `--check` reported "no drift" over a stale secret header. Listed now: a
+    # regen script that silently skips an artifact is worse than no script, because
+    # it answers the drift question with false confidence.
+    (
+        "vgi.codegen.cpp_secret_protocol_version",
+        "src/generated/vgi_secret_protocol_version.hpp",
+        "vgi",
+    ),
+    ("vgi.codegen.cpp_secret_schemas", "src/generated/vgi_secret_protocol_schemas.hpp", "vgi"),
+    (
+        "vgi.codegen.cpp_secret_request_builders",
+        "src/generated/vgi_secret_request_builders.hpp",
+        "vgi",
+    ),
     ("vgi.codegen.go_schemas", "vgi/generated/protocol_schemas.go", "vgi-go"),
     ("vgi.codegen.rust_schemas", "vgi-protocol/src/generated/protocol_schemas.rs", "vgi-rust"),
     ("vgi.codegen.rust_request_builders", "vgi-protocol/src/generated/request_params.rs", "vgi-rust"),
