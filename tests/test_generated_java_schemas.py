@@ -51,8 +51,11 @@ def _vgi_java_generated_path() -> Path:
 
 _REGEN_HINT = (
     "To regenerate, run:\n"
-    "  uv run --project ~/Development/vgi-python python -m vgi.codegen.java_schemas \\\n"
-    "    > ~/vgi-java/vgi/src/test/java/farm/query/vgi/generated/VgiProtocolSchemas.java"
+    "  uv run --project ~/Development/vgi-python python scripts/regen_generated.py\n"
+    "\n"
+    "Do not redirect a generator into its destination with `>`: the shell\n"
+    "truncates the file before the generator runs, so any failure destroys\n"
+    "the checked-in artifact. The script renders to memory first."
 )
 
 
