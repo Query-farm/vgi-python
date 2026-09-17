@@ -9,7 +9,7 @@ HTTP auth factories (require ``vgi[http]``):
     bearer_authenticate, bearer_authenticate_static, chain_authenticate,
     OAuthResourceMetadata, AuthUnavailableError
 
-Token introspection (requires ``vgi[http]``):
+Token introspection (always available):
     TokenIdentity, TokenResolver
 
 JWT auth (requires ``vgi[oauth]``):
@@ -19,12 +19,28 @@ JWT auth (requires ``vgi[oauth]``):
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Callable
 
 from vgi_rpc.rpc import AuthContext, CallContext
+
+# ``vgi_rpc.Identity.v1`` lives at the RPC layer as of vgi-rpc 0.46.0 -- it was
+# an HTTP JSON route (``POST {prefix}/__introspect_token__``) through 0.45.x,
+# which meant it existed on exactly one transport.  So this is no longer gated
+# on the ``http`` extra.  Still not re-exported by ``vgi_rpc.rpc`` itself, so
+# the private module remains the only import path; re-exported here so a worker
+# that implements ``resolve_token`` never has to name one.
+from vgi_rpc.rpc._token_identity import TokenIdentity
+
+#: What :meth:`vgi.worker.Worker.resolve_token` is.  Upstream dropped its own
+#: alias when identity moved to the RPC layer; it is spelled out here so the
+#: name ``vgi.auth.TokenResolver`` keeps working.
+TokenResolver = Callable[[str], "TokenIdentity | None"]
 
 __all__ = [
     "AuthContext",
     "CallContext",
+    "TokenIdentity",
+    "TokenResolver",
 ]
 
 # HTTP auth helpers — available when vgi[http] is installed.
@@ -41,16 +57,9 @@ with contextlib.suppress(ImportError):
         parse_device_code_client_secret,
     )
 
-    # Not re-exported by ``vgi_rpc.http`` itself, so the private module is the
-    # only import path.  Re-exported here so a worker that implements
-    # ``resolve_token`` never has to name a private module.
-    from vgi_rpc.http.server._introspect import TokenIdentity, TokenResolver  # noqa: F401
-
     __all__ += [
         "AuthUnavailableError",
         "OAuthResourceMetadata",
-        "TokenIdentity",
-        "TokenResolver",
         "bearer_authenticate",
         "bearer_authenticate_static",
         "chain_authenticate",

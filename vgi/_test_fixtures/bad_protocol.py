@@ -44,6 +44,14 @@ BAD_PROTOCOL_VERSION = "99.0.0"
 class BadProtocol(VgiProtocol):
     """VgiProtocol surface with a deliberately incompatible version."""
 
+    # The *only* thing this fixture varies is the version. As of vgi-rpc
+    # 0.46.0 the protocol name is the dispatch routing key, and it defaults to
+    # the class name -- so without this line subclassing alone renames the
+    # protocol to ``BadProtocol``, the client's request for ``VgiProtocol``
+    # finds no such protocol hosted, and the caller gets
+    # ``ProtocolNotSupportedError`` before the version gate it came to test
+    # ever runs.
+    protocol_name: ClassVar[str] = "VgiProtocol"
     protocol_version: ClassVar[str] = BAD_PROTOCOL_VERSION
 
 

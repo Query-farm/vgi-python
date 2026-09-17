@@ -501,79 +501,124 @@ class TestIntrospectResolverDetection:
         assert resolver("nope") is None
 
 
+def _introspector_ctx(principal: str) -> object:
+    """Build a ``CallContext`` for an authenticated caller named *principal*.
+
+    The identity guards read the caller off ``ctx.auth``, so this is the whole
+    input they need: the allowlist check compares ``auth.principal`` against
+    the configured principals and refuses anything not authenticated.
+    """
+    from vgi_rpc.rpc import AuthContext, CallContext
+
+    return CallContext(
+        auth=AuthContext(domain="test", authenticated=True, principal=principal),
+        emit_client_log=lambda *a, **k: None,
+    )
+
+
+def _hosted_protocols(worker_cls: type[Worker]) -> frozenset[str]:
+    """Return the protocol names the server built for *worker_cls* hosts.
+
+    Built the way :func:`vgi.serve.create_app` builds it, so this observes the
+    real routing table rather than a re-derivation of it. The protocol name is
+    the dispatch routing key as of vgi-rpc 0.46.0, so "is identity hosted" is
+    exactly "is its name in here".
+    """
+    from vgi_rpc.rpc import RpcServer
+
+    from vgi.protocol import VgiProtocol
+    from vgi.serve import _build_identity
+    from vgi.worker import _get_vgi_version
+
+    server = RpcServer(
+        VgiProtocol,
+        worker_cls(quiet=True),
+        enable_describe=False,
+        server_version=_get_vgi_version(),
+        identity=_build_identity(worker_cls, None, None),
+    )
+    return frozenset(server.bindings)
+
+
 class TestTokenIntrospection:
-    """``POST /__introspect_token__`` — absent unless a worker implements it."""
+    """``vgi_rpc.Identity.v1`` — unhosted unless a worker implements the hook.
+
+    Identity was an HTTP JSON route (``POST {prefix}/__introspect_token__``)
+    through vgi-rpc 0.45.x. As of 0.46.0 it is an RPC-layer protocol hosted on
+    the ``RpcServer``, so it reaches every transport rather than only HTTP and
+    a client discovers it through reflection rather than by calling and reading
+    an error. What this repo owns — and what these tests cover — is the
+    *wiring*: a ``resolve_token`` override becomes an ``IdentityImpl`` carrying
+    the configured allowlist, and nothing at all when the hook is absent. The
+    guards themselves (allowlist enforcement, uniform rejection, JWS-shape
+    refusal, rate limiting) live in vgi-rpc and are tested there.
+    """
 
     @staticmethod
-    def _client(worker_cls: type[Worker], **env: str) -> object:
-        import falcon.testing
-
-        from vgi.serve import _resolve_authenticate
+    def _identity(worker_cls: type[Worker], **env: str) -> object | None:
+        from vgi.serve import _build_identity
 
         with pytest.MonkeyPatch.context() as mp:
-            for key in ("VGI_INTROSPECT_PRINCIPALS", "VGI_INTROSPECT_RATE_LIMIT", "VGI_BEARER_TOKENS"):
+            for key in ("VGI_INTROSPECT_PRINCIPALS", "VGI_INTROSPECT_RATE_LIMIT"):
                 mp.delenv(key, raising=False)
             for key, value in env.items():
                 mp.setenv(key, value)
-            app = create_app(
-                worker_cls,
-                prefix="/vgi",
-                describe=False,
-                authenticate=_resolve_authenticate(),
-            )
-        return falcon.testing.TestClient(app)
+            return _build_identity(worker_cls, None, None)
 
-    def test_route_absent_without_hook(self) -> None:
-        """Not "routed and refusing" — absent.
+    def test_identity_absent_without_hook(self) -> None:
+        """Not "hosted and refusing" — absent.
 
         This is the property that keeps a dependency upgrade from silently
         growing a credential-to-identity oracle on every existing worker.
         """
-        client = self._client(_SingleWorker)
-        resp = client.simulate_post("/vgi/__introspect_token__", json={"token": "x"})  # type: ignore[attr-defined]
-        assert resp.status_code == 404
+        assert self._identity(_SingleWorker) is None
 
-    def test_capability_not_advertised_without_hook(self) -> None:
-        """A proxy preflighting at boot learns this worker cannot answer."""
-        app = create_app(_SingleWorker, prefix="/vgi", describe=False)
-        assert "vgi-token-introspection" not in _capability_headers(app)
+    def test_protocol_not_hosted_without_hook(self) -> None:
+        """The server built for such a worker hosts no identity protocol."""
+        assert "vgi_rpc.Identity.v1" not in _hosted_protocols(_SingleWorker)
 
-    def test_capability_advertised_with_hook(self) -> None:
-        """A proxy can discover support at boot rather than at first login."""
+    def test_identity_built_with_hook(self) -> None:
+        """Implementing the hook is what builds the implementation."""
+        identity = self._identity(_IntrospectingWorker, VGI_INTROSPECT_PRINCIPALS="proxy-a")
+        assert identity is not None
+
+    def test_only_offered_methods_are_hosted(self) -> None:
+        """A worker that resolves but does not mint offers exactly one method.
+
+        The protocol a server hosts describes what it actually does, so a
+        client learns ``issue_grant`` is unavailable from reflection rather
+        than from an error.
+        """
+        identity = self._identity(_IntrospectingWorker, VGI_INTROSPECT_PRINCIPALS="proxy-a")
+        assert identity is not None
+        assert identity.offered_methods() == frozenset({"introspect_token"})  # type: ignore[attr-defined]
+
+    def test_protocol_hosted_with_hook(self) -> None:
+        """A client preflighting via reflection discovers the worker can answer."""
         with pytest.MonkeyPatch.context() as mp:
             mp.setenv("VGI_INTROSPECT_PRINCIPALS", "proxy-a")
-            app = create_app(_IntrospectingWorker, prefix="/vgi", describe=False)
-        assert _capability_headers(app)["vgi-token-introspection"] == "true"
+            hosted = _hosted_protocols(_IntrospectingWorker)
+        assert "vgi_rpc.Identity.v1" in hosted
 
-    def test_allowlisted_caller_resolves(self) -> None:
-        """The endpoint answers with a principal and never with claims."""
-        client = self._client(
-            _IntrospectingWorker,
-            VGI_INTROSPECT_PRINCIPALS="proxy-a",
-            VGI_BEARER_TOKENS="ptok=proxy-a",
-        )
-        resp = client.simulate_post(  # type: ignore[attr-defined]
-            "/vgi/__introspect_token__",
-            json={"token": "good-token"},
-            headers={"Authorization": "Bearer ptok"},
-        )
-        assert resp.status_code == 200
-        assert resp.json == {"principal": "alice", "token_name": "deploy-key-1", "ttl_seconds": 300}
-        assert "claims" not in resp.json
+    def test_resolver_answers_through_the_implementation(self) -> None:
+        """The worker's own lookup is what the hosted protocol calls."""
+        identity = self._identity(_IntrospectingWorker, VGI_INTROSPECT_PRINCIPALS="proxy-a")
+        assert identity is not None
+        resolved = identity.introspect_token("good-token", _introspector_ctx("proxy-a"))  # type: ignore[attr-defined]
+        assert resolved.principal == "alice"
+        assert resolved.token_name == "deploy-key-1"
+        # Never claims: a pass-through claims field would let a worker choose
+        # its caller's tenant routing and policy branch.
+        assert not hasattr(resolved, "claims")
 
-    def test_unresolvable_token_is_404(self) -> None:
-        """Unknown credential and unknown route answer alike, on purpose."""
-        client = self._client(
-            _IntrospectingWorker,
-            VGI_INTROSPECT_PRINCIPALS="proxy-a",
-            VGI_BEARER_TOKENS="ptok=proxy-a",
-        )
-        resp = client.simulate_post(  # type: ignore[attr-defined]
-            "/vgi/__introspect_token__",
-            json={"token": "nope"},
-            headers={"Authorization": "Bearer ptok"},
-        )
-        assert resp.status_code == 404
+    def test_unresolvable_token_is_refused(self) -> None:
+        """Unknown, expired and malformed are deliberately one answer."""
+        from vgi_rpc.rpc._token_identity import TokenUnresolvedError
+
+        identity = self._identity(_IntrospectingWorker, VGI_INTROSPECT_PRINCIPALS="proxy-a")
+        assert identity is not None
+        with pytest.raises(TokenUnresolvedError):
+            identity.introspect_token("nope", _introspector_ctx("proxy-a"))  # type: ignore[attr-defined]
 
     def test_non_allowlisted_caller_refused(self) -> None:
         """Authenticating is not the same capability as introspecting.
@@ -581,17 +626,12 @@ class TestTokenIntrospection:
         Without this, any user holding a valid credential could resolve any
         other user's credential to its owner.
         """
-        client = self._client(
-            _IntrospectingWorker,
-            VGI_INTROSPECT_PRINCIPALS="proxy-a",
-            VGI_BEARER_TOKENS="ptok=proxy-a,utok=user-b",
-        )
-        resp = client.simulate_post(  # type: ignore[attr-defined]
-            "/vgi/__introspect_token__",
-            json={"token": "good-token"},
-            headers={"Authorization": "Bearer utok"},
-        )
-        assert resp.status_code == 403
+        from vgi_rpc.rpc._token_identity import IntrospectionRefusedError
+
+        identity = self._identity(_IntrospectingWorker, VGI_INTROSPECT_PRINCIPALS="proxy-a")
+        assert identity is not None
+        with pytest.raises(IntrospectionRefusedError):
+            identity.introspect_token("good-token", _introspector_ctx("user-b"))  # type: ignore[attr-defined]
 
     def test_hook_without_allowlist_refuses_to_start(self) -> None:
         """Fail closed and loud, rather than defaulting to an open oracle."""

@@ -172,8 +172,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from ssl import SSLContext
 
-    from vgi_rpc.http.server._introspect import TokenIdentity
     from vgi_rpc.rpc import PeerAuthenticationPolicy, PeerIdentityProvider
+    from vgi_rpc.rpc._token_identity import TokenIdentity
 
     from vgi.catalog.descriptors import Catalog
     from vgi.protocol import (
@@ -1420,12 +1420,16 @@ class Worker:
     def resolve_token(cls, token: str) -> TokenIdentity | None:
         """Resolve an opaque bearer credential to the identity it authenticates as.
 
-        Override to enable ``POST {prefix}/__introspect_token__``, which a
-        reverse proxy calls when it terminates the only public listener and
-        must know *which principal* a credential is before it can authorize
-        anything. Until it is overridden the route does not exist at all —
-        not "exists and refuses", absent — so no worker grows a
+        Override to host ``vgi_rpc.Identity.v1``'s ``introspect_token``,
+        which a reverse proxy calls when it terminates the only public
+        listener and must know *which principal* a credential is before it can
+        authorize anything. Until it is overridden the protocol is not hosted
+        at all — not "hosted and refusing", absent — so no worker grows a
         credential-to-identity oracle by upgrading a dependency.
+
+        Through vgi-rpc 0.45.x this was an HTTP JSON route, ``POST
+        {prefix}/__introspect_token__``. As of 0.46.0 identity lives at the RPC
+        layer, so it reaches every transport rather than only HTTP.
 
         Enabling it also requires an allowlist of principals permitted to ask
         (``--introspect-principals`` / ``VGI_INTROSPECT_PRINCIPALS``). There is
@@ -1437,7 +1441,7 @@ class Worker:
 
         This is deliberately *not* "run the credential back through the
         worker's own authenticate chain" — see
-        ``vgi_rpc.http.server._introspect`` for the four ways that breaks.
+        ``vgi_rpc.rpc._token_identity`` for the four ways that breaks.
         Write a narrow lookup against whatever store issued the credential.
 
         Args:

@@ -297,7 +297,7 @@ vgi-client --input data.parquet --function sum_all_columns --worker vgi-fixture-
 | `VGI_OAUTH_DEVICE_CODE_CLIENT_ID` | Client ID for device-code flow (optional, URL-safe chars only) |
 | `VGI_OAUTH_DEVICE_CODE_CLIENT_SECRET` | Client secret for device-code flow (optional, URL-safe chars only) |
 | `VGI_OAUTH_USE_ID_TOKEN` | When `1`/`true`/`yes`, clients use OIDC `id_token` as Bearer instead of `access_token` |
-| `VGI_INTROSPECT_PRINCIPALS` | Comma-separated principals permitted to call `__introspect_token__`. Required — no permissive default — whenever the worker implements `resolve_token()` (see below) |
+| `VGI_INTROSPECT_PRINCIPALS` | Comma-separated principals permitted to call `vgi_rpc.Identity.v1`'s `introspect_token`. Required — no permissive default — whenever the worker implements `resolve_token()` (see below) |
 | `VGI_INTROSPECT_RATE_LIMIT` | Introspection requests allowed per caller per second (default 20) |
 | `VGI_WORKER_ACCESS_LOG_SAMPLE` | Fraction of *successful* calls to keep in the access log, `0.0`–`1.0`. Errors are always kept; the decision is per call, so every record of one stream shares a fate |
 | `VGI_WORKER_ACCESS_LOG_ASYNC` | When `1`/`true`/`yes`, emit access-log records from a listener thread. Bounded queue; full means drop, and a crash loses whatever is queued |
@@ -420,10 +420,16 @@ Also available on `Worker.main --http` and the fixture server. Under
 
 ### Token Introspection (`resolve_token`)
 
-A worker may optionally expose `POST {prefix}/__introspect_token__`, which
-resolves an opaque bearer credential to a principal — for a reverse proxy that
-terminates the only public listener and must know the caller's identity before
-it can authorize anything.
+A worker may optionally host the `vgi_rpc.Identity.v1` protocol, whose
+`introspect_token` method resolves an opaque bearer credential to a principal —
+for a reverse proxy that terminates the only public listener and must know the
+caller's identity before it can authorize anything.
+
+Through vgi-rpc 0.45.x this was an HTTP JSON route, `POST
+{prefix}/__introspect_token__`, which meant it existed on exactly one
+transport. As of **vgi-rpc 0.46.0** identity lives at the RPC layer, so it
+reaches every transport, and a client discovers it through ordinary reflection
+(`list_protocols`) rather than by calling and reading an error.
 
 ```python
 from vgi.auth import AuthUnavailableError, TokenIdentity
@@ -444,9 +450,11 @@ class MyWorker(Worker):
         return TokenIdentity(principal=row.principal, token_name=row.label)
 ```
 
-**The route does not exist until `resolve_token` is overridden** — absent, not
-routed-and-refusing. That is what keeps a dependency upgrade from growing a
-credential-to-identity oracle on every existing worker.
+**The protocol is not hosted until `resolve_token` is overridden** — absent,
+not hosted-and-refusing. That is what keeps a dependency upgrade from growing a
+credential-to-identity oracle on every existing worker. Only the methods whose
+hooks exist are registered, so a worker that resolves credentials but does not
+mint grants hosts `introspect_token` and not `issue_grant`.
 
 Enabling it also requires an allowlist of principals permitted to ask, via
 `--introspect-principals` or `VGI_INTROSPECT_PRINCIPALS`. There is no permissive

@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     import falcon
     from vgi_rpc.otel import OtelConfig
     from vgi_rpc.rpc import AuthContext, PeerAuthenticationPolicy, PeerIdentityProvider
+    from vgi_rpc.rpc._token_identity import IdentityImpl
 
     from vgi.worker import Worker
 
@@ -275,8 +276,8 @@ def create_app(
             escape, because bytes already uploaded cannot be un-uploaded.
             ``None`` (the default) means no cap.
         introspect_principals: Principals permitted to call
-            ``__introspect_token__``.  Only consulted when the worker class
-            overrides ``resolve_token``.  ``None`` reads
+            ``vgi_rpc.Identity.v1``'s ``introspect_token``.  Only consulted
+            when the worker class overrides ``resolve_token``.  ``None`` reads
             ``VGI_INTROSPECT_PRINCIPALS``.
         introspect_rate_limit: Introspection requests allowed per caller per
             second.  ``None`` reads ``VGI_INTROSPECT_RATE_LIMIT``, defaulting
@@ -321,19 +322,13 @@ def create_app(
     worker._signing_key = signing_key
     from vgi.worker import _get_vgi_version
 
-    server = RpcServer(VgiProtocol, worker, enable_describe=describe, server_version=_get_vgi_version())
-
-    # Absent unless the worker class actually implements the lookup. Passing
-    # ``None`` leaves the route unrouted rather than routed-and-refusing, which
-    # is what keeps a dependency upgrade from growing a credential oracle.
-    introspect_resolver = worker_cls._introspect_resolver()
-    introspect_kwargs: dict[str, Any] = {}
-    if introspect_resolver is not None:
-        introspect_kwargs = {
-            "introspect_resolver": introspect_resolver,
-            "introspect_principals": _resolve_introspect_principals(introspect_principals),
-            "introspect_rate_limit": _resolve_introspect_rate_limit(introspect_rate_limit),
-        }
+    server = RpcServer(
+        VgiProtocol,
+        worker,
+        enable_describe=describe,
+        server_version=_get_vgi_version(),
+        identity=_build_identity(worker_cls, introspect_principals, introspect_rate_limit),
+    )
 
     effective_peer_identity_providers = tuple(peer_identity_providers)
     effective_peer_authentication_policy = peer_authentication_policy
@@ -370,7 +365,6 @@ def create_app(
         max_stream_response_bytes=max_stream_response_bytes,
         max_externalized_response_bytes=max_externalized_response_bytes,
         enable_landing_page=False,
-        **introspect_kwargs,
     )
 
     # Frontend: either redirect to external CDN or serve pre-rendered worker page
@@ -500,7 +494,7 @@ def main() -> None:
             None,
             "--introspect-principals",
             help=(
-                "Comma-separated principals permitted to call __introspect_token__. "
+                "Comma-separated principals permitted to call introspect_token. "
                 "Only used when the worker implements resolve_token(); required in "
                 "that case, with no permissive default. Env: VGI_INTROSPECT_PRINCIPALS."
             ),
@@ -805,6 +799,53 @@ def _resolve_authenticate() -> Callable[..., Any] | None:
     return require_all(gate, inner)
 
 
+def _build_identity(
+    worker_cls: type[Worker],
+    introspect_principals: Iterable[str] | None,
+    introspect_rate_limit: int | None,
+) -> IdentityImpl | None:
+    """Build the ``vgi_rpc.Identity.v1`` implementation, or ``None``.
+
+    ``None`` unless the worker class actually implements the lookup, and that
+    is the point: ``RpcServer`` then does not host the protocol at all, rather
+    than hosting it and refusing every call. Absent beats routed-and-refusing —
+    it is what keeps a dependency upgrade from growing a
+    credential-to-identity oracle on every existing worker.
+
+    As of vgi-rpc 0.46.0 identity is an RPC-layer protocol hosted on the
+    server, not the HTTP JSON route (``POST {prefix}/__introspect_token__``) it
+    was through 0.45.x. It therefore reaches every transport rather than only
+    HTTP, and a client discovers it through ordinary reflection rather than by
+    calling and reading an error.
+
+    Args:
+        worker_cls: The worker class, consulted for a ``resolve_token``
+            override.
+        introspect_principals: Principals permitted to introspect, or ``None``
+            to read the environment.
+        introspect_rate_limit: Per-caller, per-second ceiling, or ``None`` to
+            read the environment.
+
+    Returns:
+        The implementation, or ``None`` when this worker does not resolve
+        credentials.
+
+    """
+    resolver = worker_cls._introspect_resolver()
+    if resolver is None:
+        return None
+
+    # Not re-exported by ``vgi_rpc.rpc``, so the private module is the only
+    # import path for the ``vgi_rpc.Identity.v1`` implementation helper.
+    from vgi_rpc.rpc._token_identity import IdentityImpl
+
+    return IdentityImpl(
+        resolve_token=resolver,
+        introspect_principals=_resolve_introspect_principals(introspect_principals),
+        introspect_rate_limit=_resolve_introspect_rate_limit(introspect_rate_limit),
+    )
+
+
 def _resolve_introspect_principals(explicit: Iterable[str] | None) -> list[str]:
     """Resolve the introspector allowlist, or exit with an actionable message.
 
@@ -835,16 +876,16 @@ def _resolve_introspect_principals(explicit: Iterable[str] | None) -> list[str]:
 
     if not principals:
         sys.stderr.write(
-            "Error: this worker implements resolve_token(), which enables the\n"
-            "  POST /__introspect_token__ endpoint, but no introspector allowlist\n"
-            "  was configured. Set VGI_INTROSPECT_PRINCIPALS (comma-separated) or\n"
+            "Error: this worker implements resolve_token(), which hosts the\n"
+            "  vgi_rpc.Identity.v1 protocol, but no introspector allowlist was\n"
+            "  configured. Set VGI_INTROSPECT_PRINCIPALS (comma-separated) or\n"
             "  pass --introspect-principals.\n"
             "\n"
             "  There is no permissive default on purpose: introspection is a\n"
             "  separate capability from authentication, and allowing every\n"
             "  authenticated caller lets any user resolve any other user's\n"
-            "  credential to its owner. Remove resolve_token() to disable the\n"
-            "  endpoint entirely.\n"
+            "  credential to its owner. Remove resolve_token() to leave the\n"
+            "  protocol unhosted entirely.\n"
         )
         sys.exit(1)
     return principals

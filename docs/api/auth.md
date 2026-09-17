@@ -18,6 +18,10 @@ require `pip install vgi-python[http]`; JWT authentication additionally requires
 `principal` plus an optional `token_name`. It lives in a private `vgi-rpc` module, so `vgi.auth`
 re-exports it — a worker that implements `resolve_token` never has to name a private import path.
 
+As of vgi-rpc 0.46.0 introspection is the `vgi_rpc.Identity.v1` protocol hosted on the RPC server,
+not an HTTP JSON route, so it reaches every transport rather than only HTTP. `TokenIdentity` and
+`TokenResolver` are correspondingly no longer gated on the `[http]` extra.
+
 ## Secret protocol
 
 ::: vgi.secret_protocol
