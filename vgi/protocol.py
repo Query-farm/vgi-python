@@ -3077,10 +3077,26 @@ class VgiProtocol(Protocol):
     a dedicated generator so this version doesn't pollute the byte-key constants).
 
     Attributes:
+        protocol_name: Wire name used as the ``vgi_rpc.protocol`` routing key
+            and as the ``{protocol}`` HTTP path segment. Carries the major
+            version, so an incompatible major is a different name and therefore
+            a 404 rather than a confusing dispatch.
         protocol_version: The VGI protocol version integer, declared as the
             canonical semver (MAJOR.MINOR.PATCH) of the method-and-schema contract.
     """
 
+    # The wire name carries the major version, so an incompatible major is a
+    # *different* protocol and therefore a 404 -- an answer every proxy, WAF and
+    # load balancer understands without an Arrow parser, and one that lets
+    # ``vgi.v2`` and a future ``vgi.v3`` be served side by side while clients
+    # migrate. That matters here specifically: the DuckDB extension ships to
+    # users and cannot be flag-dayed.
+    #
+    # Declared rather than derived. Without it the name defaults to the class
+    # name, which left the six implementations disagreeing four ways -- Python
+    # ``VgiProtocol``, Java and C# ``VgiService``, Go the framework default
+    # ``Service``, TypeScript ``vgi`` -- so no client could address them all.
+    protocol_name: ClassVar[str] = "vgi.v2"
     protocol_version: ClassVar[str] = "2.0.0"
 
     def bind(self, request: BindRequest) -> BindResponse:

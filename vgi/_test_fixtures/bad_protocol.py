@@ -51,7 +51,7 @@ class BadProtocol(VgiProtocol):
     # finds no such protocol hosted, and the caller gets
     # ``ProtocolNotSupportedError`` before the version gate it came to test
     # ever runs.
-    protocol_name: ClassVar[str] = "VgiProtocol"
+    protocol_name: ClassVar[str] = "vgi.v2"
     protocol_version: ClassVar[str] = BAD_PROTOCOL_VERSION
 
 

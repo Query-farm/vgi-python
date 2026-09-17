@@ -126,10 +126,17 @@ class VgiSecretProtocol(Protocol):
     backwards-incompatible change, minor for additive, patch for worker-side fixes.
 
     Attributes:
+        protocol_name: Wire name used as the ``vgi_rpc.protocol`` routing key.
+            Independent of :class:`vgi.protocol.VgiProtocol`'s, so this service
+            can be co-hosted beside it or deployed on its own.
         protocol_version: Canonical semver (MAJOR.MINOR.PATCH) of this contract,
             enforced as an exact major+minor match at the dispatch boundary.
     """
 
+    # Its own name and its own major, independent of ``vgi.v2``: this contract
+    # versions on a separate cadence, which is why ``protocol_version_override``
+    # exists on the client side at all.
+    protocol_name: ClassVar[str] = "vgi.secret.v1"
     protocol_version: ClassVar[str] = "1.0.0"
 
     def secret_lookup(self, path: str, type: str) -> SecretLookupResponse:  # noqa: A002
