@@ -453,6 +453,11 @@ Triggers are different. Supporting a trigger in a virtual catalog would require 
 
 The same principle applies to secure views, composable COPY, remote-plan pushdown, coordinate systems, and any catalog object VGI does not currently virtualize: they are not protocol requirements simply because DuckDB implements them. They should be gated through explicit catalog capabilities and fail early.
 
+The separate [catalog query pushdown design](vgi-catalog-query-pushdown-design.md) now proposes an
+optional read-query preparation/execution contract and implementation sequence. It distinguishes
+DuckDB 1.5 explicit query execution from automatic pushdown in the inspected 2.0 development API;
+the feature is not yet implemented.
+
 ### 6.1 Writable result modes and OLD/NEW images
 
 VGI 2.0 replaces the four `TableInfo` booleans `supports_insert`,

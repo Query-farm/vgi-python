@@ -8,6 +8,7 @@ Each document declares its own status; “proposed” means the contract is stil
 | [VGI Filter Encoding v2](vgi-filter-encoding-v2-spec.md) | **Normative, proposed** | Engine-neutral wire format, semantics, validation, and conformance requirements for `vgi.filters.v2`. |
 | [VGI Runtime-Filter Artifacts](vgi-runtime-filter-artifacts.md) | **Normative optional extension, proposed** | Additional requirements for capability-gated advisory runtime-pruning artifacts. Base filter-v2 conformance does not require this extension. |
 | [VGI DuckDB Filter Adapter](vgi-duckdb-filter-adapter.md) | **Informative implementation guide, proposed** | DuckDB 1.5 and 2.0 mappings into the normative filter-v2 wire contract. |
+| [VGI catalog query pushdown](vgi-catalog-query-pushdown-design.md) | **Informative implementation design, proposed** | Optional read-query preparation and streaming, Python provider API, DuckDB 1.5 explicit execution, and DuckDB 2.0 automatic pushdown. |
 | [Proposed VGI protocol changes for DuckDB 2.0](vgi-protocol-proposed-changes.md) | **Informative design/audit report** | Rationale, migration inventory, implementation status, and deferred protocol decisions. It is not an implementation specification. |
 
 ## Reading order
@@ -15,6 +16,10 @@ Each document declares its own status; “proposed” means the contract is stil
 Protocol implementers should begin with the normative [Filter Encoding v2](vgi-filter-encoding-v2-spec.md). Read the
 runtime-artifact extension only when implementing one of its negotiated algorithms. Engine adapters should then use
 the relevant implementation guide without treating engine-private classes as wire types.
+
+The [catalog query pushdown design](vgi-catalog-query-pushdown-design.md) describes a separate optional
+capability for executing whole eligible read queries at a catalog provider. It is a proposal, not
+an implemented extension of the filter-v2 contract.
 
 The language-neutral filter corpus at `conformance/filter-v2/` contains structural JSON cases and executable Arrow
 IPC vectors. Its worker runner sends the portable cases through the public VGI client and can target any SDK's
