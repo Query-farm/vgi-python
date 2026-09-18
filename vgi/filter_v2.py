@@ -4,9 +4,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import threading
+from collections.abc import Iterator
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -45,6 +48,54 @@ _KNOWN_ARROW_EXTENSIONS = {
     "geoarrow.polygon",
     "geoarrow.wkb",
 }
+
+
+#: Set while re-deriving filter state that this worker already accepted (see
+#: :func:`replaying_accepted_state`). Default off: every document arriving from a
+#: client is validated in full.
+_REPLAYING_ACCEPTED_STATE: ContextVar[bool] = ContextVar("vgi_filter_v2_replaying_accepted_state", default=False)
+
+
+@contextlib.contextmanager
+def replaying_accepted_state() -> Iterator[None]:
+    """Re-parse filter documents this worker has already validated and accepted.
+
+    Validating a predicate binds it against the output schema through the
+    embedded DuckDB evaluator -- one query, several milliseconds, per predicate.
+    The spec asks for that once per accepted revision. An HTTP worker, though,
+    rebuilds its filter state from the call and cursor tokens on every turn, and
+    re-validating there made every continuation pay a bind per predicate (and,
+    with dynamic filters, one per delta ever applied). Those tokens are sealed by
+    the worker, so the documents in them are exactly the ones it validated when
+    they first arrived: inside this context the parse is still strict about
+    structure, but the redundant bind is skipped.
+
+    Yields:
+        None.
+
+    """
+    token = _REPLAYING_ACCEPTED_STATE.set(True)
+    try:
+        yield
+    finally:
+        _REPLAYING_ACCEPTED_STATE.reset(token)
+
+
+def delta_revisions(batch: pa.RecordBatch) -> tuple[tuple[str, int], ...]:
+    """Return the ``(id, revision)`` of every update a delta batch carries.
+
+    A structural read only, for bookkeeping over deltas that were already
+    applied (and therefore validated); it does not apply or validate anything.
+
+    Args:
+        batch: A delta document batch.
+
+    Returns:
+        One ``(id, revision)`` pair per update, in document order.
+
+    """
+    document = json.loads(batch.column(0)[0].as_py())
+    return tuple((update["id"], update["revision"]) for update in document["updates"])
 
 
 class FilterV2Error(ValueError):
@@ -666,7 +717,11 @@ class _Parser:
                 raise FilterV2Error("runtime_filter predicates must be advisory")
         elif not self._is_boolean(expression):
             raise FilterV2Error("predicate root must resolve to BOOLEAN")
-        if self.output_schema is not None and not isinstance(expression, RuntimeFilter):
+        if (
+            self.output_schema is not None
+            and not isinstance(expression, RuntimeFilter)
+            and not _REPLAYING_ACCEPTED_STATE.get()
+        ):
             empty = pa.RecordBatch.from_arrays(
                 [pa.array([], type=field.type) for field in self.output_schema],
                 schema=self.output_schema,

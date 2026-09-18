@@ -1131,6 +1131,31 @@ class PushdownFilters:
             raise FilterDeserializationError(f"Failed to parse filter delta: {exc}") from exc
         return _pushdown_from_v2_state(state)
 
+    def _revision_map(self) -> dict[str, int]:
+        """Map every predicate ID seen in this scan, tombstones included, to its last applied revision."""
+        return dict(self._v2_state.revisions) if self._v2_state is not None else {}
+
+    def _with_predicate_order(self, order: list[str]) -> PushdownFilters:
+        """Return these filters with their v2 predicates arranged in ``order``.
+
+        Only the order changes: ``order`` must name exactly the live predicate IDs.
+        Used to restore the order a state had before its delta history was
+        compacted (an ID removed and later re-added moves to the end, which a
+        shorter history does not reproduce by itself).
+
+        Raises:
+            FilterDeserializationError: If ``order`` does not name exactly the
+                live predicates.
+
+        """
+        state = self._v2_state
+        if state is None or [p.id for p in state.predicates] == order:
+            return self
+        by_id = {p.id: p for p in state.predicates}
+        if len(order) != len(by_id) or set(order) != set(by_id):
+            raise FilterDeserializationError("recorded predicate order does not match the replayed filter state")
+        return _pushdown_from_v2_state(dataclasses.replace(state, predicates=tuple(by_id[i] for i in order)))
+
     def get_join_keys_batch(self) -> pa.RecordBatch | None:
         """Return a merged join keys batch for temp table registration.
 

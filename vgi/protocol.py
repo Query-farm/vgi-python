@@ -63,6 +63,7 @@ from vgi.catalog.catalog_interface import (
     TableInfo,
     ViewInfo,
 )
+from vgi.filter_v2 import delta_revisions, replaying_accepted_state
 from vgi.function import StreamStateCodec, _is_state_codec
 from vgi.function_storage import BoundStorage, FrameworkNS, attach_catalog_bytes
 from vgi.invocation import BindResponse, FunctionType, GlobalInitResponse
@@ -1827,17 +1828,84 @@ class _TrackingOutputCollector:
         return getattr(self._inner, name)
 
 
-def _apply_filter_delta_bytes(current: Any, filter_bytes: bytes) -> Any:
-    """Decode one IPC delta and apply it to existing immutable filter state."""
-    if current is None:
-        raise ValueError("dynamic filter delta received without an initial snapshot")
+def _decode_filter_delta(filter_bytes: bytes) -> pa.RecordBatch:
+    """Decode one IPC dynamic-filter delta into its single document batch."""
     if len(filter_bytes) > (17 << 20):
         raise ValueError("dynamic filter IPC payload exceeds the encoded-size limit")
     table = pa.ipc.open_stream(filter_bytes).read_all()
     batches = table.to_batches()
     if len(batches) != 1:
         raise ValueError("dynamic filter metadata must contain exactly one RecordBatch")
-    return current.apply_delta(batches[0])
+    return batches[0]
+
+
+def _apply_filter_delta_bytes(current: Any, filter_bytes: bytes) -> Any:
+    """Decode one IPC delta and apply it to existing immutable filter state."""
+    if current is None:
+        raise ValueError("dynamic filter delta received without an initial snapshot")
+    return current.apply_delta(_decode_filter_delta(filter_bytes))
+
+
+def _record_filter_delta(current: Any, history: list[bytes], filter_bytes: bytes) -> tuple[Any, list[bytes], list[str]]:
+    """Apply one tick's dynamic-filter delta; return the new filters and what a cursor must carry.
+
+    An HTTP stream cannot keep parsed filters between turns, so its cursor
+    carries the deltas it has applied and :func:`_replay_filter_history` rebuilds
+    the state from them on the next turn. Carrying *every* delta made each turn
+    replay all of its predecessors -- quadratic in the tick count, and a Top-N
+    scan gets a delta on nearly every tick (``dynamic_filter.test`` took ~200 s).
+
+    So the history is compacted to the deltas that installed some predicate's
+    *current* revision, tombstones included: for each ``(id, revision)`` of the
+    live state, the first delta carrying it. Replaying just those reproduces the
+    same predicates, values and revisions -- earlier updates to an ID are
+    overwritten by its current revision, later ones were stale and stay stale --
+    and the history stays bounded by the number of predicate IDs instead of
+    growing per tick. Replay cannot always reproduce predicate *order* (an ID
+    removed and later re-added moves to the end), so the order is returned
+    alongside to be restored explicitly.
+
+    Args:
+        current: The stream's current ``PushdownFilters``.
+        history: The compacted deltas applied so far.
+        filter_bytes: The IPC bytes of the delta this tick carried.
+
+    Returns:
+        ``(filters, history, order)``: the updated filters, the compacted
+        history including this delta if it is still needed, and the live
+        predicate IDs in order.
+
+    """
+    updated = _apply_filter_delta_bytes(current, filter_bytes)
+    wanted = set(updated._revision_map().items())
+    kept: list[bytes] = []
+    for delta in [*history, filter_bytes]:
+        carried = set(delta_revisions(_decode_filter_delta(delta))) & wanted
+        if carried:
+            kept.append(delta)
+            wanted -= carried
+    return updated, kept, [p.id for p in updated.predicates]
+
+
+def _replay_filter_history(filters: Any, history: list[bytes], order: list[str]) -> Any:
+    """Rebuild a turn's filters from the init snapshot plus the carried deltas.
+
+    Runs inside :func:`vgi.filter_v2.replaying_accepted_state` (see the call
+    sites): every document here was validated when it first arrived, and both
+    tokens are sealed by the worker.
+
+    Args:
+        filters: The ``PushdownFilters`` parsed from the init snapshot.
+        history: The compacted deltas from :func:`_record_filter_delta`.
+        order: The live predicate order recorded alongside them.
+
+    Returns:
+        The stream's current ``PushdownFilters``.
+
+    """
+    for filter_bytes in history:
+        filters = _apply_filter_delta_bytes(filters, filter_bytes)
+    return filters._with_predicate_order(order) if history else filters
 
 
 @dataclass
@@ -1868,7 +1936,10 @@ class TableProducerState(_VgiCallStateHolder, ProducerState):
     _user_state: Annotated[Any, Transient()] = field(default=None, repr=False)
     _pushdown_filters: Annotated[Any, Transient()] = field(default=None, repr=False)  # PushdownFilters | None
     _auto_apply: Annotated[bool, Transient()] = field(default=False, repr=False)
+    # The dynamic-filter deltas this stream must replay on an HTTP turn, compacted by
+    # _record_filter_delta, and the live predicate order they rebuild.
     _filter_delta_history: list[bytes] = field(default_factory=list, repr=False)
+    _filter_predicate_order: list[str] = field(default_factory=list, repr=False)
     _vgi_tracer: Annotated[VgiTracer, Transient()] = field(default_factory=get_noop_tracer, repr=False)
     # Conditional-revalidation validators read off the first tick's custom_metadata
     # and surfaced to the generator via ProcessParams (M6). None on a normal call.
@@ -1935,13 +2006,17 @@ class TableProducerState(_VgiCallStateHolder, ProducerState):
         # manual consumers see the same required/current state after HTTP rehydrate.
         self._auto_apply = func_cls._should_auto_apply_filters()
         if self._call.init_call.pushdown_filters is not None:
-            self._pushdown_filters = func_cls.pushdown_filters(
-                self._call.init_call.pushdown_filters,
-                join_keys=self._call.init_call.join_keys,
-                output_schema=self._call.init_call.output_schema,
-            )
-            for filter_bytes in self._filter_delta_history:
-                self._pushdown_filters = _apply_filter_delta_bytes(self._pushdown_filters, filter_bytes)
+            # Everything re-parsed here was validated when it first arrived.
+            with replaying_accepted_state():
+                self._pushdown_filters = _replay_filter_history(
+                    func_cls.pushdown_filters(
+                        self._call.init_call.pushdown_filters,
+                        join_keys=self._call.init_call.join_keys,
+                        output_schema=self._call.init_call.output_schema,
+                    ),
+                    self._filter_delta_history,
+                    self._filter_predicate_order,
+                )
             self._params = dataclasses.replace(self._params, current_pushdown_filters=self._pushdown_filters)
         # Restore _user_state from serialized bytes if available
         if self._user_state_bytes is not None:
@@ -1978,8 +2053,9 @@ class TableProducerState(_VgiCallStateHolder, ProducerState):
         if len(encoded_filters) > (24 << 20):
             raise ValueError("base64 dynamic filter metadata exceeds the encoded-size limit")
         filter_bytes = base64.b64decode(encoded_filters, validate=True)
-        self._pushdown_filters = _apply_filter_delta_bytes(self._pushdown_filters, filter_bytes)
-        self._filter_delta_history.append(filter_bytes)
+        self._pushdown_filters, self._filter_delta_history, self._filter_predicate_order = _record_filter_delta(
+            self._pushdown_filters, self._filter_delta_history, filter_bytes
+        )
 
     def produce(self, out: OutputCollector, ctx: CallContext) -> None:
         """Produce the next output batch from the table function."""
@@ -2052,7 +2128,10 @@ class TableInOutExchangeState(_VgiCallStateHolder, ExchangeState):
     _user_state: Annotated[Any, Transient()] = field(default=None, repr=False)
     _pushdown_filters: Annotated[Any, Transient()] = field(default=None, repr=False)  # PushdownFilters | None
     _auto_apply: Annotated[bool, Transient()] = field(default=False, repr=False)
+    # The dynamic-filter deltas this stream must replay on an HTTP turn, compacted by
+    # _record_filter_delta, and the live predicate order they rebuild.
     _filter_delta_history: list[bytes] = field(default_factory=list, repr=False)
+    _filter_predicate_order: list[str] = field(default_factory=list, repr=False)
     _vgi_tracer: Annotated[VgiTracer, Transient()] = field(default_factory=get_noop_tracer, repr=False)
 
     def __post_init__(self) -> None:
@@ -2113,13 +2192,17 @@ class TableInOutExchangeState(_VgiCallStateHolder, ExchangeState):
         )
         self._auto_apply = func_cls._should_auto_apply_filters()
         if self._call.init_call.pushdown_filters is not None:
-            self._pushdown_filters = func_cls.pushdown_filters(
-                self._call.init_call.pushdown_filters,
-                join_keys=self._call.init_call.join_keys,
-                output_schema=self._call.init_call.output_schema,
-            )
-            for filter_bytes in self._filter_delta_history:
-                self._pushdown_filters = _apply_filter_delta_bytes(self._pushdown_filters, filter_bytes)
+            # Everything re-parsed here was validated when it first arrived.
+            with replaying_accepted_state():
+                self._pushdown_filters = _replay_filter_history(
+                    func_cls.pushdown_filters(
+                        self._call.init_call.pushdown_filters,
+                        join_keys=self._call.init_call.join_keys,
+                        output_schema=self._call.init_call.output_schema,
+                    ),
+                    self._filter_delta_history,
+                    self._filter_predicate_order,
+                )
             self._params = dataclasses.replace(self._params, current_pushdown_filters=self._pushdown_filters)
         # Restore _user_state from serialized bytes if available
         if self._user_state_bytes is not None:
@@ -2141,8 +2224,9 @@ class TableInOutExchangeState(_VgiCallStateHolder, ExchangeState):
                 if len(encoded) > (24 << 20):
                     raise ValueError("base64 dynamic filter metadata exceeds the encoded-size limit")
                 filter_bytes = base64.b64decode(encoded, validate=True)
-                self._pushdown_filters = _apply_filter_delta_bytes(self._pushdown_filters, filter_bytes)
-                self._filter_delta_history.append(filter_bytes)
+                self._pushdown_filters, self._filter_delta_history, self._filter_predicate_order = _record_filter_delta(
+                    self._pushdown_filters, self._filter_delta_history, filter_bytes
+                )
         params = dataclasses.replace(
             self._params,
             auth_context=ctx.auth,
