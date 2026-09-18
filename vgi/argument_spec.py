@@ -19,7 +19,8 @@ import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cache
-from typing import Annotated, Any, get_args, get_origin, get_type_hints
+from types import UnionType
+from typing import Annotated, Any, Union, get_args, get_origin, get_type_hints
 
 import pyarrow as pa
 
@@ -395,14 +396,22 @@ def parameter_default_values_from_specs(
     arrays: list[pa.Array[Any]] = []
     names: list[str] = []
     for spec in default_specs:
-        if pa.types.is_null(spec.arrow_type):
-            raise ValueError(
-                f"Parameter {spec.name!r} has a default but no concrete Arrow type; "
-                "typed defaults require an explicit parameter type"
-            )
         value = spec.default_value
         if isinstance(value, pa.Scalar):
             value = value.as_py()
+        # An ANY-typed parameter (AnyArrow) has no concrete Arrow type, so a
+        # VALUE default cannot be represented. `None` still can: a null-typed
+        # array holds nulls, and it is column PRESENCE, not the value, that
+        # marks a parameter as having a default. Allowing it lets a required
+        # ANY parameter be declared `default=None` so that omitting it reaches
+        # the function's own on_bind() validation — which can name the argument
+        # and show its shape — instead of raising a bare KeyError during
+        # argument parsing, before any user code runs.
+        if pa.types.is_null(spec.arrow_type) and value is not None:
+            raise ValueError(
+                f"Parameter {spec.name!r} has a non-null default but no concrete Arrow type; "
+                "a typed default requires an explicit parameter type (None is allowed)"
+            )
         try:
             arrays.append(pa.array([value], type=spec.arrow_type))
         except (pa.ArrowException, TypeError, ValueError) as exc:
@@ -536,6 +545,30 @@ def _format_range(
     else:
         high = "+inf)"
     return f"{low}, {high}"
+
+
+def _unwrap_optional(annotation: Any) -> Any:
+    """``T | None`` -> ``T``; anything else unchanged.
+
+    A special marker type (``AnyArrow``, ``TableInput``) is recognised by
+    identity, so an Optional wrapper would hide it — an ``AnyArrow | None``
+    parameter would silently become a NULL-typed one, and DuckDB then cannot
+    cast anything into it. Unwrapping first lets a marker be declared nullable,
+    which is how a REQUIRED ANY argument opts into reaching its function's own
+    ``on_bind()`` validation (with ``default=None``) instead of being rejected
+    during parsing. Mirrors what ``_accepts_none`` already looks for.
+
+    Args:
+        annotation: The declared type of an ``Annotated[T, Arg(...)]`` field.
+
+    Returns:
+        The single non-``None`` member of an optional union, else ``annotation``.
+    """
+    origin = get_origin(annotation)
+    if origin is not Union and origin is not UnionType:
+        return annotation
+    members = [a for a in get_args(annotation) if a is not type(None)]
+    return members[0] if len(members) == 1 else annotation
 
 
 def _constraint_kwargs(arg: Arg[Any]) -> dict[str, Any]:
@@ -744,6 +777,7 @@ def _extract_argument_specs(
                 if type_args:
                     infer_type = type_args[0]
 
+            infer_type = _unwrap_optional(infer_type)
             is_table_input = infer_type is TableInput
             is_any_type = infer_type is AnyArrow or infer_type is AnyArrowValue
 
@@ -790,8 +824,8 @@ def _extract_argument_specs(
                 # Check for special types (AnyArrow, TableInput)
                 # Priority: Arg subscript type (Arg[AnyArrow]) > class type hint
                 # Also check _returns_any_arrow_value for Annotated[AnyArrowValue, ...]
-                hint = hints.get(attr_name)
-                type_param = getattr(arg_legacy, "_type_param", None)
+                hint = _unwrap_optional(hints.get(attr_name))
+                type_param = _unwrap_optional(getattr(arg_legacy, "_type_param", None))
                 is_table_input = type_param is TableInput or hint is TableInput
                 is_any_type = (
                     type_param is AnyArrow

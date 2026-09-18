@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Annotated, Any
 
 import pyarrow as pa
@@ -856,7 +857,7 @@ class TestArgumentConstraints:
         assert defaults.column("label")[0].as_py() is None
 
     def test_typed_default_requires_concrete_parameter_type(self) -> None:
-        """An ANY parameter cannot carry an untyped protocol default."""
+        """An ANY parameter cannot carry an untyped protocol default VALUE."""
         spec = ArgumentSpec(
             name="value",
             position=0,
@@ -865,8 +866,64 @@ class TestArgumentConstraints:
             default_value=1,
         )
 
-        with pytest.raises(ValueError, match="typed defaults require an explicit parameter type"):
+        with pytest.raises(ValueError, match="a typed default requires an explicit parameter type"):
             parameter_default_values_from_specs([spec], require_trailing=True)
+
+    def test_an_any_parameter_may_default_to_none(self) -> None:
+        """`None` IS representable on an ANY parameter — a null array holds nulls.
+
+        It is column presence, not the value, that marks a parameter as having a
+        default, so this costs the protocol nothing. It buys a function the
+        ability to declare a *required* ANY argument with ``default=None`` so
+        that omitting it reaches ``on_bind()``, where the function can name the
+        argument and show its shape, instead of raising a bare ``KeyError``
+        during argument parsing before any user code runs.
+        """
+        spec = ArgumentSpec(
+            name="questions",
+            position="questions",
+            arrow_type=pa.null(),
+            is_any_type=True,
+            default_value=None,
+        )
+
+        defaults = parameter_default_values_from_specs([spec], require_trailing=True)
+
+        assert defaults is not None
+        assert defaults.schema.names == ["questions"]
+        assert defaults.column("questions").type == pa.null()
+        assert defaults.column("questions")[0].as_py() is None
+
+    def test_an_optional_any_argument_is_still_an_any_argument(self) -> None:
+        """``AnyArrow | None`` must stay ANY-typed, not collapse to a NULL column.
+
+        A marker type is recognised by identity, so an Optional wrapper used to
+        hide it: the parameter silently became NULL-typed and DuckDB could then
+        cast nothing into it (`Unimplemented type for cast (STRUCT(...) -> NULL)`).
+        Declaring a REQUIRED ANY argument nullable, with ``default=None``, is how
+        a function gets to reject the missing case in its own ``on_bind()`` with
+        a message naming the argument.
+        """
+
+        @dataclasses.dataclass(slots=True, frozen=True, kw_only=True)
+        class _Args:
+            """Args with a required-but-nullable ANY parameter."""
+
+            payload: Annotated[AnyArrow | None, Arg("payload", default=None)] = None
+
+        class _Fn(TableInOutFunction[_Args]):
+            """A function declaring one optional ANY argument."""
+
+            FunctionArguments = _Args
+
+            class Meta:
+                """Metadata."""
+
+                name = "optional_any"
+
+        (spec,) = [sp for sp in extract_argument_specs(_Fn) if sp.name == "payload"]
+        assert spec.is_any_type, "an optional ANY argument lost its ANY marker"
+        assert pa.types.is_null(spec.arrow_type)
 
     def test_typed_defaults_reject_case_insensitive_duplicate_names(self) -> None:
         """Default-batch field names must identify one signature slot."""
