@@ -91,8 +91,10 @@ class TestSubstreamPartialSumFunction:
         batches = [
             pa.RecordBatch.from_pydict({"n": list(range(i * 100, (i + 1) * 100))}, schema=schema) for i in range(20)
         ]
-        # A plain subprocess worker whatever transport the suite runs on.
-        with Client("vgi-fixture-worker") as client:
+        # A plain subprocess worker whatever transport the suite runs on; four
+        # connections are enough to share an execution, where a worker per core
+        # would be dozens of processes.
+        with Client("vgi-fixture-worker", worker_limit=4) as client:
             output = list(
                 client.table_in_out_function(
                     function_name="substream_partial_sum",
