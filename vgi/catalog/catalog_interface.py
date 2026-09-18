@@ -2698,6 +2698,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     _function_registry: "dict[tuple[SchemaKey, str], list[type]] | None" = None
     _macro_registry: "dict[tuple[SchemaKey, str], Macro] | None" = None
     _index_registry: "dict[tuple[SchemaKey, str], Index] | None" = None
+    # Function listings by (schema, listing type), filled in by ``_function_infos``.
+    _function_info_cache: "dict[tuple[SchemaKey, SchemaObjectType], tuple[FunctionInfo, ...]] | None" = None
     # Lazy registry build is one-time but the fixture HTTP server is
     # multi-threaded and shares one catalog instance, so concurrent
     # first-requests can race the build. Serialize it under a lock and flip
@@ -2738,6 +2740,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         self._function_registry = {}
         self._macro_registry = {}
         self._index_registry = {}
+        self._function_info_cache = {}
 
         def _register_table(schema_key: SchemaKey, table: "Table") -> None:
             key = (schema_key, table.name.lower())
@@ -3320,28 +3323,45 @@ class ReadOnlyCatalogInterface(CatalogInterface):
                 if sn == path_key and macro.macro_type == target_macro_type:
                     results.append(macro.to_macro_info(schema_path))
         else:
-            # SCALAR_FUNCTION or TABLE_FUNCTION
-            for (sn, _), func_classes in self._function_registry.items():
-                if sn != path_key:
-                    continue
-                for func_cls in func_classes:
-                    func_info = self._function_to_info(func_cls, schema_path)
-                    # Filter by function type
-                    if type_enum == SchemaObjectType.SCALAR_FUNCTION and func_info.function_type != FunctionType.SCALAR:
-                        continue
-                    if type_enum == SchemaObjectType.TABLE_FUNCTION and func_info.function_type not in (
-                        FunctionType.TABLE,
-                        FunctionType.TABLE_BUFFERING,
-                    ):
-                        continue
-                    if (
-                        type_enum == SchemaObjectType.AGGREGATE_FUNCTION
-                        and func_info.function_type != FunctionType.AGGREGATE
-                    ):
-                        continue
-                    results.append(func_info)
+            # SCALAR_FUNCTION, TABLE_FUNCTION or AGGREGATE_FUNCTION
+            results.extend(self._function_infos(path_key, schema_path, type_enum))
 
         return results
+
+    def _function_infos(
+        self, path_key: SchemaKey, schema_path: SchemaPath, type_enum: SchemaObjectType
+    ) -> tuple[FunctionInfo, ...]:
+        """Return the schema's functions of one listing type, built on the first request.
+
+        A listing depends only on the registered classes' static metadata, so
+        every request for it returns the same `FunctionInfo` instances. Rebuilding
+        it on each request re-derived every function in the schema to keep the
+        requested type's. It also made the worker encode each one again, at
+        about 0.8 ms per function, because ``FunctionsResponse.from_infos``
+        stores an instance's encoding on the instance.
+        The instances are shared between requests, so they must not be mutated.
+        """
+        assert self._function_registry is not None
+        assert self._function_info_cache is not None
+        key = (path_key, type_enum)
+        cached = self._function_info_cache.get(key)
+        if cached is not None:
+            return cached
+        wanted = {
+            SchemaObjectType.SCALAR_FUNCTION: (FunctionType.SCALAR,),
+            SchemaObjectType.TABLE_FUNCTION: (FunctionType.TABLE, FunctionType.TABLE_BUFFERING),
+            SchemaObjectType.AGGREGATE_FUNCTION: (FunctionType.AGGREGATE,),
+        }.get(type_enum, ())
+        infos: list[FunctionInfo] = []
+        for (sn, _), func_classes in self._function_registry.items():
+            if sn != path_key:
+                continue
+            for func_cls in func_classes:
+                func_info = self._function_to_info(func_cls, schema_path)
+                if func_info.function_type in wanted:
+                    infos.append(func_info)
+        # Concurrent first requests may both build it; keep whichever landed first.
+        return self._function_info_cache.setdefault(key, tuple(infos))
 
     def copy_from_formats(
         self,
