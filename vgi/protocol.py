@@ -842,6 +842,37 @@ class TransactionBeginResponse(ArrowSerializableDataclass):
     transaction_opaque_data: bytes | None = None
 
 
+#: Instance attribute where `_item_ipc_bytes` keeps an item's encoding.
+_ITEM_IPC_MEMO = "_vgi_item_ipc"
+
+
+def _item_ipc_bytes(info: Any) -> bytes:
+    """Return a catalog item's Arrow IPC encoding, encoded once per instance.
+
+    A catalog item is a frozen dataclass, so its encoding cannot change, and
+    encoding one costs about 0.8 ms (a one-row batch of some 40 columns, plus
+    its schema). A catalog that returns the same instances on every listing,
+    as ``CatalogInterface`` does for functions, therefore pays for the encoding
+    once. The encoding is kept in the instance's ``__dict__``, as
+    ``functools.cached_property`` does on a frozen dataclass. It is not a field,
+    so it takes no part in equality, ``repr``, ``dataclasses.replace`` or
+    serialization. An item without a ``__dict__`` is encoded on every call.
+
+    Args:
+        info: The catalog item (an ``ArrowSerializableDataclass``).
+
+    Returns:
+        The item's Arrow IPC stream bytes.
+    """
+    memo = getattr(info, "__dict__", None)
+    if memo is None:
+        return info.serialize_to_bytes()  # type: ignore[no-any-return]
+    encoded = memo.get(_ITEM_IPC_MEMO)
+    if encoded is None:
+        encoded = memo[_ITEM_IPC_MEMO] = info.serialize_to_bytes()
+    return encoded  # type: ignore[no-any-return]
+
+
 def _catalog_items_response(item_type: type) -> type:
     """Generate a catalog items response class for the given `ArrowSerializableDataclass` type.
 
@@ -868,13 +899,13 @@ def _catalog_items_response(item_type: type) -> type:
 
         @staticmethod
         def from_infos(infos: list) -> _Response:  # type: ignore[type-arg]
-            return _Response(items=[info.serialize_to_bytes() for info in infos])
+            return _Response(items=[_item_ipc_bytes(info) for info in infos])
 
         @staticmethod
         def from_optional(info: object | None) -> _Response:
             if info is None:
                 return _Response(items=[])
-            return _Response(items=[info.serialize_to_bytes()])  # type: ignore[attr-defined]
+            return _Response(items=[_item_ipc_bytes(info)])
 
         def to_infos(self) -> list:  # type: ignore[type-arg]
             return [item_type.deserialize_from_bytes(b) for b in self.items]  # type: ignore[attr-defined]
