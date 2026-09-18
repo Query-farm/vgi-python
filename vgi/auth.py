@@ -65,7 +65,7 @@ _LAZY_EXPORTS = {
 }
 
 if TYPE_CHECKING:
-    from vgi_rpc.http import (
+    from vgi_rpc.http import (  # noqa: F401
         AuthUnavailableError,
         OAuthResourceMetadata,
         bearer_authenticate,
@@ -76,7 +76,7 @@ if TYPE_CHECKING:
         parse_device_code_client_id,
         parse_device_code_client_secret,
     )
-    from vgi_rpc.http._oauth_jwt import jwt_authenticate
+    from vgi_rpc.http._oauth_jwt import jwt_authenticate  # noqa: F401
 
 
 def __getattr__(name: str) -> Any:
