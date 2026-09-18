@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import cast
 
 import pyarrow as pa
@@ -398,8 +399,10 @@ class TestScalarFunctionParallel:
                 )
             )
 
-        # Ten batches dealt round-robin reach all four connections.
-        assert opened == [1, 2, 3]
+        # Ten batches dealt round-robin reach every connection the client
+        # allows: four, or one per core on a smaller machine (GitHub's macOS
+        # runners have three).
+        assert opened == list(range(1, min(4, os.cpu_count() or 1)))
 
         # Should get all 1000 rows back
         assert_total_rows(outputs, 1000)

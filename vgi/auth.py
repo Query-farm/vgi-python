@@ -65,18 +65,36 @@ _LAZY_EXPORTS = {
 }
 
 if TYPE_CHECKING:
-    from vgi_rpc.http import (  # noqa: F401
-        AuthUnavailableError,
-        OAuthResourceMetadata,
-        bearer_authenticate,
-        bearer_authenticate_static,
-        chain_authenticate,
-        parse_client_id,
-        parse_client_secret,
-        parse_device_code_client_id,
-        parse_device_code_client_secret,
+    # ``X as X``: explicit re-exports, so type checkers see these as part of
+    # ``vgi.auth`` exactly as they were before they became lazy.
+    from vgi_rpc.http import (
+        AuthUnavailableError as AuthUnavailableError,
     )
-    from vgi_rpc.http._oauth_jwt import jwt_authenticate  # noqa: F401
+    from vgi_rpc.http import (
+        OAuthResourceMetadata as OAuthResourceMetadata,
+    )
+    from vgi_rpc.http import (
+        bearer_authenticate as bearer_authenticate,
+    )
+    from vgi_rpc.http import (
+        bearer_authenticate_static as bearer_authenticate_static,
+    )
+    from vgi_rpc.http import (
+        chain_authenticate as chain_authenticate,
+    )
+    from vgi_rpc.http import (
+        parse_client_id as parse_client_id,
+    )
+    from vgi_rpc.http import (
+        parse_client_secret as parse_client_secret,
+    )
+    from vgi_rpc.http import (
+        parse_device_code_client_id as parse_device_code_client_id,
+    )
+    from vgi_rpc.http import (
+        parse_device_code_client_secret as parse_device_code_client_secret,
+    )
+    from vgi_rpc.http._oauth_jwt import jwt_authenticate as jwt_authenticate
 
 
 def __getattr__(name: str) -> Any:
