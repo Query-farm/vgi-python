@@ -44,7 +44,10 @@ _LAUNCHED: list[list[str]] = []
 def _fixture_command(*argv: str) -> str:
     """Return the ``Client`` worker string for a fixture command under ``TEST_TRANSPORT``."""
     if TEST_TRANSPORT == "subprocess":
-        return shlex.join(argv)
+        # Unquoted, as these commands always were: Windows splits server_path
+        # non-POSIX, so shlex quoting around a backslashed python.exe path
+        # stayed on the argv and the executable was not found.
+        return " ".join(argv)
     # Every test process shares the one worker, so its connection cap must sit
     # above anything the suite opens: at the default 64 a scan holding its
     # connections while its next one waits in the backlog can wait on the others
