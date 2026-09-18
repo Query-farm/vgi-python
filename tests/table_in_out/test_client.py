@@ -231,7 +231,9 @@ class TestWorkerStderrCapture:
 
     def test_captures_worker_stderr(self, simple_batches: list[pa.RecordBatch]) -> None:
         """Should capture stderr output from the worker process."""
-        with Client(SUBPROCESS_FIXTURE_WORKER, pool=None) as client:
+        # One worker: stderr capture needs a process, not echo's fan-out (a
+        # direct worker per core).
+        with Client(SUBPROCESS_FIXTURE_WORKER, pool=None, worker_limit=1) as client:
             # The example worker uses logging which writes to stderr
             list(
                 client.table_in_out_function(
