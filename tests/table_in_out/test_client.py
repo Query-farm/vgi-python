@@ -10,7 +10,13 @@ import time
 import pyarrow as pa
 import pytest
 
-from tests.conftest import SUBPROCESS_FIXTURE_WORKER, assert_single_result, assert_total_rows, make_schema
+from tests.conftest import (
+    SUBPROCESS_FIXTURE_WORKER,
+    assert_single_result,
+    assert_total_rows,
+    make_schema,
+    record_opened_connections,
+)
 from vgi.client import Client
 from vgi.client.client import ClientError
 
@@ -146,9 +152,12 @@ class TestEdgeCases:
 class TestMultiWorkerEdgeCases:
     """Tests for edge cases with multiple workers.
 
-    These tests expose timeout/hang bugs when:
+    These tests exposed timeout/hang bugs when:
     - Processing parquet with one batch of zero rows
-    - Additional workers spawned but don't receive batches
+    - Additional workers were spawned but received no batches
+
+    The client now opens a secondary connection only when a batch is dealt to
+    it, so no connection sits idle. The tests check that too.
     """
 
     def test_zero_row_batch_single_worker(self, fixture_worker: str) -> None:
@@ -174,8 +183,9 @@ class TestMultiWorkerEdgeCases:
         schema = make_schema([pa.field("id", pa.int64()), pa.field("value", pa.int64())])
         zero_row_batch = pa.RecordBatch.from_pydict({"id": [], "value": []}, schema=schema)
 
-        # Force 4 workers even though there's only one batch with zero rows
+        # Allow 4 workers even though there's only one batch with zero rows
         with Client(fixture_worker, worker_limit=4) as client:
+            opened = record_opened_connections(client)
             output_batches = list(
                 client.table_in_out_function(
                     function_name="echo",
@@ -184,17 +194,19 @@ class TestMultiWorkerEdgeCases:
                 )
             )
 
-        # Should complete without hanging
+        # Should complete without hanging, on the primary alone
         assert len(output_batches) >= 1
         assert_total_rows(output_batches, 0)
+        assert opened == []
 
     def test_single_batch_multiple_workers(self, fixture_worker: str) -> None:
         """Single normal batch with max_workers=4 should complete without hanging."""
         schema = make_schema([pa.field("id", pa.int64()), pa.field("value", pa.int64())])
         single_batch = pa.RecordBatch.from_pydict({"id": [1, 2, 3], "value": [10, 20, 30]}, schema=schema)
 
-        # Force 4 workers even though there's only 1 batch
+        # Allow 4 workers even though there's only 1 batch
         with Client(fixture_worker, worker_limit=4) as client:
+            opened = record_opened_connections(client)
             output_batches = list(
                 client.table_in_out_function(
                     function_name="echo",
@@ -205,6 +217,7 @@ class TestMultiWorkerEdgeCases:
 
         # Should complete without hanging and return correct data
         assert_total_rows(output_batches, 3)
+        assert opened == []
 
     def test_fewer_batches_than_workers(self, fixture_worker: str) -> None:
         """2 batches with max_workers=4 should complete without hanging."""
@@ -212,8 +225,9 @@ class TestMultiWorkerEdgeCases:
         batch1 = pa.RecordBatch.from_pydict({"id": [1, 2], "value": [10, 20]}, schema=schema)
         batch2 = pa.RecordBatch.from_pydict({"id": [3, 4, 5], "value": [30, 40, 50]}, schema=schema)
 
-        # Force 4 workers even though there are only 2 batches
+        # Allow 4 workers even though there are only 2 batches
         with Client(fixture_worker, worker_limit=4) as client:
+            opened = record_opened_connections(client)
             output_batches = list(
                 client.table_in_out_function(
                     function_name="echo",
@@ -224,6 +238,8 @@ class TestMultiWorkerEdgeCases:
 
         # Should complete without hanging and return correct data (5 rows total)
         assert_total_rows(output_batches, 5)
+        # The second batch opened the one secondary connection it needed.
+        assert opened == [1]
 
 
 class TestWorkerStderrCapture:

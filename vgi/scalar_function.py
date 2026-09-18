@@ -755,7 +755,8 @@ class ScalarFunctionGenerator(vgi.function.Function):
         """Initialize the function during the init API call.
 
         Override to perform one-time setup that should happen after bind
-        but before processing batches. The default returns max_processes=1.
+        but before processing batches. The default leaves ``max_workers``
+        unbounded, so the caller decides how many connections to use.
 
         Args:
             bind_call: The original BindCall with arguments and schema.
@@ -769,7 +770,7 @@ class ScalarFunctionGenerator(vgi.function.Function):
             storage: [`BoundStorage`][] for storing data across calls.
 
         Returns:
-            [`GlobalInitResponse`][] with max_processes and optional opaque data.
+            [`GlobalInitResponse`][] with ``max_workers`` and optional opaque data.
 
         """
         return GlobalInitResponse()

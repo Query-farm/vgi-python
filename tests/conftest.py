@@ -132,6 +132,24 @@ def empty_batch_from_schema(schema: pa.Schema) -> pa.RecordBatch:
     return pa.RecordBatch.from_pydict({field.name: [] for field in schema}, schema=schema)
 
 
+def record_opened_connections(client: Any) -> list[int]:
+    """Record the index of each worker connection a started ``client`` opens from now on.
+
+    The primary connection (index 0) is opened when the client starts, so call
+    this afterwards: the list then holds only secondary connections, which a
+    call opens for fan-out. Only records; each connection is opened for real.
+    """
+    opened: list[int] = []
+    spawn = client._spawn_worker
+
+    def recording_spawn(worker_index: int) -> Any:
+        opened.append(worker_index)
+        return spawn(worker_index)
+
+    client._spawn_worker = recording_spawn
+    return opened
+
+
 # =============================================================================
 # Fixtures
 # =============================================================================
