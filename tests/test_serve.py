@@ -535,7 +535,7 @@ def _hosted_protocols(worker_cls: type[Worker]) -> frozenset[str]:
         worker_cls(quiet=True),
         enable_describe=False,
         server_version=_get_vgi_version(),
-        identity=_build_identity(worker_cls, None, None),
+        identity=_build_identity(worker_cls, None),
     )
     return frozenset(server.bindings)
 
