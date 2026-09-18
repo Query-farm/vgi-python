@@ -45,10 +45,11 @@ def _fixture_command(*argv: str) -> str:
     """Return the ``Client`` worker string for a fixture command under ``TEST_TRANSPORT``."""
     if TEST_TRANSPORT == "subprocess":
         return shlex.join(argv)
-    # Every test process shares the one worker, so it must not cap connections:
-    # at the default 64 a scan holding its connections while its next one waits
-    # in the backlog can wait on the others doing the same, forever.
-    launch_argv = [shutil.which(argv[0]) or argv[0], *argv[1:], "--max-connections", "0"]
+    # Every test process shares the one worker, so its connection cap must sit
+    # above anything the suite opens: at the default 64 a scan holding its
+    # connections while its next one waits in the backlog can wait on the others
+    # doing the same, forever. Finite because ``Worker.main`` refuses 0.
+    launch_argv = [shutil.which(argv[0]) or argv[0], *argv[1:], "--max-connections", "4096"]
     _LAUNCHED.append(launch_argv)
     return "launch:" + shlex.join(launch_argv)
 
