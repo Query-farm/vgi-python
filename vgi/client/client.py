@@ -33,10 +33,14 @@ the HTTP flow and skip the subprocess branch.
 
 Parallel processing
 -------------------
-When a bind returns ``max_workers > 1`` the client spawns additional
-worker connections and distributes input batches round-robin. Output
-order is non-deterministic in parallel mode. This is optimization; a
-minimal port can ignore it and always use one connection.
+When an init returns ``max_workers > 1`` the client may use that many
+worker connections, capped by the CPU count and ``worker_limit``. For
+scalar and table-in-out calls it deals input batches round-robin and opens
+a secondary connection only when the first batch is dealt to it, so ``n``
+input batches use at most ``n`` connections. A table function has no input,
+so it opens every allowed connection at init. Output order is
+non-deterministic in parallel mode. This is optimization; a minimal port
+can ignore it and always use one connection.
 
 Key classes
 -----------
@@ -256,6 +260,37 @@ class WorkerConnection:
     _iroh_ctx: AbstractContextManager[Any] | None = field(default=None, repr=False)
     # Launch transport: context manager from vgi_rpc.launcher.resolve_and_connect.
     _launch_ctx: AbstractContextManager[Any] | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class _FanOut:
+    """How far a stream may fan out, and the init every secondary connection sends.
+
+    Built from the primary's bind and init. A secondary connection's init
+    echoes the primary's request plus its ``execution_id`` and init opaque
+    data, so all connections are parts of one execution.
+
+    Attributes:
+        max_workers: The total connections allowed, the primary included, after
+            ``_determine_max_workers`` applies the client's limits.
+        bind_request: The primary's bind request, carried inside each init.
+        bind_response: The primary's bind response.
+        init_response: The primary's init header. Supplies ``execution_id`` and
+            ``opaque_data``.
+        projection_ids: Projection, repeated on every secondary init.
+        pushdown_filters_batch: Pushed-down filters, repeated on every secondary init.
+        phase: Table-in-out phase, or ``None`` for other function kinds.
+        join_keys: Join-key batches, repeated on every secondary init.
+    """
+
+    max_workers: int
+    bind_request: BindRequest
+    bind_response: BindResponse
+    init_response: GlobalInitResponse
+    projection_ids: list[int] | None
+    pushdown_filters_batch: pa.RecordBatch | None
+    phase: TableInOutFunctionInitPhase | None
+    join_keys: list[pa.RecordBatch] | None
 
 
 class Client(CatalogClientMixin, AggregateClientMixin):
@@ -1731,7 +1766,8 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         join_keys: list[pa.RecordBatch] | None = None,
         at_unit: str | None = None,
         at_value: str | None = None,
-    ) -> tuple[BindRequest, BindResponse, GlobalInitResponse]:
+        fan_out_on_demand: bool = False,
+    ) -> tuple[BindRequest, BindResponse, GlobalInitResponse, _FanOut]:
         """Run the canonical bind → init → fan-out-workers sequence.
 
         All three function entry points (``scalar_function``,
@@ -1744,7 +1780,16 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         4. Read the `[`GlobalInitResponse`][]` header (carries ``max_workers``
            + ``execution_id`` for secondary workers).
         5. Spawn any additional workers and drive their ``init`` with the
-           primary's execution identity.
+           primary's execution identity — unless ``fan_out_on_demand``, in
+           which case the returned `_FanOut` is handed to
+           ``_distribute_and_collect``, which opens a secondary connection only
+           when an input batch is dealt to it. Input-driven calls (scalar and
+           table-in-out) fan out that way: the server's ``max_workers`` is an
+           upper bound (by default unbounded, so the client's CPU count), and
+           opening that many connections up front for a call with one input
+           batch costs a worker process each on the subprocess transport, all
+           but one of them idle. ``table_function`` has no input to deal, so
+           its connections are all opened here.
 
         Centralizing this keeps HTTP/subprocess differences and protocol
         changes (e.g. future scoped-secret re-bind, init hints) in one
@@ -1809,69 +1854,71 @@ class Client(CatalogClientMixin, AggregateClientMixin):
 
         init_response = stream.typed_header(GlobalInitResponse)
         max_workers = 1 if split_tokens is not None else self._determine_max_workers(init_response.max_workers)
-
-        self._spawn_additional_workers(
-            max_workers,
-            bind_request,
-            bind_response,
-            init_response,
+        fan_out = _FanOut(
+            max_workers=max_workers,
+            bind_request=bind_request,
+            bind_response=bind_response,
+            init_response=init_response,
             projection_ids=projection_ids,
             pushdown_filters_batch=pushdown_filters_batch,
             phase=phase,
             join_keys=join_keys,
         )
+        if not fan_out_on_demand:
+            self._spawn_additional_workers(fan_out)
 
-        return bind_request, bind_response, init_response
+        return bind_request, bind_response, init_response, fan_out
 
-    def _spawn_additional_workers(
-        self,
-        max_workers: int,
-        bind_request: BindRequest,
-        bind_response: BindResponse,
-        global_init_response: GlobalInitResponse,
-        *,
-        projection_ids: list[int] | None = None,
-        pushdown_filters_batch: pa.RecordBatch | None = None,
-        phase: TableInOutFunctionInitPhase | None = None,
-        join_keys: list[pa.RecordBatch] | None = None,
-    ) -> None:
-        """Spawn and initialize additional worker subprocesses in parallel.
-
-        First spawns all worker subprocesses sequentially (fast operation), then
-        initializes all workers in parallel using threads. Each additional worker
-        receives a secondary init with the execution_id from the primary worker.
-
-        The spawned workers are appended to self._additional_workers list.
-
-        If max_workers is 1 or less, this method returns immediately without
-        spawning any workers.
+    def _init_secondary_worker(self, worker: WorkerConnection, fan_out: _FanOut) -> None:
+        """Send a secondary worker its ``init``, making it part of the primary's execution.
 
         Args:
-            max_workers: Total number of workers desired (including the primary
-                worker). For example, if max_workers=4, this method spawns
-                3 additional workers (indices 1, 2, 3).
-            bind_request: The original bind request to embed in init.
-            bind_response: The bind response with output schema.
-            global_init_response: The primary worker's init response containing
-                execution_id and opaque_data for secondary init.
-            projection_ids: Optional column indices for projection.
-            pushdown_filters_batch: Optional deserialized filter predicates.
-            phase: Table-in-out function phase (INPUT or FINALIZE).
-            join_keys: Optional serialized join-key batches pushed down for
-                join filtering, echoed to every secondary worker exactly like
-                ``pushdown_filters_batch``.
+            worker: The newly opened secondary connection.
+            fan_out: The primary's bind and init, which the secondary init repeats.
+        """
+        worker.substream_id = _substream_id_for(fan_out.phase)
+        worker.stream = self._do_init(
+            worker.proxy,
+            fan_out.bind_request,
+            fan_out.bind_response,
+            projection_ids=fan_out.projection_ids,
+            pushdown_filters_batch=fan_out.pushdown_filters_batch,
+            phase=fan_out.phase,
+            join_keys=fan_out.join_keys,
+            execution_id=fan_out.init_response.execution_id,
+            init_opaque_data=fan_out.init_response.opaque_data,
+            substream_id=worker.substream_id,
+        )
+
+    def _spawn_additional_workers(self, fan_out: _FanOut) -> None:
+        """Open and initialize every secondary connection ``fan_out`` allows, in parallel.
+
+        Opens the connections one after another, which is fast: a subprocess is
+        only started here, not waited for. Then initializes them in parallel
+        threads, overlapping the workers' startup. Each secondary init carries
+        the primary's ``execution_id``. The connections are appended to
+        ``self._additional_workers``.
+
+        ``table_function`` fans out this way because it has no input to deal.
+        Input-driven calls use `_distribute_and_collect`, which opens a
+        connection only when a batch is dealt to it. When ``max_workers`` is 1
+        or less, this method returns without opening anything.
+
+        Args:
+            fan_out: The connection limit and the primary's bind and init, which
+                every secondary init repeats.
 
         Raises:
             [`ClientError`][]: If any worker fails to initialize. The exception wraps
                 the first initialization error encountered.
 
         """
-        if max_workers <= 1:
+        if fan_out.max_workers <= 1:
             return
 
         # Spawn all worker subprocesses first (fast)
         new_workers: list[WorkerConnection] = []
-        for worker_index in range(1, max_workers):
+        for worker_index in range(1, fan_out.max_workers):
             worker = self._spawn_worker(worker_index)
             new_workers.append(worker)
             self._additional_workers.append(worker)
@@ -1881,20 +1928,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
 
         def do_init(worker: WorkerConnection) -> None:
             try:
-                worker.substream_id = _substream_id_for(phase)
-                stream = self._do_init(
-                    worker.proxy,
-                    bind_request,
-                    bind_response,
-                    projection_ids=projection_ids,
-                    pushdown_filters_batch=pushdown_filters_batch,
-                    phase=phase,
-                    join_keys=join_keys,
-                    execution_id=global_init_response.execution_id,
-                    init_opaque_data=global_init_response.opaque_data,
-                    substream_id=worker.substream_id,
-                )
-                worker.stream = stream
+                self._init_secondary_worker(worker, fan_out)
             except Exception as e:
                 init_errors.append(e)
 
@@ -2111,13 +2145,16 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         output_queue: Queue[tuple[int, list[pa.RecordBatch], list[list[int]] | None] | BaseException],
         *,
         decode_parent_rows: bool = False,
+        init: _FanOut | None = None,
     ) -> None:
         """Thread function that processes batches for a single worker.
 
         Runs in a dedicated thread, pulling (batch_index, batch) tuples from
         the input queue, processing them via _process_batch_on_worker, and
         pushing (batch_index, output_batches, parent_rows_batches) tuples to
-        the output queue.
+        the output queue. With ``init``, first sends the worker its secondary
+        init, so a connection opened on demand starts up without holding up
+        the thread dealing the batches.
 
         When None is received from input_queue, signals thread completion by
         pushing (-1, [], None) to output_queue and exits.
@@ -2132,9 +2169,13 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             output_queue: Thread-safe queue for results.
             decode_parent_rows: Forwarded to `_process_batch_on_worker` — see
                 its docstring.
+            init: The fan-out plan to initialize a just-opened secondary worker
+                from, or ``None`` for a worker already initialized.
 
         """
         try:
+            if init is not None:
+                self._init_secondary_worker(worker, init)
             while True:
                 item = input_queue.get()
                 if item is None:
@@ -2154,7 +2195,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
     def _distribute_and_collect(
         self,
         *,
-        all_workers: list[WorkerConnection],
+        fan_out: _FanOut,
         first_batch: pa.RecordBatch,
         remaining_input: Iterator[pa.RecordBatch],
         decode_parent_rows: bool = False,
@@ -2166,8 +2207,16 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         worker, spawns a dedicated thread that pulls batches from an input queue,
         sends them to the worker, and pushes results to a shared output queue.
 
+        Batch ``i`` goes to connection ``i % fan_out.max_workers``. The primary
+        is connection 0. A secondary connection is opened, and sent its init,
+        when the first batch is dealt to it, so a call with ``n`` input batches
+        uses ``min(n, max_workers)`` connections. It never opens one that would
+        get no input. Opened connections are appended to
+        ``self._additional_workers``, where the caller closes them.
+
         Args:
-            all_workers: List of all workers (primary + additional).
+            fan_out: The primary's init and the connection limit, from
+                `_initialize_stream_common` with ``fan_out_on_demand=True``.
             first_batch: The first input batch, already consumed from the
                 iterator by the calling method.
             remaining_input: Iterator for remaining input batches.
@@ -2190,42 +2239,48 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             [`ClientError`][]: If a worker thread fails with an exception.
 
         """
-        num_workers = len(all_workers)
-
-        _logger.debug("starting_parallel_processing num_workers=%s", num_workers)
-
-        # Create queues for each worker
-        input_queues: list[Queue[tuple[int, pa.RecordBatch] | None]] = [Queue() for _ in range(num_workers)]
+        assert self._primary is not None
+        max_workers = max(fan_out.max_workers, 1)
+        input_queues: list[Queue[tuple[int, pa.RecordBatch] | None]] = []
         output_queue: Queue[tuple[int, list[pa.RecordBatch], list[list[int]] | None] | BaseException] = Queue()
-
-        # Start worker threads
         threads: list[threading.Thread] = []
-        for i, worker in enumerate(all_workers):
+
+        def start_worker_thread(worker: WorkerConnection, init: _FanOut | None) -> None:
+            input_queue: Queue[tuple[int, pa.RecordBatch] | None] = Queue()
+            input_queues.append(input_queue)
             thread = threading.Thread(
                 target=self._worker_thread_loop,
-                args=(worker, input_queues[i], output_queue),
-                kwargs={"decode_parent_rows": decode_parent_rows},
+                args=(worker, input_queue, output_queue),
+                kwargs={"decode_parent_rows": decode_parent_rows, "init": init},
                 daemon=True,
             )
             thread.start()
             threads.append(thread)
 
-        # Distribute batches round-robin across workers
-        batch_index = 0
+        start_worker_thread(self._primary, None)
+
+        # Deal batches round-robin, opening a connection the first time one is
+        # dealt to it. Opening is quick (a subprocess is started, not waited
+        # for); the secondary init runs on the connection's own thread.
         batches_sent = 0
+        try:
+            for batch_index, input_batch in enumerate(itertools.chain((first_batch,), remaining_input)):
+                worker_idx = batch_index % max_workers
+                if worker_idx == len(input_queues):
+                    worker = self._spawn_worker(worker_idx)
+                    self._additional_workers.append(worker)
+                    start_worker_thread(worker, fan_out)
+                input_queues[worker_idx].put((batch_index, input_batch))
+                batches_sent += 1
+        except BaseException:
+            # The input or a connection failed: let the started threads finish
+            # what they were dealt and exit rather than wait forever.
+            for q in input_queues:
+                q.put(None)
+            raise
 
-        # Send first batch
-        worker_idx = batch_index % num_workers
-        input_queues[worker_idx].put((batch_index, first_batch))
-        batches_sent += 1
-        batch_index += 1
-
-        # Send remaining batches
-        for input_batch in remaining_input:
-            worker_idx = batch_index % num_workers
-            input_queues[worker_idx].put((batch_index, input_batch))
-            batches_sent += 1
-            batch_index += 1
+        num_workers = len(input_queues)
+        _logger.debug("starting_parallel_processing num_workers=%s", num_workers)
 
         # Signal end of input to all workers
         for q in input_queues:
@@ -2377,7 +2432,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 input_schema = first_batch.schema
                 pushdown_filters_batch = self._deserialize_pushdown_filters(pushdown_filters)
 
-                bind_request, bind_response, init_response = self._initialize_stream_common(
+                bind_request, bind_response, init_response, fan_out = self._initialize_stream_common(
                     function_name=function_name,
                     schema_path=schema_path,
                     arguments=arguments,
@@ -2391,12 +2446,12 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                     phase=TableInOutFunctionInitPhase.INPUT,
                     bind_result_callback=bind_result_callback,
                     join_keys=join_keys,
+                    fan_out_on_demand=True,
                 )
 
                 # Process input batches across all workers
-                all_workers = [self._primary] + self._additional_workers
                 yield from self._distribute_and_collect(
-                    all_workers=all_workers,
+                    fan_out=fan_out,
                     first_batch=first_batch,
                     remaining_input=input,
                     decode_parent_rows=parent_row_callback is not None,
@@ -2404,7 +2459,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 )
 
                 # Close all input streams
-                for worker in all_workers:
+                for worker in [self._primary, *self._additional_workers]:
                     if worker.stream is not None:
                         worker.stream.close()
                         worker.stream = None
@@ -3492,7 +3547,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
 
                 input_schema = first_batch.schema
 
-                self._initialize_stream_common(
+                *_, fan_out = self._initialize_stream_common(
                     function_name=function_name,
                     schema_path=schema_path,
                     arguments=arguments,
@@ -3505,18 +3560,18 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                     pushdown_filters_batch=None,
                     phase=None,
                     bind_result_callback=bind_result_callback,
+                    fan_out_on_demand=True,
                 )
 
                 # Process batches across all workers
-                all_workers = [self._primary] + self._additional_workers
                 yield from self._distribute_and_collect(
-                    all_workers=all_workers,
+                    fan_out=fan_out,
                     first_batch=first_batch,
                     remaining_input=input,
                 )
 
                 # Close streams and secondary workers
-                for worker in all_workers:
+                for worker in [self._primary, *self._additional_workers]:
                     if worker.stream is not None:
                         worker.stream.close()
                         worker.stream = None
