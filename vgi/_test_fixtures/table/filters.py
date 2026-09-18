@@ -1003,7 +1003,10 @@ class FilterEchoPartitionedFunction(TableFunctionGenerator[_FilterEchoPartitione
             end_idx = min(start_idx + chunk, params.args.count)
             work_items.append(struct.pack(">QQ", start_idx, end_idx))
         params.storage.queue_push(work_items)
-        return GlobalInitResponse()
+        # No more readers than work items. Left at the default (unbounded) the
+        # client opens one stream per DuckDB thread -- 48 on a 48-core host for at
+        # most MAX_PARTITIONS items, every extra one an init plus an empty drain.
+        return GlobalInitResponse(max_workers=max(1, len(work_items)))
 
     @classmethod
     def initial_state(cls, params: ProcessParams[_FilterEchoPartitionedArgs]) -> _FilterEchoPartitionedState:
