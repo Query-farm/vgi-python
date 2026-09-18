@@ -20,6 +20,7 @@ Implementations:
 import contextlib
 import enum
 import functools
+import inspect
 import logging
 import os
 import sqlite3
@@ -944,9 +945,9 @@ class FunctionStorageSqlite:
             self._memory_uri = None
             self._anchor_conn = None
             self.db_path = db_path if db_path is not None else _get_default_db_path()
-        # Shared-cache in-memory DBs need a process-local write lock; file DBs
-        # do not. See `_write_guard`.
-        self._write_lock: threading.Lock | None = threading.Lock() if self._memory_uri is not None else None
+        # Shared-cache in-memory DBs need a process-local lock around every
+        # operation; file DBs do not. See `_op_guard`.
+        self._op_lock: threading.Lock | None = threading.Lock() if self._memory_uri is not None else None
         self._tls = threading.local()
         self._ensure_tables()
 
@@ -986,8 +987,8 @@ class FunctionStorageSqlite:
         return conn
 
     @contextlib.contextmanager
-    def _write_guard(self) -> Iterator[None]:
-        """Serialize writers on a shared-cache in-memory DB; no-op for a file DB.
+    def _op_guard(self) -> Iterator[None]:
+        """Serialize every operation on a shared-cache in-memory DB; no-op for a file DB.
 
         `_conn` gives each thread its own connection so SQLite's own locking
         serializes writers "without a Python-level lock and without forfeiting
@@ -1008,11 +1009,25 @@ class FunctionStorageSqlite:
         Serializing writes costs nothing here. Measured: pops are 0.007 ms and
         concurrency already made them *slower* (128k/s at 1 thread → 79k/s at
         16), so there was never any write parallelism to lose — only the error.
+
+        **Readers too.** This first serialized writers only, which is not
+        enough: shared-cache locks are per *table* and conflict in both
+        directions. A writer cannot modify a table another connection is
+        reading, and a reader cannot read one another connection has written
+        and not yet committed — either is the same unretried `SQLITE_LOCKED`.
+        So a `state_scan` overlapping an `execution_clear` failed exactly as
+        two pops had. It stayed hidden because `vgi-fixture-http`, the one
+        in-tree user of `:memory:`, silently ran on the file DB until 0.34.1:
+        `import vgi` resolved `Function.storage` before the fixture's `main()`
+        could ask for memory. Once it really ran here, 69 cases of the
+        integration suite failed with "database table is locked". Every read
+        fetches eagerly (`fetchall`/`fetchone`), so no statement outlives the
+        guard, and — as above — there was no concurrency to give up.
         """
-        if self._write_lock is None:
+        if self._op_lock is None:
             yield
             return
-        with self._write_lock:
+        with self._op_lock:
             yield
 
     def close(self) -> None:
@@ -1477,40 +1492,37 @@ class FunctionStorageSqlite:
         conn.commit()
 
 
-def _guard_sqlite_writes() -> None:
-    """Route every FunctionStorageSqlite writer through `_write_guard`.
+#: Public methods that run no statement against the shared cache, so they are
+#: left outside `_op_guard`. ``close`` only drops the calling thread's own
+#: connection.
+_UNGUARDED_OPS = frozenset({"close"})
 
-    Applied here rather than by editing each method so no writer can be added
-    later and silently miss the guard — a partial fix would be worse than none,
-    since one unguarded writer is enough to re-introduce `SQLITE_LOCKED` for
-    every other one sharing the cache.
+
+def _guard_sqlite_ops() -> None:
+    """Route every public FunctionStorageSqlite operation through `_op_guard`.
+
+    Derived from the class rather than listed: the previous version named its
+    methods by hand, the four readers were never on the list, and one unguarded
+    operation is enough to re-introduce `SQLITE_LOCKED` for every other one
+    sharing the cache. A new public method is now guarded by default, and
+    `_UNGUARDED_OPS` is the only way out of it.
     """
 
     def guarded(fn: Any) -> Any:
         @functools.wraps(fn)
         def wrapper(self: "FunctionStorageSqlite", *a: Any, **k: Any) -> Any:
-            with self._write_guard():
+            with self._op_guard():
                 return fn(self, *a, **k)
 
         return wrapper
 
-    for name in (
-        "queue_push",
-        "queue_pop",
-        "queue_clear",
-        "state_put_many",
-        "state_drain",
-        "state_delete",
-        "state_append",
-        "execution_clear",
-        "state_counter_add",
-        "state_counter_set",
-        "state_counter_delete",
-    ):
-        setattr(FunctionStorageSqlite, name, guarded(getattr(FunctionStorageSqlite, name)))
+    for name, member in list(vars(FunctionStorageSqlite).items()):
+        if name.startswith("_") or name in _UNGUARDED_OPS or not inspect.isfunction(member):
+            continue
+        setattr(FunctionStorageSqlite, name, guarded(member))
 
 
-_guard_sqlite_writes()
+_guard_sqlite_ops()
 
 
 class ShardedSqliteStorage:

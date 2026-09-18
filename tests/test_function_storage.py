@@ -554,3 +554,122 @@ class TestShardKeyDerivation:
 
         bs = BoundStorage(FunctionStorageSqlite(db_path=":memory:"), b"exec1")
         assert bs._shard_key == ""
+
+
+class TestSharedCacheMemoryConcurrency:
+    """The ``:memory:`` store under concurrent threads — what ``vgi-fixture-http`` runs.
+
+    A shared-cache in-memory database locks per *table*, in both directions: a
+    connection cannot write a table another connection is reading, nor read one
+    another connection has written and not committed. Either collision is
+    ``SQLITE_LOCKED`` ("database table is locked"), which the busy handler never
+    retries. Serializing only the writers therefore still failed the moment a
+    reader overlapped a writer — the shape of every catalog transaction, which
+    reads state, then clears it on commit.
+    """
+
+    def test_concurrent_readers_and_writers_do_not_lock(self) -> None:
+        """Mixed readers and writers on one scope, every thread at once.
+
+        The same mix as a concurrent integration run: put, get, scan, append,
+        log-scan, counter add/get, and a periodic ``execution_clear``. Before
+        readers were serialized too, every thread failed within its first few
+        operations.
+        """
+        import threading
+
+        storage = FunctionStorageSqlite(db_path=":memory:")
+        threads_n = 8
+        iters = 200
+        barrier = threading.Barrier(threads_n)
+        errors: list[BaseException] = []
+        scope = b"shared-scope"  # one scope for all: the contention a transaction produces
+
+        def worker(i: int) -> None:
+            barrier.wait()  # maximize contention
+            try:
+                for n in range(iters):
+                    storage.state_put_many(scope, b"ns", [(b"k%d" % i, b"v%d" % n)])
+                    storage.state_get_many(scope, b"ns", [b"k0", b"k1"])
+                    storage.state_scan(scope, b"ns")
+                    storage.state_append(scope, b"log", b"k", b"item")
+                    storage.state_log_scan(scope, b"log", b"k")
+                    storage.state_counter_add(scope, b"counters", b"c", 1)
+                    storage.state_counter_get(scope, b"counters", b"c")
+                    if n % 50 == 49:
+                        storage.execution_clear(scope)
+            except BaseException as exc:  # noqa: BLE001 — collected and asserted below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(threads_n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == [], f"{len(errors)} thread(s) failed: {sorted({str(e) for e in errors})}"
+
+    def test_every_public_operation_is_serialized(self) -> None:
+        """No operation can be added, or left out, without the guard.
+
+        The writer-only guard named its methods by hand, and the four readers
+        were simply not on the list. Deriving the set from the class makes that
+        omission impossible; this pins it, so a new public operation that somehow
+        escaped the wrapper fails here rather than as a flaky lock error under load.
+        """
+        import inspect
+
+        ops = [
+            name
+            for name, member in vars(FunctionStorageSqlite).items()
+            if not name.startswith("_") and inspect.isfunction(member) and name != "close"
+        ]
+        assert "state_scan" in ops and "state_put_many" in ops, "the derivation found nothing"
+        unguarded = [name for name in ops if not hasattr(getattr(FunctionStorageSqlite, name), "__wrapped__")]
+        assert unguarded == []
+
+
+class TestDefaultStorageResolution:
+    """``Function.storage`` resolves lazily — and exactly once, even when raced.
+
+    Resolution moved from import time to first use in 0.34.1, which means the
+    first use is now a request, and requests arrive concurrently. An unguarded
+    check-then-set let two first callers each build a store; with ``:memory:``
+    that is two unrelated databases, so state written through one is invisible
+    through the other.
+    """
+
+    def test_concurrent_first_use_resolves_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Eight simultaneous first uses build one store, and all eight get it."""
+        import threading
+        import time
+
+        import vgi.function as function_module
+        from vgi.function import _DefaultStorageDescriptor
+
+        built: list[object] = []
+
+        def slow_resolve() -> object:
+            time.sleep(0.05)  # widen the window between the check and the set
+            store = object()
+            built.append(store)
+            return store
+
+        monkeypatch.setattr(function_module, "_resolve_storage", slow_resolve)
+        descriptor = _DefaultStorageDescriptor()
+        threads_n = 8
+        barrier = threading.Barrier(threads_n)
+        seen: list[object] = []
+
+        def first_use() -> None:
+            barrier.wait()
+            seen.append(descriptor.__get__(None, object))
+
+        threads = [threading.Thread(target=first_use) for _ in range(threads_n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(built) == 1, f"the default store was built {len(built)} times"
+        assert all(s is built[0] for s in seen)
