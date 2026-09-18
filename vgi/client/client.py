@@ -242,10 +242,10 @@ class WorkerConnection:
     proxy: VgiProtocol
     worker_index: int = 0
     stream: StreamSession | None = None
-    substream_id: bytes | None = None
     # Subprocess transport, direct (non-pooled).
     proc: subprocess.Popen[bytes] | None = None
     connection: RpcConnection[VgiProtocol] | None = None
+    substream_id: bytes | None = None
     # Subprocess transport, pooled.
     _pool_ctx: AbstractContextManager[Any] | None = field(default=None, repr=False)
     # HTTP transport: context manager from vgi_rpc.http.http_connect.
