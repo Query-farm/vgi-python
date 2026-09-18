@@ -183,6 +183,20 @@ _default_pool = WorkerPool(max_idle=8, idle_timeout=30.0)
 _HTTP_TRANSPORT_READY = True
 
 _DEFAULT_ACCEPTED_MAX_RESPONSE_BYTES = 256 * 1024 * 1024
+
+
+def _substream_id_for(phase: TableInOutFunctionInitPhase | None) -> bytes | None:
+    """Mint the ``InitRequest.substream_id`` for a connection's table-in-out INPUT stream.
+
+    Each connection a table-in-out call fans out to is its own substream of the
+    one execution — the worker keeps one accumulated state per substream, and
+    the single finalize drains them all. Sharing an id (or sending none, which
+    the worker keys by process) lets connections served by one process
+    overwrite each other's state. ``None`` for every other kind of init.
+    """
+    return os.urandom(16) if phase == TableInOutFunctionInitPhase.INPUT else None
+
+
 _MIN_ACCEPTED_MAX_RESPONSE_BYTES = 65536
 _MAX_SAFE_HTTP_BYTES = (1 << 53) - 1
 
@@ -215,11 +229,14 @@ class WorkerConnection:
         stream: The active streaming session, if any.
         proc: The worker subprocess for direct (non-pooled) subprocess transport.
         connection: The RPC connection for direct subprocess transport.
+        substream_id: The ``InitRequest.substream_id`` this connection's
+            table-in-out stream was opened with, or None.
     """
 
     proxy: VgiProtocol
     worker_index: int = 0
     stream: StreamSession | None = None
+    substream_id: bytes | None = None
     # Subprocess transport, direct (non-pooled).
     proc: subprocess.Popen[bytes] | None = None
     connection: RpcConnection[VgiProtocol] | None = None
@@ -1618,6 +1635,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         finalize_state_id: bytes | None = None,
         split_tokens: list[bytes] | None = None,
         join_keys: list[pa.RecordBatch] | None = None,
+        substream_id: bytes | None = None,
     ) -> StreamSession:
         """Call init on a worker proxy and return a `StreamSession`.
 
@@ -1642,6 +1660,8 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 looked up by column name — see
                 ``PushdownFilters.get_join_keys_column``), or `None` when not
                 applicable.
+            substream_id: The table-in-out substream this init opens or
+                finalizes (see ``_substream_id_for``), or `None`.
 
         Returns:
             `StreamSession` for data exchange or production.
@@ -1662,6 +1682,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             init_opaque_data=init_opaque_data,
             finalize_state_id=finalize_state_id,
             split_tokens=split_tokens,
+            substream_id=substream_id,
         )
         try:
             stream: StreamSession = proxy.init(request=init_request)  # type: ignore[assignment]
@@ -1750,6 +1771,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         )
         bind_response = self._do_bind(self._primary.proxy, bind_request, bind_result_callback)
 
+        substream_id = _substream_id_for(phase)
         stream = self._do_init(
             self._primary.proxy,
             bind_request,
@@ -1761,8 +1783,10 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             execution_id=split_execution_id,
             init_opaque_data=split_init_opaque_data,
             join_keys=join_keys,
+            substream_id=substream_id,
         )
         self._primary.stream = stream
+        self._primary.substream_id = substream_id
 
         init_response = stream.typed_header(GlobalInitResponse)
         max_workers = 1 if split_tokens is not None else self._determine_max_workers(init_response.max_workers)
@@ -1838,6 +1862,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
 
         def do_init(worker: WorkerConnection) -> None:
             try:
+                worker.substream_id = _substream_id_for(phase)
                 stream = self._do_init(
                     worker.proxy,
                     bind_request,
@@ -1848,6 +1873,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                     join_keys=join_keys,
                     execution_id=global_init_response.execution_id,
                     init_opaque_data=global_init_response.opaque_data,
+                    substream_id=worker.substream_id,
                 )
                 worker.stream = stream
             except Exception as e:
@@ -2629,6 +2655,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             phase=TableInOutFunctionInitPhase.FINALIZE,
             execution_id=init_response.execution_id,
             init_opaque_data=init_response.opaque_data,
+            substream_id=self._primary.substream_id,
         )
 
         try:
