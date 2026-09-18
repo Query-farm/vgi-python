@@ -2,12 +2,14 @@
 
 """Shared fixtures for VGI tests."""
 
+import contextlib
 import logging
 import os
 import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import uuid
 from typing import Any
 
@@ -72,6 +74,38 @@ CATALOG_WORKER = _fixture_command(sys.executable, "-m", "vgi._test_fixtures.cata
 #: The protocol fixture worker as a plain subprocess, for tests of the
 #: subprocess transport itself (stderr capture, pooling).
 SUBPROCESS_FIXTURE_WORKER = "vgi-fixture-worker"
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Start the shared fixture worker while the test processes collect.
+
+    Otherwise the first tests to reach it all wait for its start (about a
+    second of imports) and then for the first function listings, which build
+    and encode every function's metadata before it is cached; each costs
+    the one GIL-bound worker 0.2-0.3 s, and the early tests run them all at
+    once. Collection takes several seconds, so warming the worker in the
+    background here costs nothing. Only the controlling process does it.
+    """
+    if hasattr(config, "workerinput") or TEST_TRANSPORT != "launch":
+        return
+    threading.Thread(target=_warm_fixture_worker, name="warm-fixture-worker", daemon=True).start()
+
+
+def _warm_fixture_worker() -> None:
+    """Launch the fixture worker and fill its function-listing caches."""
+    from vgi.catalog import SchemaObjectType
+    from vgi.client import Client
+
+    # Best effort: a worker that cannot start fails the tests that use it, with
+    # the real error.
+    with contextlib.suppress(Exception), Client(FIXTURE_WORKER) as client:
+        attach = client.catalog_attach(name="example", options={}, data_version_spec=None, implementation_version=None)
+        for kind in (
+            SchemaObjectType.TABLE_FUNCTION,
+            SchemaObjectType.SCALAR_FUNCTION,
+            SchemaObjectType.AGGREGATE_FUNCTION,
+        ):
+            list(client.schema_contents(attach_opaque_data=attach.attach_opaque_data, path=["main"], type=kind))
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:
