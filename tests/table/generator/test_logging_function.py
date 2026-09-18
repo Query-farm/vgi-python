@@ -4,6 +4,7 @@
 
 import pyarrow as pa
 
+from tests.conftest import FIXTURE_WORKER
 from vgi.arguments import Arguments
 from vgi.client import Client
 
@@ -13,7 +14,7 @@ class TestLoggingGeneratorFunctionViaClient:
 
     def test_generates_correct_output(self) -> None:
         """Function should generate correct output via Client."""
-        with Client("vgi-fixture-worker") as client:
+        with Client(FIXTURE_WORKER) as client:
             outputs = list(
                 client.table_function(
                     function_name="logging_generator",
@@ -31,7 +32,7 @@ class TestLoggingGeneratorFunctionViaClient:
 
     def test_zero_count_produces_no_output(self) -> None:
         """Function with count=0 should produce no output via Client."""
-        with Client("vgi-fixture-worker") as client:
+        with Client(FIXTURE_WORKER) as client:
             outputs = list(
                 client.table_function(
                     function_name="logging_generator",
@@ -44,7 +45,7 @@ class TestLoggingGeneratorFunctionViaClient:
 
     def test_large_output(self) -> None:
         """Function should handle larger outputs via Client."""
-        with Client("vgi-fixture-worker") as client:
+        with Client(FIXTURE_WORKER) as client:
             outputs = list(
                 client.table_function(
                     function_name="logging_generator",

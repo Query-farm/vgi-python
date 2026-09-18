@@ -78,7 +78,9 @@ import io
 import itertools
 import logging
 import os
+import shlex
 import subprocess
+import sys
 import threading
 from collections.abc import Callable, Generator, Iterator, Sequence
 from contextlib import AbstractContextManager
@@ -181,6 +183,10 @@ _default_pool = WorkerPool(max_idle=8, idle_timeout=30.0)
 # parametrized ``client_transport`` fixture in tests/conftest.py to decide
 # whether to skip the HTTP leg of the matrix.
 _HTTP_TRANSPORT_READY = True
+
+# ``server_path`` prefix selecting ``transport="launch"`` — the same scheme as
+# the VGI DuckDB extension's ``launch:<argv>`` LOCATION.
+_LAUNCH_SCHEME = "launch:"
 
 _DEFAULT_ACCEPTED_MAX_RESPONSE_BYTES = 256 * 1024 * 1024
 _MIN_ACCEPTED_MAX_RESPONSE_BYTES = 65536
@@ -486,6 +492,11 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 spaces or quotes (``[sys.executable, "-c", script]``). No shell
                 is involved either way, so shell syntax — pipes, redirection,
                 ``VAR=value`` prefixes, ``~`` expansion — is not interpreted.
+                A string of the form ``launch:<argv>`` selects
+                ``transport="launch"`` instead, with ``<argv>`` split the same
+                way into ``launch_argv`` — the VGI DuckDB extension's
+                ``launch:`` LOCATION scheme, so one worker string names the
+                same shared worker in both. ``pool`` does not apply to it.
             passthrough_stderr: Subprocess-only. If True, worker stderr is
                 passed through to the parent process's stderr in real-time.
             worker_limit: Maximum number of parallel worker processes.
@@ -584,6 +595,14 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 combination is inconsistent.
 
         """
+        if transport == "subprocess" and isinstance(server_path, str) and server_path.startswith(_LAUNCH_SCHEME):
+            if launch_argv is not None:
+                raise ValueError("pass the worker command as a 'launch:' server_path or as launch_argv, not both")
+            launch_argv = shlex.split(server_path[len(_LAUNCH_SCHEME) :], posix=sys.platform != "win32")
+            server_path = None
+            pool = None
+            transport = "launch"
+
         if transport == "subprocess":
             if server_path is None:
                 raise ValueError("subprocess transport requires server_path")

@@ -8,6 +8,7 @@ from typing import Any
 
 import pyarrow as pa
 
+from tests.conftest import FIXTURE_WORKER
 from vgi.arguments import Arguments
 from vgi.client import Client
 
@@ -22,7 +23,7 @@ class TestPartitionedSequenceFunctionMultiWorker:
 
     def test_two_workers_produce_complete_sequence(self) -> None:
         """Two workers should together produce the complete sequence."""
-        with Client("vgi-fixture-worker", worker_limit=2) as client:
+        with Client(FIXTURE_WORKER, worker_limit=2) as client:
             outputs = list(
                 client.table_function(
                     function_name="partitioned_sequence",
@@ -39,7 +40,7 @@ class TestPartitionedSequenceFunctionMultiWorker:
 
     def test_three_workers_produce_complete_sequence(self) -> None:
         """Three workers should together produce the complete sequence."""
-        with Client("vgi-fixture-worker", worker_limit=3) as client:
+        with Client(FIXTURE_WORKER, worker_limit=3) as client:
             outputs = list(
                 client.table_function(
                     function_name="partitioned_sequence",
@@ -56,7 +57,7 @@ class TestPartitionedSequenceFunctionMultiWorker:
 
     def test_workers_produce_large_sequence(self) -> None:
         """Multiple workers should handle large sequences."""
-        with Client("vgi-fixture-worker", worker_limit=4) as client:
+        with Client(FIXTURE_WORKER, worker_limit=4) as client:
             outputs = list(
                 client.table_function(
                     function_name="partitioned_sequence",
@@ -73,7 +74,7 @@ class TestPartitionedSequenceFunctionMultiWorker:
 
     def test_uneven_distribution(self) -> None:
         """Workers should handle sequences that don't divide evenly."""
-        with Client("vgi-fixture-worker", worker_limit=3) as client:
+        with Client(FIXTURE_WORKER, worker_limit=3) as client:
             outputs = list(
                 client.table_function(
                     function_name="partitioned_sequence",
@@ -90,7 +91,7 @@ class TestPartitionedSequenceFunctionMultiWorker:
 
     def test_single_worker_fallback(self) -> None:
         """worker_limit=1 should work like single worker mode."""
-        with Client("vgi-fixture-worker", worker_limit=1) as client:
+        with Client(FIXTURE_WORKER, worker_limit=1) as client:
             outputs = list(
                 client.table_function(
                     function_name="partitioned_sequence",
@@ -107,7 +108,7 @@ class TestPartitionedSequenceFunctionMultiWorker:
 
     def test_increment_with_multi_workers(self) -> None:
         """Multiple workers should handle increment parameter."""
-        with Client("vgi-fixture-worker", worker_limit=2) as client:
+        with Client(FIXTURE_WORKER, worker_limit=2) as client:
             outputs = list(
                 client.table_function(
                     function_name="partitioned_sequence",

@@ -4,6 +4,7 @@
 
 import pyarrow as pa
 
+from tests.conftest import FIXTURE_WORKER
 from vgi.arguments import Arguments
 from vgi.client import Client
 from vgi.invocation import BindResponse
@@ -19,7 +20,7 @@ class TestSequenceFunctionClient:
         def capture_bind_result(result: BindResponse) -> None:
             bind_results.append(result)
 
-        with Client("vgi-fixture-worker") as client:
+        with Client(FIXTURE_WORKER) as client:
             list(
                 client.table_function(
                     function_name="sequence",

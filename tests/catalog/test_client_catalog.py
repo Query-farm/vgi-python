@@ -10,12 +10,8 @@ For full catalog CRUD workflows (create/get/drop tables, views, schemas),
 see tests/catalog/test_integration.py which exercises all catalog operations.
 """
 
-import sys
-
+from tests.conftest import CATALOG_WORKER
 from vgi.client import Client
-
-# Worker command for catalog tests
-CATALOG_WORKER = f"{sys.executable} -m vgi._test_fixtures.catalog"
 
 
 class TestClientCatalogStatelessOperations:

@@ -19,6 +19,7 @@ from dataclasses import dataclass
 
 import pytest
 
+from tests.conftest import FIXTURE_WORKER
 from vgi.catalog.catalog_interface import AttachOpaqueData, SchemaObjectType
 from vgi.client.client import Client
 
@@ -79,7 +80,7 @@ _COVERAGE_MAP: dict[SchemaObjectType, TypeCoverage] = {
 @pytest.fixture(scope="module")
 def attached_example() -> tuple[str, AttachOpaqueData]:
     """Attach to the ``example`` catalog once per module and yield ``(worker, attach_opaque_data)``."""
-    worker = "vgi-fixture-worker"
+    worker = FIXTURE_WORKER
     client = Client(worker)
     result = client.catalog_attach(
         name=EXAMPLE_CATALOG_NAME,
@@ -92,7 +93,7 @@ def attached_example() -> tuple[str, AttachOpaqueData]:
 
 def test_example_catalog_is_attachable() -> None:
     """Sanity: the example worker advertises a catalog named ``example``."""
-    client = Client("vgi-fixture-worker")
+    client = Client(FIXTURE_WORKER)
     names = [c.name for c in client.catalogs()]
     assert EXAMPLE_CATALOG_NAME in names, (
         f"Example worker should advertise the {EXAMPLE_CATALOG_NAME!r} catalog; got {names!r}"
@@ -149,7 +150,7 @@ def test_fixture_worker_registers_at_least_one_per_category(
     broken — both are drift we want to catch.
     """
     _worker, attach_opaque_data = attached_example
-    client = Client("vgi-fixture-worker")
+    client = Client(FIXTURE_WORKER)
     infos = client.schema_contents(
         attach_opaque_data=attach_opaque_data,
         path=[EXAMPLE_SCHEMA_NAME],

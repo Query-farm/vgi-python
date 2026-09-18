@@ -8,6 +8,7 @@ interface, allowing clients to discover available functions.
 
 import pyarrow as pa
 
+from tests.conftest import FIXTURE_WORKER
 from vgi._test_fixtures.worker import ExampleWorker
 from vgi.catalog import (
     AttachOpaqueData,
@@ -23,7 +24,7 @@ from vgi.catalog import (
 from vgi.client import Client
 
 # Worker command for catalog tests
-EXAMPLE_WORKER = "vgi-fixture-worker"
+EXAMPLE_WORKER = FIXTURE_WORKER
 
 
 def _get_expected_function_names() -> set[str]:

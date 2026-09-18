@@ -3,12 +3,81 @@
 """Shared fixtures for VGI tests."""
 
 import logging
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+import uuid
 from typing import Any
 
 import pyarrow as pa
 import pytest
 
 from vgi import schema
+
+# =============================================================================
+# Fixture-worker transport
+# =============================================================================
+
+# How tests reach the fixture workers. ``launch`` (the default wherever AF_UNIX
+# exists) routes every fixture-worker ``Client`` through ``vgi_rpc.launcher``:
+# one warm worker per command, shared by every test process, so ``pytest -n 48``
+# talks to one worker instead of each xdist process growing its own pool (and
+# the matrix's ``subprocess-direct`` leg spawning a fresh worker per test) —
+# which put hundreds of ``vgi-fixture-worker`` processes on a 48-core box.
+# ``VGI_TEST_CLIENT_TRANSPORT=subprocess`` restores the per-process pools.
+TEST_TRANSPORT = os.environ.get("VGI_TEST_CLIENT_TRANSPORT") or ("subprocess" if sys.platform == "win32" else "launch")
+if TEST_TRANSPORT not in ("launch", "subprocess"):
+    raise pytest.UsageError(f"VGI_TEST_CLIENT_TRANSPORT must be 'launch' or 'subprocess', got {TEST_TRANSPORT!r}")
+
+# Part of the launcher's hash domain (it hashes every ``VGI_RPC_*`` variable), so
+# each session gets its own workers: never a warm one left by an earlier run of
+# older code, and never one another checkout on the machine is using. Set here,
+# before xdist spawns its workers, so every process of one session agrees on it.
+_SESSION_ENV = "VGI_RPC_TEST_SESSION"
+os.environ.setdefault(_SESSION_ENV, uuid.uuid4().hex)
+
+_LAUNCHED: list[list[str]] = []
+
+
+def _fixture_command(*argv: str) -> str:
+    """Return the ``Client`` worker string for a fixture command under ``TEST_TRANSPORT``."""
+    if TEST_TRANSPORT == "subprocess":
+        return shlex.join(argv)
+    # Every test process shares the one worker, so it must not cap connections:
+    # at the default 64 a scan holding its connections while its next one waits
+    # in the backlog can wait on the others doing the same, forever.
+    launch_argv = [shutil.which(argv[0]) or argv[0], *argv[1:], "--max-connections", "0"]
+    _LAUNCHED.append(launch_argv)
+    return "launch:" + shlex.join(launch_argv)
+
+
+#: The protocol fixture worker, and the catalog fixture worker.
+FIXTURE_WORKER = _fixture_command("vgi-fixture-worker")
+CATALOG_WORKER = _fixture_command(sys.executable, "-m", "vgi._test_fixtures.catalog")
+
+#: The protocol fixture worker as a plain subprocess, for tests of the
+#: subprocess transport itself (stderr capture, pooling).
+SUBPROCESS_FIXTURE_WORKER = "vgi-fixture-worker"
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    """Stop this session's launched workers rather than leaving them to idle out.
+
+    Only the controlling process does it — an xdist worker finishing early must
+    not pull the shared worker out from under the others.
+    """
+    if hasattr(config, "workerinput") or not _LAUNCHED or sys.platform == "win32":
+        return
+    from vgi_rpc.launcher import compute_hash, default_state_dir, gc_state_dir
+
+    for argv in _LAUNCHED:
+        # The worker's argv carries ``--unix <state dir>/<hash>.sock``, and the
+        # session variable makes that hash this session's alone.
+        subprocess.run(["pkill", "-TERM", "-f", f"{compute_hash(argv)}.sock"], check=False)
+    gc_state_dir(default_state_dir())
+
 
 # =============================================================================
 # Utility Functions (not fixtures, can be imported directly)
@@ -72,8 +141,8 @@ def test_logger() -> logging.Logger:
 
 @pytest.fixture
 def fixture_worker() -> str:
-    """Return the path to the example worker."""
-    return "vgi-fixture-worker"
+    """Return the example worker, as a ``Client`` worker string for ``TEST_TRANSPORT``."""
+    return FIXTURE_WORKER
 
 
 @pytest.fixture(scope="session")
@@ -118,8 +187,11 @@ def http_worker() -> Any:
 # Keys used to identify transport modes in conformance tests. Keeping the
 # literal values here (rather than inside the fixture) makes it easy for
 # individual tests to opt out with ``@pytest.mark.parametrize("client_transport",
-# ["subprocess-pooled"], indirect=True)``.
-_CLIENT_TRANSPORT_MODES = ["subprocess-pooled", "subprocess-direct", "http"]
+# ["subprocess-pooled"], indirect=True)``. The subprocess legs join the default
+# matrix only under ``VGI_TEST_CLIENT_TRANSPORT=subprocess``.
+_CLIENT_TRANSPORT_MODES = (
+    ["launch", "http"] if TEST_TRANSPORT == "launch" else ["subprocess-pooled", "subprocess-direct", "http"]
+)
 
 
 @pytest.fixture(scope="session")
@@ -160,7 +232,8 @@ def client_transport(
     returned client as a context manager.
 
     Modes:
-        subprocess-pooled: Pool-backed subprocess (the default path).
+        launch: The launcher-shared worker (``launch:`` worker string).
+        subprocess-pooled: Pool-backed subprocess.
         subprocess-direct: ``pool=None`` — direct Popen management.
         http: ``Client.from_http(base_url)`` backed by a per-test
             ``vgi-fixture-http`` subprocess. Skips if the HTTP transport
@@ -171,10 +244,14 @@ def client_transport(
     mode = request.param
 
     def _make() -> Client:
+        if mode == "launch":
+            if TEST_TRANSPORT != "launch":
+                pytest.skip("VGI_TEST_CLIENT_TRANSPORT=subprocess")
+            return Client(fixture_worker)
         if mode == "subprocess-pooled":
-            return Client(fixture_worker, pool=_default_pool)
+            return Client(SUBPROCESS_FIXTURE_WORKER, pool=_default_pool)
         if mode == "subprocess-direct":
-            return Client(fixture_worker, pool=None)
+            return Client(SUBPROCESS_FIXTURE_WORKER, pool=None)
         if mode == "http":
             if not _HTTP_TRANSPORT_READY:
                 pytest.skip("Client HTTP transport arrives in Phase 2 of whimsical-mccarthy plan")
