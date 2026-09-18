@@ -1132,7 +1132,12 @@ class PushdownFilters:
         return _pushdown_from_v2_state(state)
 
     def _revision_map(self) -> dict[str, int]:
-        """Map every predicate ID seen in this scan, tombstones included, to its last applied revision."""
+        """Map every predicate ID seen in this scan, tombstones included, to its last applied revision.
+
+        Returns:
+            ``{predicate_id: revision}``; empty for filters not decoded from v2.
+
+        """
         return dict(self._v2_state.revisions) if self._v2_state is not None else {}
 
     def _with_predicate_order(self, order: list[str]) -> PushdownFilters:
@@ -1142,6 +1147,12 @@ class PushdownFilters:
         Used to restore the order a state had before its delta history was
         compacted (an ID removed and later re-added moves to the end, which a
         shorter history does not reproduce by itself).
+
+        Args:
+            order: The live predicate IDs in the order to restore.
+
+        Returns:
+            Filters with the same predicates, arranged in ``order``.
 
         Raises:
             FilterDeserializationError: If ``order`` does not name exactly the
