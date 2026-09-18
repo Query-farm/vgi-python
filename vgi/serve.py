@@ -217,7 +217,6 @@ def create_app(
     max_stream_response_bytes: int | None = None,
     max_externalized_response_bytes: int | None = None,
     introspect_principals: Iterable[str] | None = None,
-    introspect_rate_limit: int | None = None,
     iroh_bridge_issuer: str | None = None,
     iroh_trusted_proxy_addresses: Iterable[str] = (),
     iroh_authenticate: bool = True,
@@ -279,9 +278,6 @@ def create_app(
             ``vgi_rpc.Identity.v1``'s ``introspect_token``.  Only consulted
             when the worker class overrides ``resolve_token``.  ``None`` reads
             ``VGI_INTROSPECT_PRINCIPALS``.
-        introspect_rate_limit: Introspection requests allowed per caller per
-            second.  ``None`` reads ``VGI_INTROSPECT_RATE_LIMIT``, defaulting
-            to 20.
         iroh_bridge_issuer: Operator-controlled identity namespace for an
             ``iroh-http/2`` bridge. ``None`` disables Iroh header trust.
         iroh_trusted_proxy_addresses: Exact immediate bridge addresses.
@@ -327,7 +323,7 @@ def create_app(
         worker,
         enable_describe=describe,
         server_version=_get_vgi_version(),
-        identity=_build_identity(worker_cls, introspect_principals, introspect_rate_limit),
+        identity=_build_identity(worker_cls, introspect_principals),
     )
 
     effective_peer_identity_providers = tuple(peer_identity_providers)
@@ -499,15 +495,6 @@ def main() -> None:
                 "that case, with no permissive default. Env: VGI_INTROSPECT_PRINCIPALS."
             ),
         ),
-        introspect_rate_limit: int | None = typer.Option(  # noqa: B008
-            None,
-            "--introspect-rate-limit",
-            help=(
-                "Introspection requests allowed per caller per second (default 20). "
-                "Bounds, rather than closes, the oracle an allowlisted-but-compromised "
-                "caller has. Env: VGI_INTROSPECT_RATE_LIMIT."
-            ),
-        ),
         access_log_sample: float | None = typer.Option(  # noqa: B008
             None,
             "--access-log-sample",
@@ -591,7 +578,6 @@ def main() -> None:
                 max_stream_response_bytes=max_stream_response_bytes,
                 max_externalized_response_bytes=max_externalized_response_bytes,
                 introspect_principals=introspect_principals,
-                introspect_rate_limit=introspect_rate_limit,
                 server=server,
                 worker_ref=worker_ref,
                 http_workers=http_workers,
@@ -802,7 +788,6 @@ def _resolve_authenticate() -> Callable[..., Any] | None:
 def _build_identity(
     worker_cls: type[Worker],
     introspect_principals: Iterable[str] | None,
-    introspect_rate_limit: int | None,
 ) -> IdentityImpl | None:
     """Build the ``vgi_rpc.Identity.v1`` implementation, or ``None``.
 
@@ -823,8 +808,6 @@ def _build_identity(
             override.
         introspect_principals: Principals permitted to introspect, or ``None``
             to read the environment.
-        introspect_rate_limit: Per-caller, per-second ceiling, or ``None`` to
-            read the environment.
 
     Returns:
         The implementation, or ``None`` when this worker does not resolve
@@ -842,7 +825,6 @@ def _build_identity(
     return IdentityImpl(
         resolve_token=resolver,
         introspect_principals=_resolve_introspect_principals(introspect_principals),
-        introspect_rate_limit=_resolve_introspect_rate_limit(introspect_rate_limit),
     )
 
 
@@ -889,42 +871,6 @@ def _resolve_introspect_principals(explicit: Iterable[str] | None) -> list[str]:
         )
         sys.exit(1)
     return principals
-
-
-def _resolve_introspect_rate_limit(explicit: int | None) -> int:
-    """Resolve introspection requests allowed per caller per second.
-
-    Env var: ``VGI_INTROSPECT_RATE_LIMIT``; defaults to 20.
-
-    Args:
-        explicit: Value passed to :func:`create_app`, or None to read the
-            environment.
-
-    Returns:
-        A positive per-caller, per-second request ceiling.
-
-    Raises:
-        SystemExit: When the environment value is not a positive integer. A
-            typo that silently became 0 would refuse every introspection with
-            no diagnostic; one that became huge would remove the bound on an
-            allowlisted-but-compromised caller's guessing rate.
-
-    """
-    if explicit is not None:
-        value = explicit
-    else:
-        raw = os.environ.get("VGI_INTROSPECT_RATE_LIMIT")
-        if not raw:
-            return 20
-        try:
-            value = int(raw)
-        except ValueError:
-            sys.stderr.write(f"Error: VGI_INTROSPECT_RATE_LIMIT must be an integer, got {raw!r}\n")
-            sys.exit(1)
-    if value <= 0:
-        sys.stderr.write(f"Error: introspection rate limit must be positive, got {value}\n")
-        sys.exit(1)
-    return value
 
 
 def _resolve_proxy_proof_gate() -> Any | None:
@@ -1506,7 +1452,6 @@ def _serve_http(
     max_stream_response_bytes: int | None = None,
     max_externalized_response_bytes: int | None = None,
     introspect_principals: str | None = None,
-    introspect_rate_limit: int | None = None,
     server: str = "waitress",
     worker_ref: str | None = None,
     http_workers: int | None = None,
@@ -1524,8 +1469,6 @@ def _serve_http(
     # export_serve_config for why the environment is the channel.
     if introspect_principals is not None:
         os.environ["VGI_INTROSPECT_PRINCIPALS"] = introspect_principals
-    if introspect_rate_limit is not None:
-        os.environ["VGI_INTROSPECT_RATE_LIMIT"] = str(introspect_rate_limit)
 
     if server == "granian":
         _serve_http_granian(

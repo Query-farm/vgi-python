@@ -298,7 +298,6 @@ vgi-client --input data.parquet --function sum_all_columns --worker vgi-fixture-
 | `VGI_OAUTH_DEVICE_CODE_CLIENT_SECRET` | Client secret for device-code flow (optional, URL-safe chars only) |
 | `VGI_OAUTH_USE_ID_TOKEN` | When `1`/`true`/`yes`, clients use OIDC `id_token` as Bearer instead of `access_token` |
 | `VGI_INTROSPECT_PRINCIPALS` | Comma-separated principals permitted to call `vgi_rpc.Identity.v1`'s `introspect_token`. Required — no permissive default — whenever the worker implements `resolve_token()` (see below) |
-| `VGI_INTROSPECT_RATE_LIMIT` | Introspection requests allowed per caller per second (default 20) |
 | `VGI_WORKER_ACCESS_LOG_SAMPLE` | Fraction of *successful* calls to keep in the access log, `0.0`–`1.0`. Errors are always kept; the decision is per call, so every record of one stream shares a fate |
 | `VGI_WORKER_ACCESS_LOG_ASYNC` | When `1`/`true`/`yes`, emit access-log records from a listener thread. Bounded queue; full means drop, and a crash loses whatever is queued |
 | `VGI_WORKER_ACCESS_LOG_QUEUE_SIZE` | Bound on the async access-log queue (default 10000) |
@@ -461,8 +460,10 @@ Enabling it also requires an allowlist of principals permitted to ask, via
 default and a worker that overrides the hook without one **refuses to start**:
 authenticating and introspecting are different capabilities, and "any
 authenticated caller" lets any user resolve any other user's credential to its
-owner. `--introspect-rate-limit` (default 20/caller/second) bounds, rather than
-closes, the oracle an allowlisted-but-compromised caller still has.
+owner. Introspection is deliberately not rate limited (vgi-rpc removed the
+limiter): the allowlisted caller is a proxy asking on behalf of every client, so a
+per-caller limit was one budget for every user's login, drainable by junk
+credentials. Throttle untrusted traffic at the proxy, per client.
 
 Return `None` for "the store answered and this credential is unknown"; raise
 `AuthUnavailableError` for "the answer is not knowable". A caller that

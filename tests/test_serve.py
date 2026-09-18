@@ -551,7 +551,7 @@ class TestTokenIntrospection:
     *wiring*: a ``resolve_token`` override becomes an ``IdentityImpl`` carrying
     the configured allowlist, and nothing at all when the hook is absent. The
     guards themselves (allowlist enforcement, uniform rejection, JWS-shape
-    refusal, rate limiting) live in vgi-rpc and are tested there.
+    refusal) live in vgi-rpc and are tested there.
     """
 
     @staticmethod
@@ -559,11 +559,10 @@ class TestTokenIntrospection:
         from vgi.serve import _build_identity
 
         with pytest.MonkeyPatch.context() as mp:
-            for key in ("VGI_INTROSPECT_PRINCIPALS", "VGI_INTROSPECT_RATE_LIMIT"):
-                mp.delenv(key, raising=False)
+            mp.delenv("VGI_INTROSPECT_PRINCIPALS", raising=False)
             for key, value in env.items():
                 mp.setenv(key, value)
-            return _build_identity(worker_cls, None, None)
+            return _build_identity(worker_cls, None)
 
     def test_identity_absent_without_hook(self) -> None:
         """Not "hosted and refusing" — absent.
@@ -641,14 +640,19 @@ class TestTokenIntrospection:
                 create_app(_IntrospectingWorker, prefix="/vgi", describe=False)
         assert exc.value.code == 1
 
-    @pytest.mark.parametrize("bad", ["nonsense", "0", "-5"])
-    def test_bad_rate_limit_refuses_to_start(self, bad: str) -> None:
-        """A typo must not silently become "refuse everything" or "no bound"."""
-        with pytest.MonkeyPatch.context() as mp:
+    def test_the_retired_rate_limit_is_not_passed(self) -> None:
+        """Introspection is not rate limited, and this repo no longer asks for it.
+
+        vgi-rpc still accepts ``introspect_rate_limit=`` for one release as a
+        deprecated no-op, only because vgi-python 0.34.1 passes it. Building the
+        identity without a ``DeprecationWarning`` pins that this version does not.
+        """
+        import warnings
+
+        with pytest.MonkeyPatch.context() as mp, warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
             mp.setenv("VGI_INTROSPECT_PRINCIPALS", "proxy-a")
-            mp.setenv("VGI_INTROSPECT_RATE_LIMIT", bad)
-            with pytest.raises(SystemExit):
-                create_app(_IntrospectingWorker, prefix="/vgi", describe=False)
+            create_app(_IntrospectingWorker, prefix="/vgi", describe=False)
 
 
 class TestAuthUnavailableReExport:
