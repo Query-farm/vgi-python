@@ -35,6 +35,7 @@ from vgi_rpc.rpc import OutputCollector
 
 from vgi.arguments import Arg
 from vgi.cache_control import CacheControl
+from vgi.filter_v2 import replaying_accepted_state
 from vgi.metadata import FunctionExample, PartitionKind
 from vgi.protocol import PlanResponse, ScanSplit, VgiOutputCollector
 from vgi.schema_utils import partition_field, schema
@@ -1055,11 +1056,15 @@ class SplitDynamicFilterFunction(TableFunctionGenerator[SplitSequenceArgs, Split
             init = params.init_call
             merged = None
             if init is not None and init.pushdown_filters is not None:
-                merged = cls.pushdown_filters(
-                    init.pushdown_filters,
-                    join_keys=init.join_keys,
-                    output_schema=init.output_schema,
-                )
+                # The framework validated these at init; re-binding every
+                # predicate through the evaluator on every tick is what made
+                # this fixture cost ~10 ms a batch.
+                with replaying_accepted_state():
+                    merged = cls.pushdown_filters(
+                        init.pushdown_filters,
+                        join_keys=init.join_keys,
+                        output_schema=init.output_schema,
+                    )
             if merged is None:
                 merged = params.current_pushdown_filters
             filter_str = _render_filters_canonical(merged)

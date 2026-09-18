@@ -516,7 +516,10 @@ class PartitionedSequenceFunction(
 
         # Always enqueue (even if empty) to register the invocation
         params.storage.queue_push(work_items)
-        return GlobalInitResponse()
+        # No more readers than work items. Left at the default (unbounded) the
+        # client opens one stream per DuckDB thread -- 48 on a 48-core host for at
+        # most MAX_PARTITIONS items, every extra one an init plus an empty drain.
+        return GlobalInitResponse(max_workers=max(1, len(work_items)))
 
     @classmethod
     def initial_state(cls, params: ProcessParams[PartitionedSequenceFunctionArguments]) -> PartitionedSequenceState:
