@@ -11,10 +11,18 @@ import sys
 import uuid
 from typing import Any
 
-import pyarrow as pa
-import pytest
+# pyarrow imports numpy, and numpy's OpenBLAS starts one thread per core at
+# import and busy-waits them: about 2.7 CPU-seconds per process on a 48-core
+# machine. No test does linear algebra. This module is loaded before xdist
+# starts its workers, so every process of the session inherits the setting:
+# xdist workers, fixture and example workers, HTTP servers, CLI runs. On
+# 48 cores it cut the suite's CPU time from 363 s to 208 s.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
-from vgi import schema
+import pyarrow as pa  # noqa: E402
+import pytest  # noqa: E402
+
+from vgi import schema  # noqa: E402
 
 # =============================================================================
 # Fixture-worker transport
