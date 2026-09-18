@@ -223,7 +223,12 @@ warn_unused_ignores = false
 python-version = "3.13"
 
 [tool.pytest.ini_options]
-addopts = "--ruff"
+# worksteal: xdist's default "load" hands each worker a contiguous slice of the
+# collection up front, so tests/catalog/test_integration.py (30 tests that each
+# start a fresh catalog worker process, ~0.7 s apiece) all landed on one xdist
+# worker, which then ran for 20 s after the rest had finished. worksteal lets
+# idle workers take queued tests from busy ones. Ignored without -n.
+addopts = "--ruff --dist worksteal"
 testpaths = ["tests"]
 
 [tool.coverage.run]
