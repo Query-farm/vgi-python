@@ -26,8 +26,11 @@ import pytest
 from vgi.arguments import Arguments
 from vgi.client.client import Client, _default_pool
 
-# Long enough that a graceful teardown would have to wait on it if the worker were stuck.
-_SLEEP_MS = 5_000
+# How long the worker sleeps before each row. The first row alone costs this
+# much, so it is kept short; the forced stop is held to half of it (see
+# test_force_returns_promptly_mid_stream), which a teardown that waited out the
+# sleep would miss by a wide margin, and a kill (milliseconds) clears.
+_SLEEP_MS = 2_000
 
 
 def _started_client(**kwargs: Any) -> Client:
@@ -65,10 +68,13 @@ def test_force_returns_promptly_mid_stream(tmp_path: Any) -> None:
     )
     next(gen)  # worker is now mid-stream, sleeping between batches
 
+    # The client's reader thread asks for the next row as soon as it has the
+    # first, so the worker is now inside that row's sleep. A stop that waited
+    # it out would take nearly the whole sleep; hold the kill to half of it.
     started = time.monotonic()
     client.stop(force=True)
     elapsed = time.monotonic() - started
-    assert elapsed < _SLEEP_MS / 1000.0, f"forced stop waited {elapsed:.2f}s on a sleeping worker"
+    assert elapsed < _SLEEP_MS / 2000.0, f"forced stop waited {elapsed:.2f}s on a sleeping worker"
 
 
 def test_graceful_stop_is_unchanged() -> None:
