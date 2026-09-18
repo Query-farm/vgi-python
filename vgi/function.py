@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from abc import ABC
 from typing import (
     Annotated,
@@ -73,19 +74,32 @@ def _resolve_storage() -> FunctionStorage:
 
 
 class _DefaultStorageDescriptor:
-    """Resolve `FunctionStorage` lazily on first attribute access.
+    """Resolve `FunctionStorage` lazily on first attribute access — exactly once.
 
     This avoids evaluating environment variables at import time. When a
     subclass explicitly sets ``storage = SomeStorage(...)``, the plain
     attribute shadows this descriptor — no interference.
+
+    Resolution is locked because first use is a *request* now, and requests
+    arrive concurrently. Until 0.34.1 the store was resolved as a side effect of
+    ``import vgi``, single-threaded; once that was made lazy, an unguarded
+    check-then-set let two first callers each build a store — and with the
+    ``:memory:`` backend that is two unrelated databases, so state one thread
+    wrote was invisible to the other. Double-checked, so every later access
+    stays lock-free.
     """
 
     _resolved: FunctionStorage | None = None
+    _lock = threading.Lock()
 
     def __get__(self, obj: object | None, objtype: type | None = None) -> FunctionStorage:
-        if self._resolved is None:
-            self._resolved = _resolve_storage()
-        return self._resolved
+        resolved = self._resolved
+        if resolved is None:
+            with self._lock:
+                if self._resolved is None:
+                    self._resolved = _resolve_storage()
+                resolved = self._resolved
+        return resolved
 
 
 # Default max_workers when not explicitly specified (effectively unlimited)
