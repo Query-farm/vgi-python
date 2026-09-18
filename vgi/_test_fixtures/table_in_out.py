@@ -138,9 +138,9 @@ class SubstreamPartialSumFunction(TableInOutFunction[SingleTableArguments, Subst
     their finalize outputs, so the caller re-aggregates with an outer
     ``SELECT sum(...)`` to get the global total — correct no matter how the rows
     were partitioned across substreams. Each substream's ``finish()`` reads only
-    its OWN worker's accumulated state (keyed by the substream's execution_id;
-    ``params.substream_id`` is the stable client-owned key available for workers
-    that manage cross-backend state themselves). This is the per-substream
+    its OWN execution's accumulated state — the framework keeps one row per
+    ``params.substream_id`` in storage scoped to that execution, so it is found
+    even when a finalize lands on a different backend. This is the per-substream
     finalize contract A4 enables — it is NOT a global cross-substream combine
     (that is a ``TableBufferingFunction``; see ``SumAllColumnsSimpleDistributed``).
 
@@ -191,8 +191,9 @@ class SubstreamPartialSumFunction(TableInOutFunction[SingleTableArguments, Subst
         params: ProcessParams[SingleTableArguments],
         states: list[SubstreamPartialSumState],
     ) -> list[pa.RecordBatch]:
-        # `states` are THIS substream's accumulated states (one per worker pid that
-        # handled this substream's batches); their sum is this substream's partial.
+        # `states` are this execution's accumulated states, one per substream that
+        # saw input (the Python client fans one execution across several); their
+        # sum is this finalize's partial.
         total = sum(st.total for st in states)
         name = params.output_schema.names[0]
         return [pa.RecordBatch.from_pydict({name: [total]}, schema=params.output_schema)]

@@ -360,7 +360,8 @@ class TableInOutFunction[
 
         Args:
             params: The process parameters — function args, settings, secrets.
-            states: The accumulated per-partition states from ``transform()``.
+            states: The accumulated states from ``transform()``, one per
+                substream of this execution that saw input.
 
         Returns:
             List of pa.RecordBatch to emit as final output.
@@ -412,11 +413,17 @@ class TableInOutFunction[
         """
         result = cls.transform(batch, params, state)
 
-        # Save state for distributed processing (upsert semantics)
+        # Save state for distributed processing (upsert semantics), one row per
+        # substream. Storage is scoped to the execution, which every connection
+        # of a fanned-out scan shares, and one process serves many of those
+        # connections under the launcher, TCP or HTTP — so a per-process key let
+        # them overwrite each other and finish() undercounted. The pid remains
+        # only for a client that sends no substream_id, which it keys as before.
         if state is not None:
-            params.storage.state_put(
-                FrameworkNS.TIO_STATE, BoundStorage.pack_int_key(os.getpid()), state.serialize_to_bytes()
-            )
+            key = params.substream_id
+            if key is None:
+                key = BoundStorage.pack_int_key(os.getpid())
+            params.storage.state_put(FrameworkNS.TIO_STATE, key, state.serialize_to_bytes())
 
         # Handle single batch or list of batches — exchange must emit exactly one
         if isinstance(result, list):
