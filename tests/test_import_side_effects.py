@@ -45,6 +45,13 @@ class Concrete(TableFunctionGenerator[None, None]):
     @classmethod
     def process(cls, params, state, out):
         out.finish()
+
+
+# The direct check, independent of where a platform keeps its state directory:
+# reading through __dict__ does not invoke the descriptor.
+from vgi.function import Function
+
+assert Function.__dict__["storage"]._resolved is None, "storage was resolved during import"
 """
 
 
@@ -59,6 +66,10 @@ def _isolated_env(home: Path) -> dict[str, str]:
     env["HOME"] = str(home)
     for name in ("XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME"):
         env[name] = str(home / name.lower())
+    # platformdirs asks Windows for its folders directly and ignores HOME and
+    # XDG there, but honors these overrides.
+    for name in ("LOCAL_APPDATA", "APPDATA"):
+        env[f"WIN_PD_OVERRIDE_{name}"] = str(home / name.lower())
     return env
 
 
@@ -127,7 +138,7 @@ class TestAbstractDetection:
         """Control: without an abstract member, the invalid argument type is rejected."""
         with pytest.raises(TypeError, match="must be a dataclass"):
 
-            class Concrete(TableFunctionGenerator[_NotADataclass, None]):  # type: ignore[type-var]
+            class Concrete(TableFunctionGenerator[_NotADataclass, None]):
                 @classmethod
                 def on_bind(cls, params):  # type: ignore[no-untyped-def]
                     raise NotImplementedError
@@ -139,7 +150,7 @@ class TestAbstractDetection:
     def test_an_abstract_classmethod_marks_the_class_abstract(self) -> None:
         """An inherited-concrete class that adds an abstract classmethod skips validation."""
 
-        class WithAbstractClassmethod(TableFunctionGenerator[_NotADataclass, None]):  # type: ignore[type-var]
+        class WithAbstractClassmethod(TableFunctionGenerator[_NotADataclass, None]):
             @classmethod
             def on_bind(cls, params):  # type: ignore[no-untyped-def]
                 raise NotImplementedError
@@ -158,7 +169,7 @@ class TestAbstractDetection:
     def test_an_abstract_staticmethod_marks_the_class_abstract(self) -> None:
         """An abstract staticmethod is recognized through its raw attribute too."""
 
-        class WithAbstractStaticmethod(TableFunctionGenerator[_NotADataclass, None]):  # type: ignore[type-var]
+        class WithAbstractStaticmethod(TableFunctionGenerator[_NotADataclass, None]):
             @classmethod
             def on_bind(cls, params):  # type: ignore[no-untyped-def]
                 raise NotImplementedError
@@ -177,7 +188,7 @@ class TestAbstractDetection:
     def test_an_abstract_property_marks_the_class_abstract(self) -> None:
         """An abstract property is recognized through its raw attribute too."""
 
-        class WithAbstractProperty(TableFunctionGenerator[_NotADataclass, None]):  # type: ignore[type-var]
+        class WithAbstractProperty(TableFunctionGenerator[_NotADataclass, None]):
             @classmethod
             def on_bind(cls, params):  # type: ignore[no-untyped-def]
                 raise NotImplementedError
