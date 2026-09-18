@@ -8,6 +8,7 @@ to `process()` either emits a batch via `out.emit()` or signals completion via `
 
 from __future__ import annotations
 
+import inspect
 import uuid
 from abc import abstractmethod
 from collections.abc import Mapping
@@ -854,8 +855,19 @@ class TableFunctionBase[TArgs](vgi.function.Function):
                             cls.FunctionArguments = type_args[0]
                         break
 
-        # Skip validation for abstract base classes
-        is_abstract = any(getattr(getattr(cls, name, None), "__isabstractmethod__", False) for name in dir(cls))
+        # Skip validation for abstract base classes. Each attribute is read with
+        # getattr_static, which returns the raw class attribute without invoking
+        # descriptors: a plain getattr() here resolved the inherited
+        # `Function.storage` descriptor, whose first access builds the default
+        # SQLite store on disk. Because vgi defines subclasses of its own, that
+        # made `import vgi` alone create a database under the user's state
+        # directory, and fail outright where that directory is not writable (a
+        # container's non-root user, say). The raw attribute answers the same
+        # question: classmethod, staticmethod and property objects all expose
+        # the `__isabstractmethod__` of what they wrap.
+        is_abstract = any(
+            getattr(inspect.getattr_static(cls, name, None), "__isabstractmethod__", False) for name in dir(cls)
+        )
         if is_abstract:
             cls._setting_params = {}
             cls._secret_params = {}
