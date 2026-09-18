@@ -10,6 +10,7 @@ from typing import Annotated, Any
 
 import pyarrow as pa
 
+from tests.conftest import FIXTURE_WORKER
 from vgi.arguments import (
     Arg,
     Secret,
@@ -218,7 +219,7 @@ class TestTableFunctionSettingAnnotations:
         from vgi.arguments import Arguments
         from vgi.client import Client
 
-        with Client("vgi-fixture-worker") as client:
+        with Client(FIXTURE_WORKER) as client:
             outputs = list(
                 client.table_function(
                     function_name="settings_aware",
@@ -400,7 +401,7 @@ class TestSecretsTypeInParams:
         from vgi.arguments import Arguments
         from vgi.client import Client
 
-        with Client("vgi-fixture-worker") as client:
+        with Client(FIXTURE_WORKER) as client:
             outputs = list(
                 client.table_function(
                     function_name="settings_aware",

@@ -4,6 +4,7 @@
 
 import pyarrow as pa
 
+from tests.conftest import FIXTURE_WORKER
 from vgi.arguments import Arguments
 
 
@@ -14,7 +15,7 @@ class TestProjectedDataFunctionViaClient:
         """Projection should work correctly via Client subprocess."""
         from vgi.client import Client
 
-        with Client("vgi-fixture-worker", worker_limit=1) as client:
+        with Client(FIXTURE_WORKER, worker_limit=1) as client:
             outputs = list(
                 client.table_function(
                     function_name="projected_data",
@@ -36,7 +37,7 @@ class TestProjectedDataFunctionViaClient:
         """All columns should be returned when no projection specified."""
         from vgi.client import Client
 
-        with Client("vgi-fixture-worker", worker_limit=1) as client:
+        with Client(FIXTURE_WORKER, worker_limit=1) as client:
             outputs = list(
                 client.table_function(
                     function_name="projected_data",

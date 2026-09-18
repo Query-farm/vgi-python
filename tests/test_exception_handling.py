@@ -15,6 +15,7 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
+from tests.conftest import FIXTURE_WORKER
 from vgi.arguments import Arguments
 from vgi.client.client import Client, ClientError
 
@@ -28,7 +29,7 @@ class TestBindExceptionHandling:
 
     def test_unknown_function_raises_client_error(self) -> None:
         """Test that calling an unknown function raises ClientError."""
-        with Client("vgi-fixture-worker") as client:
+        with Client(FIXTURE_WORKER) as client:
             with pytest.raises(ClientError) as exc_info:
                 list(
                     client.table_function(
@@ -47,7 +48,7 @@ class TestBindExceptionHandling:
 
     def test_missing_required_setting_raises_client_error(self) -> None:
         """Test that missing required settings raise ClientError."""
-        with Client("vgi-fixture-worker") as client:
+        with Client(FIXTURE_WORKER) as client:
             with pytest.raises(ClientError) as exc_info:
                 list(
                     client.table_function(
@@ -71,7 +72,7 @@ class TestProcessingExceptionHandling:
 
     def test_invalid_argument_type_raises_client_error(self) -> None:
         """Test that invalid argument types are caught and reported."""
-        with Client("vgi-fixture-worker") as client:
+        with Client(FIXTURE_WORKER) as client:
             with pytest.raises(ClientError) as exc_info:
                 list(
                     client.table_function(
@@ -99,7 +100,7 @@ class TestExceptionTracebackPreservation:
 
     def test_bind_exception_has_traceback(self) -> None:
         """Verify bind exceptions include traceback information."""
-        with Client("vgi-fixture-worker") as client:
+        with Client(FIXTURE_WORKER) as client:
             with pytest.raises(ClientError) as exc_info:
                 list(
                     client.table_function(
@@ -115,7 +116,7 @@ class TestExceptionTracebackPreservation:
 
     def test_unknown_function_has_traceback(self) -> None:
         """Verify unknown function errors include traceback information."""
-        with Client("vgi-fixture-worker") as client:
+        with Client(FIXTURE_WORKER) as client:
             with pytest.raises(ClientError) as exc_info:
                 list(
                     client.table_function(
@@ -140,7 +141,7 @@ class TestMultiWorkerExceptionHandling:
 
     def test_bind_exception_in_primary_worker(self) -> None:
         """Test that bind exceptions in primary worker are propagated."""
-        with Client("vgi-fixture-worker") as client:
+        with Client(FIXTURE_WORKER) as client:
             with pytest.raises(ClientError) as exc_info:
                 list(
                     client.table_function(
@@ -168,7 +169,7 @@ class TestTableInOutExceptionHandling:
         """Test that referencing invalid column raises ClientError."""
         input_batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]})
 
-        with Client("vgi-fixture-worker") as client:
+        with Client(FIXTURE_WORKER) as client:
             with pytest.raises(ClientError) as exc_info:
                 list(
                     client.table_in_out_function(
@@ -199,7 +200,7 @@ class TestScalarExceptionHandling:
         """Test that referencing invalid column raises ClientError."""
         input_batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]})
 
-        with Client("vgi-fixture-worker") as client:
+        with Client(FIXTURE_WORKER) as client:
             with pytest.raises(ClientError) as exc_info:
                 list(
                     client.scalar_function(
@@ -233,7 +234,7 @@ class TestErrorMessageContent:
 
     def test_error_first_line_has_type_and_message(self) -> None:
         """First line of str(ClientError) is ``error_type: error_message``."""
-        with Client("vgi-fixture-worker") as client:
+        with Client(FIXTURE_WORKER) as client:
             with pytest.raises(ClientError) as exc_info:
                 list(
                     client.table_function(
@@ -251,7 +252,7 @@ class TestErrorMessageContent:
 
     def test_exception_type_in_message(self) -> None:
         """Test that exception type is included in error message."""
-        with Client("vgi-fixture-worker") as client:
+        with Client(FIXTURE_WORKER) as client:
             with pytest.raises(ClientError) as exc_info:
                 list(
                     client.table_function(
@@ -267,7 +268,7 @@ class TestErrorMessageContent:
 
     def test_original_exception_message_preserved(self) -> None:
         """Test that the original exception message is preserved."""
-        with Client("vgi-fixture-worker") as client:
+        with Client(FIXTURE_WORKER) as client:
             with pytest.raises(ClientError) as exc_info:
                 list(
                     client.table_function(

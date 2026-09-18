@@ -10,7 +10,7 @@ import time
 import pyarrow as pa
 import pytest
 
-from tests.conftest import assert_single_result, assert_total_rows, make_schema
+from tests.conftest import SUBPROCESS_FIXTURE_WORKER, assert_single_result, assert_total_rows, make_schema
 from vgi.client import Client
 from vgi.client.client import ClientError
 
@@ -229,9 +229,9 @@ class TestMultiWorkerEdgeCases:
 class TestWorkerStderrCapture:
     """Tests for capturing worker stderr output."""
 
-    def test_captures_worker_stderr(self, fixture_worker: str, simple_batches: list[pa.RecordBatch]) -> None:
+    def test_captures_worker_stderr(self, simple_batches: list[pa.RecordBatch]) -> None:
         """Should capture stderr output from the worker process."""
-        with Client(fixture_worker, pool=None) as client:
+        with Client(SUBPROCESS_FIXTURE_WORKER, pool=None) as client:
             # The example worker uses logging which writes to stderr
             list(
                 client.table_in_out_function(

@@ -4,6 +4,7 @@
 
 import pyarrow as pa
 
+from tests.conftest import FIXTURE_WORKER
 from vgi.arguments import Arguments
 from vgi.client import Client
 
@@ -13,7 +14,7 @@ class TestStructSettingsFunction:
 
     def test_struct_setting_basic(self) -> None:
         """Struct setting should configure sequence generation."""
-        with Client("vgi-fixture-worker") as client:
+        with Client(FIXTURE_WORKER) as client:
             outputs = list(
                 client.table_function(
                     function_name="struct_settings",
@@ -32,7 +33,7 @@ class TestStructSettingsFunction:
 
     def test_struct_setting_different_values(self) -> None:
         """Different struct values should produce different output."""
-        with Client("vgi-fixture-worker") as client:
+        with Client(FIXTURE_WORKER) as client:
             outputs = list(
                 client.table_function(
                     function_name="struct_settings",

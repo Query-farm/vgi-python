@@ -35,6 +35,7 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
+from tests.conftest import FIXTURE_WORKER
 from vgi.arguments import Arguments
 from vgi.client import Client
 
@@ -64,7 +65,7 @@ class TestProjReproStrictDirect:
 
     def test_no_projection_returns_all_columns(self) -> None:
         """Without projection_ids, all 12 columns come back."""
-        with Client("vgi-fixture-worker", worker_limit=1) as client:
+        with Client(FIXTURE_WORKER, worker_limit=1) as client:
             outputs = list(
                 client.table_function(
                     function_name="proj_repro_strict",
@@ -84,7 +85,7 @@ class TestProjReproStrictDirect:
         12-column FIXED_SCHEMA instead of the 1-column projected
         schema.
         """
-        with Client("vgi-fixture-worker", worker_limit=1) as client:
+        with Client(FIXTURE_WORKER, worker_limit=1) as client:
             outputs = list(
                 client.table_function(
                     function_name="proj_repro_strict",
@@ -107,7 +108,7 @@ class TestProjReproStrictDirect:
         must preserve the row count even when the output schema is
         empty — DuckDB's count(*) needs N, not 0.
         """
-        with Client("vgi-fixture-worker", worker_limit=1) as client:
+        with Client(FIXTURE_WORKER, worker_limit=1) as client:
             outputs = list(
                 client.table_function(
                     function_name="proj_repro_strict",
@@ -133,7 +134,7 @@ class TestProjReproStrictDirect:
         ``test_projection_enforcement`` coverage on the canonical
         ``projected_data`` fixture.
         """
-        with Client("vgi-fixture-worker", worker_limit=1) as client:
+        with Client(FIXTURE_WORKER, worker_limit=1) as client:
             outputs = list(
                 client.table_function(
                     function_name="proj_repro_strict",
@@ -148,7 +149,7 @@ class TestProjReproStrictDirect:
 
     def test_all_columns_projection(self) -> None:
         """Projecting every column should be equivalent to no projection."""
-        with Client("vgi-fixture-worker", worker_limit=1) as client:
+        with Client(FIXTURE_WORKER, worker_limit=1) as client:
             outputs = list(
                 client.table_function(
                     function_name="proj_repro_strict",
@@ -196,7 +197,7 @@ class TestProjReproFullSchema:
         """
         # value_schema_id is index 10 in WIDE_SCHEMA.
         value_schema_id_idx = 10
-        with Client("vgi-fixture-worker", worker_limit=1) as client:
+        with Client(FIXTURE_WORKER, worker_limit=1) as client:
             outputs = list(
                 client.table_function(
                     function_name="proj_repro_full_schema",
@@ -225,7 +226,7 @@ class TestProjReproFullSchema:
         are not matching`` cast error means the projection-emit
         handshake is broken.
         """
-        with Client("vgi-fixture-worker", worker_limit=1) as client:
+        with Client(FIXTURE_WORKER, worker_limit=1) as client:
             try:
                 outputs = list(
                     client.table_function(

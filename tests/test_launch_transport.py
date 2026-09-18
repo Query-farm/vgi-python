@@ -11,6 +11,7 @@ way it participates in the TCP path (``--tcp HOST:PORT``).
 
 from __future__ import annotations
 
+import shlex
 import shutil
 import socket
 import sys
@@ -92,6 +93,50 @@ def test_launch_shares_one_worker_across_clients(state_dir: str) -> None:
             rows = status_rows(Path(state_dir))
             assert len(rows) == 1, f"expected exactly one shared worker, found {len(rows)}: {rows}"
             assert rows[0].alive
+
+
+def test_launch_worker_string_shares_the_from_launch_worker(state_dir: str) -> None:
+    """``Client("launch:<argv>")`` is ``Client.from_launch(argv)``: the same worker, not a second one.
+
+    The worker string is the DuckDB extension's ``launch:`` LOCATION scheme, so one
+    string names one shared worker in both clients.
+    """
+    worker_string = "launch:" + shlex.join(_WORKER_ARGV)
+    with Client.from_launch(_WORKER_ARGV, idle_timeout=10.0, state_dir=state_dir) as client_a:
+        assert client_a.catalogs()
+        with Client(worker_string, launch_idle_timeout=10.0, launch_state_dir=state_dir) as client_b:
+            batches = list(
+                client_b.table_function(
+                    function_name="sequence",
+                    schema_path=["main"],
+                    arguments=Arguments(positional=(pa.scalar(3),)),
+                )
+            )
+            rows = status_rows(Path(state_dir))
+
+    assert pa.Table.from_batches(batches).column("n").to_pylist() == [0, 1, 2]
+    assert len(rows) == 1, f"expected exactly one shared worker, found {len(rows)}: {rows}"
+
+
+class TestLaunchWorkerString:
+    """The ``launch:`` prefix on ``server_path``."""
+
+    def test_selects_the_launch_transport(self) -> None:
+        """The argv after the prefix is split shlex-style into ``launch_argv``; the pool is dropped."""
+        client = Client('launch:"/path with spaces/worker" --quiet')
+        assert client._transport == "launch"
+        assert client._launch_argv == ("/path with spaces/worker", "--quiet")
+        assert client._pool is None
+
+    def test_rejects_launch_argv_as_well(self) -> None:
+        """The command comes from one place or the other."""
+        with pytest.raises(ValueError, match="not both"):
+            Client("launch:worker", launch_argv=("worker",))
+
+    def test_rejects_an_empty_command(self) -> None:
+        """``launch:`` alone names no worker."""
+        with pytest.raises(ValueError, match="requires a non-empty launch_argv"):
+            Client("launch:")
 
 
 class TestLaunchConstructorValidation:
