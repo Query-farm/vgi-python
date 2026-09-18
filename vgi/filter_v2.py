@@ -1165,7 +1165,12 @@ def _get_evaluation_connection(context: EvaluationContext) -> Any:
                 f"found {engine_name} {engine_version or '<unknown>'}"
             )
 
-        connection = connect()
+        # One thread. Each evaluates one batch against one predicate, which
+        # DuckDB cannot parallelize, and there is one of these databases per
+        # (server thread, context): at the default of one scheduler thread per
+        # core, a waitress worker on a 48-core host carried ~290 threads, and
+        # every evaluation paid to dispatch onto that pool.
+        connection = connect(config={"threads": 1})
         _apply_context(connection, context)
         connections[key] = connection
     return connection
