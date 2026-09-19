@@ -18,8 +18,8 @@ ways it goes right:
   shape that silently truncates a scan if a reader treats an empty split as EOS.
 * ``split_skewed(n)`` — one split ~100x the others, so greedy claiming can be
   told apart from static assignment.
-* ``split_many(n, splits := 1000)`` — far more splits than reader threads, which
-  forces sequential re-init on a reused connection.
+* ``split_many(n, splits)`` — far more splits than reader threads (pass them), which
+  forces sequential re-init on a reused connection. ``splits <= 0`` means 1000.
 * ``split_echo_filters(n)`` — reports the pushdown it saw *per split*, so a
   pushdown regression is visible without inferring it from row counts.
 """
@@ -322,7 +322,9 @@ class SplitManyFunction(_SplitBase):
 
     @classmethod
     def _split_count(cls, params: BindParams[SplitSequenceArgs]) -> int:
-        return max(params.args.splits, 1000)
+        # Honour the caller's count, as every other SDK's twin does; a floor here
+        # made a test that asks for 64 splits pay for 1000 HTTP round trips.
+        return params.args.splits if params.args.splits > 0 else 1000
 
 
 @dataclass(frozen=True)
