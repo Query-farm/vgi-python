@@ -2887,7 +2887,10 @@ class AggregateWindowRequest(ArrowSerializableDataclass):
         execution_id: Identifier for one query execution, stable across the
             coordinator and any secondary workers; keys worker-owned state.
         partition_id: Identifier of the window partition this call addresses.
-        rid: Row index within the partition for the output row being computed.
+        rid: Which output row this call fills, as DuckDB's per-row window callback
+            reports it: the row's index within the current output chunk
+            (``0 <= rid < STANDARD_VECTOR_SIZE``), NOT its row in the partition.
+            The frames below are partition-relative; use them to find the rows.
         frame_starts: Subframe start offsets (inclusive) within the partition, one
             per subframe.
         frame_ends: Subframe end offsets (exclusive) within the partition, parallel

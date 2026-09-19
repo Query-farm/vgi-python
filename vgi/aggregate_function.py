@@ -518,7 +518,14 @@ class AggregateFunction[TState: StreamStateCodec](vgi.function.Function):
         """Compute the aggregate value for one output row.
 
         Args:
-            rid: Partition-local row index being filled.
+            rid: Identifies the output row being filled; do not use it to
+                index the partition. Over the per-row ``aggregate_window``
+                RPC it is DuckDB's own ``rid``: the row's index within the
+                current output chunk (``0 <= rid < 2048``), not its row in
+                the partition. When the default :meth:`window_batch` calls
+                this, it passes the partition row index instead. Either way
+                ``subframes`` are partition-relative: use them to find the
+                rows to aggregate.
             subframes: Frame ranges ``[(begin, end), ...]`` — 1 for the default
                 frame, 3 when ``EXCLUDE`` produces multiple subframes.
             partition: The cached partition data.

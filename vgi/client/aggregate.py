@@ -371,7 +371,10 @@ class AggregateSession:
 
         Args:
             partition_id: The partition previously shipped by :meth:`window_init`.
-            rid: Row index within the partition of the output row being computed.
+            rid: Identifies the output row. The DuckDB extension sends DuckDB's
+                own per-row ``rid``, the row's index within the current output
+                chunk rather than its row in the partition; ``frames`` carry the
+                partition-relative bounds, and a worker must use those.
             frames: The row's subframes as ``(begin, end)`` half-open offsets
                 into the partition. One entry normally; two or three for
                 ``EXCLUDE TIES`` / ``EXCLUDE GROUP``.
