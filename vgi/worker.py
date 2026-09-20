@@ -173,7 +173,7 @@ if TYPE_CHECKING:
     from ssl import SSLContext
 
     from vgi_rpc.rpc import PeerAuthenticationPolicy, PeerIdentityProvider
-    from vgi_rpc.rpc._token_identity import TokenIdentity
+    from vgi_rpc.rpc._token_identity import IssuedGrant, TokenIdentity
 
     from vgi.catalog.descriptors import Catalog
     from vgi.protocol import (
@@ -1477,6 +1477,80 @@ class Worker:
         if cls.resolve_token.__func__ is Worker.resolve_token.__func__:  # type: ignore[attr-defined]
             return None
         return cls.resolve_token
+
+    @classmethod
+    def mint_grant(cls, principal: str, purpose: str, scopes: list[str], ttl_seconds: int) -> IssuedGrant:
+        """Mint a standing delegation credential for *principal*.
+
+        Override to host ``vgi_rpc.Identity.v1``'s ``issue_grant``. Like
+        ``resolve_token``, the method is absent until it is overridden rather
+        than hosted-and-refusing, so no worker grows a credential *issuer* by
+        upgrading a dependency.
+
+        OAuth cannot express durable delegation: it fuses the grant, the
+        credential and the session into one refresh token, so an IdP shortening
+        session lifetime shortens the grant. This mints the durable record —
+        created while the user is present, presented later by unattended
+        automation as an ordinary bearer.
+
+        **There is no subject on the wire.** ``issue_grant`` takes no subject
+        field; the framework passes the *caller's own* authenticated principal,
+        so cross-subject minting is closed by construction rather than by a
+        check that could be forgotten. That is also why this needs no allowlist
+        while ``introspect_token`` has one — it is not an oracle about anybody
+        else. The framework additionally refuses a caller whose authentication
+        is stale (``max_auth_age``, 15 minutes by default), because "minted
+        while the user is present" is the property that makes a grant
+        accountable to them.
+
+        ``IssuedGrant.token`` is **opaque to the framework** — a sealed
+        envelope, a database row, or a credential brokered from the IdP are all
+        equally valid and equally invisible here. It is never parsed and never
+        logged. Note that a self-contained sealed token cannot be revoked
+        individually: with no server-side record there is nothing to delete,
+        and rotating the sealing key invalidates every grant at once. If
+        per-grant revocation matters, the token has to name something the
+        worker can look up and remove.
+
+        Args:
+            principal: The caller's authenticated principal, in the form this
+                worker derives itself. Supplied by the framework, never by the
+                caller.
+            purpose: Free-text reason recorded with the grant, for the audit
+                trail.
+            scopes: Scopes the grant is limited to. A worker that ignores this
+                is issuing a credential broader than the caller asked for.
+            ttl_seconds: Lifetime the caller requested. A worker may issue a
+                shorter one — and should say so in ``expires_at`` — but must
+                never issue a longer one.
+
+        Returns:
+            The minted ``IssuedGrant``. ``expires_at`` is a declaration rather
+            than an enforcement: the real lifetime lives inside the opaque
+            token, so a worker that states one has thought about one.
+
+        Raises:
+            GrantRefusedError: When this caller may not mint this grant —
+                an unsupported scope, a ttl beyond policy, a principal the
+                worker declines to delegate for.
+
+        """
+        from vgi_rpc.rpc._token_identity import GrantRefusedError
+
+        raise GrantRefusedError("this worker does not mint grants")
+
+    @classmethod
+    def _grant_minter(cls) -> Callable[[str, str, list[str], int], IssuedGrant] | None:
+        """Return this worker's grant minter, or ``None`` when it has none.
+
+        Identity comparison against the base implementation, for the same
+        reason ``_introspect_resolver`` uses one: the method must be absent
+        unless a worker actually wrote the minting, and a "supports grants"
+        flag can be set without one.
+        """
+        if cls.mint_grant.__func__ is Worker.mint_grant.__func__:  # type: ignore[attr-defined]
+            return None
+        return cls.mint_grant
 
     @final
     @classmethod

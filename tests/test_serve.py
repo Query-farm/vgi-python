@@ -24,7 +24,7 @@ from vgi_rpc import (
 from vgi_rpc.rpc import AuthContext, PeerResolutionContext, peer_identity_primary
 
 from vgi.arguments import Arguments, Auth, Param, Returns
-from vgi.auth import TokenIdentity
+from vgi.auth import IssuedGrant, TokenIdentity
 from vgi.client import Client
 from vgi.scalar_function import ScalarFunction
 from vgi.serve import (
@@ -486,6 +486,32 @@ class _IntrospectingWorker(Worker):
         return None
 
 
+class _MintingWorker(Worker):
+    """Worker that implements only the optional grant-minting hook."""
+
+    functions = [_DoubleFunc]
+
+    @classmethod
+    def mint_grant(cls, principal: str, purpose: str, scopes: list[str], ttl_seconds: int) -> IssuedGrant:
+        # A sealed self-contained credential: the worker owns the format and
+        # the framework never parses it. Capped TTL, to pin that a worker may
+        # issue SHORTER than asked.
+        ttl = min(ttl_seconds, 3600)
+        return IssuedGrant(
+            token=f"sealed:{principal}:{':'.join(scopes)}:{purpose}",
+            expires_at=1_000_000.0 + ttl,
+            grant_id="grant-1",
+        )
+
+
+class _BothWorker(_IntrospectingWorker):
+    """Worker that both resolves credentials and mints grants."""
+
+    @classmethod
+    def mint_grant(cls, principal: str, purpose: str, scopes: list[str], ttl_seconds: int) -> IssuedGrant:
+        return IssuedGrant(token=f"sealed:{principal}", expires_at=1_000_000.0, grant_id="g")
+
+
 class TestIntrospectResolverDetection:
     """``resolve_token`` presence is detected by override, not by a flag."""
 
@@ -512,6 +538,31 @@ def _introspector_ctx(principal: str) -> object:
 
     return CallContext(
         auth=AuthContext(domain="test", authenticated=True, principal=principal),
+        emit_client_log=lambda *a, **k: None,
+    )
+
+
+def _minting_ctx(principal: str, *, auth_age_s: float = 0.0) -> object:
+    """Build a ``CallContext`` for a caller who authenticated *auth_age_s* ago.
+
+    Minting reads ``auth_time`` off the credential's claims, and a credential
+    without one cannot mint at all. That single rule is what stops a grant
+    minting another grant — a grant is not IdP-issued, so it carries no
+    ``auth_time`` — and what makes a static bearer token, which proves a
+    machine holds a secret rather than that a human just authenticated,
+    fail closed here.
+    """
+    import time
+
+    from vgi_rpc.rpc import AuthContext, CallContext
+
+    return CallContext(
+        auth=AuthContext(
+            domain="test",
+            authenticated=True,
+            principal=principal,
+            claims={"auth_time": time.time() - auth_age_s},
+        ),
         emit_client_log=lambda *a, **k: None,
     )
 
@@ -653,6 +704,111 @@ class TestTokenIntrospection:
             warnings.simplefilter("error", DeprecationWarning)
             mp.setenv("VGI_INTROSPECT_PRINCIPALS", "proxy-a")
             create_app(_IntrospectingWorker, prefix="/vgi", describe=False)
+
+
+class TestGrantMinting:
+    """``issue_grant`` — the other half of ``vgi_rpc.Identity.v1``.
+
+    Guarded very differently from ``introspect_token``, and deliberately so.
+    Introspection answers a question about *somebody else's* credential, so it
+    needs an allowlist. Minting produces a credential for the *caller* — there
+    is no subject on the wire, so cross-subject minting is closed by
+    construction and no allowlist applies. What this repo owns is the wiring:
+    a ``mint_grant`` override becomes an ``IdentityImpl`` that offers the
+    method, and a worker that never wrote one does not host it.
+    """
+
+    @staticmethod
+    def _identity(worker_cls: type[Worker], **env: str) -> object:
+        from vgi.serve import _build_identity
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.delenv("VGI_INTROSPECT_PRINCIPALS", raising=False)
+            for key, value in env.items():
+                mp.setenv(key, value)
+            return _build_identity(worker_cls, None)
+
+    def test_base_worker_has_no_minter(self) -> None:
+        """A worker that never wrote the minting gets no issuer."""
+        assert _SingleWorker._grant_minter() is None
+
+    def test_override_is_detected(self) -> None:
+        """Implementing the hook is what enables it."""
+        minter = _MintingWorker._grant_minter()
+        assert minter is not None
+
+    def test_minting_alone_hosts_the_protocol(self) -> None:
+        """A worker may mint without resolving — the two are independent."""
+        assert "vgi_rpc.Identity.v1" in _hosted_protocols(_MintingWorker)
+
+    def test_minting_alone_offers_only_issue_grant(self) -> None:
+        """The protocol describes what the worker does, not what it could do."""
+        identity = self._identity(_MintingWorker)
+        assert identity is not None
+        assert identity.offered_methods() == frozenset({"issue_grant"})  # type: ignore[attr-defined]
+
+    def test_minting_alone_needs_no_introspect_allowlist(self) -> None:
+        """No allowlist is required to mint: a grant is not an oracle.
+
+        Requiring one would be a startup error for a worker that never exposes
+        anybody else's identity — the exact opposite of the guard's purpose.
+        """
+        with pytest.MonkeyPatch.context() as mp:
+            mp.delenv("VGI_INTROSPECT_PRINCIPALS", raising=False)
+            create_app(_MintingWorker, prefix="/vgi", describe=False)
+
+    def test_both_hooks_offer_both_methods(self) -> None:
+        """Resolving and minting compose."""
+        identity = self._identity(_BothWorker, VGI_INTROSPECT_PRINCIPALS="proxy-a")
+        assert identity is not None
+        assert identity.offered_methods() == frozenset({"introspect_token", "issue_grant"})  # type: ignore[attr-defined]
+
+    def test_the_caller_is_the_subject(self) -> None:
+        """The framework supplies the principal; the wire method has no subject field.
+
+        This is the property that makes an allowlist unnecessary, so pin it
+        here rather than trusting the signature to stay that way.
+        """
+        identity = self._identity(_MintingWorker)
+        assert identity is not None
+        grant = identity.issue_grant(  # type: ignore[attr-defined]
+            "nightly-etl", ["read"], 600, _minting_ctx("alice")
+        )
+        assert grant.token.startswith("sealed:alice:")
+        assert grant.grant_id == "grant-1"
+
+    def test_a_worker_may_issue_a_shorter_ttl_than_asked(self) -> None:
+        """A worker may narrow the request; it must never widen it."""
+        identity = self._identity(_MintingWorker)
+        assert identity is not None
+        grant = identity.issue_grant(  # type: ignore[attr-defined]
+            "long", [], 86_400, _minting_ctx("alice")
+        )
+        assert grant.expires_at == 1_000_000.0 + 3600
+
+    def test_stale_authentication_cannot_mint(self) -> None:
+        """Minting while the user is present is enforced, not just documented."""
+        from vgi_rpc.rpc._token_identity import StaleAuthError
+
+        identity = self._identity(_MintingWorker)
+        assert identity is not None
+        with pytest.raises(StaleAuthError):
+            identity.issue_grant("x", [], 60, _minting_ctx("alice", auth_age_s=86_400))  # type: ignore[attr-defined]
+
+    def test_a_credential_with_no_auth_time_cannot_mint(self) -> None:
+        """A grant cannot mint another grant, and a static bearer cannot mint at all.
+
+        Neither carries ``auth_time`` — only an IdP-issued credential does — so
+        the lineage cannot escape the identity provider. This is the rule that
+        makes delegation accountable to a human login rather than to whoever
+        currently holds a machine secret.
+        """
+        from vgi_rpc.rpc._token_identity import StaleAuthError
+
+        identity = self._identity(_MintingWorker)
+        assert identity is not None
+        with pytest.raises(StaleAuthError):
+            identity.issue_grant("x", [], 60, _introspector_ctx("etl-service"))  # type: ignore[attr-defined]
 
 
 class TestAuthUnavailableReExport:

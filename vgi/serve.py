@@ -791,9 +791,12 @@ def _build_identity(
 ) -> IdentityImpl | None:
     """Build the ``vgi_rpc.Identity.v1`` implementation, or ``None``.
 
-    ``None`` unless the worker class actually implements the lookup, and that
-    is the point: ``RpcServer`` then does not host the protocol at all, rather
-    than hosting it and refusing every call. Absent beats routed-and-refusing —
+    ``None`` unless the worker class implements at least one of the two
+    methods, and that is the point: ``RpcServer`` then does not host the
+    protocol at all, rather than hosting it and refusing every call. The two
+    are independent — a worker may resolve credentials without minting them,
+    mint without resolving, or do both, and ``offered_methods()`` reports
+    exactly what it wrote. Absent beats routed-and-refusing —
     it is what keeps a dependency upgrade from growing a
     credential-to-identity oracle on every existing worker.
 
@@ -804,8 +807,8 @@ def _build_identity(
     calling and reading an error.
 
     Args:
-        worker_cls: The worker class, consulted for a ``resolve_token``
-            override.
+        worker_cls: The worker class, consulted for ``resolve_token`` and
+            ``mint_grant`` overrides.
         introspect_principals: Principals permitted to introspect, or ``None``
             to read the environment.
 
@@ -815,7 +818,8 @@ def _build_identity(
 
     """
     resolver = worker_cls._introspect_resolver()
-    if resolver is None:
+    minter = worker_cls._grant_minter()
+    if resolver is None and minter is None:
         return None
 
     # Not re-exported by ``vgi_rpc.rpc``, so the private module is the only
@@ -824,7 +828,11 @@ def _build_identity(
 
     return IdentityImpl(
         resolve_token=resolver,
-        introspect_principals=_resolve_introspect_principals(introspect_principals),
+        mint_grant=minter,
+        # Only meaningful for ``introspect_token``, and ``IdentityImpl``
+        # validates it only when a resolver is supplied — a worker that mints
+        # grants but resolves nothing is not an oracle and needs no allowlist.
+        introspect_principals=(_resolve_introspect_principals(introspect_principals) if resolver is not None else None),
     )
 
 

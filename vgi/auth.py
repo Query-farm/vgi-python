@@ -9,8 +9,8 @@ HTTP auth factories (require ``vgi[http]``):
     bearer_authenticate, bearer_authenticate_static, chain_authenticate,
     OAuthResourceMetadata, AuthUnavailableError
 
-Token introspection (always available):
-    TokenIdentity, TokenResolver
+Token introspection and delegation (always available):
+    TokenIdentity, TokenResolver, IssuedGrant, GrantMinter
 
 JWT auth (requires ``vgi[oauth]``):
     jwt_authenticate
@@ -30,16 +30,25 @@ from vgi_rpc.rpc import AuthContext, CallContext
 # on the ``http`` extra.  Still not re-exported by ``vgi_rpc.rpc`` itself, so
 # the private module remains the only import path; re-exported here so a worker
 # that implements ``resolve_token`` never has to name one.
-from vgi_rpc.rpc._token_identity import TokenIdentity
+from vgi_rpc.rpc._token_identity import IssuedGrant, TokenIdentity
 
 #: What :meth:`vgi.worker.Worker.resolve_token` is.  Upstream dropped its own
 #: alias when identity moved to the RPC layer; it is spelled out here so the
 #: name ``vgi.auth.TokenResolver`` keeps working.
 TokenResolver = Callable[[str], "TokenIdentity | None"]
 
+#: What :meth:`vgi.worker.Worker.mint_grant` is: ``(principal, purpose, scopes,
+#: ttl_seconds) -> IssuedGrant``.  The subject is a *parameter of the call the
+#: framework makes*, never of the wire method — ``issue_grant`` has no subject
+#: field, so a worker is handed the caller's own principal and cannot be asked
+#: to mint for anybody else.
+GrantMinter = Callable[[str, str, list[str], int], "IssuedGrant"]
+
 __all__ = [
     "AuthContext",
     "CallContext",
+    "GrantMinter",
+    "IssuedGrant",
     "TokenIdentity",
     "TokenResolver",
 ]
