@@ -740,11 +740,24 @@ class _Parser:
 
     @staticmethod
     def _is_boolean(expression: FilterExpression) -> bool:
-        if isinstance(expression, Literal):
-            return pa.types.is_boolean(expression.field.type)
-        if isinstance(expression, (Comparison, BooleanExpression, Not, IsNull, In, RuntimeFilter)):
-            return True
-        return isinstance(expression, Call)
+        """Whether *expression* resolves to BOOLEAN.
+
+        Ask the type, never the node kind. The two agree for every node whose
+        type is structurally fixed -- a comparison is BOOLEAN whatever its
+        operands -- and that is exactly why enumerating kinds looked sufficient.
+        It is not: ``column_ref``, ``field_ref``, ``cast`` and ``arithmetic``
+        are BOOLEAN or not depending on a type resolved from elsewhere (the
+        bind output schema, or a parent expression), and the schema admits all
+        four as a predicate root -- ``coreExpression`` lists ``columnRef``
+        first. Enumerating kinds rejected the lot, so the idiomatic
+        ``WHERE flag`` / ``WHERE NOT flag`` -- which DuckDB pushes down as a
+        bare column reference rather than rewriting to ``flag = true`` -- was
+        refused as "predicate root must resolve to BOOLEAN" even though the
+        parser had already resolved the column to BOOLEAN and stored it on the
+        node.
+        """
+        data_type = expression_type(expression)
+        return data_type is not None and pa.types.is_boolean(data_type)
 
     def _payload(self, prefix: str, ref: object) -> tuple[pa.Field[Any], pa.Scalar[Any]]:
         index = _uint(ref, f"{prefix}_ref")

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from typing import cast
+from typing import Any, cast
 
 import pyarrow as pa
 import pytest
@@ -531,3 +531,168 @@ def test_unknown_arrow_extension_metadata_is_rejected() -> None:
             _batch(_document([_predicate(_comparison())]), (extension_field, b"opaque")),
             output_schema=pa.schema([("n", pa.int64())]),
         )
+
+
+# ---------------------------------------------------------------------------
+# A boolean column is a predicate on its own
+#
+# `WHERE flag` / `WHERE NOT flag` is idiomatic SQL, and DuckDB pushes it down as
+# a bare `column_ref` rather than rewriting it to `flag = true`. The schema
+# admits that -- `coreExpression` lists `columnRef` first -- but the decoder's
+# boolean gate used to enumerate node *kinds* instead of asking for the resolved
+# *type*, so it refused every one of them: "predicate root must resolve to
+# BOOLEAN", on a node whose type it had already resolved to BOOLEAN and stored.
+# ---------------------------------------------------------------------------
+
+_BOOL_FIELDS: list[pa.Field[Any]] = [pa.field("flag", pa.bool_()), pa.field("n", pa.int64())]
+_BOOL_SCHEMA = pa.schema(_BOOL_FIELDS)
+
+
+def _flag(index: int = 0) -> dict[str, object]:
+    return {"node": "column_ref", "column_index": index, "column_name": "flag"}
+
+
+def test_bare_boolean_column_is_a_valid_predicate_root() -> None:
+    """`WHERE flag` -- the column itself is the predicate."""
+    filters = deserialize_filters(
+        _batch(_document([_predicate(_flag())])),
+        output_schema=_BOOL_SCHEMA,
+    )
+    batch = pa.RecordBatch.from_pydict(
+        {"flag": [True, False, None, True], "n": [1, 2, 3, 4]},
+        schema=_BOOL_SCHEMA,
+    )
+    # evaluate() is the raw three-valued predicate: NULL stays NULL.
+    assert filters.evaluate(batch).to_pylist() == [True, False, None, True]
+    # apply() is what selects rows, and there a NULL predicate is not satisfied
+    # -- the same rows `flag = true` would keep, which is what makes the SQL
+    # rewrite below a projection rather than a change of meaning.
+    assert filters.apply(batch).to_pydict()["n"] == [1, 4]
+
+
+def test_negated_boolean_column_is_a_valid_predicate_root() -> None:
+    """`WHERE NOT flag` -- `not` over a bare column, which the gate also refused."""
+    filters = deserialize_filters(
+        _batch(_document([_predicate({"node": "not", "expression": _flag()})])),
+        output_schema=_BOOL_SCHEMA,
+    )
+    batch = pa.RecordBatch.from_pydict(
+        {"flag": [True, False, None, True], "n": [1, 2, 3, 4]},
+        schema=_BOOL_SCHEMA,
+    )
+    assert filters.evaluate(batch).to_pylist() == [False, True, None, False]
+    # NOT NULL is NULL, so row 3 is not kept -- exactly `flag = false`.
+    assert filters.apply(batch).to_pydict()["n"] == [2]
+
+
+def test_boolean_column_predicates_render_as_sql() -> None:
+    """They must reach SQL, not just the evaluator.
+
+    Left as a generic v2 expression a bare column renders no SQL at all, so a
+    SQL-backed worker loses pushdown on the commonest boolean predicate there
+    is -- and DuckDB does not re-apply what it pushed down, so that is a wrong
+    answer, not a slow one.
+    """
+    positive = deserialize_filters(_batch(_document([_predicate(_flag())])), output_schema=_BOOL_SCHEMA)
+    where, params = positive.to_sql()
+    assert where == '"flag" = ?'
+    assert params == [True]
+
+    negative = deserialize_filters(
+        _batch(_document([_predicate({"node": "not", "expression": _flag()})])),
+        output_schema=_BOOL_SCHEMA,
+    )
+    where, params = negative.to_sql()
+    assert where == '"flag" = ?'
+    assert params == [False]
+
+
+def test_boolean_column_inside_a_conjunction_still_pushes_down() -> None:
+    """The shape that actually showed up: `WHERE other = x AND NOT flag`.
+
+    One unrenderable child used to cost the whole conjunction its pushdown.
+    """
+    document = _document(
+        [
+            _predicate(
+                {
+                    "node": "and",
+                    "children": [
+                        {
+                            "node": "comparison",
+                            "op": "gt",
+                            "left": _column(name="n", index=1),
+                            "right": {"node": "literal", "value_ref": 0},
+                        },
+                        {"node": "not", "expression": _flag()},
+                    ],
+                }
+            )
+        ]
+    )
+    filters = deserialize_filters(
+        _batch(document, (pa.field("value_0", pa.int64()), 2)),
+        output_schema=_BOOL_SCHEMA,
+    )
+    where, params = filters.to_sql()
+    assert where == '("n" > ? AND "flag" = ?)'
+    assert params == [2, False]
+
+
+def test_an_unresolved_column_is_not_assumed_boolean() -> None:
+    """Without a bind schema the column's type is unknown -- refuse, don't guess."""
+    with pytest.raises(FilterDeserializationError, match="predicate root"):
+        deserialize_filters(_batch(_document([_predicate(_flag())])))
+
+
+def test_a_non_boolean_column_is_still_refused() -> None:
+    """`WHERE n` where n is BIGINT is not a predicate."""
+    with pytest.raises(FilterDeserializationError, match="predicate root"):
+        deserialize_filters(
+            _batch(_document([_predicate(_column(name="n", index=1))])),
+            output_schema=_BOOL_SCHEMA,
+        )
+
+
+def test_an_unrenderable_filter_raises_rather_than_vanishing() -> None:
+    """`to_sql()` must never quietly drop a predicate it cannot render.
+
+    DuckDB does not re-apply a filter it pushed into a table function, so the
+    worker's WHERE clause is the only thing standing between the caller and
+    rows the predicate excludes. A skipped filter is therefore a wrong answer,
+    not a slow one -- which is why this raises instead of degrading.
+    """
+    from vgi.table_filter_pushdown import FilterSQLUnsupportedError
+
+    # `n + 1 > 2` -- arithmetic has no legacy leaf shape and no SQL rendering.
+    document = _document(
+        [
+            _predicate(
+                {
+                    "node": "comparison",
+                    "op": "gt",
+                    "left": {
+                        "node": "arithmetic",
+                        "op": "add",
+                        "left": _column(name="n", index=1),
+                        "right": {"node": "literal", "value_ref": 0},
+                    },
+                    "right": {"node": "literal", "value_ref": 1},
+                }
+            )
+        ]
+    )
+    filters = deserialize_filters(
+        _batch(
+            document,
+            (pa.field("value_0", pa.int64()), 1),
+            (pa.field("value_1", pa.int64()), 2),
+        ),
+        output_schema=_BOOL_SCHEMA,
+    )
+    # It evaluates correctly -- there is simply no SQL for it.
+    batch = pa.RecordBatch.from_pydict({"flag": [True, True, True], "n": [0, 2, 5]}, schema=_BOOL_SCHEMA)
+    assert filters.apply(batch).to_pydict()["n"] == [2, 5]
+
+    with pytest.raises(FilterSQLUnsupportedError, match="no SQL rendering"):
+        filters.to_sql()

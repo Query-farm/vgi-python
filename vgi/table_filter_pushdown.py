@@ -64,6 +64,9 @@ from vgi.filter_v2 import (
     Literal as V2Literal,
 )
 from vgi.filter_v2 import (
+    Not as V2Not,
+)
+from vgi.filter_v2 import (
     RuntimeFilter as V2RuntimeFilter,
 )
 from vgi.filter_v2 import (
@@ -71,6 +74,9 @@ from vgi.filter_v2 import (
 )
 from vgi.filter_v2 import (
     expression_columns as v2_expression_columns,
+)
+from vgi.filter_v2 import (
+    expression_type as v2_expression_type,
 )
 
 if TYPE_CHECKING:
@@ -207,6 +213,7 @@ __all__ = [
     "OrFilter",
     "StructFilter",
     "ExpressionFilter",
+    "FilterSQLUnsupportedError",
     "V2ExpressionFilter",
     # Expression node classes
     "ExpressionNode",
@@ -1638,6 +1645,22 @@ class PushdownFilters:
 # =============================================================================
 
 
+class FilterSQLUnsupportedError(ValueError):
+    """A filter that `to_sql()` cannot render as a SQL fragment.
+
+    Raised rather than skipped, and that is the whole point: DuckDB does **not**
+    re-apply a predicate it pushed into a table function, so a WHERE clause that
+    silently omits one does not return the same rows more slowly -- it returns
+    the wrong rows. Degrading quietly here would turn an unrenderable filter
+    into a wrong answer with no error anywhere.
+
+    A worker that catches this has two honest options: evaluate the filters in
+    memory instead (`PushdownFilters.apply()` / `evaluate()` handle every v2
+    expression), or decline the scan. Subclasses `ValueError` so existing
+    callers that catch the old error keep working.
+    """
+
+
 def _filter_to_sql(
     f: Filter,
     quote: Callable[[str], str],
@@ -1713,8 +1736,19 @@ def _filter_to_sql(
             # Constants are embedded directly in the SQL string.
             return expr.to_sql(f.column_name), []
 
+        case V2ExpressionFilter(expression=expression):
+            # A v2 expression the legacy projection could not reduce to a leaf
+            # shape (arithmetic, casts, extension calls, ...). It evaluates
+            # correctly -- `V2ExpressionFilter.evaluate()` runs the v2 reference
+            # evaluator -- there is simply no SQL rendering for it yet.
+            raise FilterSQLUnsupportedError(
+                f"filter on {f.column_name!r} is a v2 expression with no SQL rendering "
+                f"({type(expression).__name__}); evaluate it with PushdownFilters.apply() "
+                f"instead, or the scan will return rows the predicate excludes"
+            )
+
         case _:
-            raise ValueError(f"Unknown filter type: {type(f)}")
+            raise FilterSQLUnsupportedError(f"Unknown filter type: {type(f)}")
 
 
 # =============================================================================
@@ -1787,6 +1821,48 @@ def _pushdown_from_v2_state(state: V2FilterState) -> PushdownFilters:
     )
 
 
+def _v2_boolean_column_view(expression: V2FilterExpression) -> Filter | None:
+    """Project ``WHERE flag`` / ``WHERE NOT flag`` onto the legacy equality leaf.
+
+    DuckDB pushes a predicate that *is* a boolean column down as a bare
+    ``column_ref``, not as ``flag = true``. Left as a generic v2 expression it
+    becomes a `V2ExpressionFilter`, which evaluates fine but renders no SQL --
+    so every SQL-backed worker loses pushdown on the most ordinary boolean
+    predicate there is, and on the commonest shape of all, a conjunction with
+    one, it loses pushdown for the whole conjunction.
+
+    The rewrite is exact rather than approximate, including under NULLs:
+    ``WHERE flag`` keeps only TRUE (a NULL predicate is not satisfied), and so
+    does ``flag = true``; ``WHERE NOT flag`` keeps only FALSE, and so does
+    ``flag = false``. Three-valued logic makes the two pairs agree on every
+    input, which is what lets this be a projection and not a semantic change.
+
+    Args:
+        expression: A v2 expression that may be a bare boolean column or its
+            negation.
+
+    Returns:
+        The equivalent `ConstantFilter`, or None when *expression* is neither.
+
+    """
+
+    def boolean_column(node: V2FilterExpression) -> V2ColumnRef | None:
+        if not isinstance(node, V2ColumnRef):
+            return None
+        node_type = v2_expression_type(node)
+        # An unresolved column (no bind schema) is not known to be boolean, and
+        # guessing here would rewrite a non-boolean predicate into `= true`.
+        if node_type is None or not pa.types.is_boolean(node_type):
+            return None
+        return node
+
+    if ref := boolean_column(expression):
+        return ConstantFilter(ref.column_name, ref.column_index, ComparisonOp.EQ, pa.scalar(True))
+    if isinstance(expression, V2Not) and (ref := boolean_column(expression.expression)):
+        return ConstantFilter(ref.column_name, ref.column_index, ComparisonOp.EQ, pa.scalar(False))
+    return None
+
+
 def _v2_filter_view(expression: V2FilterExpression, context: EvaluationContext) -> Filter | None:
     """Project common v2 shapes into the longstanding convenience classes."""
     if isinstance(expression, V2Comparison):
@@ -1802,6 +1878,8 @@ def _v2_filter_view(expression: V2FilterExpression, context: EvaluationContext) 
             }
             if op := mapping.get(expression.op):
                 return ConstantFilter(operands[0].column_name, operands[0].column_index, op, operands[1].value)
+    if boolean_leaf := _v2_boolean_column_view(expression):
+        return boolean_leaf
     if isinstance(expression, V2IsNull) and isinstance(expression.expression, V2ColumnRef):
         ref = expression.expression
         if expression.negated:
