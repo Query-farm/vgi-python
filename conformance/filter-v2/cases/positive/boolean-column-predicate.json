@@ -1,0 +1,32 @@
+{
+  "encoding": "vgi.filters.v2",
+  "semantics": "vgi.duckdb.standard.v1",
+  "kind": "snapshot",
+  "predicates": [
+    {
+      "id": "query:bare-boolean-column",
+      "revision": 0,
+      "mode": "required",
+      "source": "query",
+      "expression": {
+        "node": "column_ref",
+        "column_index": 0,
+        "column_name": "flag"
+      }
+    },
+    {
+      "id": "query:negated-boolean-column",
+      "revision": 0,
+      "mode": "required",
+      "source": "query",
+      "expression": {
+        "node": "not",
+        "expression": {
+          "node": "column_ref",
+          "column_index": 1,
+          "column_name": "other_flag"
+        }
+      }
+    }
+  ]
+}

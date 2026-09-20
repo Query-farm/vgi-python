@@ -31,6 +31,11 @@
       "expected": "valid"
     },
     {
+      "id": "structural.boolean-column-predicate",
+      "document": "cases/positive/boolean-column-predicate.json",
+      "expected": "valid"
+    },
+    {
       "id": "structural.and-too-few-children",
       "document": "cases/negative/and-too-few-children.json",
       "expected": "invalid"

@@ -192,6 +192,129 @@ class FilterEchoFunction(TableFunctionGenerator[FilterEchoFunctionArgs, FilterEc
 
 
 # ============================================================================
+# BoolFilterEchoFunction — a table function with a BOOLEAN column, so the
+# bare-column predicate shapes (`WHERE flag`, `WHERE NOT flag`) can be driven
+# end to end.
+#
+# filter_echo cannot cover these: its schema has no boolean column, so the
+# predicate cannot even be written. The table-in-out `echo` path cannot either
+# — DuckDB does not hand it a bare boolean column as a pushed predicate, so a
+# test written there passes whether or not the worker can decode one. It takes
+# a TABLE FUNCTION with a boolean column to see the shape at all, which is why
+# a decoder that refused every one of them ("predicate root must resolve to
+# BOOLEAN", vgi-python < 0.36.2) went unnoticed by a filter-pushdown suite of
+# 348 files including one dedicated to booleans.
+#
+# `pushed_filters` echoes the SQL rendering, so this covers both halves: the
+# decode (the rows are auto-applied and must be right) and `to_sql()` (a shape
+# that parses but renders nothing would show up here as "(none)").
+# ============================================================================
+
+
+@dataclass(slots=True, frozen=True)
+class _BoolFilterEchoArgs:
+    """Arguments for BoolFilterEchoFunction."""
+
+    count: Annotated[int, Arg(0, doc="Number of rows to generate", ge=0)]
+
+
+@dataclass(kw_only=True)
+class _BoolFilterEchoState(ArrowSerializableDataclass):
+    """Remaining rows plus the echoed SQL rendering of the pushed filters."""
+
+    remaining: int
+    current_index: int = 0
+    filter_str: str = "(none)"
+
+
+@init_single_worker
+@bind_fixed_schema
+@_cardinality_from_count
+class BoolFilterEchoFunction(TableFunctionGenerator[_BoolFilterEchoArgs, _BoolFilterEchoState]):
+    """Rows with a nullable BOOLEAN column, echoing the pushed-down filters.
+
+    SCHEMA
+    ------
+    Output: {"n": int64, "flag": bool, "pushed_filters": string}
+
+    ``flag`` cycles TRUE, FALSE, NULL so every predicate is exercised against
+    all three truth values -- the NULL row is what distinguishes ``WHERE flag``
+    from ``WHERE flag IS NOT FALSE``, and ``WHERE NOT flag`` from
+    ``WHERE flag IS NOT TRUE``.
+
+    Attributes:
+        FIXED_SCHEMA: The fixed Arrow output schema this function always produces.
+
+    """
+
+    class Meta:
+        """Metadata for BoolFilterEchoFunction."""
+
+        name = "bool_filter_echo"
+        description = "Rows with a nullable BOOLEAN column, echoing pushed-down filters"
+        categories = ["generator", "diagnostic"]
+        filter_pushdown = True
+        auto_apply_filters = True
+        projection_pushdown = True
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM bool_filter_echo(6) WHERE flag",
+                description="A boolean column is a predicate on its own",
+            ),
+        ]
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = schema({"n": pa.int64(), "flag": pa.bool_(), "pushed_filters": pa.utf8()})
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[_BoolFilterEchoArgs]) -> _BoolFilterEchoState:
+        """Create initial state, caching the SQL rendering of the pushed filters."""
+        assert params.init_call is not None
+        pf = params.init_call.pushdown_filters
+        filters = (
+            cls.pushdown_filters(
+                pf,
+                join_keys=params.init_call.join_keys,
+                output_schema=params.init_call.output_schema,
+            )
+            if pf is not None
+            else None
+        )
+        return _BoolFilterEchoState(
+            remaining=params.args.count,
+            filter_str=_format_pushed_filters(filters),
+        )
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_BoolFilterEchoArgs],
+        state: _BoolFilterEchoState,
+        out: OutputCollector,
+    ) -> None:
+        """Emit rows whose ``flag`` cycles TRUE, FALSE, NULL."""
+        if state.remaining <= 0:
+            out.finish()
+            return
+
+        n_values = list(range(state.current_index, state.current_index + state.remaining))
+        flags: list[bool | None] = [(True, False, None)[i % 3] for i in n_values]
+
+        out.emit(
+            pa.RecordBatch.from_pydict(
+                {
+                    "n": n_values,
+                    "flag": flags,
+                    "pushed_filters": [state.filter_str] * len(n_values),
+                },
+                schema=params.output_schema,
+            )
+        )
+
+        state.current_index += state.remaining
+        state.remaining = 0
+
+
+# ============================================================================
 # ValuePruneFunction — exercises PushdownFilters.get_column_values('n'), the
 # partition-pruning idiom (resolve the discrete value set up front, fetch only
 # those keys). filter_echo can't cover this: it auto-applies the predicate

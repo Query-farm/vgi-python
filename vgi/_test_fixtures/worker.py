@@ -140,6 +140,7 @@ from vgi._test_fixtures.table import (
     RFF_SIMPLE_COLUMNS,
     RFF_STRUCT_COLUMNS,
     BatchIndexOverflowFunction,
+    BoolFilterEchoFunction,
     BrokenMissingPartitionValuesFunction,
     BrokenPartitionColumnAbsentFromBatchFunction,
     BrokenPartitionMinNeqMaxFunction,
@@ -486,6 +487,7 @@ _EXAMPLE_CATALOG = Catalog(
                 # TableFunctionGenerator - generate output without input
                 ConstantColumnsFunction,
                 SlowCancellableFunction,
+                BoolFilterEchoFunction,
                 FilterEchoFunction,
                 FilterEchoPartitionedFunction,
                 FilterEchoTableScanFunction,
