@@ -113,6 +113,7 @@ from vgi._test_fixtures.table.partition_columns import (
     OverlappingRangePartitionedFunction,
     PartitionedWithExplicitOverrideFunction,
     RegionYearPartitionedFunction,
+    TrailingPartitionSalesFunction,
 )
 from vgi._test_fixtures.table.partition_columns_broken import (
     BrokenMissingPartitionValuesFunction,
@@ -264,6 +265,7 @@ __all__ = [
     "RFF_SIMPLE_COLUMNS",
     "RFF_STRUCT_COLUMNS",
     "RegionYearPartitionedFunction",
+    "TrailingPartitionSalesFunction",
     "RepeatValueIntFunction",
     "RepeatValueStrFunction",
     "RffMultiScanFunction",

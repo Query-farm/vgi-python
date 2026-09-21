@@ -23,6 +23,11 @@ Fixtures:
 * :class:`RegionYearPartitionedFunction` — multi-column SINGLE_VALUE.
   Each chunk has a single ``(region, year)`` tuple.
 
+* :class:`TrailingPartitionSalesFunction` — same contract as the
+  country fixture, but the partition column is declared LAST rather
+  than first, so the worker-schema and scan-local index spaces do not
+  coincide. Also exposed as a catalog table.
+
 * :class:`PartitionedWithProjectedOutColumnFunction` — declares
   partition on ``category`` but DOES NOT include ``category`` in the
   emitted batch. Uses the explicit ``partition_values=`` override on
@@ -49,7 +54,7 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass
-from typing import Annotated, ClassVar, cast
+from typing import Annotated, Any, ClassVar, cast
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
@@ -283,6 +288,126 @@ class RegionYearPartitionedFunction(TableFunctionGenerator[_RegionYearArgs, _Reg
         )
         out.emit(batch)
         state.current_idx = rpp
+
+
+# =============================================================================
+# SINGLE_VALUE_PARTITIONS with the partition column NOT first
+# =============================================================================
+
+
+@dataclass(slots=True, frozen=True)
+class _TrailingPartitionArgs:
+    """Arguments for ``trailing_partition_sales``."""
+
+    rows_per_country: Annotated[int, Arg(0, doc="Rows to emit per country partition", ge=1)]
+
+
+@dataclass(kw_only=True)
+class _TrailingPartitionState(ArrowSerializableDataclass):
+    """Per-worker cursor over countries (same shape as the country fixture)."""
+
+    current_country: str | None = None
+    current_country_idx: int = -1
+    current_idx: int = 0
+
+
+@bind_fixed_schema
+@_cardinality_from_count
+class TrailingPartitionSalesFunction(TableFunctionGenerator[_TrailingPartitionArgs, _TrailingPartitionState]):
+    """``country`` is single-valued per chunk, but sits LAST in the schema.
+
+    Identical contract to :class:`CountryPartitionedSalesFunction`; the only
+    difference is where the partition column lives. That difference is the
+    point: every other partitioned fixture declares its partition column at
+    index 0, which makes two distinct index spaces accidentally agree.
+
+    ``CanUsePartitionedAggregate`` asks ``get_partition_info`` about
+    WORKER-SCHEMA indices, but the sink later asks ``get_partition_data``
+    about SCAN-LOCAL ones (positions in the scan's own ``column_ids``, after
+    projection pushdown). ``GROUP BY country`` projects just ``country`` and
+    ``sales``, so here the sink asks about scan-local 0 while the declared
+    index is 3 — and a client that compares them without mapping raises
+    "sink requested partition column 0 that is not in the declared partition
+    set", which is fatal. With the partition column at index 0 both spaces
+    say 0 and the bug is invisible.
+
+    Also registered as a catalog TABLE (``example.data.trailing_partition_sales``)
+    because the two paths install their scan functions separately: a client can
+    wire ``get_partition_info`` for direct function calls and miss it for
+    catalog tables, in which case the planner silently never picks
+    ``PARTITIONED_AGGREGATE`` for a table however it is declared.
+    """
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema(
+        cast(
+            "list[pa.Field[Any]]",
+            [
+                pa.field("seq", pa.int64()),
+                pa.field("label", pa.string()),
+                pa.field("sales", pa.int64()),
+                partition_field("country", pa.string()),
+            ],
+        )
+    )
+
+    class Meta:
+        name = "trailing_partition_sales"
+        projection_pushdown = True
+        description = (
+            "Per-country sales rows, one Arrow batch per country, with the "
+            "SINGLE_VALUE partition column declared LAST in the schema "
+            "instead of first."
+        )
+        categories = ["generator", "partitioning"]
+        partition_kind = PartitionKind.SINGLE_VALUE_PARTITIONS
+        examples = [
+            FunctionExample(
+                sql="SELECT country, SUM(sales) FROM trailing_partition_sales(100) GROUP BY country",
+                description="Partitioned aggregate over a non-leading partition column",
+            ),
+        ]
+
+    @classmethod
+    def on_init(cls, params: InitParams[_TrailingPartitionArgs]) -> GlobalInitResponse:
+        items = [struct.pack(_QUEUE_ITEM_FMT, i) for i in range(len(_COUNTRIES))]
+        params.storage.queue_push(items)
+        return GlobalInitResponse()
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[_TrailingPartitionArgs]) -> _TrailingPartitionState:
+        return _TrailingPartitionState()
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_TrailingPartitionArgs],
+        state: _TrailingPartitionState,
+        out: OutputCollector,
+    ) -> None:
+        if state.current_country is None or state.current_idx >= params.args.rows_per_country:
+            item = params.storage.queue_pop()
+            if item is None:
+                out.finish()
+                return
+            (state.current_country_idx,) = struct.unpack(_QUEUE_ITEM_FMT, item)
+            state.current_country = _COUNTRIES[state.current_country_idx]
+            state.current_idx = 0
+
+        rpc = params.args.rows_per_country
+        # Same deterministic sales values as country_partitioned_sales, so a
+        # test can assert the two agree column-for-column despite the layout.
+        base = state.current_country_idx * 1_000_000
+        batch = pa.RecordBatch.from_pydict(
+            {
+                "seq": list(range(rpc)),
+                "label": [f"{state.current_country}-{i}" for i in range(rpc)],
+                "sales": [base + i for i in range(rpc)],
+                "country": [state.current_country] * rpc,
+            },
+            schema=cls.FIXED_SCHEMA,
+        )
+        out.emit(batch)
+        state.current_idx = rpc
 
 
 # =============================================================================

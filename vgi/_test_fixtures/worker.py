@@ -243,6 +243,7 @@ from vgi._test_fixtures.table import (
     SplitZeroFunction,
     StructSettingsFunction,
     TenThousandFunction,
+    TrailingPartitionSalesFunction,
     TxCachedValueFunction,
     TypedProbeFunction,
     UnionVarargsFunction,
@@ -528,6 +529,7 @@ _EXAMPLE_CATALOG = Catalog(
                 OverlappingRangePartitionedFunction,
                 PartitionedWithExplicitOverrideFunction,
                 RegionYearPartitionedFunction,
+                TrailingPartitionSalesFunction,
                 # Deliberately-broken batch_index fixtures (see
                 # vgi/_test_fixtures/table/batch_index_broken.py). Registered
                 # so SQL integration tests in batch_index_contract.test can
@@ -882,6 +884,20 @@ _EXAMPLE_CATALOG = Catalog(
                     name="funny_numbers",
                     columns=schema(n=pa.int64()),
                     comment="123456 integers; stats served by the sequence function, not the table",
+                ),
+                # PartitionColumns as a CATALOG TABLE. A table's scan function is
+                # built through a different path than a direct function call, so a
+                # client can support partitioned aggregates for one and silently
+                # not the other; only a table exercises the catalog path. Paired
+                # with a partition column declared last — see the fixture docstring.
+                Table(
+                    name="trailing_partition_sales",
+                    function=TrailingPartitionSalesFunction,
+                    arguments=Arguments(positional=(pa.scalar(100),)),
+                    comment=(
+                        "Per-country sales, SINGLE_VALUE partition column declared last; "
+                        "GROUP BY country must plan as PARTITIONED_AGGREGATE"
+                    ),
                 ),
                 # Result-cache fixtures, exposed as function-backed tables so the
                 # catalog-attached path (SELECT ... FROM ex.data.<name>) exercises
