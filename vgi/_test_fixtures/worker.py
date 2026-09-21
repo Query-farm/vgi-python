@@ -130,6 +130,11 @@ from vgi._test_fixtures.scalar import (
     UpperCaseFunction,
     WhoAmIFunction,
 )
+from vgi._test_fixtures.secret_cache import (
+    SecretCachedLateralFunction,
+    SecretCachedScalarFunction,
+    SecretCacheNonceFunction,
+)
 from vgi._test_fixtures.table import (
     _VERSIONED_CONSTRAINTS_SCHEMAS,
     _VERSIONED_SCHEMAS,
@@ -451,6 +456,9 @@ _EXAMPLE_CATALOG = Catalog(
                 BufferInputFunction,
                 FilterBySettingFunction,
                 SecretInOutFunction,
+                # Secret-dependent + per_value: cached per secret fingerprint
+                # (see vgi/_test_fixtures/secret_cache.py).
+                SecretCachedLateralFunction,
                 RepeatInputsFunction,
                 SlowCancellableInOutFunction,
                 MultiBatchFinishFunction,
@@ -573,6 +581,7 @@ _EXAMPLE_CATALOG = Catalog(
                 SecretDemoFunction,
                 MultiSecretDemoFunction,
                 ScopedSecretDemoFunction,
+                SecretCacheNonceFunction,
                 ExpressionFilterTestFunction,
                 SequenceFunction,
                 # Split-capable scans (plan() -> named units -> per-split init).
@@ -652,6 +661,7 @@ _EXAMPLE_CATALOG = Catalog(
                 RandomBytesFunction,
                 RandomIntFunction,
                 ReturnSecretValueFunction,
+                SecretCachedScalarFunction,
                 # Schema-disambiguation probes: each name is also registered in
                 # the `data` schema below with a different body. The scalar
                 # covers the scalar bind path; the table-in-out and buffered
@@ -911,6 +921,15 @@ _EXAMPLE_CATALOG = Catalog(
                     name="cache_nonce",
                     function=CacheNonceFunction,
                     comment="One-row cacheable result whose value changes per real invocation",
+                ),
+                # A secret-dependent cacheable table, pre-bound (inline_bind) so a
+                # scan takes the client's no-RPC bind path, where the secrets the
+                # cache keys on are resolved client-side. See secret_cache.py.
+                Table(
+                    name="secret_cache_nonce",
+                    function=SecretCacheNonceFunction,
+                    inline_bind=True,
+                    comment="One-row cacheable result keyed on the vgi_example secret",
                 ),
                 Table(
                     name="cache_multicol",
