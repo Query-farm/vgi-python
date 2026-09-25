@@ -280,7 +280,7 @@
 </style>
 </head>
 <body>
-<!-- vgi-landing-asset v4 -->
+<!-- vgi-landing-asset v5 -->
 
 <a class="skip" href="#contents">Skip to contents</a>
 
@@ -362,7 +362,7 @@ function icon(name, cls){ return '<svg class="ic '+(cls||'')+'" viewBox="0 0 256
 import {
   VgiClient, httpConnect, deserializeAttachOptionSpecs, deserializeSchema,
   schemaToArgumentSpecs, TypeId
-} from './vgi-client.js';
+} from './vgi-client.js?v=5';
 
 // ── Catalog metadata, read straight off the VGI wire protocol ────────────────────
 // The page speaks the protocol the DuckDB extension speaks, through the JS
@@ -417,7 +417,7 @@ function readSchema(bytes){
 // JSON endpoint — the difference is where the bytes come from.
 const columnCache = new Map();
 async function fetchColumns(catName, schema, table){
-  const key = catName+' '+schema+' '+table;
+  const key = JSON.stringify([catName, schema, table]);
   if (columnCache.has(key)) return columnCache.get(key);
   const cat = describe.catalogs.find(c=>c.name===catName);
   if (!cat || !cat._aod) return {columns:[]};
@@ -480,13 +480,13 @@ function fnArgs(f){
 async function schemaEntry(aod, si){
   // A VGI worker commonly exposes its callable surface as declarative macros,
   // so they fold into the same scalar/table buckets as functions.
-  const macros = (kind)=> client.schemaContentsMacros(aod, si.name, kind).catch(()=>[]);
+  const macros = (kind)=> client.schemaContentsMacros(aod, si.path, kind).catch(()=>[]);
   const [tablesRaw, viewsRaw, scalarFns, tableFns, aggFns, scalarMacros, tableMacros] = await Promise.all([
-    client.schemaContentsTables(aod, si.name),
-    client.schemaContentsViews(aod, si.name),
-    client.schemaContentsFunctions(aod, si.name, 'SCALAR_FUNCTION'),
-    client.schemaContentsFunctions(aod, si.name, 'TABLE_FUNCTION'),
-    client.schemaContentsFunctions(aod, si.name, 'AGGREGATE_FUNCTION'),
+    client.schemaContentsTables(aod, si.path),
+    client.schemaContentsViews(aod, si.path),
+    client.schemaContentsFunctions(aod, si.path, 'SCALAR_FUNCTION'),
+    client.schemaContentsFunctions(aod, si.path, 'TABLE_FUNCTION'),
+    client.schemaContentsFunctions(aod, si.path, 'AGGREGATE_FUNCTION'),
     macros('SCALAR_MACRO'),
     macros('TABLE_MACRO')
   ]);
@@ -522,7 +522,7 @@ async function schemaEntry(aod, si){
     doc: m.comment || '', args: (m.parameters||[]).map(p=>({name:p}))
   })));
   functions.sort((a,b)=> a.type===b.type ? byName(a,b) : (a.type<b.type?-1:1));
-  const entry = {name: si.name, tables, views, functions};
+  const entry = {name: si.path.join('.'), path: si.path, tables, views, functions};
   if (si.comment) entry.doc = si.comment;
   return entry;
 }
@@ -563,7 +563,7 @@ async function buildCatalog(info){
   cat.tags = mapTags(attach.tags || {});
 
   const schemaInfos = (await client.schemas(cat._aod)).slice()
-    .sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0);
+    .sort((a,b)=>a.path.join('.').localeCompare(b.path.join('.')));
   cat.schemas = await Promise.all(schemaInfos.map(si=>schemaEntry(cat._aod, si)));
   // `s.functions` holds both, so macros are counted apart rather than inflating
   // the function count — vgi-open-meteo reads "13 functions · 6 macros", not
@@ -754,7 +754,7 @@ function exampleTable(c){
   // unsupported version) has no schemas to draw an example from.
   const s = c.schemas[0]; if (!s) return 'main.my_table';
   const t = (s.tables[0]||s.views[0]||{name:'my_table'});
-  return s.name+'.'+t.name;
+  return s.path.concat(t.name).map(n=>/^[a-z_][a-z0-9_]*$/i.test(n) ? n : '"'+n.replace(/"/g,'""')+'"').join('.');
 }
 function connectCode(c, pinned, lang){
   const q=c.name, ex=exampleTable(c), P=attachParen(c,pinned);
@@ -843,7 +843,7 @@ function updateCupola(){ const u = cupolaUrl(""); document.getElementById('cupol
 function tableRow(catName, s, t, kind){       // kind: 'table' | 'view'
   const iconName = kind==='view' ? 'view' : 'table';
   const kcls = kind==='view' ? ' view k-view' : '';
-  return '<details class="tbl'+kcls+'" data-name="'+esc(t.name.toLowerCase())+'" data-kind="'+kind+'" data-catalog="'+esc(catName)+'" data-schema="'+esc(s.name)+'" data-table="'+esc(t.name)+'">'+
+  return '<details class="tbl'+kcls+'" data-name="'+esc(t.name.toLowerCase())+'" data-kind="'+kind+'" data-catalog="'+esc(catName)+'" data-schema="'+esc(JSON.stringify(s.path))+'" data-table="'+esc(t.name)+'">'+
     '<summary>'+icon('caret','tri')+icon(iconName,'row-icon')+
       '<span class="t-name">'+esc(t.name)+'</span><span class="t-meta">'+t.cols+' cols</span></summary>'+
     '<div class="t-body">'+
@@ -948,7 +948,7 @@ document.getElementById('catalogs').addEventListener('toggle', e=>{
   if (!d.classList || !d.classList.contains('tbl') || !d.open || d.dataset.loaded) return;
   d.dataset.loaded = '1';
   const body = d.querySelector('.cols');
-  fetchColumns(d.dataset.catalog, d.dataset.schema, d.dataset.table).then(info=>{
+  fetchColumns(d.dataset.catalog, JSON.parse(d.dataset.schema), d.dataset.table).then(info=>{
     body.innerHTML = info.columns.map(col=>
       '<div class="col-item"><div class="col"><span class="col-name">'+esc(col.name)+'</span><span class="col-type">'+esc(duckdbType(col.type))+'</span></div>'+
       (col.comment? '<div class="col-comment">'+esc(col.comment)+'</div>':'')+'</div>').join('');
