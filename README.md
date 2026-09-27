@@ -16,6 +16,11 @@
   <a href="LICENSE"><img src="https://img.shields.io/pypi/l/vgi-python" alt="License"></a>
 </p>
 
+<p align="center">
+  <a href="https://youtu.be/J2E51PTZn6o"><img src="https://raw.githubusercontent.com/Query-farm/vgi-python/main/docs/assets/video-thumbnail.jpg" alt="Watch: VGI explained in 2½ minutes, on YouTube" width="640"></a><br>
+  <sub>▶ <a href="https://youtu.be/J2E51PTZn6o">Watch the 2½-minute overview</a></sub>
+</p>
+
 ---
 
 ## See It in Action
