@@ -369,6 +369,7 @@ def main() -> None:
         # and not the other fails the file on that transport alone — which reads
         # as a transport bug and is not one. narrow_bind drifted exactly that
         # way, and it guards a client SIGSEGV, so it was the worst one to lose.
+        from vgi._test_fixtures.catalog_contents import CONTENTS_WORKERS
         from vgi._test_fixtures.narrow_bind.worker import NarrowBindWorker
         from vgi._test_fixtures.twin_catalogs import TwinAWorker, TwinBWorker
         from vgi.rpc_server import build_rpc_server
@@ -381,6 +382,7 @@ def main() -> None:
             NarrowBindWorker,
             TwinAWorker,
             TwinBWorker,
+            *CONTENTS_WORKERS,
         ]
         try:
             from vgi._test_fixtures.writable.worker import WritableWorker

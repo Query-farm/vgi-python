@@ -2192,12 +2192,13 @@ def main() -> None:
 
     Always serves the base ExampleWorker catalog plus the
     ``projection_repro``, ``schema_reconcile``, ``accumulate``,
-    ``narrow_bind``, ``twin_a`` and ``twin_b`` fixture catalogs (all
+    ``narrow_bind``, ``twin_a``, ``twin_b`` and ``contents_*`` fixture catalogs (all
     depend on the ``vgi[test-fixtures]`` extra). Adds the writable
     catalog when the ``vgi[test-fixtures-writable]`` extra is also
     installed.
     """
     from vgi._test_fixtures.accumulate.worker import AccumulateWorker
+    from vgi._test_fixtures.catalog_contents import CONTENTS_WORKERS
     from vgi._test_fixtures.narrow_bind.worker import NarrowBindWorker
     from vgi._test_fixtures.projection_repro.worker import ProjReproWorker
     from vgi._test_fixtures.schema_reconcile.worker import SchemaReconcileWorker
@@ -2214,6 +2215,9 @@ def main() -> None:
         # `test_same_name_catalog` — only the attached catalog tells them apart.
         TwinAWorker,
         TwinBWorker,
+        # contents_probe / contents_broken / contents_legacy: catalog_contents
+        # served, failing, and not advertised.
+        *CONTENTS_WORKERS,
     ]
     try:
         from vgi._test_fixtures.writable.worker import WritableWorker
