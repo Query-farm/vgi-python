@@ -51,6 +51,7 @@ _TARGETS: list[tuple[str, str, str]] = [
         "vgi",
     ),
     ("vgi.codegen.go_schemas", "vgi/generated/protocol_schemas.go", "vgi-go"),
+    ("vgi.codegen.go_types", "vgi/generated/protocol_types.go", "vgi-go"),
     ("vgi.codegen.rust_schemas", "vgi-protocol/src/generated/protocol_schemas.rs", "vgi-rust"),
     ("vgi.codegen.rust_request_builders", "vgi-protocol/src/generated/request_params.rs", "vgi-rust"),
     ("vgi.codegen.ts_schemas", "src/generated/vgi-protocol-schemas.ts", "vgi-typescript"),
