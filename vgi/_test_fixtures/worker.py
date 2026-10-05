@@ -2151,8 +2151,8 @@ class ExampleWorker(Worker):
         multiplier: Annotated[int, Setting(desc="Value multiplier")] = 1
         threshold: Annotated[int, Setting(desc="Filter threshold")] = 0
         scale_factor: Annotated[float, Setting(desc="Float scale factor")] = 1.0
-        config: Annotated[  # type: ignore[valid-type]
-            pa.struct([("start", pa.int64()), ("step", pa.int64()), ("label", pa.string())]),
+        config: Annotated[
+            pa.struct([("start", pa.int64()), ("step", pa.int64()), ("label", pa.string())]),  # type: ignore[valid-type]
             Setting(desc="Sequence configuration struct"),
         ] = None
 

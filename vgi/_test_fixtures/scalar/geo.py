@@ -106,12 +106,12 @@ class GeoDistanceListFunction(ScalarFunction):
     @classmethod
     def compute(
         cls,
-        p1: Annotated[  # type: ignore[type-arg]
-            pa.ListArray,
+        p1: Annotated[
+            pa.ListArray,  # type: ignore[type-arg]
             Param(doc="First point [lat, lon]", arrow_type=pa.list_(pa.float64())),
         ],
-        p2: Annotated[  # type: ignore[type-arg]
-            pa.ListArray,
+        p2: Annotated[
+            pa.ListArray,  # type: ignore[type-arg]
             Param(doc="Second point [lat, lon]", arrow_type=pa.list_(pa.float64())),
         ],
     ) -> Annotated[pa.DoubleArray, Returns()]:
@@ -151,12 +151,12 @@ class GeoDistanceFixedFunction(ScalarFunction):
     @classmethod
     def compute(
         cls,
-        p1: Annotated[  # type: ignore[type-arg]
-            pa.FixedSizeListArray,
+        p1: Annotated[
+            pa.FixedSizeListArray,  # type: ignore[type-arg]
             Param(doc="First point [lat, lon]", arrow_type=pa.list_(pa.float64(), 2)),
         ],
-        p2: Annotated[  # type: ignore[type-arg]
-            pa.FixedSizeListArray,
+        p2: Annotated[
+            pa.FixedSizeListArray,  # type: ignore[type-arg]
             Param(doc="Second point [lat, lon]", arrow_type=pa.list_(pa.float64(), 2)),
         ],
     ) -> Annotated[pa.DoubleArray, Returns()]:
@@ -240,8 +240,8 @@ class GeoCentroidListFunction(ScalarFunction):
     @classmethod
     def compute(
         cls,
-        points: Annotated[  # type: ignore[type-arg]
-            list[pa.ListArray],
+        points: Annotated[
+            list[pa.ListArray],  # type: ignore[type-arg]
             Param(
                 doc="Point columns [lat, lon]",
                 arrow_type=pa.list_(pa.float64()),
@@ -284,8 +284,8 @@ class GeoCentroidFixedFunction(ScalarFunction):
     @classmethod
     def compute(
         cls,
-        points: Annotated[  # type: ignore[type-arg]
-            list[pa.FixedSizeListArray],
+        points: Annotated[
+            list[pa.FixedSizeListArray],  # type: ignore[type-arg]
             Param(
                 doc="Point columns [lat, lon]",
                 arrow_type=pa.list_(pa.float64(), 2),

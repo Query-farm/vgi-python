@@ -149,8 +149,8 @@ class TestExtractSettingSpecs:
         """Settings can use Arrow DataTypes directly in annotations."""
 
         class Settings:
-            allowed_ids: Annotated[  # type: ignore[valid-type]
-                pa.list_(pa.int64()), Setting(desc="IDs")
+            allowed_ids: Annotated[
+                pa.list_(pa.int64()), Setting(desc="IDs")  # type: ignore[valid-type]
             ] = []
 
         specs = extract_setting_specs(Settings)
@@ -163,8 +163,8 @@ class TestExtractSettingSpecs:
         """Settings can use struct types."""
 
         class Settings:
-            config: Annotated[  # type: ignore[valid-type]
-                pa.struct([("key", pa.string()), ("value", pa.int64())]),
+            config: Annotated[
+                pa.struct([("key", pa.string()), ("value", pa.int64())]),  # type: ignore[valid-type]
                 Setting(desc="Config"),
             ] = {}
 

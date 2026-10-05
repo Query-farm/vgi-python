@@ -1446,8 +1446,8 @@ class TestVarargsOverloading:
             @classmethod
             def compute(
                 cls,
-                values: Annotated[  # type: ignore[type-arg]
-                    list[pa.Array],
+                values: Annotated[
+                    list[pa.Array],  # type: ignore[type-arg]
                     Param(doc="any", varargs=True),
                 ],
             ) -> Annotated[pa.StringArray, Returns()]:
