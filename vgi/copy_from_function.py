@@ -33,10 +33,11 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar, final
+from typing import ClassVar, final
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
+from vgi_rpc.rpc import OutputCollector
 
 from vgi.invocation import BindResponse
 from vgi.table_function import (
@@ -46,10 +47,7 @@ from vgi.table_function import (
     init_single_worker,
 )
 
-if TYPE_CHECKING:
-    from vgi_rpc.rpc import OutputCollector
-
-__all__ = ["CopyFromFunction"]
+__all__ = ["CopyFromFunction", "OutputCollector"]
 
 
 @dataclass(kw_only=True)

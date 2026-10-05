@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     pass
 
 __all__ = [
+    "OutputCollector",
     "TableInOutGenerator",
     "TableInOutFunction",
     "TableInOutFunctionStateNoOp",
