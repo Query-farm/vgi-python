@@ -26,7 +26,10 @@ Every kind the client seeds from ``catalog_contents`` is present at least once
 macros), split over two schemas (``main`` and ``extra``), so RPC accounting in
 ``vgi/test/sql/integration/catalog/catalog_contents*.test`` is deterministic.
 Served by ``vgi-fixture-worker`` and ``vgi-fixture-http`` (MetaWorker), so the
-same tests run over every transport.
+same tests run over every transport. Their functions re-use the example
+catalog's classes (``main.double`` …), so the workers set
+``route_unattached_calls = False``: they are reachable only through their own
+attach, and an unattached ``main.double`` still routes to the example worker.
 """
 
 from __future__ import annotations
@@ -155,6 +158,8 @@ class ContentsLegacyCatalog(ReadOnlyCatalogInterface):
 class ContentsProbeWorker(Worker):
     """Serves ``contents_probe``."""
 
+    route_unattached_calls = False
+
     catalog_interface = ContentsProbeCatalog
     catalog_name = CATALOG_PROBE
     catalog = _CATALOG_PROBE
@@ -163,6 +168,8 @@ class ContentsProbeWorker(Worker):
 class ContentsBrokenWorker(Worker):
     """Serves ``contents_broken``."""
 
+    route_unattached_calls = False
+
     catalog_interface = ContentsBrokenCatalog
     catalog_name = CATALOG_BROKEN
     catalog = _CATALOG_BROKEN
@@ -170,6 +177,8 @@ class ContentsBrokenWorker(Worker):
 
 class ContentsLegacyWorker(Worker):
     """Serves ``contents_legacy``."""
+
+    route_unattached_calls = False
 
     catalog_interface = ContentsLegacyCatalog
     catalog_name = CATALOG_LEGACY
@@ -229,6 +238,8 @@ class ContentsMemoryCatalog(InMemoryCatalog):
 
 class ContentsMemoryWorker(Worker):
     """Serves ``contents_memory``."""
+
+    route_unattached_calls = False
 
     catalog_interface = ContentsMemoryCatalog
     catalog_name = CATALOG_MEMORY

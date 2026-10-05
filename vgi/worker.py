@@ -1145,6 +1145,9 @@ class Worker:
             to use the auto-generated default (or disable the catalog).
         catalog_name: Name of the default catalog; set to ``None`` to disable the
             default catalog.
+        route_unattached_calls: Whether a [`MetaWorker`][]
+            may route a call carrying no attach to this worker by function name.
+            ``False`` makes the worker reachable only through its own catalog.
         catalog: Optional declarative `[`Catalog`][]` describing the worker's
             schemas, tables, and views.
     """
@@ -1158,6 +1161,12 @@ class Worker:
     protocol_class: ClassVar[type[VgiProtocol]] = VgiProtocol  # type: ignore[type-abstract]
     catalog_interface: type[CatalogInterface] | None = None
     catalog_name: str | None = "functions"  # Set to None to disable default catalog
+    # Whether a MetaWorker may route a call that carries no attach (a
+    # non-catalog caller) to this worker by function name. A worker whose
+    # functions are only meant to be reached through its own attached catalog
+    # sets this False, so re-declaring a name another sub-worker owns does not
+    # make that name ambiguous for unattached callers.
+    route_unattached_calls: ClassVar[bool] = True
     catalog: Catalog | None = None
     _registry: dict[str, list[type[Function]]] | None = None
     # (lowercased structural schema path, function name) -> classes declared there.

@@ -239,13 +239,18 @@ class MetaWorker:
         return self._workers[idx]
 
     def _candidates_for(self, function_name: str, schema_path: list[str] | None) -> list[Worker]:
-        """Every sub-worker declaring ``function_name``, most specific first."""
+        """Every sub-worker declaring ``function_name``, most specific first.
+
+        Only sub-workers that accept unattached calls (``route_unattached_calls``)
+        are candidates; the rest are reachable solely through their own attach.
+        """
+        workers = [w for w in self._workers if type(w).route_unattached_calls]
         if schema_path is not None:
             key = (schema_path_key(schema_path), function_name)
-            scoped = [w for w in self._workers if key in type(w)._build_schema_registry()]
+            scoped = [w for w in workers if key in type(w)._build_schema_registry()]
             if scoped:
                 return scoped
-        return [w for w in self._workers if function_name in type(w)._build_registry()]
+        return [w for w in workers if function_name in type(w)._build_registry()]
 
     def _worker_for_unattached(self, function_name: str, schema_path: list[str] | None) -> Worker | None:
         """Pick a sub-worker for a call that carries no usable attach.

@@ -239,3 +239,40 @@ class TestCrossCatalogResolution:
         request = dataclasses.replace(self._request(None), function_name="no_such_function")
         with pytest.raises(ValueError, match="Unknown function"):
             meta._resolve_function(request)
+
+
+class TestAttachedOnlyWorkers:
+    """``route_unattached_calls = False`` keeps a sub-worker out of name routing.
+
+    The catalog_contents fixture catalogs re-declare ``main.double`` (the example
+    catalog's class). Without the opt-out an attach-less ``main.double`` call
+    would have four declarers and raise; with it the example worker stays the
+    sole owner, while an attach still reaches the fixture catalog.
+    """
+
+    @staticmethod
+    def _request(attach_opaque_data: bytes | None) -> BindRequest:
+        return BindRequest(
+            function_name="double",
+            arguments=Arguments(positional=()),
+            function_type=FunctionType.SCALAR,
+            input_schema=_INPUT_SCHEMA,
+            schema_path=["main"],
+            attach_opaque_data=attach_opaque_data,
+        )
+
+    def test_unattached_call_routes_to_the_routable_worker(self) -> None:
+        """Only the example worker is a candidate for an attach-less call."""
+        from vgi._test_fixtures.catalog_contents import CONTENTS_WORKERS
+
+        meta = MetaWorker([ExampleWorker(), *(w() for w in CONTENTS_WORKERS)])
+        assert meta._candidates_for("double", ["main"]) == [meta._workers[0]]
+        assert meta._resolve_function(self._request(None)) is not None
+
+    def test_attach_still_reaches_an_attached_only_worker(self) -> None:
+        """Opting out of name routing does not affect attach routing."""
+        from vgi._test_fixtures.catalog_contents import CATALOG_PROBE, ContentsProbeWorker
+
+        meta = MetaWorker([ExampleWorker(), ContentsProbeWorker()])
+        attach = meta._workers[1]._seal_attach_with_catalog(b"\x00" * 16, CATALOG_PROBE)
+        assert meta._maybe_worker_for_attach(attach) is meta._workers[1]
