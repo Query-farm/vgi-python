@@ -79,13 +79,6 @@ _EXEMPTIONS: dict[str, str] = {
         "(it spawns the Python worker as a subprocess); the Python client never "
         "exercises the launcher surface."
     ),
-    "attach_secrets": (
-        "Masking, redaction from duckdb_databases() and cache-key hashing of secret "
-        "attach options happen inside the C++ extension. The Python side is the "
-        "AttachOptionSpec.secret wire column, covered by "
-        "tests/catalog/test_attach_option.py (round trip, absent column, interaction "
-        "with required)."
-    ),
     "location_policy": (
         "LOCATION transport policy (vgi_allowed_transports, enable_external_access) "
         "is enforced by the C++ extension before it starts or connects to a worker; "
