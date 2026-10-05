@@ -116,6 +116,7 @@ from vgi.protocol import (
     BindRequest,
     BufferedFinalizeState,
     CatalogAttachRequest,
+    CatalogContentsResponse,
     CatalogCreateRequest,
     CatalogsResponse,
     CatalogVersionResponse,
@@ -130,6 +131,7 @@ from vgi.protocol import (
     ProcessState,
     ScalarExchangeState,
     ScanSplit,
+    SchemaContents,
     SchemasResponse,
     TableBufferingFinalizeState,
     TableCreateRequest,
@@ -145,6 +147,7 @@ from vgi.protocol import (
     VgiCallState,
     VgiProtocol,
     ViewsResponse,
+    _item_ipc_bytes,
 )
 from vgi.rpc_server import build_rpc_server
 from vgi.scalar_function import ScalarFunctionGenerator
@@ -4827,6 +4830,36 @@ class Worker:
             type=type,
         )
         return FunctionsResponse.from_infos(list(infos))
+
+    def catalog_contents(self, attach_opaque_data: bytes) -> CatalogContentsResponse:
+        """Return every schema and all of its contents in one result."""
+        cat = self._get_catalog()
+        attach = self._unwrap_attach(attach_opaque_data)
+        version = cat.catalog_version(attach_opaque_data=attach, transaction_opaque_data=None)
+        contents = cat.catalog_contents(attach_opaque_data=attach)
+        # Same parent-before-child order catalog_schemas guarantees.
+        ordered = sorted(contents, key=lambda c: len(c.schema.path))
+
+        def items(infos: Sequence[object]) -> list[bytes]:
+            return [_item_ipc_bytes(info) for info in infos]
+
+        return CatalogContentsResponse(
+            catalog_version=version,
+            schemas=[
+                SchemaContents(
+                    schema=_item_ipc_bytes(c.schema),
+                    tables=items(c.tables),
+                    views=items(c.views),
+                    scalar_functions=items(c.scalar_functions),
+                    aggregate_functions=items(c.aggregate_functions),
+                    table_functions=items(c.table_functions),
+                    scalar_macros=items(c.scalar_macros),
+                    table_macros=items(c.table_macros),
+                    indexes=items(c.indexes),
+                ).serialize_to_bytes()
+                for c in ordered
+            ],
+        )
 
     def catalog_copy_from_formats(
         self,

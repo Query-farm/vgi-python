@@ -1028,6 +1028,55 @@ else:
     IndexesResponse = _catalog_items_response(IndexInfo)
 
 
+_BinaryList = Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SchemaContents(ArrowSerializableDataclass):
+    """One schema and everything in it, as carried by `catalog_contents()`.
+
+    Every item is byte-for-byte what the matching per-schema RPC returns in its
+    ``items`` list, so a client decodes them with the decoders it already has.
+    Each kind is complete: an empty list means the schema has none of that kind.
+
+    Attributes:
+        schema: The schema's [`SchemaInfo`][] item (a ``catalog_schemas`` entry).
+        tables: [`TableInfo`][] items (``catalog_schema_contents_tables``).
+        views: [`ViewInfo`][] items (``catalog_schema_contents_views``).
+        scalar_functions: [`FunctionInfo`][] items, ``SCALAR_FUNCTION``.
+        aggregate_functions: [`FunctionInfo`][] items, ``AGGREGATE_FUNCTION``.
+        table_functions: [`FunctionInfo`][] items, ``TABLE_FUNCTION``.
+        scalar_macros: [`MacroInfo`][] items, ``SCALAR_MACRO``.
+        table_macros: [`MacroInfo`][] items, ``TABLE_MACRO``.
+        indexes: [`IndexInfo`][] items (``catalog_schema_contents_indexes``).
+    """
+
+    schema: bytes
+    tables: _BinaryList = field(default_factory=list)
+    views: _BinaryList = field(default_factory=list)
+    scalar_functions: _BinaryList = field(default_factory=list)
+    aggregate_functions: _BinaryList = field(default_factory=list)
+    table_functions: _BinaryList = field(default_factory=list)
+    scalar_macros: _BinaryList = field(default_factory=list)
+    table_macros: _BinaryList = field(default_factory=list)
+    indexes: _BinaryList = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CatalogContentsResponse(ArrowSerializableDataclass):
+    """Response for `catalog_contents()`: the whole catalog in one result.
+
+    Attributes:
+        catalog_version: The catalog version the snapshot was taken at. Worker-defined
+            and only meaningful within the session that requested it.
+        schemas: One IPC-serialized [`SchemaContents`][] per schema, parents before
+            children.
+    """
+
+    catalog_version: int
+    schemas: _BinaryList
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class IndexCreateRequest(ArrowSerializableDataclass):
     """Request for catalog_index_create.
@@ -3447,6 +3496,17 @@ class VgiProtocol(Protocol):
         transaction_opaque_data: bytes | None = None,
     ) -> FunctionsResponse:
         """List functions in a schema (scalar or table)."""
+        ...
+
+    def catalog_contents(self, attach_opaque_data: bytes) -> CatalogContentsResponse:
+        """Return every schema and all of its contents in one result.
+
+        Only called when the attach result sets ``supports_catalog_contents``.
+        Replaces ``catalog_schemas`` plus every ``catalog_schema_contents_*`` call
+        for a client that wants the whole catalog. Takes no transaction: the
+        client caches the answer catalog-wide, so it is the committed catalog
+        at ``catalog_version``.
+        """
         ...
 
     def catalog_copy_from_formats(

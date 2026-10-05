@@ -304,6 +304,10 @@ class CatalogAttachResult(ArrowSerializableDataclass):
         resolved_implementation_version: Concrete implementation version the
             worker resolved for this attach. ``None`` = worker has no opinion or
             the request omitted implementation_version.
+        supports_catalog_contents: Whether the client may load the whole
+            catalog with one ``catalog_contents`` call instead of
+            ``catalog_schemas`` plus a ``catalog_schema_contents_*`` call per
+            schema and kind. Older workers omit it and read as ``False``.
     """
 
     attach_opaque_data: AttachOpaqueData
@@ -323,6 +327,7 @@ class CatalogAttachResult(ArrowSerializableDataclass):
     global_function_prefix: str = ""
     resolved_data_version: str | None = field(kw_only=True)
     resolved_implementation_version: str | None = field(kw_only=True)
+    supports_catalog_contents: bool = field(default=False, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -875,6 +880,33 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
         for index, value in enumerate(self.argument_monotonicity):
             if not isinstance(value, ArgumentMonotonicity):
                 raise ValueError(f"argument_monotonicity[{index}] is not a valid ArgumentMonotonicity")
+
+
+@dataclass(frozen=True)
+class SchemaContentsInfo:
+    """One schema and everything in it, as returned by `CatalogInterface.catalog_contents`.
+
+    Attributes:
+        schema: The schema.
+        tables: Its tables.
+        views: Its views.
+        scalar_functions: Its scalar functions.
+        aggregate_functions: Its aggregate functions.
+        table_functions: Its table functions.
+        scalar_macros: Its scalar macros.
+        table_macros: Its table macros.
+        indexes: Its indexes.
+    """
+
+    schema: SchemaInfo
+    tables: Sequence[TableInfo] = ()
+    views: Sequence[ViewInfo] = ()
+    scalar_functions: Sequence[FunctionInfo] = ()
+    aggregate_functions: Sequence[FunctionInfo] = ()
+    table_functions: Sequence[FunctionInfo] = ()
+    scalar_macros: Sequence[MacroInfo] = ()
+    table_macros: Sequence[MacroInfo] = ()
+    indexes: Sequence[IndexInfo] = ()
 
 
 @dataclass(frozen=True)
@@ -1963,6 +1995,62 @@ class CatalogInterface(ABC):
         """
         raise NotImplementedError("Schema contents not implemented.")
 
+    def catalog_contents(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+    ) -> list[SchemaContentsInfo]:
+        """Return every schema and all of its contents, for ``catalog_contents``.
+
+        Served only when the attach result sets ``supports_catalog_contents``.
+        The default composes `schemas` and `schema_contents` for every
+        kind, skipping kinds a schema's ``estimated_object_count`` reports as
+        exactly 0 (a hard guarantee). It runs with no transaction: the client
+        caches the answer for the whole attach. Override it to build the
+        snapshot more cheaply.
+
+        Args:
+            attach_opaque_data: The attachment identifier.
+
+        Returns:
+            One [`SchemaContentsInfo`][] per schema, in `schemas` order.
+        """
+        result: list[SchemaContentsInfo] = []
+        for schema in self.schemas(attach_opaque_data=attach_opaque_data, transaction_opaque_data=None):
+            counts = schema.estimated_object_count or {}
+
+            def kind(
+                object_type: SchemaObjectType,
+                count_key: str,
+                path: SchemaPath = schema.path,
+                counts: dict[str, int] = counts,
+            ) -> list[Any]:
+                if counts.get(count_key, 1) == 0:
+                    return []
+                return list(
+                    self.schema_contents(  # type: ignore[call-overload]
+                        attach_opaque_data=attach_opaque_data,
+                        transaction_opaque_data=None,
+                        path=path,
+                        type=object_type,
+                    )
+                )
+
+            result.append(
+                SchemaContentsInfo(
+                    schema=schema,
+                    tables=kind(SchemaObjectType.TABLE, "table"),
+                    views=kind(SchemaObjectType.VIEW, "view"),
+                    scalar_functions=kind(SchemaObjectType.SCALAR_FUNCTION, "scalar_function"),
+                    aggregate_functions=kind(SchemaObjectType.AGGREGATE_FUNCTION, "aggregate_function"),
+                    table_functions=kind(SchemaObjectType.TABLE_FUNCTION, "table_function"),
+                    scalar_macros=kind(SchemaObjectType.SCALAR_MACRO, "macro"),
+                    table_macros=kind(SchemaObjectType.TABLE_MACRO, "macro"),
+                    indexes=kind(SchemaObjectType.INDEX, "index"),
+                )
+            )
+        return result
+
     @abstractmethod
     def schema_get(
         self,
@@ -2904,6 +2992,9 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             global_function_prefix=((self.catalog.global_function_prefix or "") if self.catalog is not None else ""),
             resolved_data_version=None,
             resolved_implementation_version=None,
+            # Static, version-frozen catalog: the whole thing can be served in
+            # one catalog_contents call.
+            supports_catalog_contents=True,
         )
 
     def _global_function_infos(self) -> list[FunctionInfo]:

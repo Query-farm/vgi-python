@@ -122,6 +122,7 @@ _RPC_ALLOWLIST: dict[str, tuple[str, ...] | NotExposed] = {
     "catalog_transaction_rollback": ("catalog_transaction_rollback",),
     # ---------- Catalog schemas ----------
     "catalog_schemas": ("schemas",),
+    "catalog_contents": ("contents",),
     "catalog_schema_get": ("schema_get",),
     "catalog_schema_create": ("schema_create",),
     "catalog_schema_drop": ("schema_drop",),

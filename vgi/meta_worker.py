@@ -97,6 +97,7 @@ _ATTACH_ID_METHODS = [
     "catalog_transaction_commit",
     "catalog_transaction_rollback",
     "catalog_schemas",
+    "catalog_contents",
     "catalog_schema_get",
     "catalog_schema_create",
     "catalog_schema_drop",

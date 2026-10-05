@@ -63,6 +63,7 @@ from vgi.catalog import (
     ScanBranch,
     ScanBranchesResult,
     ScanFunctionResult,
+    SchemaContentsInfo,
     SchemaInfo,
     SchemaObjectType,
     SerializedSchema,
@@ -76,6 +77,7 @@ from vgi.protocol import (
     CatalogAttachRequest,
     CatalogCreateRequest,
     MacroCreateRequest,
+    SchemaContents,
     TableCreateRequest,
     VgiProtocol,
 )
@@ -84,6 +86,22 @@ from vgi.protocol import (
 # Workers are cached by command and reused across catalog calls, avoiding
 # the overhead of spawning/tearing down a subprocess for each call.
 _catalog_pool = WorkerPool(max_idle=4, idle_timeout=30.0)
+
+
+def _decode_schema_contents(data: bytes) -> SchemaContentsInfo:
+    """Decode one ``catalog_contents`` schema entry into Python catalog objects."""
+    entry = SchemaContents.deserialize_from_bytes(data)
+    return SchemaContentsInfo(
+        schema=SchemaInfo.deserialize_from_bytes(entry.schema),
+        tables=[TableInfo.deserialize_from_bytes(b) for b in entry.tables],
+        views=[ViewInfo.deserialize_from_bytes(b) for b in entry.views],
+        scalar_functions=[FunctionInfo.deserialize_from_bytes(b) for b in entry.scalar_functions],
+        aggregate_functions=[FunctionInfo.deserialize_from_bytes(b) for b in entry.aggregate_functions],
+        table_functions=[FunctionInfo.deserialize_from_bytes(b) for b in entry.table_functions],
+        scalar_macros=[MacroInfo.deserialize_from_bytes(b) for b in entry.scalar_macros],
+        table_macros=[MacroInfo.deserialize_from_bytes(b) for b in entry.table_macros],
+        indexes=[IndexInfo.deserialize_from_bytes(b) for b in entry.indexes],
+    )
 
 
 class CatalogClientError(Exception):
@@ -433,6 +451,23 @@ class CatalogClientMixin:
                 attach_opaque_data=attach_opaque_data,
                 transaction_opaque_data=transaction_opaque_data,
             ).to_infos()
+
+    def contents(self, *, attach_opaque_data: AttachOpaqueData) -> tuple[int, list[SchemaContentsInfo]]:
+        """Load every schema and all of its contents in one call.
+
+        Only valid when the attach result sets ``supports_catalog_contents``.
+
+        Args:
+            attach_opaque_data: The attachment ID from catalog_attach.
+
+        Returns:
+            ``(catalog_version, schemas)``: the version the snapshot was taken
+            at, and one [`SchemaContentsInfo`][] per schema, parents first.
+
+        """
+        with self._catalog_connect() as proxy:
+            response = proxy.catalog_contents(attach_opaque_data=attach_opaque_data)
+        return response.catalog_version, [_decode_schema_contents(b) for b in response.schemas]
 
     def schema_get(
         self,
