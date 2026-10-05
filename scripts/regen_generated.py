@@ -70,6 +70,15 @@ _TARGETS: list[tuple[str, str, str]] = [
     ),
 ]
 
+# vgi-java's generated wire records: one file per record (Java allows one public
+# top-level type per file), so one target each. ``module:record`` tells
+# `_render` to call ``emit(out, record=...)``. Derived from the generator's own
+# list so adding a record there is all it takes.
+_TARGETS += [
+    (f"vgi.codegen.java_types:{record}", relative, "vgi-java")
+    for record, relative in importlib.import_module("vgi.codegen.java_types").targets()
+]
+
 
 def _repo_root(name: str) -> Path | None:
     """Locate a sibling checkout, or ``None`` when it is not present."""
@@ -81,10 +90,18 @@ def _repo_root(name: str) -> Path | None:
 
 
 def _render(module_name: str) -> str:
-    """Render one artifact into memory. Raises if the generator fails."""
+    """Render one artifact into memory. Raises if the generator fails.
+
+    ``module:record`` renders one file of a generator that emits several
+    (``emit(out, record=record)``).
+    """
+    module_name, _, record = module_name.partition(":")
     module = importlib.import_module(module_name)
     buf = io.StringIO()
-    module.emit(buf)
+    if record:
+        module.emit(buf, record=record)
+    else:
+        module.emit(buf)
     text = buf.getvalue()
     if not text.strip():
         raise RuntimeError(f"{module_name}.emit() produced no output")
