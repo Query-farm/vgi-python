@@ -123,7 +123,7 @@ class RequiredAttachOptions:
 
     # No class-level assignment: there is no default to fall back on, so the
     # caller has to supply it.
-    api_key: Annotated[str, AttachOption(desc="API key", required=True)]
+    api_key: Annotated[str, AttachOption(desc="API key", required=True, secret=True)]
     region: Annotated[str, AttachOption(desc="Region")] = "us-east-1"
 
 

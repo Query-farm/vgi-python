@@ -246,6 +246,42 @@ class MyCatalog(CatalogInterface):
 
 ---
 
+## Declaring Attach Options
+
+A worker declares the options its catalogs accept at `ATTACH` time in an `AttachOptions` inner class. Each option is advertised to clients at discovery (`CatalogInfo.attach_option_specs`), so DuckDB can cast and validate it, and frontends can render an options form.
+
+```python test="skip"
+from typing import Annotated
+from vgi import Worker
+from vgi.catalog.attach_option import AttachOption
+
+class MyWorker(Worker):
+    class AttachOptions:
+        region: Annotated[str, AttachOption(desc="AWS region")] = "us-east-1"
+        # A credential: required, secret, and with no default.
+        api_key: Annotated[str, AttachOption(desc="API key", required=True, secret=True)]
+```
+
+| Flag | Meaning |
+|------|---------|
+| `required=True` | The caller must supply the option. Declare it with no class-level default; `required` plus a default is rejected. |
+| `secret=True` | The option carries a credential. |
+
+**Credential options (API keys, tokens, passwords) MUST be declared `secret=True`.** Clients and the DuckDB extension then mask the value, keep it out of result-cache keys and logs, and can supply it from a `vgi_attach` DuckDB secret, so the `ATTACH` statement never carries it:
+
+```sql
+CREATE SECRET (TYPE vgi_attach, SCOPE 'https://worker.example.com', api_key '...');
+ATTACH 'mydb' AS mydb (TYPE vgi, LOCATION 'https://worker.example.com');
+```
+
+`secret` combines with `required`. It is allowed together with a default, but a secret option should normally have none: the default is advertised in plain text to every client at discovery.
+
+On the wire, `required` and `secret` are nullable boolean columns appended after the four shared spec columns (`name`, `description`, `type`, `default_value`), in that order. Readers look columns up by name, so a spec from a peer that predates either column reads it as `false`, and older peers ignore columns they don't know.
+
+`secret` does not change what the worker itself logs: attach options are never logged unless the catalog opts in through `loggable_attach_options()` (below), which must never return a secret option.
+
+---
+
 ## Logging Attach Options Safely
 
 The worker emits structured `_logger.info` records and Sentry breadcrumbs for catalog lifecycle events (`catalog.attach`, `catalog.detach`, `catalog.create`, `catalog.transaction.begin`, `catalog.transaction.commit`, `catalog.transaction.rollback`). `attach_opaque_data` and `transaction_opaque_data` are short-hashed (12-char SHA-256 prefixes) before they reach the log record, the breadcrumb data, or the Sentry scope tags — the raw values never appear in observability output, since they may carry secrets. An operator correlates the short hash back to the catalog via these breadcrumbs.

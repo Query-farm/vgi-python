@@ -544,7 +544,8 @@ async function buildCatalog(info){
       name: s.name, type: typeStr(s.type),
       default: s.default == null ? '' : String(s.default),
       description: s.description || '',
-      required: !!s.required
+      required: !!s.required,
+      secret: !!s.secret
     }));
   } catch (e) { /* keep the card; drop unreadable specs */ }
 
@@ -792,7 +793,8 @@ function attachOptionsHtml(c){
     '<table class="opts"><thead><tr><th>Option</th><th>Type</th><th>Default</th><th>Description</th></tr></thead><tbody>'+
     opts.map(o=>'<tr><td class="o-name">'+esc(o.name)+
       (o.required?'<span class="o-req" title="Must be supplied at ATTACH time">required</span>':'')+
-      '</td><td class="o-type">'+esc(o.type)+'</td><td class="o-def">'+esc(o.default||'—')+'</td><td class="o-desc">'+esc(o.description||'')+'</td></tr>').join('')+
+      (o.secret?'<span class="o-req" title="A credential: supply it from a vgi_attach DuckDB secret rather than the ATTACH text">secret</span>':'')+
+      '</td><td class="o-type">'+esc(o.type)+'</td><td class="o-def">'+esc(o.secret&&o.default?'hidden':(o.default||'—'))+'</td><td class="o-desc">'+esc(o.description||'')+'</td></tr>').join('')+
     '</tbody></table></details>';
 }
 function renderConnect(){

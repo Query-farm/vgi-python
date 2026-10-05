@@ -1,6 +1,6 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
-"""Tests for the AttachOption descriptor, its ``required`` flag, and validation."""
+"""Tests for the AttachOption descriptor, its ``required`` and ``secret`` flags, and validation."""
 
 from typing import Annotated
 
@@ -25,7 +25,11 @@ class _Options:
 
     region: Annotated[str, AttachOption(desc="AWS region")] = "us-east-1"
     # No class-level assignment: nothing to fall back to, so the caller must supply it.
-    api_key: Annotated[str, AttachOption(desc="API key", required=True)]
+    api_key: Annotated[str, AttachOption(desc="API key", required=True, secret=True)]
+    # A credential that may be omitted, with no default (the recommended shape).
+    token: Annotated[str | None, AttachOption(desc="Optional token", arrow_type=pa.string(), secret=True)] = None
+    # Allowed, though discouraged: a secret option with a default.
+    password: Annotated[str, AttachOption(desc="Password", secret=True)] = "changeme"
 
 
 def _roundtrip(spec: AttachOptionSpec) -> AttachOptionSpec:
@@ -83,6 +87,7 @@ class TestWireFormat:
             "type",
             "default_value",
             "required",
+            "secret",
         ]
 
     def test_reads_batch_without_required_column(self) -> None:
@@ -122,6 +127,120 @@ class TestWireFormat:
         # Round-trip through IPC the way a real peer's bytes would arrive.
         restored, _ = deserialize_record_batch(serialize_record_batch_bytes(batch))
         assert AttachOptionSpec.deserialize(restored).required is False
+
+
+class TestSecretExtraction:
+    """Extraction of the ``secret`` flag from Annotated declarations."""
+
+    def test_defaults_to_false(self) -> None:
+        """An option that isn't declared secret isn't secret."""
+        specs = {s.name: s for s in extract_attach_option_specs(_Options)}
+        assert specs["region"].secret is False
+
+    def test_secret_with_required(self) -> None:
+        """``secret`` and ``required`` combine: a credential the caller must supply."""
+        specs = {s.name: s for s in extract_attach_option_specs(_Options)}
+        assert specs["api_key"].secret is True
+        assert specs["api_key"].required is True
+        assert specs["api_key"].default is None
+
+    def test_secret_without_required(self) -> None:
+        """A secret option need not be required."""
+        specs = {s.name: s for s in extract_attach_option_specs(_Options)}
+        assert specs["token"].secret is True
+        assert specs["token"].required is False
+
+    def test_secret_with_default_allowed(self) -> None:
+        """A secret option may declare a default (discouraged, but not an error)."""
+        specs = {s.name: s for s in extract_attach_option_specs(_Options)}
+        assert specs["password"].secret is True
+        assert specs["password"].default == "changeme"
+
+    def test_secret_required_and_default_still_rejected(self) -> None:
+        """``secret`` doesn't relax the required + default contradiction."""
+        with pytest.raises(ValueError, match="required but also declares a default"):
+            AttachOptionSpec(name="k", desc="", type=pa.string(), default="x", required=True, secret=True)
+
+
+class TestSecretWireFormat:
+    """Serialization of the added ``secret`` column."""
+
+    @pytest.mark.parametrize("secret", [True, False], ids=["secret", "plain"])
+    def test_roundtrip_preserves_secret(self, secret: bool) -> None:
+        """``secret`` survives an Arrow IPC round trip in both states."""
+        spec = AttachOptionSpec(name="api_key", desc="API key", type=pa.string(), default=None, secret=secret)
+        restored = _roundtrip(spec)
+        assert restored.secret is secret
+        assert restored.required is False
+
+    @pytest.mark.parametrize(
+        ("required", "secret"),
+        [(True, True), (True, False), (False, True), (False, False)],
+    )
+    def test_roundtrip_required_and_secret_independent(self, required: bool, secret: bool) -> None:
+        """The two flags occupy separate columns and never bleed into each other."""
+        spec = AttachOptionSpec(
+            name="api_key", desc="API key", type=pa.string(), default=None, required=required, secret=secret
+        )
+        restored = _roundtrip(spec)
+        assert (restored.required, restored.secret) == (required, secret)
+
+    def test_secret_column_follows_required(self) -> None:
+        """``secret`` is a nullable bool appended after ``required``."""
+        schema = AttachOptionSpec.ARROW_SCHEMA
+        assert schema.get_field_index("secret") == schema.get_field_index("required") + 1
+        assert schema.get_field_index("secret") == len(schema) - 1
+        field = schema.field("secret")
+        assert field.type == pa.bool_()
+        assert field.nullable
+
+    def test_reads_batch_without_secret_column(self) -> None:
+        """A peer that has ``required`` but predates ``secret`` yields ``secret=False``."""
+        type_bytes = pa.schema([pa.field("value", pa.string())]).serialize().to_pybytes()
+        older_schema = pa.schema([*_SpecBase.ARROW_SCHEMA, pa.field("required", pa.bool_(), nullable=True)])
+        older = pa.RecordBatch.from_pylist(
+            [{"name": "api_key", "description": "", "type": type_bytes, "default_value": None, "required": True}],
+            schema=older_schema,
+        )
+        restored_batch, _ = deserialize_record_batch(serialize_record_batch_bytes(older))
+        restored = AttachOptionSpec.deserialize(restored_batch)
+        assert restored.secret is False
+        assert restored.required is True
+
+    def test_reads_four_column_batch_as_not_secret(self) -> None:
+        """A peer that predates both columns reads as neither required nor secret."""
+        type_bytes = pa.schema([pa.field("value", pa.string())]).serialize().to_pybytes()
+        legacy = pa.RecordBatch.from_pylist(
+            [{"name": "region", "description": "", "type": type_bytes, "default_value": None}],
+            schema=_SpecBase.ARROW_SCHEMA,
+        )
+        restored = AttachOptionSpec.deserialize(legacy)
+        assert (restored.required, restored.secret) == (False, False)
+
+    def test_null_secret_reads_as_false(self) -> None:
+        """An explicit null in the nullable column means "not secret"."""
+        type_bytes = pa.schema([pa.field("value", pa.string())]).serialize().to_pybytes()
+        batch = pa.RecordBatch.from_pylist(
+            [
+                {
+                    "name": "region",
+                    "description": "",
+                    "type": type_bytes,
+                    "default_value": None,
+                    "required": None,
+                    "secret": None,
+                }
+            ],
+            schema=AttachOptionSpec.ARROW_SCHEMA,
+        )
+        restored, _ = deserialize_record_batch(serialize_record_batch_bytes(batch))
+        assert AttachOptionSpec.deserialize(restored).secret is False
+
+    def test_older_reader_ignores_secret_column(self) -> None:
+        """A four-column reader still reads a six-column batch (forward compatible)."""
+        spec = AttachOptionSpec(name="api_key", desc="", type=pa.string(), default=None, required=True, secret=True)
+        batch, _ = deserialize_record_batch(spec.serialize())
+        assert SettingSpec.deserialize(batch).name == "api_key"
 
 
 class TestValidateRequiredAttachOptions:

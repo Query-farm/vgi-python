@@ -9,6 +9,14 @@ from session-level Settings resent on every call).
 The declaration mirrors ``vgi.catalog.setting.Setting`` — same Arrow IPC spec
 format, same Python type → Arrow mapping, same extractor shape — so both share
 the machinery in ``vgi.catalog._descriptor_spec``.
+
+Credential options (API keys, tokens, passwords) MUST be declared
+``secret=True``. Clients and the DuckDB extension then mask the value, keep it
+out of result-cache keys and logs, and can supply it from a ``vgi_attach``
+DuckDB secret instead of the ``ATTACH`` text::
+
+    CREATE SECRET (TYPE vgi_attach, SCOPE 'https://worker.example.com', api_key '...');
+    ATTACH 'mydb' AS mydb (TYPE vgi, LOCATION 'https://worker.example.com');
 """
 
 from dataclasses import dataclass
@@ -42,18 +50,31 @@ class AttachOptionSpec(_SpecBase):
             rather than surfacing a failure that reads like an empty catalog.
             Mutually exclusive with ``default`` — an option that falls back to
             a value is by definition satisfiable without the caller.
-        ARROW_SCHEMA: The shared four columns plus ``required``.
+        secret: The option carries a credential (an API key, token or
+            password). Clients and the DuckDB extension mask its value, keep it
+            out of result-cache keys and logs, and can supply it from a
+            ``vgi_attach`` DuckDB secret
+            (``CREATE SECRET (TYPE vgi_attach, SCOPE '<worker url>', api_key '...')``)
+            rather than the ``ATTACH`` text. Credential options MUST set this.
+            Compatible with ``required``. Allowed alongside a ``default``, but a
+            secret option should normally have none: a default credential is
+            advertised in plain text to every client at discovery.
+        ARROW_SCHEMA: The shared four columns plus ``required`` and ``secret``.
 
     """
 
     required: bool = False
+    secret: bool = False
 
     ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
         [
             *_SpecBase.ARROW_SCHEMA,
-            # Nullable, and appended last: a peer that predates this column
+            # Nullable, and appended after the shared columns: a peer that predates this column
             # reads the batch by name and simply doesn't see it.
             pa.field("required", pa.bool_(), nullable=True),
+            # Same rules as ``required``: nullable, appended after it, and an
+            # absent column reads as False.
+            pa.field("secret", pa.bool_(), nullable=True),
         ]
     )
 
@@ -67,12 +88,16 @@ class AttachOptionSpec(_SpecBase):
             )
 
     def _extra_row(self) -> dict[str, Any]:
-        return {"required": self.required}
+        return {"required": self.required, "secret": self.secret}
 
     @classmethod
     def _extra_kwargs(cls, row: dict[str, object]) -> dict[str, Any]:
-        # Absent column (older peer) and explicit null both mean "not required".
-        return {"required": bool(row.get("required") or False)}
+        # Absent column (older peer) and explicit null both mean "not required"
+        # / "not secret".
+        return {
+            "required": bool(row.get("required") or False),
+            "secret": bool(row.get("secret") or False),
+        }
 
 
 @dataclass
@@ -90,18 +115,26 @@ class AttachOption(_DescriptorBase):
 
         class AttachOptions:
             region: Annotated[str, AttachOption(desc="AWS region")] = "us-east-1"
-            api_key: Annotated[str, AttachOption(desc="API key", required=True)]
+            api_key: Annotated[str, AttachOption(desc="API key", required=True, secret=True)]
+
+    Credential options (API keys, tokens, passwords) MUST be declared
+    ``secret=True``; see `AttachOptionSpec.secret`.
 
     Attributes:
         required: The caller must supply this option at ``ATTACH`` time.
+        secret: The option carries a credential. Clients and the DuckDB
+            extension mask it, keep it out of cache keys and logs, and can
+            supply it from a ``vgi_attach`` DuckDB secret. Should normally have
+            no default.
 
     """
 
     required: bool = False
+    secret: bool = False
 
     def extra_spec_kwargs(self) -> dict[str, Any]:
-        """Carry ``required`` through to the `AttachOptionSpec`."""
-        return {"required": self.required}
+        """Carry ``required`` and ``secret`` through to the `AttachOptionSpec`."""
+        return {"required": self.required, "secret": self.secret}
 
 
 class MissingAttachOptionsError(ValueError):

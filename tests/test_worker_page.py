@@ -23,9 +23,10 @@ from vgi.catalog import (
     Table,
     View,
 )
-from vgi.catalog.attach_option import AttachOption, extract_attach_option_specs
+from vgi.catalog.attach_option import AttachOption, AttachOptionSpec, extract_attach_option_specs
 from vgi.http.worker_page import (
     WorkerPageResource,
+    _build_attach_options_table,
     _display_function_type,
     build_worker_page,
 )
@@ -541,6 +542,20 @@ class TestAttachOptions:
         assert "decimal128(18, 4)" in html
         # Defaults render via repr() and HTML-escape the quotes.
         assert "&#x27;hello&#x27;" in html
+
+    def test_required_and_secret_flags_render(self) -> None:
+        """Required/secret options are flagged, and a secret's default is never shown."""
+        specs = (
+            AttachOptionSpec(name="api_key", desc="", type=pa.string(), default=None, required=True, secret=True),
+            AttachOptionSpec(name="password", desc="", type=pa.string(), default="hunter2", secret=True),
+            AttachOptionSpec(name="region", desc="", type=pa.string(), default="us-east-1"),
+        )
+        html = _build_attach_options_table(specs)
+        assert ">required</span>" in html
+        assert ">secret</span>" in html
+        assert "hunter2" not in html
+        assert "<em>hidden</em>" in html
+        assert "&#x27;us-east-1&#x27;" in html
 
 
 class TestVersionDisplay:

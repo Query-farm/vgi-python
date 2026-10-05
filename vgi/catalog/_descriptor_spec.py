@@ -10,7 +10,7 @@ holds the machinery both share; the two public modules subclass it so their
 names and behaviour are unchanged.
 
 A subclass may widen its wire format with additional columns — `AttachOption`
-adds ``required`` — via :meth:`_SpecBase._extra_row` /
+adds ``required`` and ``secret`` — via :meth:`_SpecBase._extra_row` /
 :meth:`_SpecBase._extra_kwargs` and :meth:`_DescriptorBase.extra_spec_kwargs`.
 Because both directions read by column name, the widening is compatible in both
 directions: a reader ignores columns it doesn't know, and a reader whose peer

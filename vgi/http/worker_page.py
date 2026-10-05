@@ -584,10 +584,24 @@ def _build_attach_options_table(specs: tuple[AttachOptionSpec, ...]) -> str:
         "<table><tr><th>Name</th><th>Type</th><th>Default</th><th>Description</th></tr>",
     ]
     for spec in specs:
-        default_str = _esc(repr(spec.default)) if spec.default is not None else "&mdash;"
+        if spec.default is None:
+            default_str = "&mdash;"
+        elif spec.secret:
+            # A credential's default is never echoed back onto the page.
+            default_str = "<em>hidden</em>"
+        else:
+            default_str = _esc(repr(spec.default))
         desc_str = _esc(spec.desc) if spec.desc else "&mdash;"
+        flags = ""
+        if spec.required:
+            flags += ' <span class="o-flag" title="Must be supplied at ATTACH time">required</span>'
+        if spec.secret:
+            flags += (
+                ' <span class="o-flag" title="A credential: supply it from a vgi_attach DuckDB secret '
+                'rather than the ATTACH text">secret</span>'
+            )
         parts.append(
-            f"<tr><td><code>{_esc(spec.name)}</code></td>"
+            f"<tr><td><code>{_esc(spec.name)}</code>{flags}</td>"
             f"<td><code>{_esc(str(spec.type))}</code></td>"
             f"<td>{default_str}</td>"
             f"<td>{desc_str}</td></tr>"
@@ -1230,6 +1244,9 @@ _PAGE_TEMPLATE = (
         font-weight: 600; border-bottom: 2px solid #e0dcd0; }}
   td {{ padding: 8px 10px; border-bottom: 1px solid #f0ece0; }}
   td code {{ font-size: 0.85em; }}
+  .o-flag {{ font-size: 0.7em; font-weight: 600; text-transform: uppercase; margin-left: 4px;
+             padding: 1px 5px; border-radius: 4px; background: #fdf0e3; color: #8a4b08;
+             border: 1px solid #f0d5b4; }}
   .no-params {{ color: #6b6b5a; font-style: italic; font-size: 0.9em; }}
   .section-label {{ font-size: 0.8em; font-weight: 600; text-transform: uppercase;
                     letter-spacing: 0.05em; color: #6b6b5a; margin-top: 14px;
