@@ -267,11 +267,10 @@ class MyWorker(Worker):
 | `required=True` | The caller must supply the option. Declare it with no class-level default; `required` plus a default is rejected. |
 | `secret=True` | The option carries a credential. |
 
-**Credential options (API keys, tokens, passwords) MUST be declared `secret=True`.** Clients and the DuckDB extension then mask the value, keep it out of result-cache keys and logs, and can supply it from a `vgi_attach` DuckDB secret, so the `ATTACH` statement never carries it:
+**Credential options (API keys, tokens, passwords) MUST be declared `secret=True`.** The caller passes them inline as attach options. Clients mask secret options, and the DuckDB extension redacts them from `duckdb_databases()`, keeps only a salted hash of them in its result-cache key, and never logs them. To keep a credential out of the SQL text (shell history, scripts, shared links), write the option as an expression:
 
 ```sql
-CREATE SECRET (TYPE vgi_attach, SCOPE 'https://worker.example.com', api_key '...');
-ATTACH 'mydb' AS mydb (TYPE vgi, LOCATION 'https://worker.example.com');
+ATTACH 'mydb' (TYPE vgi, LOCATION 'https://worker.example.com', api_key getenv('MYDB_API_KEY'));
 ```
 
 `secret` combines with `required`. It is allowed together with a default, but a secret option should normally have none: the default is advertised in plain text to every client at discovery.

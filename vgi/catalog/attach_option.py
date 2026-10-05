@@ -11,12 +11,12 @@ format, same Python type → Arrow mapping, same extractor shape — so both sha
 the machinery in ``vgi.catalog._descriptor_spec``.
 
 Credential options (API keys, tokens, passwords) MUST be declared
-``secret=True``. Clients and the DuckDB extension then mask the value, keep it
-out of result-cache keys and logs, and can supply it from a ``vgi_attach``
-DuckDB secret instead of the ``ATTACH`` text::
+``secret=True``. The caller passes them inline as attach options; the DuckDB
+extension redacts them from ``duckdb_databases()``, keeps only a salted hash of
+them in its result-cache key, and never logs them. To keep a credential out of
+the SQL text, write the option as an expression::
 
-    CREATE SECRET (TYPE vgi_attach, SCOPE 'https://worker.example.com', api_key '...');
-    ATTACH 'mydb' AS mydb (TYPE vgi, LOCATION 'https://worker.example.com');
+    ATTACH 'mydb' (TYPE vgi, LOCATION 'https://worker.example.com', api_key getenv('MYDB_API_KEY'));
 """
 
 from dataclasses import dataclass
@@ -51,11 +51,12 @@ class AttachOptionSpec(_SpecBase):
             Mutually exclusive with ``default`` — an option that falls back to
             a value is by definition satisfiable without the caller.
         secret: The option carries a credential (an API key, token or
-            password). Clients and the DuckDB extension mask its value, keep it
-            out of result-cache keys and logs, and can supply it from a
-            ``vgi_attach`` DuckDB secret
-            (``CREATE SECRET (TYPE vgi_attach, SCOPE '<worker url>', api_key '...')``)
-            rather than the ``ATTACH`` text. Credential options MUST set this.
+            password). It is still passed inline at ``ATTACH``, but clients
+            mask it, and the DuckDB extension redacts it from
+            ``duckdb_databases()``, keeps only a salted hash of it in its
+            result-cache key, and never logs it. Keep it out of the SQL text
+            with an expression, e.g. ``api_key getenv('MYDB_API_KEY')``.
+            Credential options MUST set this.
             Compatible with ``required``. Allowed alongside a ``default``, but a
             secret option should normally have none: a default credential is
             advertised in plain text to every client at discovery.
@@ -123,9 +124,8 @@ class AttachOption(_DescriptorBase):
     Attributes:
         required: The caller must supply this option at ``ATTACH`` time.
         secret: The option carries a credential. Clients and the DuckDB
-            extension mask it, keep it out of cache keys and logs, and can
-            supply it from a ``vgi_attach`` DuckDB secret. Should normally have
-            no default.
+            extension mask it, keep only a salted hash of it in cache keys, and
+            never log it. Should normally have no default.
 
     """
 

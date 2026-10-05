@@ -597,8 +597,8 @@ def _build_attach_options_table(specs: tuple[AttachOptionSpec, ...]) -> str:
             flags += ' <span class="o-flag" title="Must be supplied at ATTACH time">required</span>'
         if spec.secret:
             flags += (
-                ' <span class="o-flag" title="A credential: supply it from a vgi_attach DuckDB secret '
-                'rather than the ATTACH text">secret</span>'
+                ' <span class="o-flag" title="A credential: redacted and never logged. Keep it out of '
+                'the SQL text with an expression such as getenv()">secret</span>'
             )
         parts.append(
             f"<tr><td><code>{_esc(spec.name)}</code>{flags}</td>"
