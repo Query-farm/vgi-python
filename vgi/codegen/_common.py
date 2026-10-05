@@ -62,6 +62,7 @@ from vgi.protocol import (
     InitRequest,
     MacroCreateRequest,
     ScanSplit,
+    SchemaContents,
     TableBufferingCombineRequest,
     TableBufferingDestructorRequest,
     TableBufferingProcessRequest,
@@ -96,6 +97,7 @@ EXTRA_RESPONSE_TYPES: tuple[type, ...] = (
     ScanSplit,  # one entry inside PlanResponse.splits (binary blob)
     AttachCatalogInfo,  # one entry inside CatalogAttachResult.attach_catalogs (binary blob)
     ForeignKeyInfo,  # one entry inside TableInfo.foreign_key_constraints (binary blob)
+    SchemaContents,  # one entry inside CatalogContentsResponse.schemas (binary blob)
 )
 
 
