@@ -13,10 +13,14 @@ Python protocol contract (round-trip + additive wire compatibility + accessors).
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pyarrow as pa
 import pyarrow.ipc as ipc
+import pytest
 
 from vgi.arguments import Arguments
+from vgi.client.client import Client
 from vgi.invocation import FunctionType
 from vgi.protocol import BindRequest, InitRequest
 from vgi.table_function import BindParams, ProcessParams, ResolvedSecrets
@@ -108,3 +112,31 @@ def test_process_params_accessor_none_when_no_init_call() -> None:
     )
     assert params.at_unit is None
     assert params.at_value is None
+
+
+def test_client_bind_forwards_at_clause_and_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``Client.bind`` carries at_unit/at_value and secrets onto its BindRequest, as table_function does."""
+    captured: list[BindRequest] = []
+    client = Client("unused-worker")
+    client._primary = SimpleNamespace(proxy=None)  # type: ignore[assignment]
+
+    def fake_do_bind(_proxy: object, request: BindRequest, _callback: object) -> object:
+        captured.append(request)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(client, "_do_bind", fake_do_bind)
+    client.bind(
+        function_name="sequence",
+        schema_path=["main"],
+        at_unit="VERSION",
+        at_value="3",
+        secrets={"token": "s3cr3t"},
+    )
+    (request,) = captured
+    assert (request.at_unit, request.at_value) == ("VERSION", "3")
+    assert request.secrets is not None
+
+    captured.clear()
+    client.bind(function_name="sequence", schema_path=["main"])
+    (request,) = captured
+    assert (request.at_unit, request.at_value, request.secrets) == (None, None, None)

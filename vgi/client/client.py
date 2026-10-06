@@ -2757,7 +2757,10 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         arguments: Arguments | None = None,
         function_type: FunctionType = FunctionType.TABLE,
         settings: dict[str, Any] | None = None,
+        secrets: dict[str, Any] | None = None,
         transaction_opaque_data: bytes | None = None,
+        at_unit: str | None = None,
+        at_value: str | None = None,
     ) -> BindResponse:
         """Resolve a function's bind response without running init()/process().
 
@@ -2789,8 +2792,16 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             settings: Optional dictionary of settings/pragmas — some
                 functions' output schema depends on setting values (see
                 `Meta.required_settings`).
+            secrets: Optional dictionary of secret name to value pairs, as for
+                `table_function` — a function whose bind resolves secrets
+                (e.g. a secret-backed source) needs them here too.
             transaction_opaque_data: Optional unique identifier for the
                 DuckDB transaction.
+            at_unit: Optional time travel unit (e.g. 'timestamp', 'version'):
+                bind the function as of a past point, as `table_function`'s
+                `at_unit` does, so a versioned table's historical schema can be
+                discovered. `None` binds live.
+            at_value: Optional time travel value, paired with `at_unit`.
 
         Returns:
             [`BindResponse`][] with `output_schema` and any opaque bind data —
@@ -2814,8 +2825,10 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 arguments=arguments,
                 function_type=function_type,
                 settings=settings,
-                secrets=None,
+                secrets=secrets,
                 transaction_opaque_data=transaction_opaque_data,
+                at_unit=at_unit,
+                at_value=at_value,
             )
             return self._do_bind(self._primary.proxy, bind_request, None)
         except ClientError as e:
