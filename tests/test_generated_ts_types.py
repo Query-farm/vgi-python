@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from vgi.codegen import ts_types
+from vgi.codegen._common import GeneratorError
 from vgi.codegen.ts_types import TS_RECORD_TYPES, build_model, emit
 
 
@@ -90,7 +91,7 @@ def test_unsupported_type_raises() -> None:
     """An Arrow type with no mapping fails loudly instead of emitting a wrong type."""
     import pyarrow as pa
 
-    with pytest.raises(ts_types.GeneratorError):
+    with pytest.raises(GeneratorError):
         ts_types._ts_type(pa.struct([pa.field("a", pa.int32())]), "X.a")
 
 

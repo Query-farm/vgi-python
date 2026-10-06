@@ -520,14 +520,14 @@ def test_item_encoding_sorts_map_keys() -> None:
     from vgi.protocol import _item_ipc_bytes
 
     a = SchemaInfo(
-        attach_opaque_data=b"x",
+        attach_opaque_data=AttachOpaqueData(b"x"),
         path=["s"],
         comment=None,
         tags={"b": "2", "a": "1"},
         estimated_object_count={"view": 0, "table": 3},
     )
     b = SchemaInfo(
-        attach_opaque_data=b"x",
+        attach_opaque_data=AttachOpaqueData(b"x"),
         path=["s"],
         comment=None,
         tags={"a": "1", "b": "2"},
