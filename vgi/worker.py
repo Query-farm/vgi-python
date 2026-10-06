@@ -1239,7 +1239,7 @@ class Worker:
             to use the auto-generated default (or disable the catalog).
         catalog_name: Name of the default catalog; set to ``None`` to disable the
             default catalog.
-        route_unattached_calls: Whether a [`MetaWorker`][]
+        route_unattached_calls: Whether a ``MetaWorker``
             may route a call carrying no attach to this worker by function name.
             ``False`` makes the worker reachable only through its own catalog.
         catalog: Optional declarative `[`Catalog`][]` describing the worker's
