@@ -34,13 +34,14 @@ from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from vgi_rpc.external import ExternalLocationConfig
+    from vgi_rpc.grants import GrantKeys
     from vgi_rpc.rpc import RpcServer
     from vgi_rpc.rpc._token_identity import IdentityImpl
 
     from vgi.meta_worker import MetaWorker
     from vgi.worker import Worker
 
-__all__ = ["Transport", "build_rpc_server"]
+__all__ = ["Transport", "build_rpc_server", "resolve_grant_keys"]
 
 Transport = Literal["pipe", "unix", "tcp", "iroh", "http"]
 """The transport a server is being built for.
@@ -65,6 +66,7 @@ def build_rpc_server(
     transport: Transport,
     describe: bool = True,
     introspect_principals: Iterable[str] | None = None,
+    grant_keys: GrantKeys | None = None,
     external_location: ExternalLocationConfig | None = None,
     otel_config: Any = None,
 ) -> RpcServer:
@@ -83,6 +85,11 @@ def build_rpc_server(
         introspect_principals: HTTP only. Principals permitted to call
             ``introspect_token``; ``None`` reads ``VGI_INTROSPECT_PRINCIPALS``.
             Only consulted when the worker overrides ``resolve_token``.
+        grant_keys: HTTP only. Sealed-grant configuration (see
+            [`resolve_grant_keys`][vgi.rpc_server.resolve_grant_keys]). When
+            given, Identity is hosted even without hooks: the framework mints
+            sealed grants unless the worker overrides ``mint_grant``, and the
+            HTTP server accepts them back as bearer credentials.
         external_location: Optional external-storage configuration for large
             batches (HTTP).
         otel_config: Optional ``OtelConfig``. When given, the server is
@@ -116,13 +123,18 @@ def build_rpc_server(
     if transport in _IDENTITY_TRANSPORTS:
         # A Worker's hooks are classmethods; a MetaWorker answers for the one
         # child that implements each hook.
-        identity = _build_identity(type(worker) if isinstance(worker, Worker) else worker, introspect_principals)
+        identity = _build_identity(
+            type(worker) if isinstance(worker, Worker) else worker, introspect_principals, grant_keys
+        )
 
     server = RpcServer(
         primary,
         worker,
         extra_protocols=extra,
         identity=identity,
+        # Explicit, never vgi-rpc's "env" default: grants are an HTTP-only
+        # identity feature here, and the caller resolved them already.
+        grant_keys=grant_keys if transport in _IDENTITY_TRANSPORTS else None,
         external_location=external_location,
         enable_describe=describe,
         server_version=_get_vgi_version(),
@@ -191,6 +203,7 @@ def _validated_hosted_protocols(worker: Worker | MetaWorker, primary: type) -> t
 def _build_identity(
     worker_cls: type[Worker] | MetaWorker,
     introspect_principals: Iterable[str] | None,
+    grant_keys: GrantKeys | None = None,
 ) -> IdentityImpl | None:
     """Build the ``vgi_rpc.Identity.v1`` implementation, or ``None``.
 
@@ -217,6 +230,9 @@ def _build_identity(
             the one child class that overrides each.
         introspect_principals: Principals permitted to introspect, or ``None``
             to read the environment.
+        grant_keys: Sealed-grant configuration. When given, Identity is built
+            even with no hook, and mints sealed grants unless the worker
+            overrides ``mint_grant``.
 
     Returns:
         The implementation, or ``None`` when this worker does not resolve
@@ -225,7 +241,7 @@ def _build_identity(
     """
     resolver = worker_cls._introspect_resolver()
     minter = worker_cls._grant_minter()
-    if resolver is None and minter is None:
+    if resolver is None and minter is None and grant_keys is None:
         return None
 
     # Not re-exported by ``vgi_rpc.rpc``, so the private module is the only
@@ -239,6 +255,9 @@ def _build_identity(
         # validates it only when a resolver is supplied — a worker that mints
         # grants but resolves nothing is not an oracle and needs no allowlist.
         introspect_principals=(_resolve_introspect_principals(introspect_principals) if resolver is not None else None),
+        # With keys and no mint_grant override, IdentityImpl mints sealed
+        # grants itself; the HTTP server then accepts them as bearers.
+        grant_keys=grant_keys,
     )
 
 
@@ -285,3 +304,37 @@ def _resolve_introspect_principals(explicit: Iterable[str] | None) -> list[str]:
         )
         sys.exit(1)
     return principals
+
+
+def resolve_grant_keys(explicit: Sequence[str] | None = None) -> GrantKeys | None:
+    """Resolve the sealed-grant configuration, or exit with an actionable message.
+
+    Grants are opt-in: with no key configured this returns ``None`` and
+    nothing changes. Keys come from *explicit* (``--grant-key``, repeatable)
+    or else ``VGI_RPC_GRANT_KEYS`` (comma-separated). Either way
+    ``VGI_RPC_GRANT_AUDIENCE`` and ``VGI_RPC_GRANT_MAX_TTL_SECONDS`` (default
+    7 days) apply. Each key is standard base64 of exactly 32 bytes; the first
+    mints and every key verifies, which is how keys rotate.
+
+    Args:
+        explicit: Keys given on the command line, or ``None`` to read the
+            environment.
+
+    Returns:
+        The configuration, or ``None`` when no key is configured.
+
+    Raises:
+        SystemExit: A key or lifetime is malformed. A worker refuses to start
+            rather than run with a key it misread.
+
+    """
+    from vgi_rpc.grants import GRANT_KEYS_ENV, GrantKeys
+
+    env: dict[str, str] = dict(os.environ)
+    if explicit:
+        env[GRANT_KEYS_ENV] = ",".join(explicit)
+    try:
+        return GrantKeys.from_env(env)
+    except ValueError as exc:
+        sys.stderr.write(f"Error: invalid sealed-grant configuration ({GRANT_KEYS_ENV} / --grant-key): {exc}\n")
+        sys.exit(1)

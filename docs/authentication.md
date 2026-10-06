@@ -39,6 +39,48 @@ When both `VGI_BEARER_TOKENS` and `VGI_JWT_ISSUER` are set, they are
 chained — JWT validation is attempted first, falling back to bearer token
 lookup.
 
+## Grants and resolved tokens as bearer credentials
+
+`vgi_rpc.Identity.v1`'s `issue_grant` mints a standing credential that
+unattended automation later presents as an ordinary bearer. Over HTTP the
+worker accepts two kinds of identity credential after the deployment's own
+authenticator:
+
+1. **Sealed grants** (opt-in). Set `VGI_RPC_GRANT_KEYS` (or
+   `vgi-serve --http --grant-key KEY`, repeatable). `issue_grant` then mints a
+   `vgig1.` grant sealed with the first key, unless the worker overrides
+   `mint_grant`. Every key verifies, so to rotate you add the new key first and
+   drop the old one once its grants have expired. A request carrying
+   `Authorization: Bearer vgig1.…` is authenticated as the grant's owner, with
+   `domain="grant"` and claims `grant_id`, `scopes` and `purpose`. The claims
+   carry no `auth_time`, so a grant cannot mint another grant.
+2. **`resolve_token`**. A worker that overrides
+   [`Worker.resolve_token`][vgi.worker.Worker.resolve_token] has it consulted
+   for any other bearer, with `domain="token"`. `None` means the credential is
+   unknown, which is a 401 unless something else accepts it.
+   `AuthUnavailableError` is a 503 with the hook's `Retry-After`.
+
+The order is the deployment's authenticator (JWT, static bearer), then sealed
+grants, then `resolve_token`. A `vgig1.` token that does not verify is a 401
+that stops the chain: it never reaches `resolve_token`. A JWS-shaped token or
+one over 4096 bytes never reaches the hook either. Your own `authenticate`
+callback must raise `ValueError` for a credential it does not recognise, so the
+chain moves on. One that answers anonymous for every request ends the chain
+before grants are checked. With no authenticator configured, a request with no
+`Authorization` header stays anonymous as before.
+
+| Variable | Description |
+|----------|-------------|
+| `VGI_RPC_GRANT_KEYS` | Comma-separated standard-base64 keys, 32 bytes each. The first mints and all verify. Unset means grants are off. A malformed key stops startup |
+| `VGI_RPC_GRANT_AUDIENCE` | Bound into every grant, so two deployments that share a key still reject each other's grants |
+| `VGI_RPC_GRANT_MAX_TTL_SECONDS` | Ceiling on a grant's lifetime (default 7 days) |
+
+The startup rules are unchanged. Overriding `resolve_token` still requires
+`VGI_INTROSPECT_PRINCIPALS`. Grant keys alone need no allowlist, because
+minting answers only for the caller. Grants and `resolve_token` bearers are
+HTTP-only, like the rest of Identity. When `VGI_PROXY_PROOF_MODE` is on, both
+are accepted only *inside* the proxy-proof gate, never as an alternative to it.
+
 ## Programmatic API
 
 ```python test="skip"

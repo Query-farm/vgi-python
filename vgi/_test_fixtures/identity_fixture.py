@@ -61,12 +61,18 @@ class IdentityExampleWorker(ExampleWorker):
 def conformance_authenticate(req: Any) -> AuthContext:
     """Derive the caller from ``X-Conformance-Principal`` / ``X-Conformance-Auth-Time``.
 
-    An absent principal header means *unauthenticated*. The auth-time header is
+    An absent principal header means *unauthenticated*, unless an
+    ``Authorization`` header is present: that request falls through to the
+    sealed-grant and ``resolve_token`` bearers. The auth-time header is
     placed in the claims verbatim and unparsed, because the guard does the
     parsing and the fixture only carries the value.
     """
     principal = req.get_header(PRINCIPAL_HEADER)
     if not principal:
+        if req.get_header("Authorization"):
+            # A bearer is not ours: fall through to the identity bearer
+            # authenticators vgi-rpc appends (sealed grants, resolve_token).
+            raise ValueError("no conformance principal header")
         return AuthContext(domain=None, authenticated=False, principal=None)
     claims: dict[str, object] = {}
     auth_time = req.get_header(AUTH_TIME_HEADER)

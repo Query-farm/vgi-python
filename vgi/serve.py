@@ -41,6 +41,7 @@ from vgi.profiling import maybe_start_profile
 
 if TYPE_CHECKING:
     import falcon
+    from vgi_rpc.grants import GrantKeys
     from vgi_rpc.otel import OtelConfig
     from vgi_rpc.rpc import AuthContext, PeerAuthenticationPolicy, PeerIdentityProvider
 
@@ -216,6 +217,7 @@ def create_app(
     max_stream_response_bytes: int | None = None,
     max_externalized_response_bytes: int | None = None,
     introspect_principals: Iterable[str] | None = None,
+    grant_keys: GrantKeys | None = None,
     iroh_bridge_issuer: str | None = None,
     iroh_trusted_proxy_addresses: Iterable[str] = (),
     iroh_authenticate: bool = True,
@@ -277,6 +279,16 @@ def create_app(
             ``vgi_rpc.Identity.v1``'s ``introspect_token``.  Only consulted
             when the worker class overrides ``resolve_token``.  ``None`` reads
             ``VGI_INTROSPECT_PRINCIPALS``.
+        grant_keys: Sealed-grant configuration. ``None`` reads
+            ``VGI_RPC_GRANT_KEYS`` (see
+            [`resolve_grant_keys`][vgi.rpc_server.resolve_grant_keys]); no key
+            configured means grants are off. With keys, ``issue_grant`` mints
+            sealed grants (unless the worker overrides ``mint_grant``) and
+            requests may present them as ``Authorization: Bearer <grant>``.
+            Independently, a worker that overrides ``resolve_token`` has it
+            consulted for bearer credentials. Both come after *authenticate*
+            in the chain, so the deployment's own authenticator answers first
+            and must raise ``ValueError`` for a credential it does not know.
         iroh_bridge_issuer: Operator-controlled identity namespace for an
             ``iroh-http/2`` bridge. ``None`` disables Iroh header trust.
         iroh_trusted_proxy_addresses: Exact immediate bridge addresses.
@@ -297,7 +309,7 @@ def create_app(
         sys.exit(1)
 
     from vgi.otel import VgiTracer
-    from vgi.rpc_server import build_rpc_server
+    from vgi.rpc_server import build_rpc_server, resolve_grant_keys
 
     # Resolve the signing key once, here, so the worker (which seals catalog
     # opaque-data envelopes) and the HTTP state-token machinery share the same
@@ -319,7 +331,9 @@ def create_app(
         transport="http",
         describe=describe,
         introspect_principals=introspect_principals,
+        grant_keys=grant_keys if grant_keys is not None else resolve_grant_keys(),
     )
+    authenticate, identity_bearer = _compose_identity_bearer(server, authenticate)
 
     effective_peer_identity_providers = tuple(peer_identity_providers)
     effective_peer_authentication_policy = peer_authentication_policy
@@ -356,6 +370,7 @@ def create_app(
         max_stream_response_bytes=max_stream_response_bytes,
         max_externalized_response_bytes=max_externalized_response_bytes,
         enable_landing_page=False,
+        identity_bearer=identity_bearer,
     )
 
     # Frontend: either redirect to external CDN or serve pre-rendered worker page
@@ -490,6 +505,16 @@ def main() -> None:
                 "that case, with no permissive default. Env: VGI_INTROSPECT_PRINCIPALS."
             ),
         ),
+        grant_key: list[str] | None = typer.Option(  # noqa: B008
+            None,
+            "--grant-key",
+            help=(
+                "Sealed-grant key: standard base64 of 32 bytes; repeat to rotate (the first "
+                "mints, all verify). Enables issue_grant without a mint_grant override and "
+                "accepts the grants as HTTP bearer credentials. Env: VGI_RPC_GRANT_KEYS "
+                "(comma-separated), VGI_RPC_GRANT_AUDIENCE, VGI_RPC_GRANT_MAX_TTL_SECONDS."
+            ),
+        ),
         access_log_sample: float | None = typer.Option(  # noqa: B008
             None,
             "--access-log-sample",
@@ -573,6 +598,7 @@ def main() -> None:
                 max_stream_response_bytes=max_stream_response_bytes,
                 max_externalized_response_bytes=max_externalized_response_bytes,
                 introspect_principals=introspect_principals,
+                grant_keys=grant_key,
                 server=server,
                 worker_ref=worker_ref,
                 http_workers=http_workers,
@@ -770,7 +796,44 @@ def _resolve_authenticate() -> Callable[..., Any] | None:
     # this worker", with user identity handled upstream.
     from vgi_rpc.http import require_all
 
-    return require_all(gate, inner)
+    gated = require_all(gate, inner)
+    # Kept so create_app can put the identity bearers (sealed grants,
+    # resolve_token) inside the gate rather than beside it.
+    setattr(gated, _PROXY_GATE_PARTS_ATTR, (gate, inner))
+    return gated
+
+
+#: Attribute on a proxy-gated authenticator holding its ``(gate, inner)``.
+_PROXY_GATE_PARTS_ATTR = "_vgi_proxy_gate_parts"
+
+
+def _compose_identity_bearer(
+    server: Any,
+    authenticate: Callable[..., Any] | None,
+) -> tuple[Callable[..., Any] | None, bool]:
+    """Return ``(authenticate, identity_bearer)`` for ``make_wsgi_app``.
+
+    vgi-rpc appends the identity bearers (sealed grants, then the worker's
+    ``resolve_token``) after *authenticate* itself. It refuses when
+    *authenticate* depends on proxy-injected evidence, because an OR beside a
+    proxy-proof gate would let a grant bypass it. VGI's own gate
+    (``VGI_PROXY_PROOF_MODE``) is built by :func:`_resolve_authenticate`, so
+    here the bearers go *inside* it: ``require_all(gate, inner, then grants,
+    then resolve_token)``. Any other authenticator is left to vgi-rpc.
+    """
+    identity = getattr(server, "identity", None)
+    parts = getattr(authenticate, _PROXY_GATE_PARTS_ATTR, None)
+    if identity is None or parts is None:
+        return authenticate, True
+    if identity.grant_keys is None and identity.resolve_token_hook is None:
+        return authenticate, True
+    from vgi_rpc.http import compose_identity_authenticate, require_all
+
+    gate, inner = parts
+    composed = compose_identity_authenticate(
+        inner, grant_keys=identity.grant_keys, resolve_token=identity.resolve_token_hook
+    )
+    return require_all(gate, composed), False
 
 
 def _resolve_proxy_proof_gate() -> Any | None:
@@ -1352,6 +1415,7 @@ def _serve_http(
     max_stream_response_bytes: int | None = None,
     max_externalized_response_bytes: int | None = None,
     introspect_principals: str | None = None,
+    grant_keys: Sequence[str] | None = None,
     server: str = "waitress",
     worker_ref: str | None = None,
     http_workers: int | None = None,
@@ -1369,6 +1433,13 @@ def _serve_http(
     # export_serve_config for why the environment is the channel.
     if introspect_principals is not None:
         os.environ["VGI_INTROSPECT_PRINCIPALS"] = introspect_principals
+    if grant_keys:
+        from vgi_rpc.grants import GRANT_KEYS_ENV
+
+        from vgi.rpc_server import resolve_grant_keys
+
+        resolve_grant_keys(grant_keys)  # a malformed key stops startup here
+        os.environ[GRANT_KEYS_ENV] = ",".join(grant_keys)
 
     if server == "granian":
         _serve_http_granian(

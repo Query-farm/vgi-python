@@ -297,6 +297,7 @@ vgi-client --input data.parquet --function sum_all_columns --worker vgi-fixture-
 | `VGI_OAUTH_DEVICE_CODE_CLIENT_ID` | Client ID for device-code flow (optional, URL-safe chars only) |
 | `VGI_OAUTH_DEVICE_CODE_CLIENT_SECRET` | Client secret for device-code flow (optional, URL-safe chars only) |
 | `VGI_OAUTH_USE_ID_TOKEN` | When `1`/`true`/`yes`, clients use OIDC `id_token` as Bearer instead of `access_token` |
+| `VGI_RPC_GRANT_KEYS` | Comma-separated base64 32-byte sealed-grant keys (first mints, all verify); enables grants as HTTP bearers. Also `VGI_RPC_GRANT_AUDIENCE`, `VGI_RPC_GRANT_MAX_TTL_SECONDS` |
 | `VGI_INTROSPECT_PRINCIPALS` | Comma-separated principals permitted to call `vgi_rpc.Identity.v1`'s `introspect_token`. Required — no permissive default — whenever the worker implements `resolve_token()` (see below) |
 | `VGI_WORKER_ACCESS_LOG_SAMPLE` | Fraction of *successful* calls to keep in the access log, `0.0`–`1.0`. Errors are always kept; the decision is per call, so every record of one stream shares a fate |
 | `VGI_WORKER_ACCESS_LOG_ASYNC` | When `1`/`true`/`yes`, emit access-log records from a listener thread. Bounded queue; full means drop, and a crash loses whatever is queued |
@@ -483,6 +484,24 @@ callback too, not just here: it is deliberately **not** a `ValueError`, because
 sidecar outage raised as one is read as "not my credential, try the next" and
 ends up a 401 from the end of the chain, restarting every session in the fleet
 over a thirty-second blip.
+
+### Grants and `resolve_token` as HTTP Bearers
+
+With `VGI_RPC_GRANT_KEYS` (or `vgi-serve --grant-key`) set, the HTTP worker
+hosts Identity even without hooks. It mints sealed `vgig1.` grants through
+`issue_grant`, unless the worker overrides `mint_grant`, and accepts them back
+as `Authorization: Bearer` credentials, authenticated as the grant's owner. A
+worker that overrides `resolve_token` also has it consulted for bearers. The
+order is the deployment's authenticator, then grants, then `resolve_token`. A
+bad `vgig1.` token is a 401 and never reaches `resolve_token`. vgi-rpc composes
+this in `make_wsgi_app`. vgi-python resolves the keys in
+`vgi.rpc_server.resolve_grant_keys` and passes them explicitly to `RpcServer`
+(`None` off HTTP, never vgi-rpc's `"env"` default), so grants stay HTTP-only. It
+also puts the bearers *inside* VGI's proxy-proof gate
+(`serve._compose_identity_bearer`), because vgi-rpc refuses to OR them beside
+one. Allowlist rules are unchanged. See `docs/authentication.md` and
+`tests/test_grant_auth.py`, which also runs the shared
+`grant_token_vectors.json` through `create_app`.
 
 ### Hosting Additional Protocols (`hosted_protocols`)
 

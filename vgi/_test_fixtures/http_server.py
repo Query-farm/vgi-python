@@ -372,7 +372,7 @@ def main() -> None:
         from vgi._test_fixtures.catalog_contents import CONTENTS_WORKERS
         from vgi._test_fixtures.narrow_bind.worker import NarrowBindWorker
         from vgi._test_fixtures.twin_catalogs import TwinAWorker, TwinBWorker
-        from vgi.rpc_server import build_rpc_server
+        from vgi.rpc_server import build_rpc_server, resolve_grant_keys
 
         worker_classes: list[type] = [
             ExampleWorker,
@@ -408,6 +408,7 @@ def main() -> None:
             describe=describe,
             external_location=external_location,
             introspect_principals=introspect_principals,
+            grant_keys=resolve_grant_keys(),
         )
         wsgi_app = make_wsgi_app(
             server,
