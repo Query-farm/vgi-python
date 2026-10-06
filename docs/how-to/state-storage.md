@@ -22,9 +22,11 @@ function that coordinates partial results across workers.
 
 ## Two kinds of "state" — don't confuse them
 
-- **Generator cursor state** — the small `ArrowSerializableDataclass` a table generator keeps
-  *within one scan* (see [streaming with state](function-patterns.md#streaming-with-state)). It
-  lives in the worker for the duration of the call.
+- **Generator cursor state** — the small serializable object a table generator keeps
+  *within one scan* (see [streaming with state](function-patterns.md#streaming-with-state)).
+  Over HTTP, the framework serializes it between requests. `ArrowSerializableDataclass`
+  supplies the serialization methods; custom types can implement
+  [`StreamStateCodec`][vgi.function.StreamStateCodec] instead.
 - **Shared storage** (this page) — state that must outlive a single call or be shared across
   **separate worker processes**, e.g. combining partial aggregate results. This is backed by a
   pluggable store.

@@ -1,5 +1,5 @@
 ---
-description: "How to write each of the four VGI function patterns: scalar, table, table-in-out, and aggregate — with a complete runnable worker for each."
+description: "How to write each of the five VGI function patterns: scalar, table, table-in-out, aggregate, and buffering — with a complete runnable worker for each."
 ---
 
 # Function patterns
@@ -178,11 +178,14 @@ ATTACH 'aggregates' (TYPE vgi, LOCATION 'uv run sum_worker.py');
 SELECT category, aggregates.vgi_sum(value) FROM t GROUP BY category;
 ```
 
-??? info "State must be an `ArrowSerializableDataclass`"
-    Table generators and aggregates keep state between calls. Because that state is serialized
-    across parallel workers (aggregates) and HTTP round-trips, the framework requires it to extend
-    `ArrowSerializableDataclass`. Annotate fields with `ArrowType(...)` so the wire type is
-    explicit.
+??? info "State must be serializable"
+    Table generators and aggregates keep state between calls. A state type must provide
+    `serialize_to_bytes()` and `deserialize_from_bytes()` so the framework can carry it across
+    HTTP round-trips or persist it between aggregate calls. `ArrowSerializableDataclass`
+    implements these methods for you and is the usual starting point. Custom state types can
+    implement the same [`StreamStateCodec`][vgi.function.StreamStateCodec] contract without
+    inheriting from `ArrowSerializableDataclass`. See
+    [State Class](../aggregate-functions.md#state-class) for both approaches.
 
 ## Buffering
 

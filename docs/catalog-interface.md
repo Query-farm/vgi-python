@@ -944,7 +944,7 @@ if __name__ == "__main__":
 
 ---
 
-## API Limitations
+## Catalog capabilities and limitations { #api-limitations }
 
 The current CatalogInterface has the following limitations:
 
@@ -952,8 +952,33 @@ The current CatalogInterface has the following limitations:
 - **Tags**: Cannot be updated after object creation
 - **Schema metadata**: Comments and tags cannot be updated on schemas
 - **Constraints**: Only NOT NULL can be added/dropped (no ALTER for UNIQUE/CHECK)
-- **Indexes**: Not supported
-- **INSERT/UPDATE/DELETE**: Not yet implemented (metadata only)
+
+### Table writes and indexes
+
+`INSERT`, `UPDATE`, and `DELETE` are supported when the catalog supplies a write
+function for the operation. For declarative catalogs, configure the
+[`Table`][vgi.catalog.descriptors.Table] descriptor:
+
+| Operation | Descriptor field | Requirement |
+|-----------|------------------|-------------|
+| `INSERT` | `insert_function` | A `TableInOutGenerator` that accepts rows to insert |
+| `UPDATE` | `update_function` | A write function and a scan `function` that provides row IDs |
+| `DELETE` | `delete_function` | A write function and a scan `function` that provides row IDs |
+
+Each field defaults to `None`, which leaves that operation unsupported. Custom
+catalogs implement `table_insert_function_get()`, `table_update_function_get()`,
+or `table_delete_function_get()` to return the corresponding `ScanFunctionResult`.
+The worker's write functions implement the changes to the backing data source;
+declaring a table alone does not make it writable.
+
+`ReadOnlyCatalogInterface` rejects catalog DDL, but can expose these write functions
+on declarative tables. Table writes do not require the bundled
+[transactor](api/transactor.md); that is an optional database-access service with
+additional engine requirements.
+
+Index metadata can be declared with [`Index`][vgi.catalog.descriptors.Index]. Custom
+catalogs can implement `index_get()`, `index_create()`, and `index_drop()`; support
+depends on the catalog implementation and backing data source.
 
 ---
 

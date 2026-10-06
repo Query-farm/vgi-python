@@ -545,7 +545,7 @@ vgi-fixture-worker --log-format json
 | `VGI_QUIET=1` | Suppress the interactive-terminal startup warning (same as `--quiet`) |
 | `VGI_FILTER_DEBUG=1` | Enable filter pushdown debug logging |
 | `VGI_BEARER_TOKENS` | Comma-separated `token=principal` pairs for static bearer auth (HTTP only) |
-| `VGI_JWT_ISSUER` | JWT issuer URL for JWT/JWKS auth (requires `vgi[oauth]` extra) |
+| `VGI_JWT_ISSUER` | JWT issuer URL for JWT/JWKS auth (requires `vgi-python[oauth]` extra) |
 | `VGI_JWT_AUDIENCE` | JWT audience string, comma-separated for multiple audiences (required when `VGI_JWT_ISSUER` is set) |
 | `VGI_JWT_JWKS_URI` | JWKS endpoint URL (auto-discovered if omitted) |
 | `VGI_OAUTH_RESOURCE` | OAuth resource URL for RFC 9728 metadata |

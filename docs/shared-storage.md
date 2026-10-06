@@ -10,7 +10,7 @@ variable.
 | Backend | Value | Use Case | Dependencies |
 |---------|-------|----------|-------------|
 | SQLite | `sqlite` (default) | Local / subprocess transport | None (stdlib) |
-| Azure SQL | `azure-sql` | Azure cloud deployments | `vgi[azure]` |
+| Azure SQL | `azure-sql` | Azure cloud deployments | `vgi-python[azure]` |
 | Cloudflare DO | `cloudflare-do` | Edge / multi-cloud deployments | None (stdlib) |
 
 ## SQLite (Default)
@@ -36,7 +36,7 @@ workers run on separate hosts.
 1. Install the Azure extra:
 
 ```bash
-pip install vgi[azure]
+pip install 'vgi-python[azure]'
 ```
 
 2. Create an Azure SQL Database (Serverless recommended for cost):

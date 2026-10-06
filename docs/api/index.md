@@ -32,7 +32,7 @@ added incrementally.
 | [Auth & Secrets](auth.md) | `AuthContext`, `CallContext`, bearer/JWT authenticators, secret protocol | HTTP: `[http]`; JWT: `[oauth]` |
 | [Observability](observability.md) | OpenTelemetry tracing, worker logging configuration | `[otel]` for tracing |
 | [HTTP](http.md) | Worker page, blob storage, request-size middleware | `pip install vgi-python[http]` |
-| [Transactor](transactor.md) | `TransactorClient`, `TransactorProtocol` | `pip install vgi-python[transactor]` |
+| [Transactor](transactor.md) | `TransactorClient`, `TransactorProtocol` | `[transactor]` extra and a [compatible engine build](transactor.md#runtime-requirements) |
 | [Exceptions](exceptions.md) | VGI exception types | — |
 
 ## Import Convention

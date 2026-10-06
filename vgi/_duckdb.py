@@ -7,8 +7,8 @@ engine (expression-filter evaluation, the transactor, the statistics
 fixtures) resolves it through this module, which prefers Query Farm's
 ``haybarn`` distribution when installed and falls back to stock ``duckdb``.
 
-Install one via the extras: ``pip install vgi[haybarn]`` (preferred) or
-``pip install vgi[duckdb]``.
+Install one via the extras: ``pip install 'vgi-python[haybarn]'`` (preferred) or
+``pip install 'vgi-python[duckdb]'``.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ def engine_module() -> ModuleType:
         else:
             raise ImportError(
                 "No DuckDB-compatible engine is installed. Install 'haybarn' (preferred) "
-                "or 'duckdb', e.g. `pip install vgi[haybarn]` or `pip install vgi[duckdb]`."
+                "or 'duckdb', e.g. `pip install 'vgi-python[haybarn]'` or `pip install 'vgi-python[duckdb]'`."
             )
     return _engine
 
