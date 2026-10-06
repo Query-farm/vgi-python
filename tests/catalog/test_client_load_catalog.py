@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -31,7 +32,7 @@ from vgi.catalog import (
     SchemaInfo,
     TransactionOpaqueData,
 )
-from vgi.client import CatalogClientMixin, CatalogContents, CatalogSnapshot
+from vgi.client import CatalogClientMixin, CatalogContents, CatalogSnapshot, catalog_mixin
 from vgi.client.catalog_mixin import CatalogClientError
 
 _KINDS = (
@@ -333,3 +334,55 @@ def test_absent_supports_catalog_contents_decodes_false() -> None:
     assert CatalogAttachResult.deserialize_from_batch(batch).supports_catalog_contents
     old = batch.drop_columns(["supports_catalog_contents"])
     assert not CatalogAttachResult.deserialize_from_batch(old).supports_catalog_contents
+
+
+class _UndecodableContentsProxy:
+    """A worker proxy whose ``catalog_contents`` item bytes are not a valid ``SchemaInfo``."""
+
+    def catalog_contents(self, **_: Any) -> Any:
+        entry = SimpleNamespace(
+            path=["main"],
+            schema=b"not an arrow ipc stream",
+            tables=[],
+            views=[],
+            scalar_functions=[],
+            aggregate_functions=[],
+            table_functions=[],
+            scalar_macros=[],
+            table_macros=[],
+            indexes=[],
+        )
+        return SimpleNamespace(catalog_version=1, etag=None, not_modified=False, schemas=[entry])
+
+    def catalog_schemas(self, **_: Any) -> Any:
+        return SimpleNamespace(to_infos=list)
+
+
+@pytest.fixture
+def undecodable_contents_client(monkeypatch: pytest.MonkeyPatch) -> CatalogClientMixin:
+    """A client whose real ``_catalog_connect`` hands out `_UndecodableContentsProxy`."""
+
+    @contextmanager
+    def connect(*_: Any, **__: Any) -> Iterator[Any]:
+        yield _UndecodableContentsProxy()
+
+    monkeypatch.setattr(catalog_mixin._catalog_pool, "connect", connect)
+
+    class _Client(CatalogClientMixin):
+        def _worker_argv(self) -> list[str]:
+            return ["unused"]
+
+    return _Client()
+
+
+def test_undecodable_contents_raises_catalog_client_error(undecodable_contents_client: CatalogClientMixin) -> None:
+    """A decode failure surfaces as ``CatalogClientError``, like every other catalog call."""
+    with pytest.raises(CatalogClientError):
+        undecodable_contents_client.contents(attach_opaque_data=_ATTACH)
+
+
+def test_undecodable_contents_falls_back_to_per_schema(undecodable_contents_client: CatalogClientMixin) -> None:
+    """``load_catalog`` treats an undecodable answer as a failure and uses the per-schema RPCs."""
+    snapshot = undecodable_contents_client.load_catalog(attach=_attach_result(True))
+    assert snapshot.source == "per_schema"
+    assert snapshot.fallback_reason

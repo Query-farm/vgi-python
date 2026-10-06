@@ -541,14 +541,17 @@ class CatalogClientMixin:
             one [`SchemaContentsInfo`][] per schema, parents first.
 
         """
+        # Decode inside the connection block so a malformed item surfaces as
+        # CatalogClientError (which load_catalog falls back on), not a bare
+        # decode error.
         with self._catalog_connect() as proxy:
             response = proxy.catalog_contents(attach_opaque_data=attach_opaque_data, if_none_match=if_none_match)
-        return CatalogContents(
-            catalog_version=response.catalog_version,
-            etag=response.etag,
-            not_modified=response.not_modified,
-            schemas=[_decode_schema_contents(entry) for entry in response.schemas],
-        )
+            return CatalogContents(
+                catalog_version=response.catalog_version,
+                etag=response.etag,
+                not_modified=response.not_modified,
+                schemas=[_decode_schema_contents(entry) for entry in response.schemas],
+            )
 
     def load_catalog(
         self,
