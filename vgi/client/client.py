@@ -3273,15 +3273,23 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         # AnnotatedBatch (not just .batch) so custom_metadata survives the
         # cross-thread handoff for batch_metadata_callback below.
         output_queue: Queue[AnnotatedBatch | BaseException | None] = Queue()
+        # Set when the consumer stops before every worker finished (the
+        # generator was closed early, or a worker failed). Each reader thread is
+        # its stream's only reader, so it is also the one that ends the stream:
+        # a producer stream advances one tick per batch, so a reader notices the
+        # flag within one batch and cancels from its own thread. Ending it from
+        # the consumer's thread instead would put two readers on one pipe.
+        stop = threading.Event()
 
         def read_worker_output(worker: WorkerConnection) -> None:
             """Thread function that reads all output from a single worker."""
             try:
-                if worker.stream is None:
+                stream = worker.stream
+                if stream is None:
                     output_queue.put(None)
                     return
 
-                for output in worker.stream:
+                for output in stream:
                     _logger.debug(
                         "received_output_from_worker worker_index=%s num_rows=%s",
                         worker.worker_index,
@@ -3289,6 +3297,10 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                     )
                     if output.batch.num_rows > 0:
                         output_queue.put(output)
+                    if stop.is_set():
+                        _logger.debug("table_function_worker_cancelled worker_index=%s", worker.worker_index)
+                        stream.cancel()
+                        break
 
                 output_queue.put(None)  # Signal completion
             except StopIteration:
@@ -3308,41 +3320,59 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             thread.start()
             threads.append(thread)
 
-        # Collect outputs from all workers until all are done
-        workers_finished = 0
-        while workers_finished < num_workers:
-            result = output_queue.get()
+        # Collect outputs from all workers until all are done. The finally
+        # block also runs when the consumer closes the generator early
+        # (GeneratorExit at the yield) or a worker fails: the reader threads are
+        # told to stop and joined before any stream is touched here.
+        completed = False
+        try:
+            workers_finished = 0
+            while workers_finished < num_workers:
+                result = output_queue.get()
 
-            # Check for exceptions from worker threads
-            if isinstance(result, BaseException):
-                if isinstance(result, RpcError):
-                    raise ClientError.from_rpc_error(result) from result
-                raise ClientError(f"Worker thread failed: {result}") from result
+                # Check for exceptions from worker threads
+                if isinstance(result, BaseException):
+                    if isinstance(result, RpcError):
+                        raise ClientError.from_rpc_error(result) from result
+                    raise ClientError(f"Worker thread failed: {result}") from result
 
-            # None signals a worker finished
-            if result is None:
-                workers_finished += 1
-                _logger.debug(
-                    "worker_finished workers_finished=%s total_workers=%s",
-                    workers_finished,
-                    num_workers,
-                )
-                continue
+                # None signals a worker finished
+                if result is None:
+                    workers_finished += 1
+                    _logger.debug(
+                        "worker_finished workers_finished=%s total_workers=%s",
+                        workers_finished,
+                        num_workers,
+                    )
+                    continue
 
-            if batch_metadata_callback is not None:
-                batch_metadata_callback(result.custom_metadata)
-            yield result.batch
+                if batch_metadata_callback is not None:
+                    batch_metadata_callback(result.custom_metadata)
+                yield result.batch
+            completed = True
+        finally:
+            if not completed:
+                stop.set()
+            self._join_threads(threads)
+            _logger.debug("all_table_function_workers_complete completed=%s", completed)
 
-        self._join_threads(threads)
-        _logger.debug("all_table_function_workers_complete")
-
-        # Close streams and secondary workers
-        for worker in all_workers:
-            if worker.stream is not None:
-                worker.stream.close()
-                worker.stream = None
-        self._close_secondary_workers()
-        _logger.debug("parallel_table_function_complete")
+            # Close streams and secondary workers. A stream a reader cancelled is
+            # already closed, so close() is a no-op for it.
+            for worker, thread in zip(all_workers, threads, strict=True):
+                if thread.is_alive():
+                    # Still reading after the join timeout: the stream's state is
+                    # unknown and its reader still owns it. Kill the worker so
+                    # neither that reader nor a later stop() blocks on the pipe.
+                    _logger.warning("table_function_worker_killed worker_index=%s", worker.worker_index)
+                    if worker.proc is not None:
+                        worker.proc.kill()
+                    worker.stream = None
+                    continue
+                if worker.stream is not None:
+                    worker.stream.close()
+                    worker.stream = None
+            self._close_secondary_workers()
+            _logger.debug("parallel_table_function_complete")
 
     # ==================================================================
     # Custom COPY formats
