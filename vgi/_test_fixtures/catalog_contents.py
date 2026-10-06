@@ -42,7 +42,9 @@ at least once (tables, a view, scalar / aggregate / table functions, scalar and
 table macros), split over two schemas (``main`` and ``extra``), so RPC
 accounting in ``vgi/test/sql/integration/catalog/catalog_contents*.test`` is
 deterministic. Served by ``vgi-fixture-worker`` and ``vgi-fixture-http``
-(MetaWorker), so the same tests run over every transport. Their functions
+(MetaWorker), so the same tests run over every transport. Every other SDK's
+fixture worker serves these six catalogs too, and the same ``.test`` files run
+against each of them, so the semantics here are the cross-SDK contract. Their functions
 re-use the example catalog's classes (``main.double`` ...), so every worker
 here sets ``route_unattached_calls = False``: they are reachable only through
 their own attach, and an unattached ``main.double`` still routes to the

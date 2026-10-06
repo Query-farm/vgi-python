@@ -389,6 +389,7 @@ def catalog_attach_result_to_dict(result: CatalogAttachResult) -> dict[str, Any]
         "catalog_version": result.catalog_version,
         "attach_opaque_data_required": result.attach_opaque_data_required,
         "default_schema": result.default_schema,
+        "supports_catalog_contents": result.supports_catalog_contents,
         "settings": [bytes_to_hex(s) for s in result.settings],
         "resolved_data_version": result.resolved_data_version,
         "resolved_implementation_version": result.resolved_implementation_version,

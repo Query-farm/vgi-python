@@ -11,6 +11,7 @@ catalog
 ├── create <name>           # Create a new catalog
 ├── drop <name>             # Drop a catalog
 ├── version                 # Get catalog version (--attach-opaque-data or --catalog)
+├── contents                # Every schema and its contents (catalog_contents when advertised)
 ├── schema                  # Schema operations
 │   ├── list/get/create/drop/contents
 ├── table                   # Table operations
@@ -161,6 +162,52 @@ def catalog_version(
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
     )
     output_json({"version": version, "attach_opaque_data": bytes_to_hex(resolved_attach_opaque_data)})
+
+
+@catalog.command("contents")
+@click.option("--catalog", "catalog_name", required=True, help="Catalog name to attach")
+@click.option("--attach-options", default="{}", help="Attach options as JSON")
+@click.option("--worker", "-w", required=True, help="VGI worker command")
+def catalog_contents(catalog_name: str, attach_options: str, worker: str) -> None:
+    """List every schema and the names of everything in it.
+
+    Uses one ``catalog_contents`` call when the catalog advertises it, else
+    ``catalog_schemas`` plus the per-schema RPCs (see ``Client.load_catalog``).
+    """
+    client = Client(worker)
+    attach = client.catalog_attach(
+        name=catalog_name,
+        options=parse_json_option(attach_options, "--attach-options"),
+        data_version_spec=None,
+        implementation_version=None,
+    )
+    snapshot = client.load_catalog(attach=attach)
+    kinds = (
+        "tables",
+        "views",
+        "scalar_functions",
+        "aggregate_functions",
+        "table_functions",
+        "scalar_macros",
+        "table_macros",
+        "indexes",
+    )
+    output_json(
+        {
+            "source": snapshot.source,
+            "catalog_version": snapshot.catalog_version,
+            "etag": snapshot.etag,
+            "fallback_reason": snapshot.fallback_reason,
+            "schemas": [
+                {
+                    "path": list(entry.schema.path),
+                    "comment": entry.schema.comment,
+                    **{kind: [item.name for item in getattr(entry, kind)] for kind in kinds},
+                }
+                for entry in snapshot.schemas
+            ],
+        }
+    )
 
 
 # Add nested subcommand groups

@@ -42,7 +42,7 @@ import shlex
 import sys
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal, overload
 
 import pyarrow as pa
@@ -127,6 +127,55 @@ class CatalogContents:
     etag: str | None
     not_modified: bool
     schemas: list[SchemaContentsInfo]
+
+
+@dataclass(frozen=True)
+class CatalogSnapshot:
+    """A whole catalog — every schema and everything in it — from [`CatalogClientMixin.load_catalog`][].
+
+    Hold on to it and pass it back as ``previous`` to revalidate: when it came
+    from ``catalog_contents`` with an etag, the next load sends
+    ``if_none_match`` and a ``not_modified`` answer returns this same content
+    without re-downloading it.
+
+    Attributes:
+        schemas: One [`SchemaContentsInfo`][] per schema, parents first.
+        catalog_version: The version the snapshot was taken at, or ``None``
+            when it was assembled from the per-schema RPCs (which carry none).
+        etag: The ``catalog_contents`` validator, or ``None`` when the worker
+            does not revalidate or the snapshot did not come from
+            ``catalog_contents``.
+        source: ``"catalog_contents"`` (one RPC) or ``"per_schema"``
+            (``catalog_schemas`` plus the per-schema ``catalog_schema_contents_*``
+            RPCs — the worker did not advertise ``catalog_contents``, the load
+            ran inside a transaction, or ``catalog_contents`` failed).
+        not_modified: ``True`` when this is ``previous`` confirmed current by a
+            ``not_modified`` answer.
+        fallback_reason: Why ``catalog_contents`` was advertised but not used
+            (its error message, or a protocol violation), else ``None``.
+    """
+
+    schemas: list[SchemaContentsInfo]
+    catalog_version: int | None
+    etag: str | None
+    source: Literal["catalog_contents", "per_schema"]
+    not_modified: bool = False
+    fallback_reason: str | None = None
+
+
+# ``SchemaInfo.estimated_object_count`` key for each per-schema kind; a count of
+# exactly 0 is a hard "none of this kind" guarantee, so the RPC is skipped (the
+# same rule the DuckDB extension and ``CatalogInterface.catalog_contents`` apply).
+_PER_SCHEMA_KINDS: tuple[tuple[str, SchemaObjectType, str], ...] = (
+    ("tables", SchemaObjectType.TABLE, "table"),
+    ("views", SchemaObjectType.VIEW, "view"),
+    ("scalar_functions", SchemaObjectType.SCALAR_FUNCTION, "scalar_function"),
+    ("aggregate_functions", SchemaObjectType.AGGREGATE_FUNCTION, "aggregate_function"),
+    ("table_functions", SchemaObjectType.TABLE_FUNCTION, "table_function"),
+    ("scalar_macros", SchemaObjectType.SCALAR_MACRO, "macro"),
+    ("table_macros", SchemaObjectType.TABLE_MACRO, "macro"),
+    ("indexes", SchemaObjectType.INDEX, "index"),
+)
 
 
 class CatalogClientError(Exception):
@@ -499,6 +548,113 @@ class CatalogClientMixin:
             etag=response.etag,
             not_modified=response.not_modified,
             schemas=[_decode_schema_contents(entry) for entry in response.schemas],
+        )
+
+    def load_catalog(
+        self,
+        *,
+        attach: CatalogAttachResult,
+        previous: CatalogSnapshot | None = None,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+    ) -> CatalogSnapshot:
+        """Load every schema and all of its contents, in as few RPCs as the worker allows.
+
+        This is the client's whole-catalog enumeration. When the attach result
+        advertises ``supports_catalog_contents`` it is one ``catalog_contents``
+        call; otherwise — or inside a transaction, or when that call fails — it
+        is ``catalog_schemas`` plus the per-schema ``catalog_schema_contents_*``
+        RPCs (skipping a kind whose ``estimated_object_count`` is exactly 0).
+        ``catalog_contents`` is never sent to a worker that did not advertise it.
+
+        Revalidation: pass the snapshot from a previous load as ``previous``.
+        If it came from ``catalog_contents`` with an etag, the call sends
+        ``if_none_match``; a ``not_modified`` answer returns ``previous``'s
+        content (with ``not_modified=True`` and the current version), and a full
+        answer replaces it. A snapshot older than ``previous`` (a lagging
+        replica) is retried once, then the per-schema RPCs are used.
+
+        Args:
+            attach: The result of [`catalog_attach`][vgi.client.CatalogClientMixin.catalog_attach]
+                for this catalog.
+            previous: A snapshot already held, to revalidate instead of reload.
+            transaction_opaque_data: Load inside this transaction. ``catalog_contents``
+                returns only the committed catalog, so a transactional load always
+                uses the (transaction-aware) per-schema RPCs.
+
+        Returns:
+            A [`CatalogSnapshot`][]. ``source`` says which path served it and
+            ``fallback_reason`` why an advertised ``catalog_contents`` was not used.
+        """
+        attach_opaque_data = attach.attach_opaque_data
+        if not attach.supports_catalog_contents or transaction_opaque_data is not None:
+            return self._load_catalog_per_schema(attach_opaque_data, transaction_opaque_data, None)
+
+        if_none_match = previous.etag if previous is not None and previous.source == "catalog_contents" else None
+        known_version = previous.catalog_version if previous is not None else None
+        reason: str
+        for _attempt in range(2):
+            try:
+                contents = self.contents(attach_opaque_data=attach_opaque_data, if_none_match=if_none_match)
+            except CatalogClientError as e:
+                reason = str(e)
+                break
+            if contents.not_modified:
+                if previous is None or if_none_match is None or contents.schemas:
+                    reason = "catalog_contents answered not_modified to a request it could not match"
+                    break
+                return replace(
+                    previous,
+                    catalog_version=contents.catalog_version,
+                    etag=contents.etag if contents.etag is not None else previous.etag,
+                    not_modified=True,
+                )
+            # Versions are monotonic within a session; 0 means "unknown".
+            if known_version and contents.catalog_version and contents.catalog_version < known_version:
+                reason = (
+                    f"catalog_contents returned version {contents.catalog_version}, "
+                    f"older than the known version {known_version}"
+                )
+                continue
+            return CatalogSnapshot(
+                schemas=contents.schemas,
+                catalog_version=contents.catalog_version,
+                etag=contents.etag,
+                source="catalog_contents",
+            )
+        return self._load_catalog_per_schema(attach_opaque_data, None, reason)
+
+    def _load_catalog_per_schema(
+        self,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        fallback_reason: str | None,
+    ) -> CatalogSnapshot:
+        """Assemble a snapshot from ``catalog_schemas`` and the per-schema RPCs."""
+        result: list[SchemaContentsInfo] = []
+        for schema in self.schemas(
+            attach_opaque_data=attach_opaque_data, transaction_opaque_data=transaction_opaque_data
+        ):
+            counts = schema.estimated_object_count or {}
+            kinds: dict[str, list[Any]] = {}
+            for attr, object_type, count_key in _PER_SCHEMA_KINDS:
+                if counts.get(count_key, 1) == 0:
+                    kinds[attr] = []
+                    continue
+                kinds[attr] = list(
+                    self.schema_contents(
+                        attach_opaque_data=attach_opaque_data,
+                        transaction_opaque_data=transaction_opaque_data,
+                        path=list(schema.path),
+                        type=object_type,
+                    )
+                )
+            result.append(SchemaContentsInfo(schema=schema, **kinds))
+        return CatalogSnapshot(
+            schemas=result,
+            catalog_version=None,
+            etag=None,
+            source="per_schema",
+            fallback_reason=fallback_reason,
         )
 
     def schema_get(

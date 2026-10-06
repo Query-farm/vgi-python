@@ -54,6 +54,7 @@ Key methods
     client.catalog_attach(...)    — open a catalog
     client.schemas(...)           — list schemas
     client.schema_contents(...)   — list tables/views/functions/macros
+    client.load_catalog(...)      — whole catalog (catalog_contents when advertised)
     client.scalar_function(...)   — invoke a scalar
     client.table_function(...)    — invoke a table function
     client.table_function_plan(...) — plan a table function into named, redeemable splits

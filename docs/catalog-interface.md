@@ -697,6 +697,14 @@ for obj in client.schema_contents(attach_opaque_data=attach_opaque_data, path=["
     elif isinstance(obj, FunctionInfo):
         print(f"Function: {obj.name}")
 
+# Or load the whole catalog at once. Uses one catalog_contents RPC when the
+# attach result advertises supports_catalog_contents, else the per-schema RPCs.
+snapshot = client.load_catalog(attach=result)
+for entry in snapshot.schemas:
+    print(entry.schema.path, [t.name for t in entry.tables])
+# Later: revalidate. A not_modified answer returns the same content cheaply.
+snapshot = client.load_catalog(attach=result, previous=snapshot)
+
 # Get only scalar functions using type filter
 from vgi.catalog import SchemaObjectType
 for obj in client.schema_contents(
@@ -723,7 +731,8 @@ client.catalog_detach(attach_opaque_data=attach_opaque_data)
 | `schema_create()` | Create a schema |
 | `schema_drop()` | Drop a schema |
 | `schema_contents()` | List schema contents (optional `type` filter) |
-| `contents()` | Load every schema and its contents in one call (`if_none_match` revalidates) |
+| `load_catalog()` | Load the whole catalog: one `catalog_contents` call when the attach advertises it, else (or on failure, or inside a transaction) `catalog_schemas` + the per-schema RPCs; pass `previous=` to revalidate with `if_none_match` |
+| `contents()` | The raw `catalog_contents` RPC (only valid when advertised; `if_none_match` revalidates) |
 | `table_get()` | Get table info |
 | `table_create()` | Create a table |
 | `table_drop()` | Drop a table |

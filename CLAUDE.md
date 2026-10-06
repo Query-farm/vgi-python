@@ -643,7 +643,14 @@ The worker validates paths, orders parents first and enforces the etag rules
 `catalog_contents_attach_independent` (with `catalog_version_frozen`, the worker
 caches the serialized response per catalog version; `ReadOnlyCatalogInterface`
 sets it). Fixture catalogs: `vgi/_test_fixtures/catalog_contents.py`
-(`contents_probe/broken/legacy/memory/reval/hash`). See `docs/catalog-interface.md`.
+(`contents_probe/broken/legacy/memory/reval/hash`). Every SDK's fixture worker
+serves the same six catalogs: the extension's five `catalog_contents*.test` files
+run against all of them (no `VGI_CATALOG_CONTENTS_WORKER` gate any more), so these
+semantics are the cross-SDK contract. Client side, `Client.load_catalog(attach=,
+previous=)` is the whole-catalog enumeration: `catalog_contents` only when
+advertised, per-schema fallback on failure / in a transaction, `if_none_match`
+revalidation via `previous` (`tests/catalog/test_client_load_catalog.py`). See
+`docs/catalog-interface.md`.
 
 ## Additional Documentation
 
