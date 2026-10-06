@@ -630,6 +630,21 @@ This allows workers to expose structured metadata (tables, views, functions) to 
 The recommended pattern is to back tables with `TableFunctionGenerator` functions.
 The table schema is automatically derived from the function's `output_schema`:
 
+### catalog_contents (whole-catalog load, protocol 2.1.0)
+
+`Worker.catalog_contents(attach_opaque_data, if_none_match=None)` returns
+`CatalogContentsResponse{catalog_version, etag, not_modified, schemas: list<struct SchemaContents>}`
+(`path` first, then the `SchemaInfo` item and eight `list<binary>` kinds, items
+byte-identical to the per-schema RPCs). The catalog side is
+`CatalogInterface.catalog_contents(*, attach_opaque_data, if_none_match) -> CatalogContentsResult`.
+The worker validates paths, orders parents first and enforces the etag rules
+(`not_modified` only with an etag equal to `if_none_match`). Opt-ins:
+`catalog_contents_etag = "content-hash"` (framework SHA-256 etag) and
+`catalog_contents_attach_independent` (with `catalog_version_frozen`, the worker
+caches the serialized response per catalog version; `ReadOnlyCatalogInterface`
+sets it). Fixture catalogs: `vgi/_test_fixtures/catalog_contents.py`
+(`contents_probe/broken/legacy/memory/reval/hash`). See `docs/catalog-interface.md`.
+
 ## Additional Documentation
 
 - **Access log**: See `vgi-rpc` docs site

@@ -97,7 +97,11 @@ EXTRA_RESPONSE_TYPES: tuple[type, ...] = (
     ScanSplit,  # one entry inside PlanResponse.splits (binary blob)
     AttachCatalogInfo,  # one entry inside CatalogAttachResult.attach_catalogs (binary blob)
     ForeignKeyInfo,  # one entry inside TableInfo.foreign_key_constraints (binary blob)
-    SchemaContents,  # one entry inside CatalogContentsResponse.schemas (binary blob)
+    # The struct row type of CatalogContentsResponse.schemas. It is inline (a
+    # struct column, not a blob), so the catalog_contents result schema already
+    # spells it out; it is also emitted standalone so each language's generated
+    # SchemaContents record type can be checked against a schema of its own.
+    SchemaContents,
 )
 
 

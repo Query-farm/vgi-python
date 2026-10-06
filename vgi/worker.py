@@ -1112,6 +1112,100 @@ def _transaction_aad(auth: AuthContext | None, attach_envelope: bytes) -> bytes:
     return _TRANSACTION_AAD_PREFIX + _identity_tail(auth) + b"\x00" + attach_envelope
 
 
+def catalog_contents_digest(schemas: Sequence[SchemaContents]) -> str:
+    """Hex SHA-256 over a ``catalog_contents`` snapshot: the ``content-hash`` etag.
+
+    Covers every schema's path and the exact item bytes of every kind, in
+    order, each length-prefixed so no two different snapshots share an input.
+    Deterministic because the items' encoding is (map columns are written in
+    sorted key order), so two builds of the same catalog hash alike.
+
+    Args:
+        schemas: The snapshot, in wire order.
+
+    Returns:
+        The lowercase hex digest.
+    """
+    digest = hashlib.sha256()
+
+    def chunk(data: bytes) -> None:
+        digest.update(len(data).to_bytes(8, "little"))
+        digest.update(data)
+
+    def chunks(values: Sequence[bytes]) -> None:
+        digest.update(len(values).to_bytes(8, "little"))
+        for value in values:
+            chunk(value)
+
+    digest.update(len(schemas).to_bytes(8, "little"))
+    for entry in schemas:
+        chunks([part.encode() for part in entry.path])
+        chunk(entry.schema)
+        for kind in (
+            entry.tables,
+            entry.views,
+            entry.scalar_functions,
+            entry.aggregate_functions,
+            entry.table_functions,
+            entry.scalar_macros,
+            entry.table_macros,
+            entry.indexes,
+        ):
+            chunks(kind)
+    return digest.hexdigest()
+
+
+class _PreserializedContentsResponse(CatalogContentsResponse):
+    """A cached ``catalog_contents`` response that carries its own wire bytes.
+
+    The RPC layer encodes a unary result with ``serialize_to_bytes()`` (the
+    response rides IPC-serialized in the result column), so returning this
+    instead of a plain response makes a cache hit skip the Arrow encode: each
+    call only copies the bytes into the one-row result batch.
+    """
+
+    __slots__ = ("_wire",)
+    _wire: bytes
+
+    @classmethod
+    def of(cls, response: CatalogContentsResponse) -> _PreserializedContentsResponse:
+        """Copy ``response`` and encode it once.
+
+        Args:
+            response: The response to cache.
+
+        Returns:
+            An equal response whose ``serialize_to_bytes`` is precomputed.
+        """
+        out = cls(
+            catalog_version=response.catalog_version,
+            etag=response.etag,
+            not_modified=response.not_modified,
+            schemas=response.schemas,
+        )
+        object.__setattr__(out, "_wire", response.serialize_to_bytes())
+        return out
+
+    def serialize_to_bytes(self) -> bytes:
+        """Return the encoding computed once in `of`."""
+        return self._wire
+
+
+@dataclass(frozen=True)
+class _ContentsSnapshot:
+    """One cached ``catalog_contents`` answer: per catalog instance and version."""
+
+    catalog: CatalogInterface
+    catalog_version: int
+    etag: str | None
+    response: _PreserializedContentsResponse
+
+
+# Serializes building the cached catalog_contents response, so concurrent first
+# calls on a threaded (HTTP) server build it once.
+_CONTENTS_CACHE_LOCK = Lock()
+
+
 class Worker:
     """Base class for VGI workers that host user-defined functions.
 
@@ -4840,35 +4934,104 @@ class Worker:
         )
         return FunctionsResponse.from_infos(list(infos))
 
-    def catalog_contents(self, attach_opaque_data: bytes) -> CatalogContentsResponse:
-        """Return every schema and all of its contents in one result."""
+    def catalog_contents(self, attach_opaque_data: bytes, if_none_match: str | None = None) -> CatalogContentsResponse:
+        """Return every schema and all of its contents in one result.
+
+        Revalidation: ``if_none_match`` is passed to the catalog, which may
+        answer ``not_modified`` without building. A full answer carries the
+        catalog's etag, or with ``catalog_contents_etag = "content-hash"`` the
+        SHA-256 of the snapshot; an etag equal to ``if_none_match`` turns it
+        into ``not_modified``. With no etag, ``if_none_match`` is ignored.
+
+        Caching: a catalog whose version is frozen and whose contents are
+        attach-independent (``catalog_contents_attach_independent``) is built
+        once per catalog version, and every later call reuses the same
+        serialized response.
+        """
         cat = self._get_catalog()
+        # Open the envelope first even on a cache hit: it is the auth check.
         attach = self._unwrap_attach(attach_opaque_data)
         version = cat.catalog_version(attach_opaque_data=attach, transaction_opaque_data=None)
-        contents = cat.catalog_contents(attach_opaque_data=attach)
+        if type(cat).catalog_contents_attach_independent and getattr(type(cat), "catalog_version_frozen", False):
+            snapshot = self._contents_cache
+            if snapshot is None or snapshot.catalog is not cat or snapshot.catalog_version != version:
+                with _CONTENTS_CACHE_LOCK:
+                    snapshot = self._contents_cache
+                    if snapshot is None or snapshot.catalog is not cat or snapshot.catalog_version != version:
+                        built = self._catalog_contents_response(cat, attach, version, None)
+                        snapshot = _ContentsSnapshot(
+                            catalog=cat,
+                            catalog_version=version,
+                            etag=built.etag,
+                            response=_PreserializedContentsResponse.of(built),
+                        )
+                        self._contents_cache = snapshot
+            if if_none_match is not None and snapshot.etag is not None and if_none_match == snapshot.etag:
+                return CatalogContentsResponse(catalog_version=version, etag=snapshot.etag, not_modified=True)
+            return snapshot.response
+        return self._catalog_contents_response(cat, attach, version, if_none_match)
+
+    _contents_cache: _ContentsSnapshot | None = None
+
+    @staticmethod
+    def _catalog_contents_response(
+        cat: CatalogInterface,
+        attach: AttachOpaqueData,
+        version: int,
+        if_none_match: str | None,
+    ) -> CatalogContentsResponse:
+        """Ask the catalog for its contents and shape the typed wire response.
+
+        Enforces the revalidation rules: ``not_modified`` needs an etag equal to
+        ``if_none_match`` and no schemas; a catalog with no etag never yields
+        ``not_modified``. Validates the schema paths (unique, parents present)
+        and orders them parent-first.
+        """
+        result = cat.catalog_contents(attach_opaque_data=attach, if_none_match=if_none_match)
+        if result.not_modified:
+            if result.etag is None or if_none_match is None or result.etag != if_none_match:
+                raise ValueError(
+                    "catalog_contents returned not_modified, but only a catalog whose etag equals "
+                    "if_none_match may (and it must return that etag)"
+                )
+            if result.schemas:
+                raise ValueError("catalog_contents returned not_modified with schemas; it must return none")
+            return CatalogContentsResponse(catalog_version=version, etag=result.etag, not_modified=True)
+
+        infos = list(result.schemas)
+        path_keys = [schema_path_key(c.schema.path) for c in infos]
+        path_key_set = set(path_keys)
+        if len(path_keys) != len(path_key_set):
+            raise ValueError("catalog_contents returned duplicate schema paths")
+        for path_key in path_keys:
+            if len(path_key) > 1 and path_key[:-1] not in path_key_set:
+                raise ValueError(f"catalog_contents returned schema path {list(path_key)!r} without its parent")
+
+        def items(objs: Sequence[object]) -> list[bytes]:
+            return [_item_ipc_bytes(obj) for obj in objs]
+
         # Same parent-before-child order catalog_schemas guarantees.
-        ordered = sorted(contents, key=lambda c: len(c.schema.path))
-
-        def items(infos: Sequence[object]) -> list[bytes]:
-            return [_item_ipc_bytes(info) for info in infos]
-
-        return CatalogContentsResponse(
-            catalog_version=version,
-            schemas=[
-                SchemaContents(
-                    schema=_item_ipc_bytes(c.schema),
-                    tables=items(c.tables),
-                    views=items(c.views),
-                    scalar_functions=items(c.scalar_functions),
-                    aggregate_functions=items(c.aggregate_functions),
-                    table_functions=items(c.table_functions),
-                    scalar_macros=items(c.scalar_macros),
-                    table_macros=items(c.table_macros),
-                    indexes=items(c.indexes),
-                ).serialize_to_bytes()
-                for c in ordered
-            ],
-        )
+        schemas = [
+            SchemaContents(
+                path=list(c.schema.path),
+                schema=_item_ipc_bytes(c.schema),
+                tables=items(c.tables),
+                views=items(c.views),
+                scalar_functions=items(c.scalar_functions),
+                aggregate_functions=items(c.aggregate_functions),
+                table_functions=items(c.table_functions),
+                scalar_macros=items(c.scalar_macros),
+                table_macros=items(c.table_macros),
+                indexes=items(c.indexes),
+            )
+            for c in sorted(infos, key=lambda c: len(c.schema.path))
+        ]
+        etag = result.etag
+        if etag is None and type(cat).catalog_contents_etag == "content-hash":
+            etag = catalog_contents_digest(schemas)
+        if etag is not None and if_none_match is not None and etag == if_none_match:
+            return CatalogContentsResponse(catalog_version=version, etag=etag, not_modified=True)
+        return CatalogContentsResponse(catalog_version=version, etag=etag, schemas=schemas)
 
     def catalog_copy_from_formats(
         self,

@@ -77,7 +77,13 @@ def test_known_shapes() -> None:
     assert attach["tags"] == "StrMap"
     assert attach["settings"] == "Vec<Bytes>"
     assert attach["supports_catalog_contents"] == "bool"
-    assert by_name["CatalogContentsResponse"] == {"catalog_version": "i64", "schemas": "Vec<Bytes>"}
+    assert by_name["CatalogContentsResponse"] == {
+        "catalog_version": "i64",
+        "etag": "Option<String>",
+        "not_modified": "bool",
+        "schemas": "Vec<SchemaContents>",
+    }
+    assert by_name["SchemaContents"]["path"] == "Vec<String>"
     assert by_name["SchemaContents"]["schema"] == "Bytes"
 
 

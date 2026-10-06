@@ -24,9 +24,9 @@ dataclass defaults:
 - ``encode<Name>`` / ``decode<Name>``: single-row Arrow IPC via the SDK's
   ``encodeASD`` / ``decodeASD``, against the record's generated schema const.
 
-Records that ride as opaque ``binary`` blobs (``SchemaContents`` inside
-``CatalogContentsResponse.schemas``) are reached by no method signature, so
-`ts_client` has no interface for them; they are emitted here in full.
+A record nested as a struct column (``SchemaContents``, the row type of
+``CatalogContentsResponse.schemas``) is typed by its own record's interface.
+Records that ``ts_client`` does not reach are emitted here in full.
 
 Add a record by appending its class to `TS_RECORD_TYPES`. Anything the mapping
 cannot express raises `GeneratorError` rather than emitting a type that silently
@@ -128,6 +128,12 @@ def _ts_type(dtype: pa.DataType, origin: str) -> str:
         if not (pa.types.is_string(dtype.key_type) and pa.types.is_string(dtype.item_type)):
             raise GeneratorError(f"{origin}: only map<utf8, utf8> is supported, got {dtype}.")
         return "Record<string, string>"
+    if pa.types.is_struct(dtype):
+        # A struct column is the record whose own schema is this struct.
+        for record in TS_RECORD_TYPES:
+            if pa.struct(list(record.ARROW_SCHEMA)).equals(dtype):  # type: ignore[attr-defined]
+                return record.__name__
+        raise GeneratorError(f"{origin}: no record in TS_RECORD_TYPES has the struct schema {dtype}.")
     raise GeneratorError(
         f"vgi.codegen.ts_types: unsupported Arrow type {dtype} at {origin}.\n"
         "Add a case to _ts_type() in vgi/codegen/ts_types.py.",

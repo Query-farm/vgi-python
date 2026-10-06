@@ -129,6 +129,13 @@ def _rust_type(dtype: pa.DataType, *, origin: str) -> str:
         if item.name != "item" or not item.nullable:
             raise GeneratorError(f"{origin}: VgiArrow derives list items as nullable 'item'; got {item}.")
         return f"Vec<{_rust_type(item.type, origin=f'{origin}[item]')}>"
+    if pa.types.is_struct(dtype):
+        # A `VgiArrow`-derived struct is itself a `Struct<fields>` Arrow type, so
+        # a struct column is the emitted record whose schema is this struct.
+        for record in RUST_TYPES:
+            if pa.struct(list(record.ARROW_SCHEMA)).equals(dtype):  # type: ignore[attr-defined]
+                return record.__name__
+        raise GeneratorError(f"{origin}: no record in RUST_TYPES has the struct schema {dtype}.")
     raise GeneratorError(
         f"vgi.codegen.rust_types: no Rust type for Arrow type {dtype} at {origin}.\n"
         "Add a mapping to _rust_type() in vgi/codegen/rust_types.py, and make sure the "

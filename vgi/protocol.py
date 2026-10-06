@@ -1033,13 +1033,15 @@ _BinaryList = Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))]
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SchemaContents(ArrowSerializableDataclass):
-    """One schema and everything in it, as carried by `catalog_contents()`.
+    """One schema and everything in it: one struct row of ``CatalogContentsResponse.schemas``.
 
     Every item is byte-for-byte what the matching per-schema RPC returns in its
     ``items`` list, so a client decodes them with the decoders it already has.
     Each kind is complete: an empty list means the schema has none of that kind.
 
     Attributes:
+        path: The schema path. Equals ``SchemaInfo.path`` inside ``schema``, so a
+            client can name the schema without decoding it.
         schema: The schema's [`SchemaInfo`][] item (a ``catalog_schemas`` entry).
         tables: [`TableInfo`][] items (``catalog_schema_contents_tables``).
         views: [`ViewInfo`][] items (``catalog_schema_contents_views``).
@@ -1051,6 +1053,7 @@ class SchemaContents(ArrowSerializableDataclass):
         indexes: [`IndexInfo`][] items (``catalog_schema_contents_indexes``).
     """
 
+    path: list[str]
     schema: bytes
     tables: _BinaryList = field(default_factory=list)
     views: _BinaryList = field(default_factory=list)
@@ -1069,12 +1072,20 @@ class CatalogContentsResponse(ArrowSerializableDataclass):
     Attributes:
         catalog_version: The catalog version the snapshot was taken at. Worker-defined
             and only meaningful within the session that requested it.
-        schemas: One IPC-serialized [`SchemaContents`][] per schema, parents before
-            children.
+        etag: Opaque validator for this snapshot, to send back as
+            ``if_none_match``. Null means the worker does not revalidate (and
+            ignores ``if_none_match``).
+        not_modified: ``True`` when the request's ``if_none_match`` equals the
+            current ``etag``: ``schemas`` is then empty and the client keeps the
+            contents it has.
+        schemas: One [`SchemaContents`][] struct per schema, parents before
+            children. Empty when ``not_modified``.
     """
 
     catalog_version: int
-    schemas: _BinaryList
+    etag: str | None = None
+    not_modified: bool = False
+    schemas: list[SchemaContents] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -3498,7 +3509,7 @@ class VgiProtocol(Protocol):
         """List functions in a schema (scalar or table)."""
         ...
 
-    def catalog_contents(self, attach_opaque_data: bytes) -> CatalogContentsResponse:
+    def catalog_contents(self, attach_opaque_data: bytes, if_none_match: str | None = None) -> CatalogContentsResponse:
         """Return every schema and all of its contents in one result.
 
         Only called when the attach result sets ``supports_catalog_contents``.
@@ -3506,6 +3517,10 @@ class VgiProtocol(Protocol):
         for a client that wants the whole catalog. Takes no transaction: the
         client caches the answer catalog-wide, so it is the committed catalog
         at ``catalog_version``.
+
+        ``if_none_match`` is the ``etag`` of a snapshot the client holds. When it
+        equals the current etag the response is ``not_modified`` with no
+        schemas. A worker that returns ``etag = None`` ignores it.
         """
         ...
 

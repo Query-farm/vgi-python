@@ -2215,8 +2215,8 @@ def main() -> None:
         # `test_same_name_catalog` — only the attached catalog tells them apart.
         TwinAWorker,
         TwinBWorker,
-        # contents_probe / contents_broken / contents_legacy: catalog_contents
-        # served, failing, and not advertised.
+        # contents_*: catalog_contents served / failing / not advertised, and
+        # the version-0, revalidating and content-hash DDL catalogs.
         *CONTENTS_WORKERS,
     ]
     try:

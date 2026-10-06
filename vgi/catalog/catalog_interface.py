@@ -910,6 +910,28 @@ class SchemaContentsInfo:
 
 
 @dataclass(frozen=True)
+class CatalogContentsResult:
+    """What `CatalogInterface.catalog_contents` returns: a snapshot, or "not modified".
+
+    Attributes:
+        schemas: One [`SchemaContentsInfo`][] per schema. Must be empty when
+            ``not_modified`` is set.
+        etag: Opaque validator for this snapshot (a generation counter, schema
+            version, git sha, ...). The client sends it back as
+            ``if_none_match``. ``None`` means the catalog does not revalidate
+            (unless the catalog opts in to the framework's content hash with
+            ``catalog_contents_etag = "content-hash"``).
+        not_modified: ``True`` when the request's ``if_none_match`` equals the
+            current etag, so the catalog skipped building the snapshot. Requires
+            ``etag`` (the matching validator).
+    """
+
+    schemas: Sequence[SchemaContentsInfo] = ()
+    etag: str | None = None
+    not_modified: bool = False
+
+
+@dataclass(frozen=True)
 class CopyFromFormatInfo(CatalogObject, ArrowSerializableDataclass):
     """A custom ``COPY ... FROM`` format advertised by a VGI catalog.
 
@@ -1713,6 +1735,25 @@ class CatalogInterface(ABC):
     to manage their catalogs.
     """
 
+    #: Opt-in framework etag for ``catalog_contents``. ``"content-hash"``: when
+    #: `catalog_contents` returns no etag of its own, the worker uses the hex
+    #: SHA-256 of the serialized snapshot as the etag and turns a matching
+    #: ``if_none_match`` into ``not_modified`` (it still builds the snapshot, but
+    #: saves the transfer and the client's decode). ``None`` (default): no etag
+    #: unless the catalog returns one. Off by default because for a catalog
+    #: whose version is not frozen the client would revalidate with a full build
+    #: on every transaction instead of a cheap ``catalog_version`` poll.
+    catalog_contents_etag: ClassVar[Literal["content-hash"] | None] = None
+
+    #: Whether ``catalog_contents`` depends only on ``catalog_version``: not on
+    #: the attach (``attach_opaque_data``, attach options), the caller's
+    #: identity, or anything else. Together with ``catalog_version_frozen``,
+    #: lets the worker build the response once per catalog version and serve
+    #: the same serialized bytes to every caller. ``ReadOnlyCatalogInterface``
+    #: sets it; a subclass whose contents vary per caller must set it back to
+    #: ``False``.
+    catalog_contents_attach_independent: ClassVar[bool] = False
+
     @property
     def interface_feature_flags(self) -> set[str]:
         """Get the feature flags supported by this [`CatalogInterface`][].
@@ -1999,22 +2040,31 @@ class CatalogInterface(ABC):
         self,
         *,
         attach_opaque_data: AttachOpaqueData,
-    ) -> list[SchemaContentsInfo]:
+        if_none_match: str | None = None,
+    ) -> CatalogContentsResult:
         """Return every schema and all of its contents, for ``catalog_contents``.
 
         Served only when the attach result sets ``supports_catalog_contents``.
         The default composes `schemas` and `schema_contents` for every
         kind, skipping kinds a schema's ``estimated_object_count`` reports as
-        exactly 0 (a hard guarantee). It runs with no transaction: the client
-        caches the answer for the whole attach. Override it to build the
-        snapshot more cheaply.
+        exactly 0 (a hard guarantee), and returns no etag. It runs with no
+        transaction: the client caches the answer for the whole attach.
+
+        Override it to build the snapshot more cheaply, or to revalidate: return
+        an ``etag`` with the contents, and when ``if_none_match`` equals the
+        current etag return ``CatalogContentsResult(etag=..., not_modified=True)``
+        *before* building anything.
 
         Args:
             attach_opaque_data: The attachment identifier.
+            if_none_match: The etag of the snapshot the client already holds,
+                or ``None``.
 
         Returns:
-            One [`SchemaContentsInfo`][] per schema, in `schemas` order.
+            A [`CatalogContentsResult`][]: one [`SchemaContentsInfo`][] per schema
+            (in `schemas` order) plus its etag, or ``not_modified``.
         """
+        del if_none_match  # the default has no etag, so it never revalidates
         result: list[SchemaContentsInfo] = []
         for schema in self.schemas(attach_opaque_data=attach_opaque_data, transaction_opaque_data=None):
             counts = schema.estimated_object_count or {}
@@ -2049,7 +2099,7 @@ class CatalogInterface(ABC):
                     indexes=kind(SchemaObjectType.INDEX, "index"),
                 )
             )
-        return result
+        return CatalogContentsResult(schemas=result)
 
     @abstractmethod
     def schema_get(
@@ -2721,6 +2771,10 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             support transactions.
         catalog_version_frozen: Always ``True`` -- the catalog version never
             changes.
+        catalog_contents_attach_independent: ``True`` -- the contents are the
+            same for every attach and caller, so the worker builds the
+            ``catalog_contents`` response once and reuses it. A subclass whose
+            contents vary per caller (or per attach option) sets it ``False``.
         catalog_name: Name of the catalog exposed when using the functions-list
             mode (default ``"functions"``).
         functions: Function classes to expose in the ``"main"`` schema.
@@ -2763,6 +2817,9 @@ class ReadOnlyCatalogInterface(CatalogInterface):
 
     supports_transactions = False
     catalog_version_frozen = True
+    # Static catalog with a fixed attach id: its catalog_contents is the same for
+    # every attach and caller, so the worker caches the serialized response.
+    catalog_contents_attach_independent = True
 
     # Class attributes for function-based catalogs
     catalog_name: str = "functions"

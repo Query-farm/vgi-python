@@ -73,14 +73,16 @@ def test_builder_fields_follow_arrow_schema_order() -> None:
     assert '    default_schema: init.default_schema ?? "main",' in text
 
 
-def test_blob_records_are_emitted_and_client_records_reexported() -> None:
-    """SchemaContents (a blob no method reaches) is emitted; ts_client's records are re-exported."""
+def test_client_records_are_reexported() -> None:
+    """ts_client's records, the nested SchemaContents struct included, are re-exported, not redeclared."""
     by_name = {r.name: r for r in build_model()}
-    assert not by_name["SchemaContents"].reexported
+    assert by_name["SchemaContents"].reexported
     assert by_name["CatalogAttachResult"].reexported
     assert by_name["CatalogContentsResponse"].schema_const == "CatalogContentsResultSchema"
+    schemas = next(f for f in by_name["CatalogContentsResponse"].fields if f.name == "schemas")
+    assert schemas.ts_type == "SchemaContents[]"
     text = _render()
-    assert "export interface SchemaContents {" in text
+    assert "export interface SchemaContents {" not in text
     assert "export interface CatalogAttachResult {" not in text
 
 

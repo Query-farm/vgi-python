@@ -133,6 +133,13 @@ def _element(dtype: pa.DataType, origin: str) -> str:
     for proto, java in _ELEMENTS:
         if dtype.equals(proto):
             return java
+    if pa.types.is_struct(dtype):
+        # A nested record derives as an inline struct of its components, so a
+        # struct element is the generated record whose own schema is this struct.
+        for cls in JAVA_RECORDS:
+            if pa.struct(list(cls.ARROW_SCHEMA)).equals(dtype):  # type: ignore[attr-defined]
+                return java_name(cls)
+        raise GeneratorError(f"{origin}: no record in JAVA_RECORDS has the struct schema {dtype}.")
     raise GeneratorError(
         f"{origin}: vgi-rpc-java cannot derive a list/map element of type {dtype} without an override; "
         "add a case to vgi/codegen/java_types.py once SchemaDerivation can express it.",

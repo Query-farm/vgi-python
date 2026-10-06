@@ -59,8 +59,9 @@ GENERATOR_VERSION = "1"
 #:
 #: - ``CatalogAttachResult`` is the ``catalog_attach`` result.
 #: - ``CatalogContentsResponse`` is the ``catalog_contents`` result.
-#: - ``SchemaContents`` rides IPC-serialized inside
-#:   ``CatalogContentsResponse.schemas``; vgi-go encodes it against
+#: - ``SchemaContents`` is the inline struct row of
+#:   ``CatalogContentsResponse.schemas`` (``[]SchemaContents``, which vgi-rpc-go
+#:   derives as ``list<struct<...>>``); it is checked on its own against
 #:   ``generated.SchemaContentsSchema``.
 GO_TYPE_RECORDS: tuple[type, ...] = (
     CatalogAttachResult,
@@ -195,6 +196,17 @@ def _map(dtype: pa.DataType, annotation: object, *, origin: str) -> tuple[str, l
         if k_options:
             raise GeneratorError(f"{origin}: a tag option cannot reach a map's key ({k_options}).")
         return f"map[{k}]{v}", _elem_options(v_options, origin=origin)
+
+    if pa.types.is_struct(dtype):
+        # vgi-rpc-go derives a nested (non-ArrowSerializable) Go struct as an
+        # inline struct of its tagged fields, so a struct column is the emitted
+        # record whose own schema is exactly this struct.
+        base, _ = _base(annotation)
+        if not (isinstance(base, type) and base in GO_TYPE_RECORDS):
+            raise GeneratorError(f"{origin}: a struct column must be a record in GO_TYPE_RECORDS, got {annotation!r}.")
+        if not pa.struct(list(base.ARROW_SCHEMA)).equals(dtype):  # type: ignore[attr-defined]
+            raise GeneratorError(f"{origin}: {base.__name__}.ARROW_SCHEMA does not match the struct {dtype}.")
+        return go_name(base.__name__), []
 
     raise GeneratorError(
         f"vgi.codegen.go_types: unsupported Arrow type {dtype} at {origin}.\n"

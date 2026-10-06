@@ -102,7 +102,12 @@ def _derive(java_type: str, annotations: str) -> pa.DataType:
     if override:
         return _OVERRIDES[override.group(1)]
     if java_type.startswith("List<"):
-        return pa.list_(pa.field("item", _INFERRED[java_type[5:-1]], nullable=True))
+        element = java_type[5:-1]
+        if element in _INFERRED:
+            return pa.list_(pa.field("item", _INFERRED[element], nullable=True))
+        # A nested generated record derives as an inline struct of its components.
+        nested = _derived_schema(java_types.render(element))
+        return pa.list_(pa.field("item", pa.struct(list(nested)), nullable=True))
     if java_type.startswith("Map<"):
         key, value = (t.strip() for t in java_type[4:-1].split(","))
         return pa.map_(_INFERRED[key], _INFERRED[value])

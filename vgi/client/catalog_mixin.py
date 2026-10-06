@@ -42,6 +42,7 @@ import shlex
 import sys
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any, Literal, overload
 
 import pyarrow as pa
@@ -88,11 +89,16 @@ from vgi.protocol import (
 _catalog_pool = WorkerPool(max_idle=4, idle_timeout=30.0)
 
 
-def _decode_schema_contents(data: bytes) -> SchemaContentsInfo:
-    """Decode one ``catalog_contents`` schema entry into Python catalog objects."""
-    entry = SchemaContents.deserialize_from_bytes(data)
+def _decode_schema_contents(entry: SchemaContents) -> SchemaContentsInfo:
+    """Decode one ``catalog_contents`` schema struct into Python catalog objects."""
+    schema = SchemaInfo.deserialize_from_bytes(entry.schema)
+    if list(schema.path) != list(entry.path):
+        raise CatalogClientError(
+            f"catalog_contents schema path {list(entry.path)!r} does not match "
+            f"its SchemaInfo path {list(schema.path)!r}"
+        )
     return SchemaContentsInfo(
-        schema=SchemaInfo.deserialize_from_bytes(entry.schema),
+        schema=schema,
         tables=[TableInfo.deserialize_from_bytes(b) for b in entry.tables],
         views=[ViewInfo.deserialize_from_bytes(b) for b in entry.views],
         scalar_functions=[FunctionInfo.deserialize_from_bytes(b) for b in entry.scalar_functions],
@@ -102,6 +108,25 @@ def _decode_schema_contents(data: bytes) -> SchemaContentsInfo:
         table_macros=[MacroInfo.deserialize_from_bytes(b) for b in entry.table_macros],
         indexes=[IndexInfo.deserialize_from_bytes(b) for b in entry.indexes],
     )
+
+
+@dataclass(frozen=True)
+class CatalogContents:
+    """A decoded ``catalog_contents`` answer.
+
+    Attributes:
+        catalog_version: The catalog version the snapshot was taken at.
+        etag: The snapshot's validator, to pass back as ``if_none_match``;
+            ``None`` when the worker does not revalidate.
+        not_modified: ``True`` when ``if_none_match`` matched: ``schemas`` is
+            empty and the caller's copy is current.
+        schemas: One [`SchemaContentsInfo`][] per schema, parents first.
+    """
+
+    catalog_version: int
+    etag: str | None
+    not_modified: bool
+    schemas: list[SchemaContentsInfo]
 
 
 class CatalogClientError(Exception):
@@ -452,22 +477,29 @@ class CatalogClientMixin:
                 transaction_opaque_data=transaction_opaque_data,
             ).to_infos()
 
-    def contents(self, *, attach_opaque_data: AttachOpaqueData) -> tuple[int, list[SchemaContentsInfo]]:
+    def contents(self, *, attach_opaque_data: AttachOpaqueData, if_none_match: str | None = None) -> CatalogContents:
         """Load every schema and all of its contents in one call.
 
         Only valid when the attach result sets ``supports_catalog_contents``.
 
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
+            if_none_match: The ``etag`` of a snapshot already held. When it is
+                still current the answer is ``not_modified`` with no schemas.
 
         Returns:
-            ``(catalog_version, schemas)``: the version the snapshot was taken
-            at, and one [`SchemaContentsInfo`][] per schema, parents first.
+            A [`CatalogContents`][]: the version, etag, ``not_modified`` flag and
+            one [`SchemaContentsInfo`][] per schema, parents first.
 
         """
         with self._catalog_connect() as proxy:
-            response = proxy.catalog_contents(attach_opaque_data=attach_opaque_data)
-        return response.catalog_version, [_decode_schema_contents(b) for b in response.schemas]
+            response = proxy.catalog_contents(attach_opaque_data=attach_opaque_data, if_none_match=if_none_match)
+        return CatalogContents(
+            catalog_version=response.catalog_version,
+            etag=response.etag,
+            not_modified=response.not_modified,
+            schemas=[_decode_schema_contents(entry) for entry in response.schemas],
+        )
 
     def schema_get(
         self,

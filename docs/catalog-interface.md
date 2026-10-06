@@ -243,6 +243,80 @@ class MyCatalog(CatalogInterface):
 | | `view_rename()` | `NotImplementedError` |
 | | `view_comment_set()` | `NotImplementedError` |
 | **Observability** | `loggable_attach_options()` | Returns `{}` (no options logged — see below) |
+| **Bulk load** | `catalog_contents()` | Composes `schemas()` + `schema_contents()` per kind; no etag (see below) |
+
+---
+
+## Loading the Whole Catalog: `catalog_contents`
+
+A client normally learns a catalog lazily: `catalog_schemas`, then one
+`catalog_schema_contents_*` call per schema and object kind. When the attach
+result sets `supports_catalog_contents` (`ReadOnlyCatalogInterface` does), the
+client may instead load everything with one `catalog_contents` RPC (protocol
+2.1.0):
+
+```text
+catalog_contents(attach_opaque_data: binary, if_none_match: utf8 nullable)
+  -> CatalogContentsResponse {
+       catalog_version: int64
+       etag:            utf8 nullable   -- null: the worker does not revalidate
+       not_modified:    bool            -- true: schemas is empty, keep what you have
+       schemas: list<struct<path: list<utf8>, schema: binary,
+                            tables, views, scalar_functions, aggregate_functions,
+                            table_functions, scalar_macros, table_macros,
+                            indexes: list<binary>>>   -- parents before children
+     }
+```
+
+Each struct row is one schema: `path` equals the `SchemaInfo.path` encoded in
+`schema`, and every item is byte-identical to what the matching per-schema RPC
+returns. There is no transaction parameter: it is the committed catalog at
+`catalog_version`.
+
+`CatalogInterface.catalog_contents(*, attach_opaque_data, if_none_match=None)`
+returns a `CatalogContentsResult(schemas, etag=None, not_modified=False)`. The
+default composes `schemas()` and `schema_contents()` for every kind (skipping
+kinds whose `estimated_object_count` is exactly 0) and returns no etag.
+
+**Revalidation.** Return an `etag` to let a client revalidate a non-frozen
+catalog with `if_none_match` instead of re-downloading it. Check it *before*
+building, so an unchanged catalog costs almost nothing:
+
+```python test="lint"
+from vgi.catalog import CatalogContentsResult, CatalogInterface
+
+
+class GenerationCatalog(CatalogInterface):  # other methods omitted
+    generation = 1  # bumped by every DDL
+
+    def catalog_contents(self, *, attach_opaque_data, if_none_match=None):
+        etag = f"gen-{self.generation}"
+        if if_none_match == etag:
+            return CatalogContentsResult(etag=etag, not_modified=True)  # nothing built
+        full = super().catalog_contents(attach_opaque_data=attach_opaque_data)
+        return CatalogContentsResult(schemas=full.schemas, etag=etag)
+```
+
+The worker enforces the rules: `not_modified` requires an etag equal to
+`if_none_match` and no schemas; a full answer whose etag equals
+`if_none_match` is turned into `not_modified`; a catalog with no etag always
+answers in full (it ignores `if_none_match`).
+
+**Content-hash etag.** A catalog without a cheap validator can set
+`catalog_contents_etag = "content-hash"`: when it returns no etag, the worker
+uses the hex SHA-256 of the serialized snapshot. The worker still builds the
+snapshot on every call, but an unchanged catalog skips the transfer and the
+client's decode. It is off by default, because for a non-frozen catalog the
+client would revalidate with a full build on every transaction instead of a
+cheap `catalog_version` poll.
+
+**Worker cache.** When the catalog's version is frozen
+(`catalog_version_frozen`) and its contents do not depend on the attach or the
+caller (`catalog_contents_attach_independent = True`, the
+`ReadOnlyCatalogInterface` default), the worker builds the response once per
+catalog version and serves the same pre-serialized bytes to every call. A
+`ReadOnlyCatalogInterface` subclass whose contents vary per caller must set
+`catalog_contents_attach_independent = False`.
 
 ---
 
@@ -649,6 +723,7 @@ client.catalog_detach(attach_opaque_data=attach_opaque_data)
 | `schema_create()` | Create a schema |
 | `schema_drop()` | Drop a schema |
 | `schema_contents()` | List schema contents (optional `type` filter) |
+| `contents()` | Load every schema and its contents in one call (`if_none_match` revalidates) |
 | `table_get()` | Get table info |
 | `table_create()` | Create a table |
 | `table_drop()` | Drop a table |

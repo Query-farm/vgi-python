@@ -45,7 +45,7 @@ from vgi.client.aggregate import (
     AggregateSession,
     AggregateStreamingSession,
 )
-from vgi.client.catalog_mixin import CatalogClientMixin
+from vgi.client.catalog_mixin import CatalogClientMixin, CatalogContents
 from vgi.client.client import Client, ClientError, ResumableTableScan, ResumeUnsupported
 
 if TYPE_CHECKING:
@@ -56,6 +56,7 @@ __all__ = [
     "AggregateSession",
     "AggregateStreamingSession",
     "CatalogClientMixin",
+    "CatalogContents",
     "Client",
     "ClientError",
     "OutputWriter",
