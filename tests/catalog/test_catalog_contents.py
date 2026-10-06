@@ -512,3 +512,26 @@ def test_client_round_trip(client_transport: Any) -> None:
         assert hit.schemas == []
         assert hit.etag == "gen-1"
         client.catalog_detach(attach_opaque_data=reval.attach_opaque_data)
+
+
+def test_item_encoding_sorts_map_keys() -> None:
+    """Equal items whose maps were filled in different orders encode identically."""
+    from vgi.catalog import SchemaInfo
+    from vgi.protocol import _item_ipc_bytes
+
+    a = SchemaInfo(
+        attach_opaque_data=b"x",
+        path=["s"],
+        comment=None,
+        tags={"b": "2", "a": "1"},
+        estimated_object_count={"view": 0, "table": 3},
+    )
+    b = SchemaInfo(
+        attach_opaque_data=b"x",
+        path=["s"],
+        comment=None,
+        tags={"a": "1", "b": "2"},
+        estimated_object_count={"table": 3, "view": 0},
+    )
+    assert _item_ipc_bytes(a) == _item_ipc_bytes(b)
+    assert SchemaInfo.deserialize_from_bytes(_item_ipc_bytes(a)).tags == {"a": "1", "b": "2"}

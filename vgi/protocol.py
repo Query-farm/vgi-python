@@ -867,11 +867,39 @@ def _item_ipc_bytes(info: Any) -> bytes:
     """
     memo = getattr(info, "__dict__", None)
     if memo is None:
-        return info.serialize_to_bytes()  # type: ignore[no-any-return]
+        return _with_sorted_maps(info).serialize_to_bytes()  # type: ignore[no-any-return]
     encoded = memo.get(_ITEM_IPC_MEMO)
     if encoded is None:
-        encoded = memo[_ITEM_IPC_MEMO] = info.serialize_to_bytes()
+        encoded = memo[_ITEM_IPC_MEMO] = _with_sorted_maps(info).serialize_to_bytes()
     return encoded  # type: ignore[no-any-return]
+
+
+def _with_sorted_maps(info: Any) -> Any:
+    """Return *info* with every map-valued field in sorted key order.
+
+    Arrow writes a map column in the dict's iteration order, so two equal
+    items whose ``tags`` (or ``estimated_object_count``, ``column_comments``,
+    ...) were filled in different orders would encode to different bytes.
+    Catalog items must encode deterministically: ``catalog_contents`` promises
+    items byte-identical to the per-schema RPCs, its content-hash etag hashes
+    them, and every other VGI SDK sorts map keys the same way.
+
+    Args:
+        info: The catalog item (a frozen dataclass).
+
+    Returns:
+        *info* itself when no map field needs reordering, else a copy.
+    """
+    if not dataclasses.is_dataclass(info) or isinstance(info, type):
+        return info
+    changes: dict[str, dict[Any, Any]] = {}
+    for f in dataclasses.fields(info):
+        if not f.init:
+            continue
+        value = getattr(info, f.name, None)
+        if isinstance(value, dict) and list(value) != sorted(value):
+            changes[f.name] = dict(sorted(value.items()))
+    return dataclasses.replace(info, **changes) if changes else info
 
 
 def _catalog_items_response(item_type: type) -> type:
