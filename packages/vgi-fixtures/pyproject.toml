@@ -34,7 +34,9 @@ classifiers = [
 # The fixture worker also builds statistics fixtures at import time, which
 # needs a DuckDB-compatible engine — vgi[duckdb] keeps the default dev env on
 # stock duckdb (the resolver prefers haybarn whenever it is installed too).
-dependencies = ["vgi-python[test-fixtures-writable]", "vgi-python[duckdb]"]
+# vgi-rpc is named directly because the fixture worker imports its conformance
+# fixtures (vgi_rpc.conformance.secondary, .identity_fixture), new in 0.48.0.
+dependencies = ["vgi-python[test-fixtures-writable]", "vgi-python[duckdb]", "vgi-rpc>=0.48.0"]
 
 [project.scripts]
 vgi-fixture-worker = "vgi._test_fixtures.worker:main"

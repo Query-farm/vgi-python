@@ -31,7 +31,8 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from typing import Any
+import sys
+from typing import TYPE_CHECKING, Any
 
 from vgi_rpc.rpc import CallContext, Stream
 
@@ -46,6 +47,12 @@ from vgi.protocol import (
 )
 from vgi.schema_path import schema_path_display, schema_path_key
 from vgi.worker import Worker
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from vgi.auth import IssuedGrant, TokenIdentity
+    from vgi.rpc_server import Transport
 
 logger = logging.getLogger("vgi.meta_worker")
 
@@ -691,6 +698,56 @@ class MetaWorker:
                 )
         raise ValueError(f"Unknown table_buffering function '{fn_name}'")
 
+    def hosted_protocols(self) -> tuple[tuple[type, object], ...]:
+        """Return every child worker class's ``hosted_protocols()``, in order.
+
+        Each distinct child class is asked once. Two children naming the same
+        protocol is a startup error from
+        [`build_rpc_server`][vgi.rpc_server.build_rpc_server], since one
+        process can host a protocol name only once.
+        """
+        pairs: list[tuple[type, object]] = []
+        asked: set[type] = set()
+        for w in self._workers:
+            worker_cls = type(w)
+            if worker_cls in asked:
+                continue
+            asked.add(worker_cls)
+            pairs.extend(worker_cls.hosted_protocols())
+        return tuple(pairs)
+
+    def _introspect_resolver(self) -> Callable[[str], TokenIdentity | None] | None:
+        """Return the one child's ``resolve_token``, or ``None`` when no child has one.
+
+        Identity is one protocol per process, so at most one child may
+        implement each hook. Two that do is a startup error rather than a
+        silent pick: the two would answer the same credential differently.
+        """
+        return self._one_child_hook("resolve_token", lambda wc: wc._introspect_resolver())
+
+    def _grant_minter(self) -> Callable[[str, str, list[str], int], IssuedGrant] | None:
+        """Return the one child's ``mint_grant``, or ``None`` when no child has one.
+
+        Same uniqueness rule as :meth:`_introspect_resolver`.
+        """
+        return self._one_child_hook("mint_grant", lambda wc: wc._grant_minter())
+
+    def _one_child_hook[H](self, hook: str, lookup: Callable[[type[Worker]], H | None]) -> H | None:
+        """Return the single distinct implementation of *hook* among the children."""
+        impls: dict[object, tuple[H, str]] = {}
+        for w in self._workers:
+            impl = lookup(type(w))
+            if impl is not None:
+                # Two subclasses inheriting one override are one implementation.
+                impls.setdefault(getattr(impl, "__func__", impl), (impl, type(w).__name__))
+        if len(impls) > 1:
+            owners = ", ".join(sorted(owner for _, owner in impls.values()))
+            raise ValueError(
+                f"MetaWorker children {owners} each implement {hook}(). vgi_rpc.Identity.v1 is "
+                f"hosted once per process, so at most one child may implement it."
+            )
+        return next(iter(impls.values()))[0] if impls else None
+
     # ========== Serve entry point ==========
 
     @classmethod
@@ -705,7 +762,7 @@ class MetaWorker:
         """
         from vgi_rpc.rpc import run_server
 
-        from vgi.protocol import VgiProtocol
+        from vgi.rpc_server import build_rpc_server
 
         # Log startup (some tests check that stderr has output)
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -713,7 +770,24 @@ class MetaWorker:
 
         workers = [wc() for wc in worker_classes]
         meta = cls(workers)
-        run_server(VgiProtocol, meta)
+        # run_server picks the transport from argv after the server is built;
+        # peek so the server is built for the transport it will serve.
+        run_server(build_rpc_server(meta, transport=_argv_transport(sys.argv[1:])))
+
+
+def _argv_transport(argv: list[str]) -> Transport:
+    """Return the transport ``run_server`` will pick for *argv*."""
+
+    def given(flag: str) -> bool:
+        return any(arg == flag or arg.startswith(f"{flag}=") for arg in argv)
+
+    if given("--http"):
+        return "http"
+    if given("--unix"):
+        return "unix"
+    if given("--tcp"):
+        return "tcp"
+    return "pipe"
 
 
 # Register all attach_opaque_data-based delegate methods on MetaWorker

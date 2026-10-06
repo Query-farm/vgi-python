@@ -81,7 +81,7 @@ from threading import Lock
 from typing import TYPE_CHECKING, Any, ClassVar, cast, final, overload
 
 import pyarrow as pa
-from vgi_rpc.rpc import AuthContext, CallContext, RpcServer, Stream, current_auth, serve_stdio
+from vgi_rpc.rpc import AuthContext, CallContext, Stream, current_auth, serve_stdio
 
 from vgi import attach_header
 from vgi.aggregate_function import AggregateBindParams, AggregateFunction
@@ -146,6 +146,7 @@ from vgi.protocol import (
     VgiProtocol,
     ViewsResponse,
 )
+from vgi.rpc_server import build_rpc_server
 from vgi.scalar_function import ScalarFunctionGenerator
 from vgi.schema_path import schema_path_display, schema_path_key
 from vgi.table_buffering_function import (
@@ -1417,6 +1418,43 @@ class Worker:
         return cls._default_catalog_interface
 
     @classmethod
+    def hosted_protocols(cls) -> Sequence[tuple[type, object]]:
+        """Return additional ``(protocol, implementation)`` pairs to host.
+
+        Override to serve other vgi-rpc protocols from the same process as the
+        VGI protocol — on the **same** listener, whatever the transport. The
+        result is hosted on every transport this worker serves (stdin/stdout,
+        AF_UNIX or named pipe, TCP, the Iroh raw upstream and HTTP), after the
+        worker's own protocol and in the order returned, so reflection's
+        ``list_protocols`` reports ``vgi.v2`` first and then these.
+
+        Called **once**, when the server is built (see
+        [`build_rpc_server`][vgi.rpc_server.build_rpc_server]). It may consult
+        configuration or the environment, but the answer is fixed for the life
+        of the process, so reflection output and protocol hashes stay stable.
+
+        The protocol is the unit of optionality: there is no way to host a
+        subset of a protocol's methods. A capability that is optional should be
+        its own protocol, included here or not.
+
+        Each protocol needs a distinct wire name (``protocol_name:
+        ClassVar[str]``). Names may not repeat, may not equal the worker's own
+        protocol, and may not use the reserved ``vgi_rpc.`` prefix: reflection
+        is hosted automatically and ``vgi_rpc.Identity.v1`` is enabled by
+        overriding [`resolve_token`][vgi.worker.Worker.resolve_token] /
+        [`mint_grant`][vgi.worker.Worker.mint_grant]. Violations are a startup
+        error naming this method.
+
+        Requests are routed on their ``vgi_rpc.protocol`` key, so hosting more
+        protocols never changes how a ``vgi.v2`` request is dispatched.
+
+        Returns:
+            The pairs to host; empty by default.
+
+        """
+        return ()
+
+    @classmethod
     def resolve_token(cls, token: str) -> TokenIdentity | None:
         """Resolve an opaque bearer credential to the identity it authenticates as.
 
@@ -1428,8 +1466,10 @@ class Worker:
         credential-to-identity oracle by upgrading a dependency.
 
         Through vgi-rpc 0.45.x this was an HTTP JSON route, ``POST
-        {prefix}/__introspect_token__``. As of 0.46.0 identity lives at the RPC
-        layer, so it reaches every transport rather than only HTTP.
+        {prefix}/__introspect_token__``. As of 0.46.0 identity is an RPC-layer
+        protocol that clients discover through reflection. VGI hosts it on
+        HTTP, the transport that authenticates callers: the allowlist below is
+        a list of principals, which stdin/stdout, AF_UNIX and TCP do not have.
 
         Enabling it also requires an allowlist of principals permitted to ask
         (``--introspect-principals`` / ``VGI_INTROSPECT_PRINCIPALS``). There is
@@ -1461,7 +1501,10 @@ class Worker:
                 backing store is down, a timeout, a 5xx from a remote
                 authority. Distinct from ``None``, which means the store
                 answered and the credential is unknown. A caller that
-                negative-caches the second must not cache the first.
+                negative-caches the second must not cache the first. The
+                framework translates it into ``identity_unavailable`` with
+                its ``retry_after`` as ``RetryInfo``, so raise the same error
+                your authenticator raises.
 
         """
         return None
@@ -1724,12 +1767,7 @@ class Worker:
                 _maybe_init_sentry()
                 otel_config = _resolve_otel_config()
                 worker = cls(quiet=quiet, log_level=effective_level)
-                server = RpcServer(cls.protocol_class, worker, server_version=_get_vgi_version())
-                if otel_config is not None:
-                    from vgi_rpc.otel import instrument_server
-
-                    instrument_server(server, otel_config)
-                    worker._vgi_tracer = VgiTracer.create(otel_config)
+                server = build_rpc_server(worker, transport="unix", otel_config=otel_config)
                 effective_idle = idle_timeout if idle_timeout > 0 else None
 
                 if sys.platform == "win32":
@@ -5562,12 +5600,7 @@ class Worker:
         _logger.info("worker_starting")
 
         try:
-            server = RpcServer(self.protocol_class, self, server_version=_get_vgi_version())
-            if otel_config is not None:
-                from vgi_rpc.otel import instrument_server
-
-                instrument_server(server, otel_config)
-                self._vgi_tracer = VgiTracer.create(otel_config)
+            server = build_rpc_server(self, transport="pipe", otel_config=otel_config)
             serve_stdio(server)
         except KeyboardInterrupt:
             _logger.debug("worker_interrupted")
@@ -5641,12 +5674,7 @@ class Worker:
         """
         from vgi_rpc.rpc import serve_tcp as rpc_serve_tcp
 
-        server = RpcServer(self.protocol_class, self, server_version=_get_vgi_version())
-        if otel_config is not None:
-            from vgi_rpc.otel import instrument_server
-
-            instrument_server(server, otel_config)
-            self._vgi_tracer = VgiTracer.create(otel_config)
+        server = build_rpc_server(self, transport="tcp", otel_config=otel_config)
         rpc_serve_tcp(
             server,
             host,

@@ -570,24 +570,14 @@ def _minting_ctx(principal: str, *, auth_age_s: float = 0.0) -> object:
 def _hosted_protocols(worker_cls: type[Worker]) -> frozenset[str]:
     """Return the protocol names the server built for *worker_cls* hosts.
 
-    Built the way :func:`vgi.serve.create_app` builds it, so this observes the
+    Built by :func:`vgi.rpc_server.build_rpc_server` for HTTP, so this observes the
     real routing table rather than a re-derivation of it. The protocol name is
     the dispatch routing key as of vgi-rpc 0.46.0, so "is identity hosted" is
     exactly "is its name in here".
     """
-    from vgi_rpc.rpc import RpcServer
+    from vgi.rpc_server import build_rpc_server
 
-    from vgi.protocol import VgiProtocol
-    from vgi.serve import _build_identity
-    from vgi.worker import _get_vgi_version
-
-    server = RpcServer(
-        VgiProtocol,
-        worker_cls(quiet=True),
-        enable_describe=False,
-        server_version=_get_vgi_version(),
-        identity=_build_identity(worker_cls, None),
-    )
+    server = build_rpc_server(worker_cls(quiet=True), transport="http", describe=False)
     return frozenset(server.bindings)
 
 
@@ -607,7 +597,7 @@ class TestTokenIntrospection:
 
     @staticmethod
     def _identity(worker_cls: type[Worker], **env: str) -> object | None:
-        from vgi.serve import _build_identity
+        from vgi.rpc_server import _build_identity
 
         with pytest.MonkeyPatch.context() as mp:
             mp.delenv("VGI_INTROSPECT_PRINCIPALS", raising=False)
@@ -720,7 +710,7 @@ class TestGrantMinting:
 
     @staticmethod
     def _identity(worker_cls: type[Worker], **env: str) -> object:
-        from vgi.serve import _build_identity
+        from vgi.rpc_server import _build_identity
 
         with pytest.MonkeyPatch.context() as mp:
             mp.delenv("VGI_INTROSPECT_PRINCIPALS", raising=False)

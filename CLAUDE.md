@@ -428,9 +428,10 @@ caller's identity before it can authorize anything.
 
 Through vgi-rpc 0.45.x this was an HTTP JSON route, `POST
 {prefix}/__introspect_token__`, which meant it existed on exactly one
-transport. As of **vgi-rpc 0.46.0** identity lives at the RPC layer, so it
-reaches every transport, and a client discovers it through ordinary reflection
-(`list_protocols`) rather than by calling and reading an error.
+transport. As of **vgi-rpc 0.46.0** identity lives at the RPC layer, and a
+client discovers it through ordinary reflection (`list_protocols`) rather than
+by calling and reading an error. VGI hosts it on HTTP only — the transport that
+authenticates callers (see `build_rpc_server` in `vgi/rpc_server.py`).
 
 ```python
 from vgi.auth import AuthUnavailableError, TokenIdentity
@@ -469,7 +470,10 @@ credentials. Throttle untrusted traffic at the proxy, per client.
 
 Return `None` for "the store answered and this credential is unknown"; raise
 `AuthUnavailableError` for "the answer is not knowable". A caller that
-negative-caches the first must not cache the second. Never return claims — a
+negative-caches the first must not cache the second. Raising the same error
+an authenticator raises is correct here: vgi-rpc translates an
+`AuthUnavailableError` from either identity hook into `identity_unavailable`
+(code `UNAVAILABLE`) and carries its `retry_after` as `RetryInfo`. Never return claims — a
 pass-through claims field would let a worker choose its caller's tenant routing
 and policy branch.
 
@@ -479,6 +483,26 @@ callback too, not just here: it is deliberately **not** a `ValueError`, because
 sidecar outage raised as one is read as "not my credential, try the next" and
 ends up a 401 from the end of the chain, restarting every session in the fleet
 over a thirty-second blip.
+
+### Hosting Additional Protocols (`hosted_protocols`)
+
+Every transport (stdio, unix/named pipe, TCP, Iroh, HTTP) builds its `RpcServer`
+through one helper, `build_rpc_server(worker, *, transport, ...)` in
+`vgi/rpc_server.py`. Never call `RpcServer(...)` for a worker anywhere else.
+`tests/test_hosted_protocols.py` enforces this structurally. Only
+`vgi/secret_service.py` and `vgi/transactor/server.py` are exempt, because they
+serve other protocols.
+
+A worker hosts extra vgi-rpc protocols by overriding the classmethod
+`Worker.hosted_protocols() -> Sequence[tuple[type, object]]` (empty by
+default). It is called once per server build. Its pairs are hosted on every
+transport, after `vgi.v2` and before `vgi_rpc.Reflection.v1`, which is now
+hosted on every transport too. You cannot host part of a protocol: the
+protocol is the unit of optionality. Duplicate names, `vgi.v2` itself, and the
+reserved `vgi_rpc.` prefix all fail at startup with an error that names the
+hook. `MetaWorker` hosts its children's lists concatenated. Identity is not
+supplied through this hook. It stays opt-in via `resolve_token`/`mint_grant`
+and is hosted on HTTP only. See `docs/api/worker.md`.
 
 ### Access Log Sampling and Async Emission
 

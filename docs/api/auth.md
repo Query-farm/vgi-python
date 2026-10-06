@@ -19,8 +19,9 @@ require `pip install vgi-python[http]`; JWT authentication additionally requires
 re-exports it — a worker that implements `resolve_token` never has to name a private import path.
 
 As of vgi-rpc 0.46.0 introspection is the `vgi_rpc.Identity.v1` protocol hosted on the RPC server,
-not an HTTP JSON route, so it reaches every transport rather than only HTTP. `TokenIdentity` and
-`TokenResolver` are correspondingly no longer gated on the `[http]` extra.
+not an HTTP JSON route, so clients discover it through reflection. VGI hosts it on HTTP only, the
+transport that authenticates callers: its allowlist names principals, which stdin/stdout, AF_UNIX
+and TCP do not have. `TokenIdentity` and `TokenResolver` are no longer gated on the `[http]` extra.
 
 ## Secret protocol
 

@@ -35,6 +35,7 @@ except ImportError:
 import os
 import tempfile
 import uuid
+from collections.abc import Sequence
 from typing import Annotated, Any
 
 import pyarrow as pa
@@ -2142,6 +2143,19 @@ class ExampleWorker(Worker):
     # catalog is set for introspection (worker page, tests) — runtime catalog
     # operations go through catalog_interface.
     catalog = _EXAMPLE_CATALOG
+
+    @classmethod
+    def hosted_protocols(cls) -> Sequence[tuple[type, object]]:
+        """Host ``conformance.Secondary.v1`` beside ``vgi.v2``, on every transport.
+
+        The cross-SDK hosted-protocols group (``vgi-rpc-test-hosted``) expects
+        every SDK fixture worker to host the vgi-rpc reference secondary. Only
+        this child of the fixture's ``MetaWorker`` returns it: one process
+        hosts a protocol name once.
+        """
+        from vgi_rpc.conformance.secondary import conformance_extra_protocols
+
+        return conformance_extra_protocols()
 
     class Settings:
         """Settings exposed via catalog_attach."""

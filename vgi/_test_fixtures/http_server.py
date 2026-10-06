@@ -187,6 +187,16 @@ def main() -> None:
                 "with no continuation escape. Default: no cap."
             ),
         ),
+        identity: bool = typer.Option(
+            False,
+            "--identity",
+            envvar="VGI_FIXTURE_IDENTITY",
+            help=(
+                "Host vgi_rpc.Identity.v1 with the vgi-rpc conformance fixture policy and its "
+                "spoofable X-Conformance-Principal header authentication. Test-only; for "
+                "vgi-rpc-test-hosted --identity."
+            ),
+        ),
         port_file: str | None = typer.Option(
             None,
             "--port-file",
@@ -198,7 +208,7 @@ def main() -> None:
         ),
     ) -> None:
         try:
-            from vgi_rpc import Compression, ExternalLocationConfig, RpcServer
+            from vgi_rpc import Compression, ExternalLocationConfig
             from vgi_rpc.http import make_wsgi_app
         except ImportError:
             sys.stderr.write(
@@ -301,8 +311,6 @@ def main() -> None:
 
         import socket
 
-        from vgi.protocol import VgiProtocol
-
         if port == 0:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.bind((host, 0))
@@ -315,6 +323,13 @@ def main() -> None:
 
         authenticate = _resolve_authenticate()
         oauth_metadata = _resolve_oauth_resource_metadata()
+
+        introspect_principals: list[str] | None = None
+        if identity:
+            from vgi._test_fixtures.identity_fixture import INTROSPECT_PRINCIPALS, conformance_authenticate
+
+            authenticate = conformance_authenticate
+            introspect_principals = INTROSPECT_PRINCIPALS
 
         if authenticate is None:
             # Test-only OPTIONAL bearer auth. Lets the cache identity-isolation
@@ -356,7 +371,7 @@ def main() -> None:
         # way, and it guards a client SIGSEGV, so it was the worst one to lose.
         from vgi._test_fixtures.narrow_bind.worker import NarrowBindWorker
         from vgi._test_fixtures.twin_catalogs import TwinAWorker, TwinBWorker
-        from vgi.worker import _get_vgi_version
+        from vgi.rpc_server import build_rpc_server
 
         worker_classes: list[type] = [
             ExampleWorker,
@@ -373,6 +388,11 @@ def main() -> None:
             pass
         else:
             worker_classes.append(WritableWorker)
+        if identity:
+            # Same "example" catalog, plus the conformance identity hooks.
+            from vgi._test_fixtures.identity_fixture import IdentityExampleWorker
+
+            worker_classes[worker_classes.index(ExampleWorker)] = IdentityExampleWorker
         workers = [wc(quiet=True, log_level=effective_level) for wc in worker_classes]
         # One signing key shared by every sub-worker (which seal catalog
         # opaque-data envelopes) and the HTTP state-token machinery.
@@ -380,12 +400,12 @@ def main() -> None:
         for w in workers:
             w._signing_key = signing_key
         worker: Any = workers[0] if len(workers) == 1 else MetaWorker(workers)
-        server = RpcServer(
-            VgiProtocol,
+        server = build_rpc_server(
             worker,
+            transport="http",
+            describe=describe,
             external_location=external_location,
-            enable_describe=describe,
-            server_version=_get_vgi_version(),
+            introspect_principals=introspect_principals,
         )
         wsgi_app = make_wsgi_app(
             server,

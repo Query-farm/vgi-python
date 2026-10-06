@@ -40,7 +40,7 @@ dependencies = [
     "pyarrow",
     "typer>=0.9",
     "platformdirs",
-    "vgi-rpc>=0.47.2",
+    "vgi-rpc>=0.48.0",
     "httpx2>=2.12.0",
 ]
 

@@ -43,7 +43,6 @@ if TYPE_CHECKING:
     import falcon
     from vgi_rpc.otel import OtelConfig
     from vgi_rpc.rpc import AuthContext, PeerAuthenticationPolicy, PeerIdentityProvider
-    from vgi_rpc.rpc._token_identity import IdentityImpl
 
     from vgi.worker import Worker
 
@@ -297,10 +296,8 @@ def create_app(
         )
         sys.exit(1)
 
-    from vgi_rpc.rpc import RpcServer
-
     from vgi.otel import VgiTracer
-    from vgi.protocol import VgiProtocol
+    from vgi.rpc_server import build_rpc_server
 
     # Resolve the signing key once, here, so the worker (which seals catalog
     # opaque-data envelopes) and the HTTP state-token machinery share the same
@@ -316,14 +313,12 @@ def create_app(
     worker = worker_cls(quiet=True, log_level=log_level)
     worker._vgi_tracer = VgiTracer.create(otel_config)
     worker._signing_key = signing_key
-    from vgi.worker import _get_vgi_version
 
-    server = RpcServer(
-        VgiProtocol,
+    server = build_rpc_server(
         worker,
-        enable_describe=describe,
-        server_version=_get_vgi_version(),
-        identity=_build_identity(worker_cls, introspect_principals),
+        transport="http",
+        describe=describe,
+        introspect_principals=introspect_principals,
     )
 
     effective_peer_identity_providers = tuple(peer_identity_providers)
@@ -587,10 +582,9 @@ def main() -> None:
                 iroh_authenticate=iroh_authenticate,
             )
         elif iroh_raw_upstream is not None:
-            from vgi_rpc.rpc import RpcServer, observe_peer_identity, peer_identity_primary, serve_tcp
+            from vgi_rpc.rpc import observe_peer_identity, peer_identity_primary, serve_tcp
 
-            from vgi.protocol import VgiProtocol
-            from vgi.worker import _get_vgi_version
+            from vgi.rpc_server import build_rpc_server
 
             if ":" in iroh_raw_upstream:
                 raw_host, _, raw_port_text = iroh_raw_upstream.rpartition(":")
@@ -605,16 +599,10 @@ def main() -> None:
                 raise SystemExit(f"--iroh-raw-upstream expects [HOST:]PORT, got {iroh_raw_upstream!r}") from None
 
             worker = worker_cls(quiet=quiet, log_level=effective_level)
-            # Iroh is also a directly addressable RPC endpoint, so advertise
-            # the standard method description just like the HTTP surface. This
-            # lets standalone clients in other languages connect without a
-            # framework-specific schema bootstrap.
-            rpc_server = RpcServer(
-                VgiProtocol,
-                worker,
-                enable_describe=True,
-                server_version=_get_vgi_version(),
-            )
+            # Iroh hosts the same set as every other transport (reflection
+            # included), so standalone clients in other languages connect
+            # without a framework-specific schema bootstrap.
+            rpc_server = build_rpc_server(worker, transport="iroh")
             policy = peer_identity_primary("iroh") if iroh_authenticate else observe_peer_identity
 
             def _emit_iroh_upstream(bound_host: str, bound_port: int) -> None:
@@ -783,102 +771,6 @@ def _resolve_authenticate() -> Callable[..., Any] | None:
     from vgi_rpc.http import require_all
 
     return require_all(gate, inner)
-
-
-def _build_identity(
-    worker_cls: type[Worker],
-    introspect_principals: Iterable[str] | None,
-) -> IdentityImpl | None:
-    """Build the ``vgi_rpc.Identity.v1`` implementation, or ``None``.
-
-    ``None`` unless the worker class implements at least one of the two
-    methods, and that is the point: ``RpcServer`` then does not host the
-    protocol at all, rather than hosting it and refusing every call. The two
-    are independent — a worker may resolve credentials without minting them,
-    mint without resolving, or do both, and ``offered_methods()`` reports
-    exactly what it wrote. Absent beats routed-and-refusing —
-    it is what keeps a dependency upgrade from growing a
-    credential-to-identity oracle on every existing worker.
-
-    As of vgi-rpc 0.46.0 identity is an RPC-layer protocol hosted on the
-    server, not the HTTP JSON route (``POST {prefix}/__introspect_token__``) it
-    was through 0.45.x. It therefore reaches every transport rather than only
-    HTTP, and a client discovers it through ordinary reflection rather than by
-    calling and reading an error.
-
-    Args:
-        worker_cls: The worker class, consulted for ``resolve_token`` and
-            ``mint_grant`` overrides.
-        introspect_principals: Principals permitted to introspect, or ``None``
-            to read the environment.
-
-    Returns:
-        The implementation, or ``None`` when this worker does not resolve
-        credentials.
-
-    """
-    resolver = worker_cls._introspect_resolver()
-    minter = worker_cls._grant_minter()
-    if resolver is None and minter is None:
-        return None
-
-    # Not re-exported by ``vgi_rpc.rpc``, so the private module is the only
-    # import path for the ``vgi_rpc.Identity.v1`` implementation helper.
-    from vgi_rpc.rpc._token_identity import IdentityImpl
-
-    return IdentityImpl(
-        resolve_token=resolver,
-        mint_grant=minter,
-        # Only meaningful for ``introspect_token``, and ``IdentityImpl``
-        # validates it only when a resolver is supplied — a worker that mints
-        # grants but resolves nothing is not an oracle and needs no allowlist.
-        introspect_principals=(_resolve_introspect_principals(introspect_principals) if resolver is not None else None),
-    )
-
-
-def _resolve_introspect_principals(explicit: Iterable[str] | None) -> list[str]:
-    """Resolve the introspector allowlist, or exit with an actionable message.
-
-    Env var: ``VGI_INTROSPECT_PRINCIPALS``, comma-separated.
-
-    Fail-closed and loud rather than defaulting to "any authenticated caller":
-    authenticating and introspecting are different capabilities, and a
-    permissive default lets any user resolve any other user's credential to
-    its owner. A worker that implements ``resolve_token`` and forgets the
-    allowlist must not start.
-
-    Args:
-        explicit: Principals passed to :func:`create_app`, or None to read
-            the environment.
-
-    Returns:
-        The allowlist, guaranteed non-empty.
-
-    Raises:
-        SystemExit: When neither source names a principal.
-
-    """
-    if explicit is not None:
-        principals = [p.strip() for p in explicit if p.strip()]
-    else:
-        raw = os.environ.get("VGI_INTROSPECT_PRINCIPALS") or ""
-        principals = [p.strip() for p in raw.split(",") if p.strip()]
-
-    if not principals:
-        sys.stderr.write(
-            "Error: this worker implements resolve_token(), which hosts the\n"
-            "  vgi_rpc.Identity.v1 protocol, but no introspector allowlist was\n"
-            "  configured. Set VGI_INTROSPECT_PRINCIPALS (comma-separated) or\n"
-            "  pass --introspect-principals.\n"
-            "\n"
-            "  There is no permissive default on purpose: introspection is a\n"
-            "  separate capability from authentication, and allowing every\n"
-            "  authenticated caller lets any user resolve any other user's\n"
-            "  credential to its owner. Remove resolve_token() to leave the\n"
-            "  protocol unhosted entirely.\n"
-        )
-        sys.exit(1)
-    return principals
 
 
 def _resolve_proxy_proof_gate() -> Any | None:

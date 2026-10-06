@@ -126,6 +126,27 @@ jobs:
           args: "--no-progress --offline --root-dir ${{ github.workspace }}/docs docs/**/*.md *.md"
           fail: true
 
+  hosted-protocols:
+    # vgi-rpc's cross-SDK hosted-protocols group: the fixture workers must host
+    # vgi.v2 then conformance.Secondary.v1 on stdio, unix and HTTP, and pass the
+    # Identity.v1 groups over HTTP (vgi-fixture-http --identity).
+    name: Hosted-protocols conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+
+      - name: Set up Python 3.14
+        run: uv python install 3.14
+
+      - name: Install dependencies
+        run: uv sync --all-extras --python 3.14
+
+      - name: Run hosted-protocols group (stdio, unix, http)
+        run: scripts/hosted_protocols_conformance.sh
+
   s3-offload-localstack:
     name: S3 Offload Tests (LocalStack)
     runs-on: ubuntu-latest
