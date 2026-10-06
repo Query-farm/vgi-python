@@ -49,8 +49,14 @@ dependencies = [
 # evaluation, the transactor, and the statistics fixtures. It is resolved
 # lazily in vgi/_duckdb.py: haybarn is preferred, stock duckdb is the
 # fallback. Neither is a hard dependency — install one via these extras.
-haybarn = ["haybarn>=1.5.5rc1"]
-duckdb = ["duckdb>=1.5.3"]
+# Both are pinned EXACTLY: expression-filter evaluation implements
+# vgi.duckdb.standard.v1, whose oracle is upstream DuckDB 1.5.5 (Haybarn
+# 1.5.5-rc1), and vgi/filter_v2.py refuses any other engine build
+# (STANDARD_V1_ENGINE_VERSIONS). A looser range lets a resolver pick e.g.
+# duckdb 1.5.6, and every pushed-down filter then fails to bind. Change these
+# only together with STANDARD_V1_ENGINE_VERSIONS (a test keeps them in step).
+haybarn = ["haybarn==1.5.5rc1"]
+duckdb = ["duckdb==1.5.5"]
 http = ["vgi-rpc[http]"]
 iroh = ["vgi-rpc[http,iroh]"]
 # transport="launch": vgi_rpc.launcher imports filelock unconditionally at
@@ -84,7 +90,7 @@ test-fixtures-writable = [
     "vgi-python[transactor]",
 ]
 dev = [
-    "duckdb>=1.5.3",
+    "duckdb==1.5.5",  # pinned with the `duckdb` extra above
     "mypy",
     "pyarrow-stubs",
     # pydoclint is intentionally NOT a project dependency: it pulls

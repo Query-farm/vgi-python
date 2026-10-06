@@ -27,6 +27,14 @@ updates:
       # failing on an impossible update; the alerts stay visible in the
       # security tab. The real fix is lifting the cap upstream in vgi-rpc.
       - dependency-name: "aiohttp"
+      # The filter evaluator implements vgi.duckdb.standard.v1, pinned to
+      # DuckDB 1.5.5 / Haybarn 1.5.5-rc1 (vgi/filter_v2.py
+      # STANDARD_V1_ENGINE_VERSIONS); any other engine build refuses every
+      # pushed-down filter. Bumping them is a deliberate profile decision, not
+      # a routine update: locking duckdb 1.5.6 broke filter pushdown in the
+      # vgi integration suite.
+      - dependency-name: "duckdb"
+      - dependency-name: "haybarn"
 
   # GitHub Actions used by the workflows in .github/workflows/.
   - package-ecosystem: "github-actions"

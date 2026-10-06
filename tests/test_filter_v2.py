@@ -696,3 +696,74 @@ def test_an_unrenderable_filter_raises_rather_than_vanishing() -> None:
 
     with pytest.raises(FilterSQLUnsupportedError, match="no SQL rendering"):
         filters.to_sql()
+
+
+def test_engine_pins_match_standard_v1_oracle() -> None:
+    """The duckdb/haybarn extras pin exactly the builds the evaluator accepts.
+
+    A looser range let a lock bump resolve duckdb 1.5.6, which the evaluator
+    (correctly) refuses, so every pushed-down filter failed to bind.
+    """
+    import pathlib
+    import re
+    import tomllib
+
+    from vgi.filter_v2 import STANDARD_V1_ENGINE_VERSIONS
+
+    pyproject = tomllib.loads((pathlib.Path(__file__).parents[1] / "pyproject.toml").read_text())
+    extras = pyproject["project"]["optional-dependencies"]
+    for engine in ("duckdb", "haybarn"):
+        specs = [spec for spec in extras[engine] if re.match(rf"{engine}\b", spec)]
+        assert len(specs) == 1, specs
+        match = re.fullmatch(rf"{engine}==(\S+)", specs[0].replace(" ", ""))
+        assert match, f"{engine} extra must pin an exact version, got {specs[0]!r}"
+        assert match.group(1) in STANDARD_V1_ENGINE_VERSIONS[engine]
+    dev_duckdb = [spec for spec in extras["dev"] if re.match(r"duckdb\b", spec)]
+    assert [spec.replace(" ", "") for spec in dev_duckdb] == list(extras["duckdb"])
+
+
+@pytest.mark.parametrize(
+    ("engine", "version", "accepted"),
+    [
+        ("duckdb", "1.5.5", True),
+        ("haybarn", "1.5.5rc1", True),
+        ("duckdb", "1.5.6", False),
+        ("duckdb", "1.5.4", False),
+        ("haybarn", "1.5.6rc1", False),
+    ],
+)
+def test_standard_v1_evaluator_requires_oracle_engine(
+    monkeypatch: pytest.MonkeyPatch, engine: str, version: str, accepted: bool
+) -> None:
+    """Only the pinned oracle builds may evaluate ``vgi.duckdb.standard.v1``."""
+    import re
+    import threading
+    import types
+
+    import vgi._duckdb
+    from vgi import filter_v2
+
+    opened: list[object] = []
+
+    class _Connection:
+        def execute(self, *_args: object) -> None:
+            return None
+
+    fake = types.ModuleType(engine)
+    fake.__version__ = version  # type: ignore[attr-defined]
+    monkeypatch.setattr(vgi._duckdb, "engine_module", lambda: fake)
+
+    def _connect(**_kw: object) -> _Connection:
+        opened.append(1)
+        return _Connection()
+
+    monkeypatch.setattr(vgi._duckdb, "connect", _connect)
+    monkeypatch.setattr(filter_v2, "_evaluation_local", threading.local())
+    context = filter_v2.EvaluationContext(profile=filter_v2.NO_EVALUATION_CONTEXT)
+    if accepted:
+        filter_v2._get_evaluation_connection(context)
+        assert opened == [1]
+    else:
+        with pytest.raises(filter_v2.FilterV2Error, match=f"found {engine} {re.escape(version)}"):
+            filter_v2._get_evaluation_connection(context)
+        assert opened == []

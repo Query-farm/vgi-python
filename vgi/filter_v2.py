@@ -23,6 +23,21 @@ DUCKDB_STANDARD_V1 = "vgi.duckdb.standard.v1"
 NO_EVALUATION_CONTEXT = "vgi.none.v1"
 DUCKDB_SESSION_CONTEXT = "vgi.duckdb.session.v1"
 
+#: Engine builds whose observable SQL behavior *is* the ``vgi.duckdb.standard.v1``
+#: oracle, by distribution name -> exact ``__version__`` strings. The profile is
+#: pinned to upstream DuckDB v1.5.5 (Haybarn v1.5.5-rc1 is its reference
+#: distribution) and is "not a reference to the moving 1.5.x release family"
+#: (vgi-filter-encoding-v2-spec.md section 6). A later patch release is not
+#: added here merely because the conformance corpus passes: DuckDB 1.5.6, for
+#: one, ships newer time-zone data (2026c/2026d) and changes integer-literal and
+#: printf behavior, so it is not the oracle. The ``duckdb``/``haybarn`` extras in
+#: pyproject.toml pin exactly these versions; tests/test_filter_v2.py keeps the
+#: two in step.
+STANDARD_V1_ENGINE_VERSIONS: dict[str, frozenset[str]] = {
+    "duckdb": frozenset({"1.5.5"}),
+    "haybarn": frozenset({"1.5.5rc1", "1.5.5-rc1"}),
+}
+
 MAX_JSON_BYTES = 1 << 20
 MAX_DEPTH = 64
 MAX_NODES = 10_000
@@ -1168,11 +1183,7 @@ def _get_evaluation_connection(context: EvaluationContext) -> Any:
         engine = engine_module()
         engine_name = engine.__name__.split(".", 1)[0]
         engine_version = str(getattr(engine, "__version__", ""))
-        accepted_versions = {
-            "duckdb": {"1.5.5"},
-            "haybarn": {"1.5.5rc1", "1.5.5-rc1"},
-        }
-        if engine_version not in accepted_versions.get(engine_name, set()):
+        if engine_version not in STANDARD_V1_ENGINE_VERSIONS.get(engine_name, frozenset()):
             raise FilterV2Error(
                 f"{DUCKDB_STANDARD_V1} requires DuckDB 1.5.5 or Haybarn 1.5.5-rc1; "
                 f"found {engine_name} {engine_version or '<unknown>'}"
