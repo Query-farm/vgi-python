@@ -1,6 +1,6 @@
 [project]
 name = "vgi-python"
-version = "0.41.0"
+version = "0.42.0"
 description = "Vector Gateway Interface - Connect DuckDB to external programs via Apache Arrow"
 readme = "README.md"
 keywords = [
@@ -40,7 +40,7 @@ dependencies = [
     "pyarrow",
     "typer>=0.9",
     "platformdirs",
-    "vgi-rpc>=0.48.0",
+    "vgi-rpc>=0.49.0",
     "httpx2>=2.12.0",
 ]
 
