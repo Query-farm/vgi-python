@@ -22,6 +22,7 @@ from vgi import (
     FilterVersionError,
     RuntimeFilterAlgorithmCapability,
     deserialize_filters,
+    filter_v2,
 )
 
 _METADATA: dict[bytes, bytes] = {
@@ -767,3 +768,36 @@ def test_standard_v1_evaluator_requires_oracle_engine(
         with pytest.raises(filter_v2.FilterV2Error, match=f"found {engine} {re.escape(version)}"):
             filter_v2._get_evaluation_connection(context)
         assert opened == []
+
+
+class _NoNbytes:
+    """Stands in for a view-typed batch under pyarrow < 19, where ``nbytes`` raises."""
+
+    def __init__(self, total: int | None) -> None:
+        self._total = total
+
+    @property
+    def nbytes(self) -> int:
+        raise pa.ArrowTypeError("not implemented for string_view")
+
+    def get_total_buffer_size(self) -> int:
+        if self._total is None:
+            raise pa.ArrowNotImplementedError("not implemented")
+        return self._total
+
+
+def test_payload_size_falls_back_when_nbytes_is_unavailable() -> None:
+    """A view-typed payload is measured by total buffer size instead of raising ArrowTypeError."""
+    assert filter_v2._payload_nbytes(_NoNbytes(123)) == 123  # type: ignore[arg-type]
+
+
+def test_payload_size_unmeasurable_is_a_filter_error() -> None:
+    """When no measurement works, the caller sees FilterV2Error, not a raw Arrow error."""
+    with pytest.raises(filter_v2.FilterV2Error, match="cannot measure filter payload size"):
+        filter_v2._payload_nbytes(_NoNbytes(None))  # type: ignore[arg-type]
+
+
+def test_payload_size_of_a_view_typed_batch() -> None:
+    """A real string_view payload is measured without error."""
+    batch = pa.record_batch([pa.array(["a", "bc"], type=pa.string_view())], names=["needles"])
+    assert filter_v2._payload_nbytes(batch) > 0

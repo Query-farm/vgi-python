@@ -117,6 +117,34 @@ class FilterV2Error(ValueError):
     """A Filter Encoding v2 document is malformed or cannot be evaluated."""
 
 
+def _payload_nbytes(batch: pa.RecordBatch) -> int:
+    """Size of a filter payload batch, for the payload limit.
+
+    ``RecordBatch.nbytes`` is not implemented for view types (``string_view``,
+    ``binary_view``, ``list_view``) before pyarrow 19 and raises a raw
+    ``ArrowTypeError``. Fall back to the total buffer size there, which walks
+    every buffer generically and can only overcount (shared buffers), never
+    undercount, so the limit still holds.
+
+    Args:
+        batch: The filter payload batch.
+
+    Returns:
+        Its size in bytes, for comparison with ``MAX_PAYLOAD_BYTES``.
+
+    Raises:
+        FilterV2Error: If neither measurement is available for the batch.
+    """
+    try:
+        return int(batch.nbytes)
+    except (pa.ArrowTypeError, pa.ArrowNotImplementedError):
+        pass
+    try:
+        return int(batch.get_total_buffer_size())
+    except (pa.ArrowTypeError, pa.ArrowNotImplementedError) as exc:
+        raise FilterV2Error(f"cannot measure filter payload size: {exc}") from exc
+
+
 class PredicateMode(StrEnum):
     """Whether a predicate must be applied exactly or is only a pruning hint."""
 
@@ -592,7 +620,7 @@ class _Parser:
                 raise FilterV2Error(f"noncanonical payload field name {name!r}")
             if name.startswith("type_") and self.batch.column(i)[0].is_valid:
                 raise FilterV2Error(f"{name} must contain a NULL value")
-        if self.batch.nbytes > MAX_PAYLOAD_BYTES:
+        if _payload_nbytes(self.batch) > MAX_PAYLOAD_BYTES:
             raise FilterV2Error("filter payload exceeds 16 MiB")
         return parse_evaluation_context(self.batch.schema)
 
