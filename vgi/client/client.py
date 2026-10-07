@@ -1637,7 +1637,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         protocol every worker hosts. The empty hash marks the entry as inferred.
 
         Returns:
-            One [`HostedProtocol`][] per hosted protocol.
+            One `vgi_rpc.HostedProtocol` per hosted protocol.
 
         Raises:
             [`ClientError`][]: If the client is not started, or the worker
