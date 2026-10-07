@@ -29,10 +29,16 @@ from vgi.catalog._descriptor_spec import _DescriptorBase, _extract_specs, _SpecB
 __all__ = [
     "AttachOption",
     "AttachOptionSpec",
+    "RESERVED_ATTACH_OPTION",
     "MissingAttachOptionsError",
     "extract_attach_option_specs",
     "validate_required_attach_options",
 ]
+
+
+#: Reserved for attach tickets (see ``vgi.attach_ticket``); no catalog may
+#: declare an attach option with this name, compared case-insensitively.
+RESERVED_ATTACH_OPTION = "vgi_attach_ticket"
 
 
 @dataclass(frozen=True)
@@ -80,7 +86,12 @@ class AttachOptionSpec(_SpecBase):
     )
 
     def __post_init__(self) -> None:
-        """Reject the contradictory ``required`` + ``default`` combination."""
+        """Reject the reserved name and the contradictory ``required`` + ``default`` combination."""
+        if self.name.lower() == RESERVED_ATTACH_OPTION:
+            raise ValueError(
+                f"Attach option {self.name!r} uses the reserved name {RESERVED_ATTACH_OPTION!r}: the framework "
+                "reads it as an attach ticket before any catalog code runs. Rename the option."
+            )
         if self.required and self.default is not None:
             raise ValueError(
                 f"Attach option {self.name!r} is required but also declares a default "

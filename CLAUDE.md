@@ -503,6 +503,20 @@ one. Allowlist rules are unchanged. See `docs/authentication.md` and
 `tests/test_grant_auth.py`, which also runs the shared
 `grant_token_vectors.json` through `create_app`.
 
+### Attach Tickets (`vgi.attach_tickets.v1`)
+
+`seal_attach` seals a user's ATTACH (catalog name, options incl. secrets,
+version specs) into a `vgia1.` ticket under `VGI_SIGNING_KEY`, AAD
+`"vgi.attach_ticket.v1\0" + principal` (principal only, not domain). A runner
+holding the user's grant reattaches with the single option `vgi_attach_ticket`;
+`Worker.catalog_attach` (and `MetaWorker`, before routing) redeems it before any
+catalog code. Hosted on HTTP only, only with an explicitly configured signing key
+(`signing_key_configured` in `build_rpc_server`; a minted key never counts) and
+the ability to issue grants. `vgi_attach_ticket` is a reserved attach-option
+name. Code: `vgi/attach_ticket.py`; spec: `docs/protocol/vgi-attach-tickets.md`;
+vectors: `vgi/_test_fixtures/attach_ticket_vectors.json` (regenerate with
+`scripts/gen_attach_ticket_vectors.py`); fixture catalog: `ticket_probe`.
+
 ### Hosting Additional Protocols (`hosted_protocols`)
 
 Every transport (stdio, unix/named pipe, TCP, Iroh, HTTP) builds its `RpcServer`

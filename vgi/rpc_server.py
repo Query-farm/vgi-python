@@ -17,7 +17,10 @@ What a server hosts, in reflection order:
 3. ``vgi_rpc.Reflection.v1`` — on every transport unless ``describe=False``
    (an HTTP operator choice, ``--no-describe``).
 4. ``vgi_rpc.Identity.v1`` — HTTP only, and only when the worker overrides
-   ``resolve_token`` and/or ``mint_grant``.
+   ``resolve_token`` and/or ``mint_grant`` (or grant keys are configured).
+5. ``vgi.attach_tickets.v1`` — HTTP only, and only when ``VGI_SIGNING_KEY`` is
+   configured explicitly *and* the worker can issue grants. See
+   [`vgi.attach_ticket`][vgi.attach_ticket].
 
 Extra protocols cannot change ``vgi.v2`` behaviour: vgi-rpc routes every
 request on its ``vgi_rpc.protocol`` key, with no fallback to the primary, so a
@@ -69,6 +72,7 @@ def build_rpc_server(
     grant_keys: GrantKeys | None = None,
     external_location: ExternalLocationConfig | None = None,
     otel_config: Any = None,
+    signing_key_configured: bool = False,
 ) -> RpcServer:
     """Build the ``RpcServer`` for *worker* on *transport*.
 
@@ -95,6 +99,11 @@ def build_rpc_server(
         otel_config: Optional ``OtelConfig``. When given, the server is
             instrumented and the worker's tracer is created from it. HTTP
             callers leave it ``None``: ``make_wsgi_app`` instruments there.
+        signing_key_configured: HTTP only. True when the worker's
+            ``_signing_key`` came from explicit configuration
+            (``VGI_SIGNING_KEY``), not a key minted for this process. Required
+            to host ``vgi.attach_tickets.v1``: a minted key would make every
+            ticket die on restart.
 
     Returns:
         The configured server.
@@ -123,9 +132,11 @@ def build_rpc_server(
     if transport in _IDENTITY_TRANSPORTS:
         # A Worker's hooks are classmethods; a MetaWorker answers for the one
         # child that implements each hook.
-        identity = _build_identity(
-            type(worker) if isinstance(worker, Worker) else worker, introspect_principals, grant_keys
-        )
+        hooks = type(worker) if isinstance(worker, Worker) else worker
+        identity = _build_identity(hooks, introspect_principals, grant_keys)
+        tickets = _build_attach_tickets(worker, hooks, signing_key_configured, grant_keys)
+        if tickets is not None:
+            extra = (*extra, tickets)
 
     server = RpcServer(
         primary,
@@ -259,6 +270,29 @@ def _build_identity(
         # grants itself; the HTTP server then accepts them as bearers.
         grant_keys=grant_keys,
     )
+
+
+def _build_attach_tickets(
+    worker: Worker | MetaWorker,
+    hooks: type[Worker] | MetaWorker,
+    signing_key_configured: bool,
+    grant_keys: GrantKeys | None,
+) -> tuple[type, object] | None:
+    """Return the ``vgi.attach_tickets.v1`` pair to host, or ``None``.
+
+    Hosted only when both halves of an unattended session can be issued: the
+    signing key is configured explicitly (a minted per-process key would make
+    tickets die on restart) and the worker can issue grants (grant keys, or its
+    own ``mint_grant``) -- a ticket is useless without a grant. Absent, not
+    hosted-and-refusing, so a client learns this from reflection.
+    """
+    if not signing_key_configured or worker._signing_key is None:
+        return None
+    if grant_keys is None and hooks._grant_minter() is None:
+        return None
+    from vgi.attach_ticket import AttachTickets, AttachTicketsImpl, resolve_ticket_max_ttl
+
+    return AttachTickets, AttachTicketsImpl(worker, max_ttl_seconds=resolve_ticket_max_ttl(grant_keys))
 
 
 def _resolve_introspect_principals(explicit: Iterable[str] | None) -> list[str]:

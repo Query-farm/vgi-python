@@ -4667,7 +4667,13 @@ class Worker:
         *,
         ctx: CallContext | None = None,
     ) -> CatalogAttachResult:
-        """Attach to a catalog with options."""
+        """Attach to a catalog with options.
+
+        A request whose only option is ``vgi_attach_ticket`` is replaced, before
+        any catalog code runs, by the attach the ticket seals (see
+        [`redeem_attach_ticket`][vgi.attach_ticket.redeem_attach_ticket]).
+        """
+        request = self._redeem_attach_ticket(request)
         self._enrich_catalog_span(vgi_catalog_name=request.name)
         self._vgi_tracer.set_current_span_attributes(
             {
@@ -4704,6 +4710,26 @@ class Worker:
             options=loggable or None,
         )
         return result
+
+    def _redeem_attach_ticket(self, request: CatalogAttachRequest) -> CatalogAttachRequest:
+        """Return the attach a ``vgi_attach_ticket`` seals, or *request* unchanged.
+
+        The ticket must be the only option (``invalid_request`` otherwise); it
+        opens only under the caller's principal and this worker's signing key
+        (``attach_ticket_invalid``) and only within its lifetime
+        (``attach_ticket_expired``). The restored request carries the sealed
+        catalog name, options and version specs, so the catalog sees exactly
+        what the user attached with. Never logs the ticket.
+        """
+        from vgi.attach_ticket import redeem_attach_ticket
+
+        restored = redeem_attach_ticket(
+            request,
+            self._options_batch_to_dict(request.options),
+            signing_key=self._signing_key,
+            auth=current_auth(),
+        )
+        return request if restored is None else restored
 
     def catalog_detach(self, attach_opaque_data: bytes) -> None:
         """Detach from a catalog."""

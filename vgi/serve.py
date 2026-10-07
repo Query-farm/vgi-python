@@ -315,9 +315,14 @@ def create_app(
     # opaque-data envelopes) and the HTTP state-token machinery share the same
     # key. See resolve_shared_signing_key for why every process serving this
     # deployment has to agree on it.
+    # Configured explicitly (passed in, or VGI_SIGNING_KEY set by the operator)
+    # rather than minted for this deployment. Attach tickets need it: a minted
+    # key would make every ticket die on restart.
+    signing_key_configured = signing_key is not None
     if signing_key is None:
         signing_key, is_ephemeral = resolve_shared_signing_key(propagate_to_children=False)
         _warn_if_ephemeral_signing_key(is_ephemeral=is_ephemeral, multiprocess=False)
+        signing_key_configured = not is_ephemeral and not signing_key_was_minted()
 
     if proxy_proof_required is None:
         proxy_proof_required = (os.environ.get("VGI_PROXY_PROOF_MODE") or "").strip().lower() == "require"
@@ -332,6 +337,7 @@ def create_app(
         describe=describe,
         introspect_principals=introspect_principals,
         grant_keys=grant_keys if grant_keys is not None else resolve_grant_keys(),
+        signing_key_configured=signing_key_configured,
     )
     authenticate, identity_bearer = _compose_identity_bearer(server, authenticate)
 
@@ -654,6 +660,11 @@ def main() -> None:
 
 SIGNING_KEY_ENV = "VGI_SIGNING_KEY"
 
+#: Set beside ``VGI_SIGNING_KEY`` when ``vgi-serve`` minted the key and exported
+#: it to its own worker processes, so a child can tell a key the operator
+#: configured from one minted for this deployment. Private to ``vgi-serve``.
+_SIGNING_KEY_MINTED_ENV = "VGI_SIGNING_KEY_MINTED"
+
 
 def _resolve_signing_key() -> bytes | None:
     """Read ``VGI_SIGNING_KEY`` from the environment."""
@@ -705,7 +716,19 @@ def resolve_shared_signing_key(*, propagate_to_children: bool) -> tuple[bytes, b
         # what makes them agree. Same channel the operator would use, so this
         # adds no exposure they did not already have by setting it.
         os.environ[SIGNING_KEY_ENV] = minted
+        os.environ[_SIGNING_KEY_MINTED_ENV] = "1"
     return minted.encode(), True
+
+
+def signing_key_was_minted() -> bool:
+    """Return True when ``VGI_SIGNING_KEY`` was minted by ``vgi-serve``, not configured.
+
+    A pre-fork parent exports a minted key so its children agree on it; to a
+    child that key is indistinguishable from an operator's except by this
+    marker. Features that need a key that survives restarts (attach tickets)
+    must not be enabled by a minted one.
+    """
+    return os.environ.get(_SIGNING_KEY_MINTED_ENV) == "1"
 
 
 def _warn_if_ephemeral_signing_key(*, is_ephemeral: bool, multiprocess: bool) -> None:

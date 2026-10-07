@@ -149,6 +149,7 @@ nav:
     - "DuckDB filter adapter (informative)": protocol/vgi-duckdb-filter-adapter.md
     - "Catalog query pushdown (proposed design)": protocol/vgi-catalog-query-pushdown-design.md
     - "DuckDB 2.0 design audit (informative)": protocol/vgi-protocol-proposed-changes.md
+    - "Attach tickets (normative)": protocol/vgi-attach-tickets.md
   - API Reference:
     - api/index.md
     - Functions: api/functions.md

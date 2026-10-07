@@ -86,6 +86,10 @@ Identity stays framework-owned. You enable it by overriding
 only on HTTP, which authenticates callers. Its introspection allowlist names principals, and the
 other transports have no principals to check.
 
+`vgi.attach_tickets.v1` is framework-owned too. It is hosted on HTTP only, and only when
+`VGI_SIGNING_KEY` is configured explicitly and the worker can issue grants (grant keys, or its own
+`mint_grant`). See [Attach tickets](../protocol/vgi-attach-tickets.md).
+
 ## Worker
 
 ::: vgi.worker
@@ -97,3 +101,7 @@ other transports have no principals to check.
 ## Serving
 
 ::: vgi.serve
+
+## Attach tickets
+
+::: vgi.attach_ticket

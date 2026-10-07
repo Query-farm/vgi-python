@@ -367,7 +367,13 @@ class MetaWorker:
         *,
         ctx: CallContext | None = None,
     ) -> CatalogAttachResult:
-        """Attach to a catalog — dispatch by name with dynamic fallback."""
+        """Attach to a catalog — dispatch by name with dynamic fallback.
+
+        A ``vgi_attach_ticket`` is redeemed first: the catalog it seals, not
+        the name on the request, decides which child serves the attach.
+        """
+        if self._workers:
+            request = self._workers[0]._redeem_attach_ticket(request)
         idx = self._name_to_index.get(request.name)
 
         if idx is not None:

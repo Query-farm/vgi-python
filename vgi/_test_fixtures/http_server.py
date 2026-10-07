@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -331,6 +332,9 @@ def main() -> None:
             authenticate = conformance_authenticate
             introspect_principals = INTROSPECT_PRINCIPALS
 
+        from vgi.rpc_server import build_rpc_server, resolve_grant_keys
+
+        grant_keys = resolve_grant_keys()
         if authenticate is None:
             # Test-only OPTIONAL bearer auth. Lets the cache identity-isolation
             # test attach the same worker under different principals (alice/bob)
@@ -350,10 +354,23 @@ def main() -> None:
                 header = req.get_header("Authorization") or ""
                 if not header.startswith("Bearer "):
                     return AuthContext.anonymous()
+                if grant_keys is not None and header.startswith("Bearer vgig1."):
+                    # A sealed grant is not ours: fall through to the grant
+                    # authenticator vgi-rpc appends after this one.
+                    raise ValueError("sealed grant")
                 try:
-                    return _bearer_validate(req)
+                    known = _bearer_validate(req)
                 except Exception:
                     return AuthContext.anonymous()
+                # A test bearer is a fresh login: stamping auth_time lets the
+                # attach-ticket tests call issue_grant (900 s freshness rule)
+                # with nothing but a bearer DuckDB can send.
+                return AuthContext(
+                    principal=known.principal,
+                    authenticated=True,
+                    domain=known.domain,
+                    claims={"auth_time": time.time()},
+                )
 
             authenticate = _optional_bearer
 
@@ -371,8 +388,8 @@ def main() -> None:
         # way, and it guards a client SIGSEGV, so it was the worst one to lose.
         from vgi._test_fixtures.catalog_contents import CONTENTS_WORKERS
         from vgi._test_fixtures.narrow_bind.worker import NarrowBindWorker
+        from vgi._test_fixtures.ticket_probe import TicketProbeWorker
         from vgi._test_fixtures.twin_catalogs import TwinAWorker, TwinBWorker
-        from vgi.rpc_server import build_rpc_server, resolve_grant_keys
 
         worker_classes: list[type] = [
             ExampleWorker,
@@ -383,6 +400,7 @@ def main() -> None:
             TwinAWorker,
             TwinBWorker,
             *CONTENTS_WORKERS,
+            TicketProbeWorker,
         ]
         try:
             from vgi._test_fixtures.writable.worker import WritableWorker
@@ -398,17 +416,24 @@ def main() -> None:
         workers = [wc(quiet=True, log_level=effective_level) for wc in worker_classes]
         # One signing key shared by every sub-worker (which seal catalog
         # opaque-data envelopes) and the HTTP state-token machinery.
+        # Configured explicitly (VGI_SIGNING_KEY) or minted for this process.
+        # Only a configured key hosts vgi.attach_tickets.v1 (with grant keys).
+        signing_key_configured = bool(os.environ.get("VGI_SIGNING_KEY"))
         signing_key = os.environ.get("VGI_SIGNING_KEY", "").encode() or os.urandom(32)
-        for w in workers:
-            w._signing_key = signing_key
         worker: Any = workers[0] if len(workers) == 1 else MetaWorker(workers)
+        # Key the worker that is actually served: MetaWorker's setter passes it
+        # to every child, and build_rpc_server reads it from the served worker
+        # to decide whether to host vgi.attach_tickets.v1. Keying only the
+        # children left the MetaWorker keyless, so tickets were never hosted.
+        worker._signing_key = signing_key
         server = build_rpc_server(
             worker,
             transport="http",
             describe=describe,
             external_location=external_location,
             introspect_principals=introspect_principals,
-            grant_keys=resolve_grant_keys(),
+            grant_keys=grant_keys,
+            signing_key_configured=signing_key_configured,
         )
         wsgi_app = make_wsgi_app(
             server,

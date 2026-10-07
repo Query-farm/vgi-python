@@ -2202,6 +2202,7 @@ def main() -> None:
     from vgi._test_fixtures.narrow_bind.worker import NarrowBindWorker
     from vgi._test_fixtures.projection_repro.worker import ProjReproWorker
     from vgi._test_fixtures.schema_reconcile.worker import SchemaReconcileWorker
+    from vgi._test_fixtures.ticket_probe import TicketProbeWorker
     from vgi._test_fixtures.twin_catalogs import TwinAWorker, TwinBWorker
     from vgi.meta_worker import MetaWorker
 
@@ -2218,6 +2219,9 @@ def main() -> None:
         # contents_*: catalog_contents served / failing / not advertised, and
         # the version-0, revalidating and content-hash DDL catalogs.
         *CONTENTS_WORKERS,
+        # ticket_probe: attach tickets (vgi.attach_tickets.v1) -- one plain and
+        # one secret attach option whose effect a table reveals.
+        TicketProbeWorker,
     ]
     try:
         from vgi._test_fixtures.writable.worker import WritableWorker
