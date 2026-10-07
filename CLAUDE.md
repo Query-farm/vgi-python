@@ -523,6 +523,15 @@ hook. `MetaWorker` hosts its children's lists concatenated. Identity is not
 supplied through this hook. It stays opt-in via `resolve_token`/`mint_grant`
 and is hosted on HTTP only. See `docs/api/worker.md`.
 
+Client side, `Client.list_protocols()` returns the hosted set as
+`vgi_rpc.HostedProtocol` (re-exported from `vgi.client`) in server order, over
+any transport, and `Client.describe_protocol(name)` returns one protocol's
+methods. Both are thin wrappers over vgi-rpc's public `list_protocols` /
+`describe_protocol` on the primary proxy (no private vgi-rpc imports). A worker
+without reflection (`ReflectionNotSupportedError`) yields
+`[HostedProtocol("vgi.v2", "", "")]` rather than an error. Tests: `tests/test_client_reflection.py`; cross-language coverage is the
+C++ repo's `test/sql/integration/reflection/`. See `docs/api/client.md`.
+
 ### Access Log Sampling and Async Emission
 
 `--access-log-sample 0.05` keeps 5% of *successful* calls. Errors are always

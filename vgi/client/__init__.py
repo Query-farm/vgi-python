@@ -40,6 +40,8 @@ Usage (CLI):
 
 from typing import TYPE_CHECKING, Any
 
+from vgi_rpc import HostedProtocol
+
 from vgi.client.aggregate import (
     AggregateClientMixin,
     AggregateSession,
@@ -60,6 +62,7 @@ __all__ = [
     "CatalogSnapshot",
     "Client",
     "ClientError",
+    "HostedProtocol",
     "OutputWriter",
     "ResumableTableScan",
     "ResumeUnsupported",

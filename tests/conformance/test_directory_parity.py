@@ -85,6 +85,12 @@ _EXEMPTIONS: dict[str, str] = {
         "it is a DuckDB setting with no counterpart in the Python client, which is "
         "handed a transport directly."
     ),
+    "reflection": (
+        "Covered by sqllogictests: vgi_rpc.Reflection.v1 discovery is asserted "
+        "cross-language by vgi/test/sql/integration/reflection/, which every SDK's "
+        "fixture worker runs. Python Client coverage (Client.list_protocols / "
+        "describe_protocol on stdio, launch and HTTP) is in tests/test_client_reflection.py."
+    ),
     "simple_writable": (
         "INSERT/UPDATE/DELETE/RETURNING write paths are mirrored by "
         "test_writable.py, which drives the same operations against the writable "

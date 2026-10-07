@@ -66,6 +66,8 @@ Key methods
     client.copy_from(...)         — read a custom ``COPY ... FROM`` format
     client.copy_to(...)           — write a custom ``COPY ... TO`` format
     client.server_capabilities()  — HTTP only; upload-URL caps
+    client.list_protocols()       — protocols the worker hosts (reflection)
+    client.describe_protocol(...) — one hosted protocol's methods (reflection)
 
 See Also:
 --------
@@ -94,7 +96,14 @@ from queue import Queue
 from typing import IO, Any, Literal, cast
 
 import pyarrow as pa
-from vgi_rpc import WorkerPool
+from vgi_rpc import (
+    HostedProtocol,
+    ReflectionNotSupportedError,
+    ServiceDescription,
+    WorkerPool,
+)
+from vgi_rpc import describe_protocol as rpc_describe_protocol
+from vgi_rpc import list_protocols as rpc_list_protocols
 from vgi_rpc.log import Message
 from vgi_rpc.rpc import (
     AnnotatedBatch,
@@ -224,6 +233,10 @@ def _validate_accepted_max_response_bytes(value: int | None) -> int | None:
             f"{_MIN_ACCEPTED_MAX_RESPONSE_BYTES} through {_MAX_SAFE_HTTP_BYTES}, or None"
         )
     return value
+
+
+#: Wire name of the primary VGI protocol, the first protocol every worker hosts.
+VGI_PROTOCOL_NAME = "vgi.v2"
 
 
 @dataclass
@@ -1598,6 +1611,70 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         if self._transport == "httpi":
             return http_capabilities(base_url=self._base_url, prefix=self._http_prefix, client=httpx_client)
         return http_capabilities(base_url=self._base_url, client=httpx_client)
+
+    def _require_primary(self) -> WorkerConnection:
+        """Return the primary connection, or raise if the client is not started."""
+        if self._primary is None:
+            raise ClientError("Client not started. Call start() or use context manager.")
+        return self._primary
+
+    def list_protocols(self) -> list[HostedProtocol]:
+        """Return the protocols the worker hosts, in the worker's order.
+
+        Calls ``vgi_rpc.Reflection.v1.list_protocols`` through
+        ``vgi_rpc.list_protocols`` on the primary worker's connection, whatever
+        the transport, without opening a new one. ``vgi.v2`` is always first; a
+        worker's extra protocols (``Worker.hosted_protocols()``) follow, then
+        the framework's own. Use it to discover an optional protocol before
+        calling it, rather than calling it and reading an error.
+
+        Do not call it while a stream is open on this client: over pipe-like
+        transports it shares the stream's connection.
+
+        A worker that does not host reflection (vgi-rpc raises
+        ``ReflectionNotSupportedError``) is not an error: the result is a single
+        ``HostedProtocol("vgi.v2", "", "")``, since ``vgi.v2`` is the one
+        protocol every worker hosts. The empty hash marks the entry as inferred.
+
+        Returns:
+            One [`HostedProtocol`][] per hosted protocol.
+
+        Raises:
+            [`ClientError`][]: If the client is not started, or the worker
+                answers reflection with any other error.
+
+        """
+        primary = self._require_primary()
+        try:
+            return rpc_list_protocols(primary.proxy)
+        except ReflectionNotSupportedError:
+            return [HostedProtocol(name=VGI_PROTOCOL_NAME, version="", hash="")]
+        except RpcError as e:
+            raise ClientError(f"list_protocols failed: {e}") from e
+
+    def describe_protocol(self, name: str) -> ServiceDescription:
+        """Return one hosted protocol's full description, via reflection.
+
+        Calls ``vgi_rpc.describe_protocol`` on the primary connection (two
+        round trips: ``list_protocols``, then ``describe(name)``).
+
+        Args:
+            name: The protocol's wire name, as ``list_protocols`` reports it.
+
+        Returns:
+            A ``vgi_rpc.ServiceDescription`` with each method's type and
+            parameter/result schemas.
+
+        Raises:
+            [`ClientError`][]: If the client is not started, the worker does
+                not host *name*, or the worker does not answer reflection.
+
+        """
+        primary = self._require_primary()
+        try:
+            return rpc_describe_protocol(primary.proxy, name)
+        except RpcError as e:
+            raise ClientError(f"describe_protocol({name!r}) failed: {e}") from e
 
     def __enter__(self) -> Client:
         """Enter the context manager by starting the worker subprocess."""
