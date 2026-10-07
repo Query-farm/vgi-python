@@ -2,34 +2,43 @@
 
 """The generated ``vgi.v2`` registries reproduce the reference protocol hash.
 
-Each SDK's vgi-rpc port derives the wire schemas from the generated interface
-by reflection, so the meaningful check is not "the generator read the model"
-but "what it *rendered* derives back to the reference". These tests parse the
-rendered Java and C#, derive every params / result / header field by that
-port's ``SchemaDerivation`` rules, and assert the resulting
-``vgi_rpc.protocol_hash.v1`` digest equals the live ``VgiProtocol`` hash --
-computed here, never a pinned constant, so a protocol change moves both sides.
+One parametrization runs over every backend of the registry generator
+(:data:`vgi.codegen._registry_backend.REGISTRY_BACKENDS`). The meaningful
+check is not "the generator read the model" but "what it *rendered* derives
+back to the reference": each backend's ``derive`` reads its rendered file the
+way that SDK's vgi-rpc port does (reflection over signatures for Java and C#,
+struct tags for Go, the registered schema values for TypeScript, Rust and
+C++), and the rebuilt method list must hash to the live ``VgiProtocol``
+digest -- computed here, never a pinned constant, so a protocol change moves
+both sides. Each backend's ``tamper`` proves the derivation reads the text.
 
-Drift: the checked-in ``VgiService.java`` / ``IVgiService.g.cs`` must equal
-what the generators emit now (skipped when the sibling checkout is absent;
-``VGI_JAVA_ROOT`` / ``VGI_CSHARP_ROOT`` override the location).
+Drift: each SDK's checked-in file must equal what its backend emits now
+(skipped when the sibling checkout is absent; each backend's ``root_env``,
+e.g. ``VGI_TYPESCRIPT_ROOT``, overrides the location).
 """
 
 from __future__ import annotations
 
-import dataclasses
 import os
 import re
 from pathlib import Path
-from typing import Any
 
 import pyarrow as pa
 import pytest
 from vgi_rpc.rpc._protocol_hash import compute_protocol_hash
-from vgi_rpc.rpc._types import MethodType, rpc_methods  # type: ignore[attr-defined]
+from vgi_rpc.rpc._types import rpc_methods
 
-from vgi.codegen import csharp_registry, csharp_types, java_registry
-from vgi.codegen._registry import RegistryMethod, preimage_hash, protocol_name, registry_methods
+from vgi.codegen import cpp_registry, rust_registry, ts_registry
+from vgi.codegen._common import GeneratorError
+from vgi.codegen._registry import (
+    MethodKind,
+    camel,
+    identifiers,
+    preimage_hash,
+    protocol_name,
+    registry_methods,
+)
+from vgi.codegen._registry_backend import RegistryBackend, registry_backends
 from vgi.protocol import VgiProtocol
 
 _REGEN_HINT = (
@@ -41,25 +50,12 @@ _REGEN_HINT = (
     "the checked-in artifact. The script renders to memory first."
 )
 
-_LIST_UTF8 = pa.list_(pa.field("item", pa.string(), nullable=True))
-_MAP_UTF8 = pa.map_(pa.string(), pa.string())
-_DICT_UTF8 = pa.dictionary(pa.int16(), pa.string())
+_BACKENDS = registry_backends()
+_IDS = [b.key for b in _BACKENDS]
 
 
 def _live_hash() -> str:
     return str(compute_protocol_hash(protocol_name(), rpc_methods(VgiProtocol)))
-
-
-def _model() -> dict[str, RegistryMethod]:
-    return {m.name: m for m in registry_methods()}
-
-
-def _header_class(name: str, names: dict[str, str]) -> type:
-    """The Python header dataclass a rendered header type name stands for."""
-    for m in registry_methods():
-        if m.header_type is not None and names.get(m.header_type.__name__, m.header_type.__name__) == name:
-            return m.header_type
-    raise AssertionError(f"no vgi.v2 header type renders as {name}")
 
 
 def test_model_reproduces_the_live_hash() -> None:
@@ -67,202 +63,114 @@ def test_model_reproduces_the_live_hash() -> None:
     assert preimage_hash(protocol_name(), registry_methods()) == _live_hash()
 
 
-# ---------------------------------------------------------------------------
-# Java: derive back by vgi-rpc-java's SchemaDerivation rules
-# ---------------------------------------------------------------------------
-
-_JAVA_METHOD = re.compile(
-    r"((?:    @\w+(?:\([^)]*\))?\n)*)    default (.+?) (\w+)\(\n"
-    r"((?:            .+,\n)*)            CallContext ctx\) \{\n"
-    r'        throw notImplemented\("(\w+)"\);\n    \}'
-)
-_JAVA_PARAM = re.compile(r"^((?:@\w+(?:\([^)]*\))? )*)(.+) (\w+)$")
-_JAVA_RECORDS = set(java_registry.JAVA_TYPES.values()) | set(java_registry.JAVA_RAW_RESULTS.values())
-
-
-def _java_type(java_type: str, annotations: str) -> pa.DataType:
-    if "@ArrowField(ArrowFieldType.DICT_INT16_UTF8)" in annotations:
-        return _DICT_UTF8
-    if java_type in _JAVA_RECORDS or java_type == "byte[]":
-        return pa.binary()
-    simple: dict[str, pa.DataType] = {
-        "String": pa.string(),
-        "boolean": pa.bool_(),
-        "Boolean": pa.bool_(),
-        "long": pa.int64(),
-        "Long": pa.int64(),
-        "List<String>": _LIST_UTF8,
-        "Map<String, String>": _MAP_UTF8,
-    }
-    return simple[java_type]
-
-
-def _java_derived(text: str | None = None) -> list[RegistryMethod]:
-    text = java_registry.render() if text is None else text
-    model = _model()
-    out: list[RegistryMethod] = []
-    for match in _JAVA_METHOD.finditer(text):
-        method_ann, ret, name, params_text, stub_name = match.groups()
-        assert stub_name == name, f"{name}'s default body reports {stub_name}"
-        base = model[name]
-        params = []
-        for line, p in zip(params_text.splitlines(), base.params, strict=True):
-            pm = _JAVA_PARAM.match(line.strip().rstrip(","))
-            assert pm is not None, line
-            annotations, java_type, pname = pm.groups()
-            assert pname == p.name
-            field = pa.field(pname, _java_type(java_type, annotations), nullable="@Nullable" in annotations)
-            params.append(dataclasses.replace(p, field=field))
-        is_stream = ret.startswith("RpcStream<")
-        result = None
-        if not is_stream and ret != "void":
-            result = pa.field("result", _java_type(ret, ""), nullable="@Nullable" in method_ann)
-        header_match = re.search(r"@StreamHeader\((\w+)\.class\)", method_ann)
-        header = _header_class(header_match.group(1), java_registry.JAVA_TYPES) if header_match else None
-        out.append(
-            dataclasses.replace(
-                base,
-                method_type=MethodType.STREAM if is_stream else MethodType.UNARY,
-                params=tuple(params),
-                result_field=result,
-                header_type=header,
-            )
-        )
-    return out
-
-
-def test_java_registry_derives_the_live_hash() -> None:
-    """The rendered VgiService, read back as vgi-rpc-java reads it, is the reference vgi.v2."""
-    derived = _java_derived()
-    assert sorted(m.name for m in derived) == sorted(_model()), "rendered method set differs from vgi.v2"
+@pytest.mark.parametrize("backend", _BACKENDS, ids=_IDS)
+def test_registry_derives_the_live_hash(backend: RegistryBackend) -> None:
+    """The rendered registry, read back as the SDK's vgi-rpc port reads it, is the reference vgi.v2."""
+    derived = backend.derived_methods()
+    assert sorted(m.name for m in derived) == sorted(m.name for m in registry_methods()), (
+        f"{backend.language}: rendered method set differs from vgi.v2"
+    )
     assert preimage_hash(protocol_name(), derived) == _live_hash()
 
 
-# ---------------------------------------------------------------------------
-# C#: derive back by vgi-rpc-csharp's SchemaDerivation rules
-# ---------------------------------------------------------------------------
-
-_CS_METHOD = re.compile(
-    r"((?:    \[.+\]\n)*)    (Task(?:<.+>)?) (\w+)Async\(\n((?:        .+,\n)*)        ICallContext\? ctx = null\) =>\n"
-    r'        throw UnimplementedMethod\.For\("(\w+)"\);'
-)
-_CS_PARAM = re.compile(r"^((?:\[[^\]]+\] )*)(.+?) (\w+)(?: = .+)?$")
+@pytest.mark.parametrize("backend", _BACKENDS, ids=_IDS)
+def test_tampered_rendering_changes_the_derived_hash(backend: RegistryBackend) -> None:
+    """Derivation reads the rendered text: the backend's one-edit tamper moves the digest."""
+    text = backend.render()
+    tampered = backend.tamper.apply(text)
+    assert tampered != text
+    assert preimage_hash(protocol_name(), backend.derived_methods(tampered)) != _live_hash()
 
 
-def _cs_type(clr: str, enums: set[str], records: set[str]) -> tuple[pa.DataType, bool]:
-    nullable = clr.endswith("?")
-    clr = clr.rstrip("?")
-    if clr in enums:
-        return _DICT_UTF8, nullable
-    if clr in records or clr == "byte[]":
-        return pa.binary(), nullable
-    simple: dict[str, pa.DataType] = {
-        "string": pa.string(),
-        "bool": pa.bool_(),
-        "long": pa.int64(),
-        "List<string>": _LIST_UTF8,
-        "Dictionary<string, string>": _MAP_UTF8,
-    }
-    return simple[clr], nullable
+@pytest.mark.parametrize("backend", _BACKENDS, ids=_IDS)
+def test_generator_is_deterministic(backend: RegistryBackend) -> None:
+    """Rendering twice produces byte-identical output."""
+    assert backend.render() == backend.render()
 
 
-def _cs_derived() -> list[RegistryMethod]:
-    text = csharp_registry.render()
-    cs_model = csharp_types.build_model()
-    enums, records = set(cs_model.enums), set(cs_model.records)
-    model = _model()
-    by_pascal = {csharp_types._pascal(name): name for name in model}
-    out: list[RegistryMethod] = []
-    for match in _CS_METHOD.finditer(text):
-        attrs, ret, pascal, params_text, stub_name = match.groups()
-        name = by_pascal[pascal]
-        assert csharp_types._to_snake_case(pascal) == name, f"{pascal}Async does not map to {name}"
-        assert stub_name == name, f"{name}'s default body reports {stub_name}"
-        base = model[name]
-        params = []
-        for line, p in zip(params_text.splitlines(), base.params, strict=True):
-            pm = _CS_PARAM.match(line.strip().rstrip(","))
-            assert pm is not None, line
-            _, clr, pname = pm.groups()
-            assert csharp_types._to_snake_case(pname) == p.name
-            dtype, nullable = _cs_type(clr, enums, records)
-            params.append(dataclasses.replace(p, field=pa.field(p.name, dtype, nullable=nullable)))
-        inner = ret[len("Task<") : -1] if ret.startswith("Task<") else None
-        is_stream = inner is not None and inner.startswith("RpcStream<")
-        result = None
-        if inner is not None and not is_stream:
-            dtype, nullable = _cs_type(inner, enums, records)
-            result = pa.field("result", dtype, nullable=nullable)
-        header_match = re.search(r"\[StreamHeader\(typeof\((\w+)\)\)\]", attrs)
-        header = _header_class(header_match.group(1), csharp_types.CSHARP_NAMES) if header_match else None
-        out.append(
-            dataclasses.replace(
-                base,
-                method_type=MethodType.STREAM if is_stream else MethodType.UNARY,
-                params=tuple(params),
-                result_field=result,
-                header_type=header,
-            )
-        )
-    return out
-
-
-def test_csharp_registry_derives_the_live_hash() -> None:
-    """The rendered IVgiService, read back as vgi-rpc-csharp reads it, is the reference vgi.v2."""
-    derived = _cs_derived()
-    assert sorted(m.name for m in derived) == sorted(_model()), "rendered method set differs from vgi.v2"
-    assert preimage_hash(protocol_name(), derived) == _live_hash()
-
-
-# ---------------------------------------------------------------------------
-# A changed protocol changes the rendering (the test above is not vacuous)
-# ---------------------------------------------------------------------------
-
-
-def test_a_flipped_nullability_changes_the_derived_hash() -> None:
-    """Derivation reads the rendered text: one dropped ``@Nullable`` moves the digest."""
-    text = java_registry.render()
-    start = text.index("    default ItemsResponse catalog_schemas(")
-    end = text.index("CallContext ctx", start)
-    target = "@Nullable byte[] transaction_opaque_data"
-    assert target in text[start:end]
-    tampered = text[:start] + text[start:end].replace(target, "byte[] transaction_opaque_data") + text[end:]
-    assert preimage_hash(protocol_name(), _java_derived(tampered)) != _live_hash()
-
-
-# ---------------------------------------------------------------------------
-# Drift
-# ---------------------------------------------------------------------------
-
-
-def _root(env: str, repo: str, marker: str) -> Path:
-    override = os.environ.get(env)
+def _root(backend: RegistryBackend) -> Path:
+    override = os.environ.get(backend.root_env)
     if override:
         return Path(override)
-    candidates = [Path(__file__).resolve().parents[2] / repo, Path.home() / repo]
+    candidates = [Path(__file__).resolve().parents[2] / backend.repo, Path.home() / backend.repo]
     for candidate in candidates:
-        if (candidate / marker).parent.is_dir():
+        if (candidate / backend.target).parent.is_dir():
             return candidate
     return candidates[0]
 
 
-_TARGETS: list[tuple[Any, str, str, str]] = [
-    (java_registry, "VGI_JAVA_ROOT", "vgi-java", java_registry.TARGET),
-    (csharp_registry, "VGI_CSHARP_ROOT", "vgi-csharp", csharp_registry.TARGET),
-]
-
-
-@pytest.mark.parametrize(("module", "env", "repo", "relative"), _TARGETS, ids=["java", "csharp"])
-def test_generator_is_deterministic(module: Any, env: str, repo: str, relative: str) -> None:
-    """Rendering twice produces byte-identical output."""
-    assert module.render() == module.render()
-
-
-@pytest.mark.parametrize(("module", "env", "repo", "relative"), _TARGETS, ids=["java", "csharp"])
-def test_checked_in_registry_matches_generator(module: Any, env: str, repo: str, relative: str) -> None:
+@pytest.mark.parametrize("backend", _BACKENDS, ids=_IDS)
+def test_checked_in_registry_matches_generator(backend: RegistryBackend) -> None:
     """Drift check: the checked-in registry matches what the generator produces."""
-    path = _root(env, repo, relative) / relative
+    path = _root(backend) / backend.target
     if not path.parent.is_dir():
-        pytest.skip(f"{path.parent} not found; set {env} or check out {repo}")
+        pytest.skip(f"{path.parent} not found; set {backend.root_env} or check out {backend.repo}")
     assert path.exists(), f"{path} is missing.\n{_REGEN_HINT}"
-    assert path.read_text() == module.render(), f"{path} is stale.\n{_REGEN_HINT}"
+    assert path.read_text() == backend.render(), f"{path} is stale.\n{_REGEN_HINT}"
+
+
+# ---------------------------------------------------------------------------
+# The shared core
+# ---------------------------------------------------------------------------
+
+
+def test_backend_keys_and_targets_are_unique() -> None:
+    """Each backend has its own id and its own (checkout, target)."""
+    assert len(set(_IDS)) == len(_IDS)
+    assert len({(b.repo, b.target) for b in _BACKENDS}) == len(_BACKENDS)
+
+
+def test_identifier_collisions_are_refused() -> None:
+    """Two wire names that map to one identifier fail generation."""
+    with pytest.raises(GeneratorError, match="both map to the VgiService key fooBar"):
+        identifiers(["foo_bar", "foo__bar"], lambda n: camel(n.replace("__", "_")), what="VgiService key")
+
+
+def test_method_kinds_cover_the_protocol() -> None:
+    """Every kind occurs, and a kind agrees with the method type and result."""
+    assert {m.kind for m in registry_methods()} == set(MethodKind)
+    for m in registry_methods():
+        assert (m.kind is MethodKind.STREAM) == m.is_stream
+        assert (m.kind is MethodKind.UNARY) == (m.result_field is not None)
+
+
+def test_a_dropped_registration_changes_the_derived_method_set() -> None:
+    """A table row missing (the hand-written registries' old failure) is caught before the hash."""
+    text = cpp_registry.render()
+    row = text.index('    {.name = "catalog_index_drop",')
+    end = text.index("    {.name = ", row + 1)
+    derived = cpp_registry.BACKEND.derived_methods(text[:row] + text[end:])
+    assert "catalog_index_drop" not in {m.name for m in derived}
+    assert preimage_hash(protocol_name(), derived) != _live_hash()
+
+
+# ---------------------------------------------------------------------------
+# Language-specific guarantees
+# ---------------------------------------------------------------------------
+
+
+def test_typescript_rejects_an_unmapped_arrow_type() -> None:
+    """A column type with no TypeScript mapping fails generation instead of emitting ``any``."""
+    with pytest.raises(GeneratorError, match="no TypeScript mapping"):
+        ts_registry._ts_value_type(pa.float16(), "probe")
+
+
+def test_cpp_registry_payloads_are_the_result_records() -> None:
+    """A row's payload is its result record's schema, and only a record result has one."""
+    known = cpp_registry.factories(cpp_registry.protocol_schemas_text(cpp_registry.BACKEND.namespace))
+    rows = cpp_registry.rows(cpp_registry.render())
+    for m in registry_methods():
+        payload = rows[m.name].get("payload")
+        if m.result_record is not None:
+            assert payload is not None, f"{m.name} has no payload"
+            assert known[payload].equals(m.result_annotation.ARROW_SCHEMA), m.name  # type: ignore[attr-defined]
+        else:
+            assert payload is None, f"{m.name} returns raw bytes but declares {payload}"
+
+
+def test_rust_streams_register_a_state_decoder() -> None:
+    """Every method that needs a state decoder gets the HTTP continuation hook, and only those."""
+    text = rust_registry.render()
+    for m in registry_methods():
+        assert (f"fn decode_{m.name}_state(" in text) == m.needs_state_decoder, m.name
+        assert bool(re.search(rf"d\.decode_{m.name}_state\(state\)", text)) == m.needs_state_decoder, m.name

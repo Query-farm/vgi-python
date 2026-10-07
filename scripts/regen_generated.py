@@ -15,7 +15,8 @@ somewhere else. Each artifact here is rendered into memory, checked non-empty,
 and only then written.
 
 Targets in sibling repos that are not checked out are skipped, not failed:
-nobody has all of them.
+nobody has all of them. A registry backend's ``root_env`` (``VGI_JAVA_ROOT``,
+``VGI_TYPESCRIPT_ROOT``, ...) points its SDK target at another checkout.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import io
+import os
 import sys
 from pathlib import Path
 
@@ -64,10 +66,6 @@ _TARGETS: list[tuple[str, str, str]] = [
         "test/QueryFarm.Vgi.Tests/Generated/VgiProtocolSchemas.g.cs",
         "vgi-csharp",
     ),
-    # The vgi.v2 registries: the interface each SDK's vgi-rpc port reflects over
-    # to register the protocol, with an UNIMPLEMENTED default on every method.
-    ("vgi.codegen.csharp_registry", importlib.import_module("vgi.codegen.csharp_registry").TARGET, "vgi-csharp"),
-    ("vgi.codegen.java_registry", importlib.import_module("vgi.codegen.java_registry").TARGET, "vgi-java"),
     (
         "vgi.codegen.java_schemas",
         "vgi/src/test/java/farm/query/vgi/generated/VgiProtocolSchemas.java",
@@ -85,8 +83,20 @@ _TARGETS += [
 ]
 
 
+# The vgi.v2 registries: one generator, one backend per SDK (see
+# vgi.codegen._registry). Each declares its own target, checkout and override.
+_REGISTRY_BACKENDS = importlib.import_module("vgi.codegen._registry_backend").registry_backends()
+_TARGETS += [(b.module, b.target, b.repo) for b in _REGISTRY_BACKENDS]
+
+#: Environment overrides for a checkout's location (``VGI_TYPESCRIPT_ROOT=...``).
+_ROOT_ENV: dict[str, str] = {b.repo: b.root_env for b in _REGISTRY_BACKENDS}
+
+
 def _repo_root(name: str) -> Path | None:
     """Locate a sibling checkout, or ``None`` when it is not present."""
+    override = os.environ.get(_ROOT_ENV.get(name, ""))
+    if override:
+        return Path(override) if Path(override).is_dir() else None
     siblings = Path(__file__).resolve().parents[2]
     for candidate in (siblings / name, Path.home() / name):
         if candidate.is_dir():

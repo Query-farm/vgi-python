@@ -36,36 +36,35 @@ protocol is generated without any edit to this file.
 
    uv run --project ~/Development/vgi-python python scripts/regen_generated.py
 
-``tests/test_generated_registry.py`` fails when the checked-in file and the
-generator disagree, and derives the protocol hash back from the rendered Java.
+:class:`JavaRegistry` is this language's backend for the one registry
+generator (:mod:`vgi.codegen._registry_backend`); its ``derive`` reads the
+rendered interface back by vgi-rpc-java's ``SchemaDerivation`` rules.
 """
 
 from __future__ import annotations
 
-import io
-import sys
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import Any
 
 import pyarrow as pa
 
 from vgi.codegen import java_types
-from vgi.codegen._common import GeneratorError, provenance_comment
+from vgi.codegen._common import GeneratorError
 from vgi.codegen._registry import (
+    MethodKind,
     RegistryMethod,
     RegistryParam,
-    is_record,
+    check_raw_results,
+    check_record_table,
     paragraphs,
     protocol_name,
     protocol_version,
     registry_methods,
+    require_binary,
 )
-
-if TYPE_CHECKING:
-    from typing import TextIO
-
-
-GENERATOR_VERSION = "1"
+from vgi.codegen._registry_backend import DerivedMethod, RegistryBackend, Tamper, expect
 
 JAVA_PACKAGE = "farm.query.vgi"
 
@@ -132,8 +131,6 @@ JAVA_STREAM_TYPE = "RpcStream<? extends StreamState>"
 
 _CTX = "ctx"
 
-_REGEN_LINE = "uv run --project ~/Development/vgi-python python scripts/regen_generated.py"
-
 
 @dataclass(frozen=True)
 class JavaParam:
@@ -155,30 +152,22 @@ class JavaMethod:
     params: tuple[JavaParam, ...]
 
 
-def _record_name(annotation: object) -> str | None:
-    """The Java record bound for a Python record annotation, or ``None`` for ``byte[]``."""
-    if not is_record(annotation):
-        return None
-    return JAVA_TYPES.get(annotation.__name__)  # type: ignore[attr-defined]
+def _record_name(record: str | None) -> str | None:
+    """The Java record bound for a Python record name, or ``None`` for ``byte[]``."""
+    return None if record is None else JAVA_TYPES.get(record)
 
 
 def _param(m: RegistryMethod, p: RegistryParam) -> JavaParam:
     origin = f"{m.name}({p.name})"
-    record = _record_name(p.annotation)
+    record = _record_name(p.record)
     nullable = ("@Nullable",) if p.field.nullable else ()
     token = f"{{@code {p.field.type}}}{', nullable' if p.field.nullable else ''}"
     if record is not None:
-        if not p.field.type.equals(pa.binary()):
-            raise GeneratorError(f"{origin}: a record binds only a binary column, got {p.field.type}")
-        return JavaParam(
-            p.name,
-            record,
-            nullable,
-            f"the packed {{@code {p.annotation.__name__}}} ({token})",  # type: ignore[attr-defined]
-        )
+        require_binary(p.field, origin, "a record's column")
+        return JavaParam(p.name, record, nullable, f"the packed {{@code {p.record}}} ({token})")
     component = java_types._component(p.field, m.name)
-    if is_record(p.annotation):
-        doc = f"the packed {{@code {p.annotation.__name__}}}, as its IPC bytes ({token})"  # type: ignore[attr-defined]
+    if p.record is not None:
+        doc = f"the packed {{@code {p.record}}}, as its IPC bytes ({token})"
     else:
         doc = f"the {{@code {p.name}}} column ({token})"
     return JavaParam(p.name, component.java_type, component.annotations, doc)
@@ -194,45 +183,24 @@ def _result(m: RegistryMethod) -> tuple[str, tuple[str, ...]]:
         return JAVA_STREAM_TYPE, (f"@StreamHeader({header}.class)",)
     if m.result_field is None:
         return "void", ()
-    if not m.result_field.type.equals(pa.binary()):
-        raise GeneratorError(f"{m.name}: result is {m.result_field.type}, expected binary")
+    require_binary(m.result_field, m.name)
     nullable = ("@Nullable",) if m.result_field.nullable else ()
     raw = JAVA_RAW_RESULTS.get(m.name)
     if raw is not None:
-        if m.result_annotation is not bytes:
-            raise GeneratorError(f"{m.name}: JAVA_RAW_RESULTS applies only to a raw-bytes result")
         return raw, nullable
-    record = _record_name(m.result_annotation)
-    return record or "byte[]", nullable
+    return _record_name(m.result_record) or "byte[]", nullable
 
 
-def java_methods() -> list[JavaMethod]:
+def java_methods(methods: Sequence[RegistryMethod] | None = None) -> list[JavaMethod]:
     """Every ``vgi.v2`` method as vgi-java declares it."""
+    methods = registry_methods() if methods is None else methods
+    check_record_table(JAVA_TYPES, methods, what="JAVA_TYPES", headers=True)
+    check_raw_results(JAVA_RAW_RESULTS, methods, what="JAVA_RAW_RESULTS")
     out = []
-    for m in registry_methods():
+    for m in methods:
         ret, ann = _result(m)
         out.append(JavaMethod(m, ret, ann, tuple(_param(m, p) for p in m.params)))
     return out
-
-
-def check_mappings() -> None:
-    """Refuse a stale :data:`JAVA_TYPES` / :data:`JAVA_RAW_RESULTS` entry (a typo would bind nothing)."""
-    methods = registry_methods()
-    seen: set[str] = set()
-    for m in methods:
-        for p in m.params:
-            if is_record(p.annotation):
-                seen.add(p.annotation.__name__)  # type: ignore[attr-defined]
-        if is_record(m.result_annotation):
-            seen.add(m.result_annotation.__name__)  # type: ignore[attr-defined]
-        if m.header_type is not None:
-            seen.add(m.header_type.__name__)
-    stale = sorted(set(JAVA_TYPES) - seen)
-    if stale:
-        raise GeneratorError(f"JAVA_TYPES names classes no vgi.v2 method uses: {stale}")
-    unknown = sorted(set(JAVA_RAW_RESULTS) - {m.name for m in methods})
-    if unknown:
-        raise GeneratorError(f"JAVA_RAW_RESULTS names unknown methods: {unknown}")
 
 
 # ---------------------------------------------------------------------------
@@ -320,9 +288,8 @@ _CLASS_DOC = """\
  */"""
 
 
-def _render_body() -> str:
-    check_mappings()
-    methods = java_methods()
+def _render_body(model: Sequence[RegistryMethod]) -> str:
+    methods = java_methods(model)
 
     imports = {
         "farm.query.vgirpc.CallContext",
@@ -392,36 +359,93 @@ def _render_body() -> str:
     return "\n".join(lines) + "\n"
 
 
-def emit(out: TextIO) -> None:
-    """Emit the generated ``VgiService.java`` to *out*."""
-    body = _render_body()
-    out.write(
-        provenance_comment(
-            generator_module="vgi.codegen.java_registry",
-            generator_command="python -m vgi.codegen.java_registry",
-            generator_version=GENERATOR_VERSION,
-            regen_command_lines=[_REGEN_LINE],
-            body=body,
-        )
+# ---------------------------------------------------------------------------
+# Derive-back: vgi-rpc-java's SchemaDerivation rules
+# ---------------------------------------------------------------------------
+
+_METHOD = re.compile(
+    r"((?:    @\w+(?:\([^)]*\))?\n)*)    default (.+?) (\w+)\(\n"
+    r"((?:            .+,\n)*)            CallContext ctx\) \{\n"
+    r'        throw notImplemented\("(\w+)"\);\n    \}'
+)
+_PARAM = re.compile(r"^((?:@\w+(?:\([^)]*\))? )*)(.+) (\w+)$")
+_LIST_UTF8 = pa.list_(pa.field("item", pa.string(), nullable=True))
+_SIMPLE: dict[str, pa.DataType] = {
+    "String": pa.string(),
+    "boolean": pa.bool_(),
+    "Boolean": pa.bool_(),
+    "long": pa.int64(),
+    "Long": pa.int64(),
+    "List<String>": _LIST_UTF8,
+    "Map<String, String>": pa.map_(pa.string(), pa.string()),
+}
+
+
+def _derived_type(java_type: str, annotations: str) -> pa.DataType:
+    """A Java parameter / return type as vgi-rpc-java derives its Arrow type."""
+    if "@ArrowField(ArrowFieldType.DICT_INT16_UTF8)" in annotations:
+        return pa.dictionary(pa.int16(), pa.string())
+    if java_type in set(JAVA_TYPES.values()) | set(JAVA_RAW_RESULTS.values()) or java_type == "byte[]":
+        return pa.binary()
+    expect(java_type in _SIMPLE, f"vgi-rpc-java derives no Arrow type from {java_type}")
+    return _SIMPLE[java_type]
+
+
+class JavaRegistry(RegistryBackend):
+    """vgi-java's ``VgiService``: the interface vgi-rpc-java reflects over."""
+
+    key = "java"
+    language = "Java"
+    module = "vgi.codegen.java_registry"
+    target = TARGET
+    repo = "vgi-java"
+    root_env = "VGI_JAVA_ROOT"
+    tamper = Tamper(
+        start="    default ItemsResponse catalog_schemas(",
+        end="CallContext ctx",
+        old="@Nullable byte[] transaction_opaque_data",
+        new="byte[] transaction_opaque_data",
     )
-    out.write("\n")
-    out.write(body)
+
+    def render_body(self, methods: Sequence[RegistryMethod]) -> str:  # noqa: D102
+        return _render_body(methods)
+
+    def derive(self, text: str) -> list[DerivedMethod]:  # noqa: D102
+        headers = {
+            JAVA_TYPES.get(m.header_type.__name__): m.header_schema
+            for m in registry_methods()
+            if m.header_type is not None
+        }
+        out: list[DerivedMethod] = []
+        for match in _METHOD.finditer(text):
+            method_ann, ret, name, params_text, stub_name = match.groups()
+            expect(stub_name == name, f"{name}'s default body reports {stub_name}")
+            params: list[pa.Field[Any]] = []
+            for line in params_text.splitlines():
+                pm = _PARAM.match(line.strip().rstrip(","))
+                expect(pm is not None, f"{name}: unparsed parameter {line!r}")
+                assert pm is not None
+                annotations, java_type, pname = pm.groups()
+                dtype = _derived_type(java_type, annotations)
+                params.append(pa.field(pname, dtype, nullable="@Nullable" in annotations))
+            header = None
+            if ret.startswith("RpcStream<"):
+                kind = MethodKind.STREAM
+                if hm := re.search(r"@StreamHeader\((\w+)\.class\)", method_ann):
+                    expect(hm.group(1) in headers, f"{name}: @StreamHeader({hm.group(1)}) is no vgi.v2 header")
+                    header = headers[hm.group(1)]
+                result = None
+            elif ret == "void":
+                kind, result = MethodKind.VOID, None
+            else:
+                kind = MethodKind.UNARY
+                result = pa.field("result", _derived_type(ret, ""), nullable="@Nullable" in method_ann)
+            out.append(DerivedMethod(name, kind, params, result, header))
+        return out
 
 
-def render() -> str:
-    """The full text of the generated file."""
-    buf = io.StringIO()
-    emit(buf)
-    return buf.getvalue()
-
-
-def main() -> None:
-    """Console-script entrypoint -- write ``VgiService.java`` to stdout."""
-    try:
-        emit(sys.stdout)
-    except GeneratorError as e:
-        print(f"\nerror: {e}\n", file=sys.stderr)
-        sys.exit(2)
+BACKEND = JavaRegistry()
+emit, render, main = BACKEND.emit, BACKEND.render, BACKEND.main
 
 
 if __name__ == "__main__":

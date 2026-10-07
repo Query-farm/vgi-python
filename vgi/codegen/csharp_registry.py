@@ -33,36 +33,35 @@ instead. Both are the same ``binary`` column.
 
    uv run --project ~/Development/vgi-python python scripts/regen_generated.py
 
-``tests/test_generated_registry.py`` fails when the checked-in file and the
-generator disagree, and derives the protocol hash back from the rendered C#.
+:class:`CSharpRegistry` is this language's backend for the one registry
+generator (:mod:`vgi.codegen._registry_backend`); its ``derive`` reads the
+rendered interface back by vgi-rpc-csharp's ``SchemaDerivation`` rules.
 """
 
 from __future__ import annotations
 
 import enum
-import io
-import sys
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import Any
 
 import pyarrow as pa
 
 from vgi.codegen import csharp_types
-from vgi.codegen._common import GeneratorError, provenance_comment
+from vgi.codegen._common import GeneratorError
 from vgi.codegen._registry import (
     NO_DEFAULT,
+    MethodKind,
     RegistryMethod,
     RegistryParam,
-    is_record,
+    check_raw_results,
+    identifiers,
     paragraphs,
     registry_methods,
+    require_binary,
 )
-
-if TYPE_CHECKING:
-    from typing import TextIO
-
-
-GENERATOR_VERSION = "1"
+from vgi.codegen._registry_backend import DerivedMethod, RegistryBackend, Tamper, expect
 
 DEFAULT_NAMESPACE = "QueryFarm.Vgi.Protocol"
 
@@ -79,8 +78,6 @@ CSHARP_RAW_RESULTS: dict[str, str] = {
 CSHARP_STREAM_TYPE = "RpcStream<StreamState>"
 
 _CTX = "ICallContext? ctx = null"
-
-_REGEN_LINE = "uv run --project ~/Development/vgi-python python scripts/regen_generated.py"
 
 _GENERIC_NS = "global::System.Collections.Generic."
 
@@ -135,14 +132,13 @@ def _param(m: RegistryMethod, p: RegistryParam, model: csharp_types._Model) -> C
         raise GeneratorError(f"{origin}: C# parameter {name} does not convert back to its wire name")
     nullable = "?" if p.field.nullable else ""
     token = f"<c>{csharp_types._xml_text(str(p.field.type))}</c>{', nullable' if p.field.nullable else ''}"
-    if is_record(p.annotation):
-        if not p.field.type.equals(pa.binary()):
-            raise GeneratorError(f"{origin}: a record binds only a binary column, got {p.field.type}")
-        record = csharp_types.csharp_name(p.annotation.__name__)  # type: ignore[attr-defined]
+    if p.record is not None:
+        require_binary(p.field, origin, "a record's column")
+        record = csharp_types.csharp_name(p.record)
         if record not in model.records:
             raise GeneratorError(f"{origin}: {record} is not a generated C# record")
         clr = record
-        doc = f"The packed <c>{p.annotation.__name__}</c> ({token})."  # type: ignore[attr-defined]
+        doc = f"The packed <c>{p.record}</c> ({token})."
         attrs: tuple[str, ...] = ()
     else:
         mapped = csharp_types._map(p.field.type, p.annotation, model=model, origin=origin)
@@ -163,16 +159,13 @@ def _result(m: RegistryMethod, model: csharp_types._Model) -> tuple[str, str | N
         return f"Task<{CSHARP_STREAM_TYPE}>", None, attrs
     if m.result_field is None:
         return "Task", None, ()
-    if not m.result_field.type.equals(pa.binary()):
-        raise GeneratorError(f"{m.name}: result is {m.result_field.type}, expected binary")
+    require_binary(m.result_field, m.name)
     nullable = "?" if m.result_field.nullable else ""
     raw = CSHARP_RAW_RESULTS.get(m.name)
     if raw is not None:
-        if m.result_annotation is not bytes:
-            raise GeneratorError(f"{m.name}: CSHARP_RAW_RESULTS applies only to a raw-bytes result")
         clr = raw
-    elif is_record(m.result_annotation):
-        clr = csharp_types.csharp_name(m.result_annotation.__name__)  # type: ignore[attr-defined]
+    elif m.result_record is not None:
+        clr = csharp_types.csharp_name(m.result_record)
     elif m.result_annotation is bytes:
         clr = "byte[]"
     else:
@@ -182,17 +175,21 @@ def _result(m: RegistryMethod, model: csharp_types._Model) -> tuple[str, str | N
     return f"Task<{clr}{nullable}>", clr + nullable, ()
 
 
-def csharp_methods() -> list[CSharpMethod]:
+def _method_name(wire: str) -> str:
+    return csharp_types._pascal(wire) + "Async"
+
+
+def csharp_methods(methods: Sequence[RegistryMethod] | None = None) -> list[CSharpMethod]:
     """Every ``vgi.v2`` method as vgi-csharp declares it."""
+    methods = registry_methods() if methods is None else methods
     model = csharp_types.build_model()
-    unknown = sorted(set(CSHARP_RAW_RESULTS) - {m.name for m in registry_methods()})
-    if unknown:
-        raise GeneratorError(f"CSHARP_RAW_RESULTS names unknown methods: {unknown}")
+    check_raw_results(CSHARP_RAW_RESULTS, methods, what="CSHARP_RAW_RESULTS")
+    names = identifiers((m.name for m in methods), _method_name, what="C# method")
     out = []
-    for m in registry_methods():
+    for m in methods:
         ret, result_clr, attrs = _result(m, model)
         params = tuple(_param(m, p, model) for p in m.params)
-        out.append(CSharpMethod(m, csharp_types._pascal(m.name) + "Async", ret, result_clr, attrs, params))
+        out.append(CSharpMethod(m, names[m.name], ret, result_clr, attrs, params))
     return out
 
 
@@ -254,8 +251,8 @@ _INTERFACE_DOC = """\
 /// </remarks>"""
 
 
-def _render_body(namespace: str) -> str:
-    methods = csharp_methods()
+def _render_body(model: Sequence[RegistryMethod], namespace: str) -> str:
+    methods = csharp_methods(model)
     lines = [
         "// Copyright 2025, 2026 Query Farm LLC - https://query.farm",
         "// <auto-generated/>",
@@ -284,36 +281,98 @@ def _render_body(namespace: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def emit(out: TextIO, *, namespace: str = DEFAULT_NAMESPACE) -> None:
-    """Emit the generated ``IVgiService.g.cs`` to *out*."""
-    body = _render_body(namespace)
-    out.write(
-        provenance_comment(
-            generator_module="vgi.codegen.csharp_registry",
-            generator_command="python -m vgi.codegen.csharp_registry",
-            generator_version=GENERATOR_VERSION,
-            regen_command_lines=[_REGEN_LINE],
-            body=body,
-        )
+# ---------------------------------------------------------------------------
+# Derive-back: vgi-rpc-csharp's SchemaDerivation rules
+# ---------------------------------------------------------------------------
+
+_METHOD = re.compile(
+    r"((?:    \[.+\]\n)*)    (Task(?:<.+>)?) (\w+)Async\(\n((?:        .+,\n)*)        ICallContext\? ctx = null\) =>\n"
+    r'        throw UnimplementedMethod\.For\("(\w+)"\);'
+)
+_PARAM = re.compile(r"^((?:\[[^\]]+\] )*)(.+?) (\w+)(?: = .+)?$")
+_SIMPLE: dict[str, pa.DataType] = {
+    "string": pa.string(),
+    "bool": pa.bool_(),
+    "long": pa.int64(),
+    "List<string>": pa.list_(pa.field("item", pa.string(), nullable=True)),
+    "Dictionary<string, string>": pa.map_(pa.string(), pa.string()),
+}
+
+
+def _derived_field(name: str, clr: str, model: csharp_types._Model) -> pa.Field[Any]:
+    """A CLR type as vgi-rpc-csharp derives its column: ``?`` is nullable, an enum a dictionary."""
+    nullable = clr.endswith("?")
+    clr = clr.rstrip("?")
+    if clr in model.enums:
+        dtype: pa.DataType = pa.dictionary(pa.int16(), pa.string())
+    elif clr in model.records or clr == "byte[]":
+        dtype = pa.binary()
+    else:
+        expect(clr in _SIMPLE, f"vgi-rpc-csharp derives no Arrow type from {clr}")
+        dtype = _SIMPLE[clr]
+    return pa.field(name, dtype, nullable=nullable)
+
+
+class CSharpRegistry(RegistryBackend):
+    """vgi-csharp's ``IVgiService``: the interface vgi-rpc-csharp reflects over."""
+
+    key = "csharp"
+    language = "C#"
+    module = "vgi.codegen.csharp_registry"
+    target = TARGET
+    repo = "vgi-csharp"
+    root_env = "VGI_CSHARP_ROOT"
+    tamper = Tamper(
+        start="    Task<ItemsResponse> CatalogSchemasAsync(",
+        end="ICallContext? ctx",
+        old="byte[]? transactionOpaqueData",
+        new="byte[] transactionOpaqueData",
     )
-    out.write("\n")
-    out.write(body)
+
+    def __init__(self, namespace: str = DEFAULT_NAMESPACE) -> None:  # noqa: D107
+        self.namespace = namespace
+
+    def render_body(self, methods: Sequence[RegistryMethod]) -> str:  # noqa: D102
+        return _render_body(methods, self.namespace)
+
+    def derive(self, text: str) -> list[DerivedMethod]:  # noqa: D102
+        model = csharp_types.build_model()
+        headers = {
+            csharp_types.csharp_name(m.header_type.__name__): m.header_schema
+            for m in registry_methods()
+            if m.header_type is not None
+        }
+        out: list[DerivedMethod] = []
+        for match in _METHOD.finditer(text):
+            attrs, ret, pascal_name, params_text, name = match.groups()
+            # vgi-rpc-csharp names the wire method by snake-casing the CLR name.
+            expect(csharp_types._to_snake_case(pascal_name) == name, f"{pascal_name}Async does not map to {name}")
+            params = []
+            for line in params_text.splitlines():
+                pm = _PARAM.match(line.strip().rstrip(","))
+                expect(pm is not None, f"{name}: unparsed parameter {line!r}")
+                assert pm is not None
+                _, clr, pname = pm.groups()
+                params.append(_derived_field(csharp_types._to_snake_case(pname), clr, model))
+            inner = ret[len("Task<") : -1] if ret.startswith("Task<") else None
+            header = None
+            result = None
+            if inner is None:
+                kind = MethodKind.VOID
+            elif inner.startswith("RpcStream<"):
+                kind = MethodKind.STREAM
+                if hm := re.search(r"\[StreamHeader\(typeof\((\w+)\)\)\]", attrs):
+                    expect(hm.group(1) in headers, f"{name}: [StreamHeader] {hm.group(1)} is no vgi.v2 header")
+                    header = headers[hm.group(1)]
+            else:
+                kind = MethodKind.UNARY
+                result = _derived_field("result", inner, model)
+            out.append(DerivedMethod(name, kind, params, result, header))
+        return out
 
 
-def render() -> str:
-    """The full text of the generated file."""
-    buf = io.StringIO()
-    emit(buf)
-    return buf.getvalue()
-
-
-def main() -> None:
-    """Console-script entrypoint -- write ``IVgiService.g.cs`` to stdout."""
-    try:
-        emit(sys.stdout)
-    except GeneratorError as e:
-        print(f"\nerror: {e}\n", file=sys.stderr)
-        sys.exit(2)
+BACKEND = CSharpRegistry()
+emit, render, main = BACKEND.emit, BACKEND.render, BACKEND.main
 
 
 if __name__ == "__main__":

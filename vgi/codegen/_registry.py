@@ -17,70 +17,100 @@ nullability, all hidden until the hash was compared. The request / response
 *types* were already generated; the method table that binds them to the server
 was the last hand-maintained copy of the protocol. Now it is generated too.
 
-The shape of a registry generator
----------------------------------
+One generator, one backend per language
+---------------------------------------
 
-One module per language (``java_registry``, ``csharp_registry``; Phase 2 adds
-Go, Rust, TypeScript and C++) turns :func:`registry_methods` into three things:
+There is one registry generator. It has three layers:
 
-1. **A complete declaration** -- interface, trait, abstract class -- of every
-   ``vgi.v2`` method with its exact method type and params / result / header
-   types, chosen so the SDK's vgi-rpc port *derives* the reference schemas
-   from it (or, for a port that registers schemas explicitly, emitting them
-   from :attr:`RegistryParam.field` and :attr:`RegistryMethod.result_field`).
-2. **A default implementation** in which every method answers the SDK's
-   ``UNIMPLEMENTED`` error. SDK code inherits it and overrides only what it
-   implements; a method added to :class:`vgi.protocol.VgiProtocol` appears in
-   every SDK as a stub on the next regeneration.
-3. **The registration** that hands the declaration to the vgi-rpc server. In
-   Java and C# the server reflects over the interface, so (1) *is* the table;
-   a port with explicit registration emits the table as well.
+1. **The model** (this module). :func:`registry_methods` reads
+   :class:`vgi.protocol.VgiProtocol` into :class:`RegistryMethod` values, and
+   everything a language would otherwise re-derive is a property or helper
+   here: the :class:`MethodKind` (``Unary`` / ``Void`` / ``Stream``), whether a
+   method is in the routable catalog family (:attr:`RegistryMethod.is_catalog`),
+   whether a stream needs a state decoder for HTTP continuation, the
+   params / header fields ready to emit and the stems of their schema
+   factories (:class:`SchemaNames`), which annotations are packed records
+   (:func:`is_record`, :func:`records_used`), wire-name -> identifier mapping
+   with a collision check (:func:`identifiers`), the Arrow -> native type hook
+   that rejects an unmapped type (:func:`map_arrow_type`), and validation of a
+   backend's hand-kept name tables (:func:`check_record_table`,
+   :func:`check_raw_results`). :func:`preimage_hash` hashes a method list
+   exactly as vgi-rpc hashes a protocol.
 
-Everything language-specific -- type names, which packed requests a port
-decodes into a typed record rather than raw bytes, how the error is
-constructed -- lives in that language's module. Nothing protocol-specific does:
-the method set, the parameter order, wire names and Arrow types, nullability,
-result presence and the stream header all come from here.
+2. **The backend contract** (:mod:`vgi.codegen._registry_backend`). A
+   :class:`~vgi.codegen._registry_backend.RegistryBackend` supplies two things:
+   ``render_body(methods)`` -- the language's file, from the model -- and
+   ``derive(text)`` -- that file read back the way the language's vgi-rpc port
+   reads it, as :class:`~vgi.codegen._registry_backend.DerivedMethod` values.
+   The base class does everything else: provenance banner, ``render`` /
+   ``emit`` / ``main``, the drift target, the registration rows an
+   explicit-registration port walks (with the port's "no result" convention
+   applied), rebuilding derived methods into :class:`RegistryMethod` values for
+   the hash, and a shared Arrow-expression evaluator
+   (:class:`~vgi.codegen._registry_backend.ArrowDialect`), so a port that
+   registers schemas as values supplies only a rewrite table from its spelling
+   to call syntax.
+
+3. **Six backends** (``java_registry``, ``csharp_registry``, ``ts_registry``,
+   ``go_registry``, ``rust_registry``, ``cpp_registry``). Each decides only
+   what is idiomatic in its language: type names, signatures, the default body
+   that raises the SDK's ``UNIMPLEMENTED``, and, for an explicit-registration
+   port, how the registration table is spelled. Nothing protocol-specific lives
+   in a backend: the method set, the parameter order, wire names and Arrow
+   types, nullability, result presence and the stream header all come from
+   here.
+
+Every backend's output is three things: **a complete declaration**
+(interface, trait, abstract class) of every ``vgi.v2`` method with its exact
+types; **a default implementation** in which every method answers the SDK's
+``UNIMPLEMENTED``, which SDK code inherits and overrides; and **the
+registration** that hands the declaration to the vgi-rpc server. In Java and
+C# the server reflects over the interface, so the declaration *is* the table;
+Go, Rust, TypeScript and C++ register explicitly, so the table is emitted too.
 
 Checking a generator
 --------------------
 
-:func:`preimage_hash` computes the ``vgi_rpc.protocol_hash.v1`` digest of a
-list of :class:`RegistryMethod`. ``tests/test_generated_registry.py`` parses
-each language's *rendered* file, rebuilds the methods with every field derived
-back from the rendered type by that port's ``SchemaDerivation`` rules
-(``dataclasses.replace``), and asserts the digest equals the live
-``VgiProtocol`` hash -- so a mapping bug in a generator fails in vgi-python
-rather than as a hash mismatch (or an Arrow schema rejection) in the SDK. The
-SDK keeps its own pinned-hash test as the end-to-end check.
+``tests/test_generated_registry.py`` runs one parametrization over every
+backend: render, ``derive`` back, rebuild, and assert :func:`preimage_hash`
+equals the live ``VgiProtocol`` hash (computed, never pinned); apply the
+backend's declared ``tamper`` (one rendered nullability or envelope flipped)
+and assert the hash moves, so the check is not vacuous; render twice for
+determinism; and compare with the sibling SDK checkout for drift. A mapping
+bug fails in vgi-python rather than as a hash mismatch (or an Arrow schema
+rejection) in the SDK. The SDK keeps its own pinned-hash test end to end.
 
-Adding a language (Phase 2)
----------------------------
+Adding a seventh language
+-------------------------
 
-- Reuse the language's ``*_types`` generator for type names and the Arrow ->
-  native mapping; the registry module only decides signatures and bodies.
-- Add a ``TARGET`` constant and list the module in
-  ``scripts/regen_generated.py`` (the ``--check`` drift mechanism and the drift
-  test in ``tests/test_generated_registry.py`` key off it), plus a derive-back
-  parser and hash test there.
-- Make the default body construct the SDK's existing UNIMPLEMENTED error, and
-  give every method the SDK's call-context parameter uniformly.
-- Behaviour the SDK used to put in hand-written interface defaults (empty
-  listings, read-only DDL refusals, a composed ``catalog_contents``) moves into
-  the SDK's concrete service, which overrides the generated stub.
-- Keep the language table small: only choices that are wire-identical (a typed
-  record vs raw IPC bytes for one ``binary`` column) belong there, and the
-  generator must reject an entry that would change a schema.
+1. Write ``vgi/codegen/<lang>_registry.py`` with a ``RegistryBackend``
+   subclass: ``key``, ``language``, ``module``, ``target``, ``repo``,
+   ``root_env``, ``void_result`` (how the port's vgi-rpc spells a unary with
+   no return), a ``tamper``, ``render_body`` and ``derive``. Bind the module
+   API with ``BACKEND = <Lang>Registry()`` and
+   ``emit, render, main = BACKEND.emit, BACKEND.render, BACKEND.main``.
+2. Reuse the language's ``*_types`` / ``*_schemas`` generator for type names
+   and field expressions; map anything else through :func:`map_arrow_type`.
+3. Derive back by the port's own rules: a reflection port parses signatures
+   (see Java, C#); a schema-as-value port declares an ``ArrowDialect`` and
+   evaluates the rendered schema expressions (see TypeScript, Rust, C++).
+4. Append the module to ``REGISTRY_BACKENDS`` in ``_registry_backend``. The
+   regen script, the drift check and every parametrized test pick it up.
+5. Keep any hand-kept table small and wire-identical (a typed record vs raw
+   IPC bytes for one ``binary`` column), validated by
+   :func:`check_record_table` / :func:`check_raw_results`.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import enum
+import functools
 import hashlib
 import inspect
 import types
 import typing
-from collections.abc import Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -94,6 +124,28 @@ from vgi.protocol import VgiProtocol
 
 #: Marker for a parameter with no default.
 NO_DEFAULT: Any = inspect.Parameter.empty
+
+
+class MethodKind(enum.Enum):
+    """How a port registers a method: a unary with a return, one without, or a stream."""
+
+    UNARY = "Unary"
+    VOID = "Void"
+    STREAM = "Stream"
+
+
+def is_record(annotation: object) -> bool:
+    """Whether *annotation* is a dataclass carrying an ``ARROW_SCHEMA`` (a packed request/response)."""
+    return (
+        isinstance(annotation, type)
+        and dataclasses.is_dataclass(annotation)
+        and isinstance(getattr(annotation, "ARROW_SCHEMA", None), pa.Schema)
+    )
+
+
+def record_name(annotation: object) -> str | None:
+    """The Python class name of a packed record annotation, or ``None`` when it is not one."""
+    return annotation.__name__ if is_record(annotation) else None  # type: ignore[attr-defined]
 
 
 @dataclass(frozen=True)
@@ -113,6 +165,25 @@ class RegistryParam:
     field: pa.Field[Any]
     annotation: object
     default: object = NO_DEFAULT
+
+    @property
+    def record(self) -> str | None:
+        """The packed record's Python class name, or ``None`` for a plain column."""
+        return record_name(self.annotation)
+
+
+@dataclass(frozen=True)
+class SchemaNames:
+    """The stems a port's schema factories / constants are named by.
+
+    ``params`` and ``result`` are ``<Pascal>Params`` / ``<Pascal>Result`` (the
+    names :mod:`vgi.codegen.cpp_schemas` and friends emit); ``header`` is the
+    header record's class name, or ``None``.
+    """
+
+    params: str
+    result: str
+    header: str | None
 
 
 @dataclass(frozen=True)
@@ -145,6 +216,33 @@ class RegistryMethod:
         return bool(self.method_type == MethodType.STREAM)
 
     @property
+    def kind(self) -> MethodKind:
+        """``Stream``, ``Unary`` (a unary with a ``result`` column) or ``Void``."""
+        if self.is_stream:
+            return MethodKind.STREAM
+        return MethodKind.UNARY if self.result_field is not None else MethodKind.VOID
+
+    @property
+    def is_catalog(self) -> bool:
+        """Whether this is a routable catalog method (the ``catalog_*`` family).
+
+        A port that unseals opaque attach / transaction values and routes a call
+        to the catalog that owns it (vgi-go's ``unaryCatalog``) does it for
+        exactly these. Defined once, here, rather than by each backend's prefix test.
+        """
+        return self.name.startswith("catalog_")
+
+    @property
+    def needs_state_decoder(self) -> bool:
+        """Whether the method needs a state decoder: every stream, for HTTP continuation."""
+        return self.is_stream
+
+    @property
+    def result_record(self) -> str | None:
+        """The result's packed-record class name, or ``None`` (raw bytes, void, stream)."""
+        return record_name(self.result_annotation) if self.result_field is not None else None
+
+    @property
     def header_schema(self) -> pa.Schema | None:
         """The stream header's Arrow schema, or ``None``."""
         if self.header_type is None:
@@ -153,6 +251,33 @@ class RegistryMethod:
         if not isinstance(schema, pa.Schema):
             raise GeneratorError(f"{self.name}: header type {self.header_type!r} has no ARROW_SCHEMA")
         return schema
+
+    @property
+    def params_fields(self) -> list[pa.Field[Any]]:
+        """The params-schema fields, in order, ready to emit."""
+        return [p.field for p in self.params]
+
+    @property
+    def header_fields(self) -> list[pa.Field[Any]] | None:
+        """The stream header's fields, or ``None`` for a unary or a headerless stream."""
+        header = self.header_schema
+        return None if header is None else list(header)
+
+    @property
+    def pascal(self) -> str:
+        """``catalog_schema_get`` -> ``CatalogSchemaGet``."""
+        return pascal(self.name)
+
+    @property
+    def schema_names(self) -> SchemaNames:
+        """The stems of this method's params / result / header schema factories."""
+        header = None if self.header_type is None else self.header_type.__name__
+        return SchemaNames(f"{self.pascal}Params", f"{self.pascal}Result", header)
+
+    @property
+    def summary(self) -> str | None:
+        """The docstring's first paragraph, whitespace-normalized."""
+        return summary(self.doc)
 
 
 def protocol_name(protocol_cls: type = VgiProtocol) -> str:
@@ -182,6 +307,11 @@ def _strip_optional(annotation: object) -> object:
 
 def registry_methods(protocol_cls: type = VgiProtocol) -> list[RegistryMethod]:
     """Every method of *protocol_cls*, sorted by wire name, as a registry sees it."""
+    return list(_registry_methods(protocol_cls))
+
+
+@functools.cache
+def _registry_methods(protocol_cls: type) -> tuple[RegistryMethod, ...]:
     out: list[RegistryMethod] = []
     methods = rpc_methods(protocol_cls)
     for name in sorted(methods):
@@ -211,6 +341,8 @@ def registry_methods(protocol_cls: type = VgiProtocol) -> list[RegistryMethod]:
             if len(result_schema) != 1 or result_schema.field(0).name != "result":
                 raise GeneratorError(f"{name}: expected a single 'result' column, got {result_schema}")
             result_field = result_schema.field(0)
+        if info.method_type == MethodType.UNARY and info.header_type is not None:
+            raise GeneratorError(f"{name}: a unary method has no stream header")
 
         out.append(
             RegistryMethod(
@@ -223,16 +355,20 @@ def registry_methods(protocol_cls: type = VgiProtocol) -> list[RegistryMethod]:
                 doc=inspect.getdoc(func),
             )
         )
-    return out
+    return tuple(out)
+
+
+# ---------------------------------------------------------------------------
+# The protocol hash
+# ---------------------------------------------------------------------------
 
 
 def preimage(name: str, methods: Sequence[RegistryMethod]) -> dict[str, Any]:
     """The ``vgi_rpc.protocol_hash.v1`` description of a method table.
 
     Mirrors ``vgi_rpc.rpc._protocol_hash.protocol_description`` field for field,
-    but over :class:`RegistryMethod` values, so a language test can build the
-    table from what its generator *rendered* (each field derived back by that
-    port's rules) and compare digests.
+    but over :class:`RegistryMethod` values, so a backend's derive-back can
+    build the table from what it *rendered* and compare digests.
     """
     entries: list[dict[str, Any]] = []
     for m in sorted(methods, key=lambda m: m.name):
@@ -257,13 +393,117 @@ def preimage_hash(name: str, methods: Sequence[RegistryMethod]) -> str:
     return hashlib.sha256(HASH_DOMAIN + canonical_json(preimage(name, methods))).hexdigest()
 
 
-def is_record(annotation: object) -> bool:
-    """Whether *annotation* is a dataclass carrying an ``ARROW_SCHEMA`` (a packed request/response)."""
-    return (
-        isinstance(annotation, type)
-        and dataclasses.is_dataclass(annotation)
-        and isinstance(getattr(annotation, "ARROW_SCHEMA", None), pa.Schema)
-    )
+# ---------------------------------------------------------------------------
+# Naming
+# ---------------------------------------------------------------------------
+
+
+def camel(name: str) -> str:
+    """``catalog_schema_get`` -> ``catalogSchemaGet``."""
+    head, *rest = name.split("_")
+    return head + "".join(p.capitalize() for p in rest)
+
+
+def pascal(name: str) -> str:
+    """``catalog_schema_get`` -> ``CatalogSchemaGet``."""
+    return "".join(p.capitalize() for p in name.split("_"))
+
+
+def identifiers(names: Iterable[str], convert: Callable[[str], str], *, what: str) -> dict[str, str]:
+    """Map each wire name to its identifier, refusing two that collide.
+
+    *what* names the identifier space in the error (``"TypeScript VgiService key"``).
+    """
+    out: dict[str, str] = {}
+    owner: dict[str, str] = {}
+    for name in names:
+        ident = convert(name)
+        if ident in owner:
+            raise GeneratorError(f"{name} and {owner[ident]} both map to the {what} {ident}")
+        owner[ident] = name
+        out[name] = ident
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Types
+# ---------------------------------------------------------------------------
+
+#: A backend's Arrow -> native mapping: ``(dtype, recurse) -> native or None``.
+#: ``recurse(child_dtype, origin_suffix)`` maps a nested type through the same rules.
+TypeMapping = Callable[[pa.DataType, Callable[[pa.DataType, str], str]], str | None]
+
+
+def map_arrow_type(dtype: pa.DataType, mapping: TypeMapping, *, origin: str, language: str, hint: str) -> str:
+    """Map an Arrow type to a native one through *mapping*, rejecting a type it does not cover.
+
+    A mapping returns ``None`` for a type it has no rule for; the rejection is
+    here, so no backend can fall back to ``any`` / ``Object`` by omission.
+    *hint* names the function to extend.
+    """
+
+    def recurse(child: pa.DataType, suffix: str) -> str:
+        return map_arrow_type(child, mapping, origin=f"{origin}{suffix}", language=language, hint=hint)
+
+    native = mapping(dtype, recurse)
+    if native is None:
+        raise GeneratorError(f"{origin}: no {language} mapping for Arrow type {dtype}; extend {hint}")
+    return native
+
+
+def records_used(methods: Iterable[RegistryMethod], *, headers: bool = True) -> set[str]:
+    """Every packed-record class name a param, a result (or, with *headers*, a stream header) carries."""
+    used: set[str] = set()
+    for m in methods:
+        used.update(p.record for p in m.params if p.record is not None)
+        if (r := record_name(m.result_annotation)) is not None:
+            used.add(r)
+        if headers and m.header_type is not None:
+            used.add(m.header_type.__name__)
+    return used
+
+
+def check_record_table(
+    table: Mapping[str, str], methods: Sequence[RegistryMethod], *, what: str, headers: bool
+) -> None:
+    """Refuse a backend name-table entry for a record no ``vgi.v2`` method carries (a typo binds nothing)."""
+    stale = sorted(set(table) - records_used(methods, headers=headers))
+    if stale:
+        raise GeneratorError(f"{what} names records no vgi.v2 method carries: {stale}")
+
+
+def check_raw_results(
+    table: Mapping[str, str], methods: Sequence[RegistryMethod], *, what: str, non_null: bool = False
+) -> None:
+    """Validate a "raw ``bytes`` result returned as a typed record" table.
+
+    Every key must be a method whose result is raw IPC ``bytes`` in one
+    ``binary`` column (a typed record is the same column). With *non_null*, the
+    column must also be non-nullable -- for a port whose record type always
+    derives a non-null result.
+    """
+    by_name = {m.name: m for m in methods}
+    unknown = sorted(set(table) - set(by_name))
+    if unknown:
+        raise GeneratorError(f"{what} names unknown methods: {unknown}")
+    for name in table:
+        m = by_name[name]
+        f = m.result_field
+        if m.result_annotation is not bytes or f is None or not f.type.equals(pa.binary()):
+            raise GeneratorError(f"{what}[{name!r}] applies only to a raw-bytes result")
+        if non_null and f.nullable:
+            raise GeneratorError(f"{what}[{name!r}] applies only to a non-null raw-bytes result")
+
+
+def require_binary(field: pa.Field[Any], origin: str, what: str = "result") -> None:
+    """Refuse a non-``binary`` column where a backend binds a record or raw bytes."""
+    if not field.type.equals(pa.binary()):
+        raise GeneratorError(f"{origin}: {what} is {field.type}, expected binary")
+
+
+# ---------------------------------------------------------------------------
+# Docs
+# ---------------------------------------------------------------------------
 
 
 def summary(doc: str | None) -> str | None:
