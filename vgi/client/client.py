@@ -90,6 +90,7 @@ import subprocess
 import sys
 import threading
 from collections.abc import Callable, Generator, Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field, replace
 from queue import Queue
@@ -1460,13 +1461,29 @@ class Client(CatalogClientMixin, AggregateClientMixin):
     def _close_secondary_workers(self, *, force: bool = False) -> None:
         """Close and stop all secondary (additional) workers.
 
+        The workers are stopped concurrently. Each stop can wait on a process
+        exit: a direct worker's own, or, for a pooled worker, that of the idle
+        worker the pool evicts to make room once it is past ``max_idle``. A
+        graceful exit is mostly interpreter teardown (~0.2 s), so stopping a
+        24-way scan one worker at a time spent ~4 s here.
+
         Args:
             force: Kill direct subprocess workers rather than closing them gracefully
                 (see ``_stop_worker``).
+
+        Raises:
+            Exception: The first error a stop raised, once every worker has been
+                stopped.
         """
-        for worker in self._additional_workers:
-            self._stop_worker(worker, force=force)
-        self._additional_workers = []
+        workers, self._additional_workers = self._additional_workers, []
+        if len(workers) <= 1:
+            for worker in workers:
+                self._stop_worker(worker, force=force)
+            return
+        with ThreadPoolExecutor(max_workers=len(workers), thread_name_prefix="vgi-stop-worker") as executor:
+            futures = [executor.submit(self._stop_worker, worker, force=force) for worker in workers]
+        for future in futures:
+            future.result()
 
     def _join_threads(self, threads: list[threading.Thread]) -> None:
         """Wait for all threads to complete with timeout.
