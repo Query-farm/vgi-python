@@ -204,11 +204,14 @@ run_integration_job() {
       return 2
       ;;
   esac
+  # --test-config: without it the runner turns any error mentioning "HTTP" or
+  # "Unable to connect" into a SKIP, so a failure can pass as a skip.
   # `~[.]` excludes Catch2-hidden tests, i.e. `*.test_slow` files. The
   # launcher keeps one Python worker warm while unittest advances serially,
   # avoiding both repeated startup and cross-test state contention.
   VGI_TEST_WORKER="$worker" \
-    timeout 600 ./build/release/test/unittest "test/sql/integration/*" "~[.]" >"$INT_LOG" 2>&1
+    timeout 600 ./build/release/test/unittest --test-config test/configs/no_error_skip.json \
+      "test/sql/integration/*" "~[.]" >"$INT_LOG" 2>&1
   local rc=$?
   summarize_integration "$INT_LOG" "$INT_SUMMARY" "$INT_FAILURES"
   echo "exit=$rc" >>"$INT_SUMMARY"

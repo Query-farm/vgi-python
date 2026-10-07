@@ -96,8 +96,12 @@ e.g. to pass an unusual filter to `unittest`):
 ```bash
 cd ~/Development/vgi
 VGI_TEST_WORKER="uv run --project ~/Development/vgi-python vgi-fixture-worker" \
-    ./build/release/test/unittest "test/sql/integration/*"
+    ./build/release/test/unittest --test-config test/configs/no_error_skip.json "test/sql/integration/*"
 ```
+
+Always pass `--test-config test/configs/no_error_skip.json` to `unittest`: without
+it, DuckDB's runner reports any error mentioning "HTTP" or "Unable to connect" as
+a SKIP and exits 0.
 
 **HTTP transport** (worker as an HTTP server):
 ```bash
@@ -142,7 +146,7 @@ with elapsed milliseconds. This helps identify slow queries and bottlenecks.
 # Timing output goes to stderr, grep for the bracket-prefixed lines:
 cd ~/Development/vgi
 VGI_TEST_WORKER="uv run --project ~/Development/vgi-python vgi-fixture-worker" \
-    ./build/release/test/unittest "test/sql/integration/table/writable_table*" \
+    ./build/release/test/unittest --test-config test/configs/no_error_skip.json "test/sql/integration/table/writable_table*" \
     2>&1 | grep "^\[stmt\|^\[query" | sort -t']' -k2 -rn
 ```
 
@@ -166,7 +170,7 @@ uv run coverage run -m pytest --no-cov -n auto
 # 3. Run DuckDB subprocess integration tests with coverage
 cd ~/Development/vgi
 VGI_TEST_WORKER="/tmp/vgi-coverage-worker.sh" \
-    ./build/release/test/unittest "test/sql/integration/*"
+    ./build/release/test/unittest --test-config test/configs/no_error_skip.json "test/sql/integration/*"
 
 # 4. Run DuckDB HTTP integration tests with coverage
 cd ~/Development/vgi

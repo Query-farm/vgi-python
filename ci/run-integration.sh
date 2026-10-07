@@ -336,6 +336,13 @@ EOF
 "$HAYBARN_UNITTEST" "test/_warm.test" >/dev/null 2>&1 || echo "::warning::extension warm step did not fully succeed"
 rm -f "$STAGE/test/_warm.test"
 
+# DuckDB's sqllogictest runner, given no --test-config, turns any error whose
+# text contains "HTTP" or "Unable to connect" into a SKIP and exits 0. Over the
+# http transport every worker error carries "HTTP", so real failures read as
+# skips. The extension ships a config that disables that; every run below uses it.
+TEST_CONFIG="$VGI_SRC/test/configs/no_error_skip.json"
+[ -f "$TEST_CONFIG" ] || { echo "::error::missing $TEST_CONFIG (VGI_REF predates it?)"; exit 1; }
+
 # Run the lane, streaming the native sqllogictest report (a progress line per
 # file + the final "All tests passed (.. N assertions ..)" summary). Out-of-scope
 # tests were dropped at staging; any failed assertion exits non-zero.
@@ -366,7 +373,7 @@ run_unittest() {
   # `set +e` rather than `|| true`: the latter runs before PIPESTATUS is read and
   # overwrites it with true's 0, silently swallowing every real test failure.
   set +e
-  "$HAYBARN_UNITTEST" "$@" 2>&1 | tee "$log"
+  "$HAYBARN_UNITTEST" --test-config "$TEST_CONFIG" "$@" 2>&1 | tee "$log"
   rc="${PIPESTATUS[0]}"
   set -e
   if grep -q 'due to a fatal error condition' "$log"; then
