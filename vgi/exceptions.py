@@ -12,7 +12,7 @@ Classes:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -21,6 +21,7 @@ __all__ = [
     "BindStateNotFoundError",
     "CatalogReadOnlyError",
     "ExecutionIdentifierError",
+    "OpaqueDataNotRecognizedError",
     "SchemaValidationError",
 ]
 
@@ -55,6 +56,28 @@ class CatalogReadOnlyError(Exception):
     - table_scan_function_get() - get scan function for tables
 
     """
+
+
+class OpaqueDataNotRecognizedError(ValueError):
+    """An opaque value (``attach_opaque_data`` / ``transaction_opaque_data``) failed to open.
+
+    The one refusal for every failure mode -- wrong caller, wrong parent attach,
+    tampered, malformed, unknown key, unroutable -- so a probing caller learns
+    nothing about which check failed (docs/protocol/vgi-opaque-data-sealing.md,
+    rule 4). vgi-rpc reads the class attributes below onto the wire as
+    ``error_code`` and ``error_kind``. The message is exactly
+    ``"<field> not recognized"`` and there are no details.
+
+    Subclasses ``ValueError`` so existing ``except ValueError`` handlers keep
+    working.
+    """
+
+    error_code: ClassVar[str] = "INVALID_ARGUMENT"
+    error_kind: ClassVar[str] = "opaque_data_not_recognized"
+
+    def __init__(self, field: str) -> None:
+        """Build the refusal for ``field`` (``attach_opaque_data`` or ``transaction_opaque_data``)."""
+        super().__init__(f"{field} not recognized")
 
 
 class ExecutionIdentifierError(ValueError):

@@ -21,7 +21,9 @@ import contextlib
 import logging
 import os
 from collections.abc import Iterator
+from typing import Any
 
+import pyarrow as pa
 import pytest
 from vgi_rpc.rpc import AuthContext
 from vgi_rpc.rpc._common import _current_transport, _TransportContext
@@ -303,3 +305,96 @@ def test_envelope_survives_worker_restart_with_stable_key(signing_key: bytes) ->
     w3._signing_key = os.urandom(32)
     with as_principal("test", "alice"), pytest.raises(ValueError, match="not recognized"):
         w3.catalog_schemas(envelope)
+
+
+# ---------------------------------------------------------------------------
+# MetaWorker: routing failures are the uniform rejection too
+# ---------------------------------------------------------------------------
+
+
+def _meta_with_key(signing_key: bytes) -> Any:
+    from vgi._test_fixtures.twin_catalogs import TwinAWorker
+    from vgi.meta_worker import MetaWorker
+
+    workers = [ExampleWorker(quiet=True), TwinAWorker(quiet=True)]
+    # As vgi-fixture-http does: the key goes on the sub-workers, which seal.
+    for w in workers:
+        w._signing_key = signing_key
+    return MetaWorker(workers)
+
+
+def test_meta_worker_unopenable_attach_is_the_uniform_rejection(signing_key: bytes) -> None:
+    """A MetaWorker that cannot route a sealed value says only "not recognized".
+
+    It used to answer "Cannot route ...: carries no catalog name this process
+    recognizes (known catalogs: [...])", which told a probing caller both which
+    check failed and every catalog the process serves.
+    """
+    meta = _meta_with_key(signing_key)
+    with as_principal("test", "alice"):
+        envelope = meta.catalog_attach(_attach_request()).attach_opaque_data
+        meta.catalog_version(attach_opaque_data=envelope)
+    tampered = bytearray(envelope)
+    tampered[len(tampered) // 2] ^= 0x01
+    cases = {
+        "wrong principal": ("bob", envelope),
+        "tampered": ("alice", bytes(tampered)),
+        "garbage": ("alice", b"\x00" * 16 + b"example"),
+    }
+    for label, (principal, value) in cases.items():
+        with as_principal("test", principal), pytest.raises(ValueError) as exc:
+            meta.catalog_version(attach_opaque_data=value)
+        assert str(exc.value) == "attach_opaque_data not recognized", label
+
+
+def test_meta_worker_unsealed_routing_error_still_explains() -> None:
+    """Without a key (stdio / unix) the routing error stays descriptive."""
+    from vgi._test_fixtures.twin_catalogs import TwinAWorker
+    from vgi.meta_worker import MetaWorker
+
+    meta: Any = MetaWorker([ExampleWorker(quiet=True), TwinAWorker(quiet=True)])
+    with pytest.raises(ValueError, match="Cannot route"):
+        meta.catalog_version(attach_opaque_data=b"\x00" * 16 + b"example")
+
+
+def test_meta_worker_log_id_is_a_hash_not_a_prefix() -> None:
+    """The MetaWorker's dispatch log id is the short SHA-256 hash, never raw hex."""
+    import hashlib
+
+    from vgi.meta_worker import _attach_opaque_data_short
+
+    value = b"api_key=sk-live-0123456789abcdef"
+    logged = _attach_opaque_data_short(value)
+    assert logged == hashlib.sha256(value.hex().encode()).hexdigest()[:12]
+    assert logged not in value.hex()
+
+
+def test_secret_option_absent_from_unsealed_attach_value() -> None:
+    """Rule 5 on stdio / unix: with no key the value is plaintext, so no secret may be in it."""
+    from vgi._test_fixtures.attach_options import REQUIRED_CATALOG_NAME, AttachOptionsWorker
+
+    canary = "sk-canary-" + os.urandom(8).hex()
+    w = AttachOptionsWorker(quiet=True)
+    assert w._signing_key is None
+    options = pa.RecordBatch.from_pylist([{"api_key": canary, "region": "eu-west-1"}])
+    result = w.catalog_attach(
+        CatalogAttachRequest(
+            name=REQUIRED_CATALOG_NAME, options=options, data_version_spec=None, implementation_version=None
+        )
+    )
+    value = bytes(result.attach_opaque_data or b"")
+    assert value
+    assert canary.encode() not in value
+    assert canary.encode().hex() not in value.hex()
+
+
+def test_rejection_is_classified_for_the_wire(http_worker: ExampleWorker) -> None:
+    """The refusal declares INVALID_ARGUMENT / opaque_data_not_recognized, with no details."""
+    from vgi_rpc.errors import error_code_of, error_details_of, error_kind_of
+
+    with as_principal("test", "alice"), pytest.raises(ValueError) as exc:
+        http_worker.catalog_schemas(b"garbage")
+    assert error_code_of(exc.value).value == "INVALID_ARGUMENT"
+    assert error_kind_of(exc.value) == "opaque_data_not_recognized"
+    assert error_details_of(exc.value) == []
+    assert str(exc.value) == "attach_opaque_data not recognized"

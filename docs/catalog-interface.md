@@ -351,6 +351,8 @@ ATTACH 'mydb' (TYPE vgi, LOCATION 'https://worker.example.com', api_key getenv('
 
 On the wire, `required` and `secret` are nullable boolean columns appended after the four shared spec columns (`name`, `description`, `type`, `default_value`), in that order. Readers look columns up by name, so a spec from a peer that predates either column reads it as `false`, and older peers ignore columns they don't know.
 
+**Never put a secret option's value in `attach_opaque_data`.** On HTTP the worker seals the value, but over stdio and a unix socket it reaches the client, and the DuckDB extension, unsealed. Keep the credential server-side, re-derive it per call, or store a digest of it, as the `ticket_probe` fixture does (see [Opaque values: sealing](protocol/vgi-opaque-data-sealing.md), rule 5).
+
 `secret` does not change what the worker itself logs: attach options are never logged unless the catalog opts in through `loggable_attach_options()` (below), which must never return a secret option.
 
 ---

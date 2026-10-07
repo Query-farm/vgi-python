@@ -84,6 +84,7 @@ import pyarrow as pa
 from vgi_rpc.rpc import AuthContext, CallContext, Stream, current_auth, serve_stdio
 
 from vgi import attach_header
+from vgi._redact import short_hash
 from vgi.aggregate_function import AggregateBindParams, AggregateFunction
 from vgi.argument_spec import ArgumentSpec, extract_argument_specs
 from vgi.arguments import Arguments
@@ -102,6 +103,7 @@ from vgi.catalog.catalog_interface import (
 )
 from vgi.catalog.secret_type import SecretTypeSpec
 from vgi.catalog.setting import SettingSpec, extract_setting_specs
+from vgi.exceptions import OpaqueDataNotRecognizedError
 from vgi.function import (
     Function,
 )
@@ -1036,20 +1038,7 @@ def _identity_tail(auth: AuthContext | None) -> bytes:
     return b"\x01" + domain + b"\x00" + principal
 
 
-def _short_hash(value: bytes | str | None, *, length: int = 12) -> str | None:
-    """Return a stable hex prefix of ``sha256(value)`` — never the value itself.
-
-    Matches ``vgi_rpc.sentry.short_hash`` so a value redacted here hashes to
-    the same token vgi-rpc's dispatch hook uses for Sentry tags. Defined
-    locally (rather than imported) because ``vgi_rpc.sentry`` pulls in
-    ``sentry_sdk``, which is an optional extra; opaque-data redaction must
-    work whether or not Sentry is installed.
-    """
-    if value is None:
-        return None
-    if isinstance(value, bytes):
-        value = value.hex()
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:length]
+_short_hash = short_hash
 
 
 def _attach_aad(auth: AuthContext | None) -> bytes:
@@ -2639,14 +2628,14 @@ class Worker:
     # transports) every helper is a transparent pass-through.
 
     @staticmethod
-    def _opaque_data_rejected(field: str) -> ValueError:
+    def _opaque_data_rejected(field: str) -> OpaqueDataNotRecognizedError:
         """Build the uniform error for an opaque value that fails to open.
 
         Every failure mode — wrong principal, wrong parent attach, tampered,
         malformed, or simply unknown — maps to this single message so a
         probing caller cannot distinguish them.
         """
-        return ValueError(f"{field} not recognized")
+        return OpaqueDataNotRecognizedError(field)
 
     def _seal_attach(self, plaintext: bytes) -> AttachOpaqueData:
         """Seal a plaintext ``attach_opaque_data`` value into an AEAD envelope."""
@@ -4709,7 +4698,7 @@ class Worker:
         self._log_catalog_lifecycle(
             "catalog.attach",
             catalog_name=request.name,
-            attach_opaque_data=result.attach_opaque_data.hex() if result.attach_opaque_data else None,
+            attach_opaque_data=result.attach_opaque_data,
             data_version_spec=request.data_version_spec,
             implementation_version=request.implementation_version,
             options=loggable or None,
@@ -4720,7 +4709,7 @@ class Worker:
         """Detach from a catalog."""
         cat = self._get_catalog()
         cat.catalog_detach(attach_opaque_data=self._unwrap_attach(attach_opaque_data))
-        self._log_catalog_lifecycle("catalog.detach", attach_opaque_data=attach_opaque_data.hex())
+        self._log_catalog_lifecycle("catalog.detach", attach_opaque_data=attach_opaque_data)
 
     def catalog_create(self, request: CatalogCreateRequest) -> None:
         """Create a new catalog."""
@@ -4772,8 +4761,8 @@ class Worker:
         sealed_tx = self._seal_transaction(bytes(tx_id), attach_opaque_data) if tx_id else None
         self._log_catalog_lifecycle(
             "catalog.transaction.begin",
-            attach_opaque_data=attach_opaque_data.hex(),
-            transaction_opaque_data=sealed_tx.hex() if sealed_tx else None,
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=sealed_tx,
         )
         return TransactionBeginResponse(transaction_opaque_data=sealed_tx)
 
@@ -4786,8 +4775,8 @@ class Worker:
         )
         self._log_catalog_lifecycle(
             "catalog.transaction.commit",
-            attach_opaque_data=attach_opaque_data.hex(),
-            transaction_opaque_data=transaction_opaque_data.hex(),
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=transaction_opaque_data,
         )
 
     def catalog_transaction_rollback(self, attach_opaque_data: bytes, transaction_opaque_data: bytes) -> None:
@@ -4799,8 +4788,8 @@ class Worker:
         )
         self._log_catalog_lifecycle(
             "catalog.transaction.rollback",
-            attach_opaque_data=attach_opaque_data.hex(),
-            transaction_opaque_data=transaction_opaque_data.hex(),
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=transaction_opaque_data,
         )
 
     # ---------------------------------------------------------------------------

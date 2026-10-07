@@ -145,6 +145,7 @@ nav:
     - protocol/index.md
     - "Filter Encoding v2 (normative, proposed)": protocol/vgi-filter-encoding-v2-spec.md
     - "Runtime-filter artifacts (optional extension)": protocol/vgi-runtime-filter-artifacts.md
+    - "Opaque values: sealing (normative)": protocol/vgi-opaque-data-sealing.md
     - "DuckDB filter adapter (informative)": protocol/vgi-duckdb-filter-adapter.md
     - "Catalog query pushdown (proposed design)": protocol/vgi-catalog-query-pushdown-design.md
     - "DuckDB 2.0 design audit (informative)": protocol/vgi-protocol-proposed-changes.md

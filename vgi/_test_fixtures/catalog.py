@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     import pyarrow as pa
     from vgi_rpc.rpc import CallContext
 
+from vgi._redact import short_hash
 from vgi.catalog import (
     AttachOpaqueData,
     CatalogAttachResult,
@@ -118,7 +119,7 @@ class InMemoryCatalog(CatalogInterface):
         """Get the catalog for the given attach_opaque_data."""
         catalog_name = self._attachments.get(attach_opaque_data)
         if catalog_name is None:
-            msg = f"No catalog attached with id {attach_opaque_data!r}"
+            msg = f"No catalog attached with id {short_hash(attach_opaque_data)}"
             raise ValueError(msg)
         catalog = self._catalogs.get(catalog_name)
         if catalog is None:

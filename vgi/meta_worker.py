@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 
 from vgi_rpc.rpc import CallContext, Stream
 
+from vgi._redact import short_hash
 from vgi.catalog.catalog_interface import CatalogAttachResult
 from vgi.invocation import GlobalInitResponse
 from vgi.protocol import (
@@ -58,10 +59,14 @@ logger = logging.getLogger("vgi.meta_worker")
 
 
 def _attach_opaque_data_short(attach_opaque_data: bytes | None) -> str:
-    """Stable, low-cardinality identifier for an attach_opaque_data, suitable for logs."""
+    """Stable, low-cardinality identifier for an attach_opaque_data, suitable for logs.
+
+    A short SHA-256 hash, never a prefix of the raw value: the value may carry
+    credentials (docs/protocol/vgi-opaque-data-sealing.md, rule 7).
+    """
     if not attach_opaque_data:
         return "-"
-    return attach_opaque_data.hex()[:16]
+    return short_hash(attach_opaque_data) or "-"
 
 
 def _make_attach_delegate(name: str) -> Any:
@@ -212,6 +217,13 @@ class MetaWorker:
         """
         worker = self._maybe_worker_for_attach(attach_opaque_data)
         if worker is None:
+            if attach_opaque_data and self._workers[0]._signing_key is not None:
+                # Sealed transport: a value this process cannot route is one it
+                # cannot open (or never minted). Answer with the uniform
+                # rejection, never a routing message: naming the known catalogs
+                # or the reason would tell a probing caller which check failed
+                # (docs/protocol/vgi-opaque-data-sealing.md, rule 4).
+                raise Worker._opaque_data_rejected("attach_opaque_data")
             msg = (
                 f"Cannot route {method_name}: attach_opaque_data carries no catalog name "
                 f"this process recognizes (known catalogs: {sorted(self._name_to_index)})."

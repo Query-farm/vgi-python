@@ -27,6 +27,7 @@ from vgi_rpc import AnnotatedBatch, OutputCollector, RpcServer
 from vgi_rpc.rpc import CallContext, ExchangeState, ProducerState, Stream, StreamState, serve_unix
 
 from vgi._duckdb import connect as engine_connect
+from vgi._redact import short_hash
 from vgi.schema_path import SchemaPath, schema_path_key, sql_qualified_name
 from vgi.schema_utils import schema
 from vgi.transactor._duckdb_compat import subcursor
@@ -80,7 +81,7 @@ class TransactorImpl:
         with self._lock:
             conn = self._databases.get(attach_opaque_data)
         if conn is None:
-            msg = f"No registered database: {attach_opaque_data.hex()}"
+            msg = f"No registered database: {short_hash(attach_opaque_data)}"
             raise ValueError(msg)
         return conn
 
@@ -90,7 +91,7 @@ class TransactorImpl:
             db_txns = self._transactions.get(attach_opaque_data, {})
             conn = db_txns.get(tx_id)
         if conn is None:
-            msg = f"No active transaction: {tx_id.hex()} in db {attach_opaque_data.hex()}"
+            msg = f"No active transaction: {short_hash(tx_id)} in db {short_hash(attach_opaque_data)}"
             raise ValueError(msg)
         return conn
 
@@ -129,7 +130,7 @@ class TransactorImpl:
         if ddl_statements:
             for sql in ddl_statements:
                 conn.execute(sql)
-        logger.info("Database registered: %s (catalog=%s) -> %s", attach_opaque_data.hex()[:8], catalog_name, db_path)
+        logger.info("Database registered: %s (catalog=%s)", short_hash(attach_opaque_data), catalog_name)
 
     def catalog_version(self, attach_opaque_data: bytes) -> int:
         """Return the catalog version for the database."""
@@ -148,7 +149,7 @@ class TransactorImpl:
         with self._lock:
             self._transactions.setdefault(attach_opaque_data, {})[tx_id] = cursor
             self._tx_locks.setdefault(attach_opaque_data, {})[tx_id] = threading.Lock()
-        logger.info("Transaction begun: %s (db %s)", tx_id.hex()[:8], attach_opaque_data.hex()[:8])
+        logger.info("Transaction begun: %s (db %s)", short_hash(tx_id), short_hash(attach_opaque_data))
         return tx_id
 
     def commit(self, attach_opaque_data: bytes, tx_id: bytes) -> None:
@@ -159,7 +160,7 @@ class TransactorImpl:
         with self._lock:
             self._transactions.get(attach_opaque_data, {}).pop(tx_id, None)
             self._tx_locks.get(attach_opaque_data, {}).pop(tx_id, None)
-        logger.info("Transaction committed: %s", tx_id.hex()[:8])
+        logger.info("Transaction committed: %s", short_hash(tx_id))
 
     def rollback(self, attach_opaque_data: bytes, tx_id: bytes) -> None:
         """Rollback a transaction."""
@@ -169,7 +170,7 @@ class TransactorImpl:
         with self._lock:
             self._transactions.get(attach_opaque_data, {}).pop(tx_id, None)
             self._tx_locks.get(attach_opaque_data, {}).pop(tx_id, None)
-        logger.info("Transaction rolled back: %s", tx_id.hex()[:8])
+        logger.info("Transaction rolled back: %s", short_hash(tx_id))
 
     # ========== Write operations (streaming exchange) ==========
 
@@ -529,16 +530,18 @@ class TransactorImpl:
                     try:
                         conn.rollback()
                         conn.close()
-                        logger.info("Rolled back orphan tx: %s (db %s)", tx_id.hex()[:8], attach_opaque_data.hex()[:8])
+                        logger.info(
+                            "Rolled back orphan tx: %s (db %s)", short_hash(tx_id), short_hash(attach_opaque_data)
+                        )
                     except Exception:
-                        logger.exception("Failed to rollback tx: %s", tx_id.hex()[:8])
+                        logger.exception("Failed to rollback tx: %s", short_hash(tx_id))
             self._transactions.clear()
             self._tx_locks.clear()
             for attach_opaque_data, conn in list(self._databases.items()):
                 try:
                     conn.close()
                 except Exception:
-                    logger.exception("Failed to close database: %s", attach_opaque_data.hex()[:8])
+                    logger.exception("Failed to close database: %s", short_hash(attach_opaque_data))
             self._databases.clear()
         sys.exit(0)
 
