@@ -64,6 +64,10 @@ _TARGETS: list[tuple[str, str, str]] = [
         "test/QueryFarm.Vgi.Tests/Generated/VgiProtocolSchemas.g.cs",
         "vgi-csharp",
     ),
+    # The vgi.v2 registries: the interface each SDK's vgi-rpc port reflects over
+    # to register the protocol, with an UNIMPLEMENTED default on every method.
+    ("vgi.codegen.csharp_registry", importlib.import_module("vgi.codegen.csharp_registry").TARGET, "vgi-csharp"),
+    ("vgi.codegen.java_registry", importlib.import_module("vgi.codegen.java_registry").TARGET, "vgi-java"),
     (
         "vgi.codegen.java_schemas",
         "vgi/src/test/java/farm/query/vgi/generated/VgiProtocolSchemas.java",
