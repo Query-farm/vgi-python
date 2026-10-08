@@ -8,7 +8,7 @@ Each document declares its own status; “proposed” means the contract is stil
 | [VGI Filter Encoding v2](vgi-filter-encoding-v2-spec.md) | **Normative, proposed** | Engine-neutral wire format, semantics, validation, and conformance requirements for `vgi.filters.v2`. |
 | [VGI Runtime-Filter Artifacts](vgi-runtime-filter-artifacts.md) | **Normative optional extension, proposed** | Additional requirements for capability-gated advisory runtime-pruning artifacts. Base filter-v2 conformance does not require this extension. |
 | [VGI DuckDB Filter Adapter](vgi-duckdb-filter-adapter.md) | **Informative implementation guide, proposed** | DuckDB 1.5 and 2.0 mappings into the normative filter-v2 wire contract. |
-| [VGI catalog query pushdown](vgi-catalog-query-pushdown-design.md) | **Informative implementation design, proposed** | Optional read-query preparation and streaming, Python provider API, DuckDB 1.5 explicit execution, and DuckDB 2.0 automatic pushdown. |
+| [VGI catalog query pushdown](vgi-catalog-query-pushdown-design.md) | **Informative implementation design, proposed** | Updated 2026-10-06: proposed VGI 2.2 query preparation, DuckDB 1.5 explicit execution, and DuckDB 2.0 bound-plan SQL export for automatic pushdown. |
 | [Proposed VGI protocol changes for DuckDB 2.0](vgi-protocol-proposed-changes.md) | **Informative design/audit report** | Rationale, migration inventory, implementation status, and deferred protocol decisions. It is not an implementation specification. |
 
 ## Reading order

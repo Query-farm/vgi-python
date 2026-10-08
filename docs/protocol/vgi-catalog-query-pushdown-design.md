@@ -1,15 +1,25 @@
-# VGI 2.0 catalog query pushdown
+# VGI 2 catalog query pushdown
 
 **Status:** proposed implementation design, not an implemented or normative wire contract.
-**Date:** 2026-09-13.
+**Updated:** 2026-10-06. **Original proposal:** 2026-09-13.
 **Scope:** optional, read-only catalog query execution; Python SDK; DuckDB 1.5 explicit-query adapter;
 DuckDB 2.0-development automatic-pushdown adapter.
 
-This design is based on `vgi-python` commit `4c5c3b1`, the DuckDB extension in the sibling `vgi`
-repository at `e48d659`, and the local DuckDB development tree at `c6032fbf3d`. “DuckDB 2.0” below
-means that inspected development API, not a claim about an already released, stable upstream API.
-The Python protocol already declares `2.0.0`; the extension's DuckDB 1.5 dependency is a separate
-version axis. All new identifiers, APIs, settings, and signatures in this document are proposals.
+The implementation target is an optional extension of the VGI 2 protocol family, proposed for
+wire version **2.2.0** under the existing protocol name **`vgi.v2`**. The current Python SDK and
+DuckDB extension already use `2.1.0`; this is no longer a change to an unreleased `2.0.0` contract.
+New query APIs in this design remain proposals.
+
+| Component | Current baseline | Role in this design |
+|---|---|---|
+| `vgi-python` | `2029f09`, package `0.42.1`, wire `2.1.0` | Worker, protocol, client, and generators |
+| `vgi` | `de68c17`, wire `2.1.0` | Existing extension and reusable execution machinery |
+| `vgi/duckdb` submodule | `105edd31b57f`, `haybarn-v1.5.5-rc1` | Explicit-query adapter's current engine dependency |
+| `duckdb-3/duckdb` | `80e17fc252`, `v2.0-cyanoptera`, 2026-10-04 | Automatic adapter and SQL-export baseline; `duckdb-8/duckdb` has the same HEAD |
+| Original `duckdb-2/duckdb` checkout | `2284ca3c90`, 2026-09-14 | Older comparison baseline, not the new API target |
+
+“DuckDB 2.0” means the inspected development API, not a released upstream compatibility claim.
+Wire versions, SDK package versions, and the two engine targets are separate version axes.
 
 ## 1. Decision
 
@@ -31,9 +41,24 @@ to the agreed wire version. A remote backend need not be DuckDB, but the first a
 should be DuckDB-backed and pass an explicit compatibility suite. SQL transpilation alone is not
 evidence of semantic compatibility.
 
-For automatic mode, require a prepare-before-rewrite integration seam in DuckDB. The inspected
-hook consumes the original query and does not have a supported decline path. Do not ship
-best-effort automatic fallback on top of that behavior.
+For automatic mode, first prototype an **early bound-plan optimizer extension using DuckDB's
+new `LogicalPlanSQLExporter`**. It can keep the original logical plan while asking the worker to
+prepare exported SQL, then replace the plan only on acceptance. This makes a new DuckDB catalog
+hook a conditional alternative, not a mandatory first dependency. The existing consuming
+`RemoteExecute(QueryNode)` hook still has no safe decline contract; do not route VGI through it
+while using the bound-plan path.
+
+### Current integration decisions
+
+| Updated capability | Implementation decision |
+|---|---|
+| Logical-plan SQL exporter and structured issues | Reuse the exporter in a pre-optimizer feasibility spike; do not build a general SQL decompiler |
+| `BoundTableFunction`, explicit parser contexts, ref-counted `LogicalType` | Add a dedicated 2.0 compatibility layer before enabling automatic queries |
+| `catalog_contents`, metadata etags, version adoption | Reuse existing metadata caches; distinguish committed metadata from transaction/data snapshots |
+| `vgi.v2` routing and wire `2.1.0` | Route new RPCs with generated protocol identifiers; propose coordinated `2.2.0` rollout |
+| Typed nested catalog records and six worker SDKs | Use typed structs for new query records and include C# schema/type generation |
+| Worker-batch validation, cancellation dispatcher, scan interrupt checks | Extend existing guards and lifecycle hooks rather than recreate them |
+| Credential-aware caches and HTTP grants | Preserve current identity isolation; keep query-result caching disabled |
 
 ### Why this is worth adding
 
@@ -73,25 +98,27 @@ This syntax is an implementation target, not an existing registered function.
 
 ```text
 Original SQL
-    -> local eligibility, name resolution, and output-contract checks
-    -> catalog_query_prepare
-         declined -> original DuckDB plan -> existing VGI scans/filter pushdown
-         accepted -> one reserved VGI query scan
-                         -> bind -> init -> ordered Arrow batches -> cleanup
+    -> ordinary binding -> early eligibility and SQL export
+         ineligible/unsupported -> original bound plan -> normal optimization and VGI scans
+         eligible -> catalog_query_prepare
+                         declined -> original bound plan
+                         accepted -> one reserved VGI query scan
+                                         -> bind -> init -> Arrow batches -> cleanup
 ```
 
 ## 2. What the current code provides, and what it does not
 
 | Layer | Available now | Required addition |
 |---|---|---|
-| DuckDB development catalog API | Remote capabilities, syntax support callbacks, query-to-`TableRef` replacement | Safe preparation/decline seam and VGI-specific eligibility checks |
-| VGI attachment | Client capabilities, attachment/transaction tokens, catalog metadata version | Query capability negotiation |
-| VGI function execution | Dynamic bind schema, opaque bind state, TABLE streaming, cancellation hooks | Reserved prepared-query dispatch and stricter query execution invariants |
+| DuckDB development API | Consuming remote-catalog hooks; bound-plan SQL exporter; pre/post optimizer extensions | Early export feasibility, VGI source reconstruction, and accepted-plan replacement |
+| VGI attachment | Client capabilities, attachment/transaction tokens, bulk catalog contents and etags | Query capability negotiation and transaction-aware metadata validation |
+| VGI function execution | Dynamic bind schema, TABLE streaming, batch/type validation, cancellation dispatcher | Reserved prepared-query dispatch and stricter query execution invariants |
 | Python worker | Declarative catalogs, scoped functions, state codecs, storage abstractions | Query-provider interface and transport-safe execution state |
 | Python transactor | Attachment-scoped databases, transaction cursors, Arrow scan producers | Reusable query-owner integration, prepare-only metadata, explicit handle lifecycle |
 | DuckDB VGI extension | Catalogs, Arrow scans, transaction integration, filter pushdown, result cache | Query binder, query-specific bind data, semantic adapter, cache exclusion |
 
-Important limits of the inspected DuckDB implementation:
+Important limits of DuckDB's existing **parsed-statement remote-catalog pass** (distinct from the
+proposed bound-plan adapter):
 
 1. The pass runs on parsed statements before normal query binding. It identifies references to
    one remote **catalog instance**, not merely one worker URL. Two attachments to the same URL
@@ -113,8 +140,20 @@ Important limits of the inspected DuckDB implementation:
 7. The pass can fold eligible scalar expressions locally. Do not describe remote pushdown as
    executing all expressions remotely, or assume preparation is the first possible binding work.
 
-The engine-wide `disabled_optimizers='remote_pushdown'` setting remains a diagnostic escape hatch
-for the automatic path. It does not need to disable explicit `vgi_query` execution.
+The newer `StripCatalogName` preserves every component after the catalog, including schema and
+struct-field suffixes; it no longer collapses qualified columns to their last two components.
+That fixes a naming hazard but does not change the consuming ownership contract above.
+
+The preferred adapter uses `OptimizerExtension::pre_optimize_function`, which runs after binding
+and mandatory aggregate lowering but before built-in logical optimizers. The exporter verifies
+the plan and returns an owned SQL AST plus output fields or structured issues. Unsupported export
+is an eligibility miss; an invalid plan or malformed extension result is an error. Export success
+alone proves neither remote semantic compatibility nor authorization.
+
+The engine's `disabled_optimizers='extension'` disables this adapter. Also explicitly honor
+`disabled_optimizers='remote_pushdown'` in the adapter for a consistent operator escape hatch;
+that flag does not automatically gate optimizer extensions. Neither flag needs to disable an
+explicit `vgi_query` call.
 
 ## 3. Non-goals for the first release
 
@@ -127,8 +166,8 @@ join placement, arbitrary mixed-query subtree extraction, or serialization of Du
 AST/logical-plan objects. No new Substrait implementation is required.
 
 No automatic pushdown of parameters, correlated/LATERAL queries, recursive CTEs, windows,
-sampling, time travel, local macros/UDFs, external table functions, or queries whose order depends
-on an unproven physical insertion order. These can be added as independently tested profile
+sampling, time travel, opaque local macro/UDF dependencies, external table functions, or queries
+whose order depends on an unproven physical insertion order. These can be added as independently tested profile
 revisions. A remote provider's broader explicit-query language must not silently broaden the
 automatic profile.
 
@@ -159,14 +198,24 @@ Changes to that compatibility policy produce a new capability revision.
 ## 5. Proposed wire contract
 
 The following records are proposed schema definitions, not currently generated dataclasses.
-Use the existing Arrow single-record IPC convention. Nested records represented as `binary`
-contain exactly one record batch with one row and the declared record schema. Schemas use the
-existing Arrow IPC schema serialization, not an IPC table. Null and empty are distinct.
+Use the existing Arrow single-record IPC envelope, with **typed nested structs** for new query
+records, following `CatalogContentsResponse.schemas`. Do not add a separate IPC stream per object
+reference or evaluation-context record. Existing attachment/transaction tokens remain binary;
+output/object schemas use Arrow IPC schema serialization, not an IPC table. Null and empty are
+distinct. The existing outer `CatalogAttachRequest.client_capabilities` IPC encoding is unchanged.
+
+Route preparation, bind, and init through `VGI_MAIN_PROTOCOL` with generated name `vgi.v2` and the
+selected surface version. HTTP preparation uses `{base}/vgi.v2/catalog_query_prepare`; raw
+transports carry `vgi_rpc.protocol`. The SDK-owned executor name is a function argument to normal
+`bind`/`init`, not a server-level reserved RPC: the `__transport_options__` routing exception must
+not apply to it. Register the new method in request/response schema validation and tracing.
 
 ### 5.1 Attachment negotiation
 
-Add nullable `query_pushdown: binary` to both `ClientCapabilities` and `CatalogAttachResult`.
-Absent/null means no query capability. The inner records differ by direction:
+Add nullable `query_pushdown: struct<ClientQueryCapabilities>` to `ClientCapabilities` and
+nullable `query_pushdown: struct<CatalogQueryCapability>` to `CatalogAttachResult`. Null means
+no query capability; decoders that allow an absent optional field use the same default. This
+does not override the protocol's major/minor compatibility check. The records differ by direction:
 
 | ClientQueryCapabilities field | Arrow type | Meaning |
 |---|---|---|
@@ -183,7 +232,7 @@ Absent/null means no query capability. The inner records differ by direction:
 | `backend_engine` | `utf8` | Provider dialect engine identity |
 | `backend_version` | `utf8` | Backend version/build identity |
 | `capability_revision` | `utf8` | Opaque revision of provider support and semantic policy |
-| `default_evaluation_context` | `binary` | `QueryEvaluationContext` containing the provider defaults used by explicit mode |
+| `default_evaluation_context` | `struct<QueryEvaluationContext>` | Provider defaults used by explicit mode |
 | `max_query_bytes` | `int64` | Positive selected limit, no larger than the client offer |
 
 Automatic mode requires `vgi.duckdb.relational.v1`; explicit mode requires
@@ -197,10 +246,10 @@ it must not silently change semantics mid-attachment. An old revision may remain
 a rolling deployment. `IS_REMOTE` is an engine catalog property, separate from HTTP versus local
 worker transport and separate from whether query execution is enabled.
 
-For a VGI virtual catalog participating in the remote optimizer, set `IS_REMOTE` consistently
-for the attachment lifetime so DuckDB's remote-catalog count and lookup behavior remain valid.
-Do not toggle it when a session enables/disables the optimization. Review the changed ambiguous
-schema-lookup behavior as part of the adapter's name-resolution tests.
+The bound-plan adapter does not require advertising `IS_REMOTE` or `EXECUTE_QUERY_NODE` just to
+trigger optimization. Preserve existing VGI lookup behavior unless a separate change justifies
+the generic remote-catalog accommodations. If the optional catalog-hook implementation is used,
+keep `IS_REMOTE` stable for the attachment lifetime and test its ambiguous-schema lookup effects.
 
 ### 5.2 `catalog_query_prepare(request) -> CatalogQueryPrepareResult`
 
@@ -211,16 +260,17 @@ backend preparation; it must not fetch query results to discover their schema.
 | Request field | Arrow type | Contract |
 |---|---|---|
 | `attach_opaque_data` | `binary` | Existing authenticated attachment token |
-| `transaction_opaque_data` | nullable `binary` | Existing transaction token, when applicable |
+| `transaction_opaque_data` | nullable `binary` | Existing transaction token; required for the initial automatic snapshot-backed profile |
 | `encoding` | `utf8` | Selected attachment encoding |
 | `semantic_profile` | `utf8` | One selected profile |
 | `mode` | `utf8` | `automatic` or `explicit` |
 | `capability_revision` | `utf8` | Must match the attachment contract |
 | `query` | `utf8` | Exactly one read-only query; canonicalized by the adapter in automatic mode |
-| `catalog_version` | nullable `int64` | Client's metadata version; required in automatic mode |
-| `referenced_objects` | `list<binary>` | Canonical object manifest; required and complete in automatic mode |
+| `catalog_version` | nullable `int64` | Attachment-local metadata version; required in automatic mode, with 0 meaning unknown |
+| `catalog_etag` | nullable `utf8` | Last committed-metadata validator, if known; never a data snapshot token |
+| `referenced_objects` | `list<struct<QueryObjectReference>>` | Canonical object manifest; required and complete in automatic mode |
 | `expected_output_schema` | nullable `binary` | Local result contract; required in automatic mode |
-| `evaluation_context` | `binary` | Profile-specific `QueryEvaluationContext` |
+| `evaluation_context` | `struct<QueryEvaluationContext>` | Profile-specific evaluation context |
 | `required_ordering` | `utf8` | `query_order` or `unspecified` |
 
 Each `QueryObjectReference` contains `schema_path: list<utf8>`, `name: utf8`, `kind: utf8`, and
@@ -244,8 +294,12 @@ certification. Automatic v1 starts with binary collation and UTC context, declin
 until tested. Canonical SQL still spells out each ORDER BY term's effective NULL placement.
 
 The worker also binds table identity, virtual-column behavior, and access policy to the existing
-catalog metadata contract. Metadata version mismatch is a decline before acceptance, not license
-to resolve a different table with the same name. Catalog version is **not** a data snapshot ID.
+catalog contract. Positive metadata versions are comparable only within the same attachment;
+0 means unknown, not "unchanged". A known incompatible metadata generation is a decline before
+acceptance, not license to resolve a different table with the same name. With version 0, validate
+the referenced objects and schemas directly in the transaction at every preparation and again
+as necessary before execution. An etag can help detect committed metadata changes but cannot
+replace transaction-local object validation. Neither version nor etag is a data snapshot ID.
 
 | Result field | Arrow type | Contract |
 |---|---|---|
@@ -255,7 +309,8 @@ to resolve a different table with the same name. Catalog version is **not** a da
 | `prepared_query_token` | nullable `binary` | Required for acceptance; absent for decline |
 | `output_schema` | nullable `binary` | Required for acceptance; absent for decline |
 | `result_ordering` | nullable `utf8` | `query_order` or `unspecified` on acceptance |
-| `validated_catalog_version` | nullable `int64` | Required for accepted automatic requests |
+| `validated_catalog_version` | nullable `int64` | Required for accepted automatic requests; 0 remains unknown |
+| `validated_catalog_etag` | nullable `utf8` | Committed-metadata validator if applicable; null when unavailable |
 | `context_digest` | nullable `binary` | Required on acceptance; exactly 32 SHA-256 bytes |
 | `expires_at_epoch_ms` | nullable `int64` | Required on acceptance; token expiry, not snapshot expiry |
 | `estimated_rows` | nullable `int64` | Optional nonnegative advisory estimate |
@@ -334,7 +389,8 @@ The fixed executor contract is:
   are disabled. This is an explicit bind-data property, not an assumption about naming.
 
 No new query-data RPC is needed. New records and the preparation RPC must be in the generated
-schema inventory, including inner records hidden behind IPC `binary` fields.
+schema/type inventory. Include nested structs in cross-language schema parity; retain explicit
+inventory registration for records that are independently serialized rather than structurally nested.
 
 ## 6. Automatic semantic profile
 
@@ -367,31 +423,73 @@ when they are not transported.
 This deliberately narrower first profile can run useful joins and reductions. It does not
 pretend that “read-only SQL” establishes engine equivalence.
 
-### 6.2 Bind locally before agreeing to substitute
+### 6.2 Use the bound plan and the SQL exporter
 
-After cheap syntax checks, bind a copy of the original qualified candidate locally with remote
-rewriting disabled for that validation bind. Do not execute rows. Use the bound result to obtain
-the original names, types, dependencies, resolved functions, casts, and session requirements.
-Only permitted base-table binding is allowed; reject arbitrary table-function binding that could
-perform user-defined work. Normal metadata RPCs may still occur.
+Let ordinary binding establish types, dependencies, resolved functions, casts, and session
+requirements. In the early optimizer callback, first restrict eligibility to supported read-only
+statement roots whose data sources all belong to one VGI attachment. Do not perform a second
+general validation bind. Ordinary binding can already perform metadata discovery and constant
+evaluation; this feature must not add query execution during export or preparation.
 
-Binding is the semantic authority; serializing an unbound AST alone is not. Validate that all
-bound data dependencies belong to the selected catalog instance and that every function/operator
-is in the tested profile. Reject local macros, local UDFs, remote objects resolved through an
-unexpected companion catalog, and views until expansion/policy equivalence is implemented.
-Do not accidentally register dependencies only on a throwaway validation binder: transfer the
-required reads and rebind properties to the final statement.
+Use `LogicalPlanSQLExporter::Export(context, candidate, options)` after the source/operator
+allowlist checks. It returns an owned `QueryNode` and positional fields with `source_binding`,
+semantic `type`, and optional `optimizer_type`. Use those fields to verify the result contract
+and build the replacement's output mapping. Do not serialize native bindings on the wire or
+assume they are stable across independent exports. Use an explicit projection to preserve the
+original local result layout and column bindings; leave statement result labels unchanged.
 
-Use the binding information to produce canonical, safely quoted SQL and the object manifest.
-Preserve the original aliases and expression types. Resolve unqualified names before removing
-only the target attachment's catalog component; qualify base references with their canonical
-schema-path components. Do not stringify a bound physical plan or strip identifiers by text
-replacement. Alias/CTE references remain references to those scopes, not catalog table names.
+Assign unique transport-column names through `LogicalPlanSQLExportOptions.output_names`, and
+derive `expected_output_schema` from those names and the validated semantic types. Local output
+labels and transport names are distinct: the former remain DuckDB's original bound labels, the
+latter identify the remote result by ordinal. If this mapping cannot be preserved, decline.
+
+VGI base-table scans must export the logical catalog table, not a private `vgi_table_scan` call
+with an opaque receipt. Use the exporter's `get.GetTable()` reconstruction when it retains the
+right identity; otherwise add a side-effect-free `TableFunction::to_sql` callback to the ordinary
+VGI table scan. Return an owned qualified `BaseTableRef` or a structured unsupported reason.
+The exporter applies projection and predicates centrally; the callback must not duplicate them.
+The reserved query executor itself should decline export to prevent recursion or token leakage.
+
+On the returned AST, remove only the proven target attachment's catalog component from resolved
+base references. Preserve schema components, generated aliases, CTE scopes, system-function
+qualification, and struct-field suffixes. Use the AST writer, not SQL text replacement. Validate
+that every remaining data reference is in the same logical-object manifest. Reject UDFs, views,
+companion sources, process-local inputs, and extension operators not admitted by the profile.
+Expanded macros are not automatically safe because their original names disappeared: their
+bound expressions and every source still need the same semantic/effect checks.
+
+The exporter is deliberately not a remote-compatibility oracle. Its same-environment contract
+does not prove that another DuckDB version or non-DuckDB backend implements the exported query
+identically. Retain negotiated profiles, overload checks, worker preparation, and output checking.
+
+Prefer the early callback, not an export of an arbitrarily late optimized plan. The current
+exporter does not undo folded statistics, literal `now()`/settings observations, or data-derived
+empty relations. It can also reject scans whose consumed projection expressions lost provenance.
+Even the early callback follows binding and mandatory aggregate lowering. Therefore initial
+automatic mode requires the worker to execute in the same backend transaction/snapshot assumed
+by binding and any data-dependent planning. Reject incompatible context rather than switching
+silently to a later export point. Nontransactional providers remain eligible for explicit mode.
 
 The worker must implement the same **logical VGI tables**. A raw backing table is not equivalent
 if normal VGI scans rename columns, add computed columns, enforce predicates, choose scan branches,
 or delegate through a companion catalog. A query provider must reproduce those rules or decline
 the affected object. This is especially important for row-level and column-level access policy.
+
+`VgiRequiredFiltersOptimizer` currently checks required filters after built-in optimization.
+Removing a scan in the early callback would bypass that check. Initially decline automatic
+queries touching objects with `required_filters`, native-delegation placeholders, or multi-branch
+markers. Supporting them later requires enforcing the same rules before replacement, not just
+trusting worker acceptance. Register the query callback in a tested order relative to
+`VgiMultiScanRewriter`; do not let branch expansion hide a source's original policy or attachment.
+
+Reuse `VgiCatalog`'s existing `catalog_contents` seeds and per-kind caches during binding. Do not
+fetch a whole inventory solely because a query mentions two tables. The bulk response represents
+committed metadata and has no transaction token; it cannot prove the existence/schema of
+transaction-local DDL. Preserve per-name transactional lookup and invalidation behavior.
+Reuse version adoption, stale-snapshot retry, and conditional etag revalidation; do not introduce
+a second independent query metadata cache. Version-0/no-etag catalogs retain lazy reload behavior.
+`catalog_contents_attach_independent` permits metadata reuse only, never reuse of query receipts,
+authorization decisions, result cursors, or data across principals.
 
 Schema paths are component lists throughout resolution. A component containing a dot is not two
 schemas. The current DuckDB 1.5 adapter's depth-one bridge must not flatten a deeper worker path.
@@ -400,15 +498,24 @@ automatic SQL uses resolved object paths and explicit mode uses the provider's d
 
 ### 6.3 Output, ordering, and settings
 
-Compare the prepared output to the locally bound output before accepting a rewrite: column count,
-ordinal order, names, and logical types must match without implicit casts or dropped fields.
+Compare the prepared output to the expected transport schema and local ordinal mapping before
+accepting a rewrite: column count, order, transport names, and logical types must match without
+implicit casts or dropped fields. Preserve the original local result labels separately.
 Define the profile's Arrow normalization explicitly; do not compare byte-for-byte IPC envelopes
 or disregard type-significant metadata. A batch may not violate accepted nullability. Validate
 subsequent batches as well as bind-time metadata.
 
-The `SELECT * FROM <table function>` wrapper can introduce name-deduplication behavior. Initially
-decline duplicate output names and any names/types the wrapper fails to preserve. Add support
-only with tests proving original result names and engine output types survive the replacement.
+The legacy `SELECT * FROM <table function>` wrapper can introduce name deduplication. The preferred
+bound-plan replacement avoids that wrapper and uses unique transport names plus the local output
+mapping. Duplicate local labels are supported only after tests prove they remain unchanged; until
+then decline them conservatively. Explicit `vgi_query` follows normal table-function naming rules.
+
+Reuse `ValidateWorkerBatch` and `ValidateProjectedWireBatch` before Arrow conversion, including
+externalized/shared-memory batches. They already defend buffer contents and wire column types.
+They do not establish result-name, collation, field-metadata, or nullability semantics, and the
+global validation setting can disable them. The query adapter's exact schema/semantic checks
+remain mandatory independently of that performance setting; do not equate structural validation
+with query equivalence. Empty `projection_ids` means the full output schema in the current client.
 
 Make default order direction and NULL placement explicit in canonical SQL. DuckDB exposes these
 as settings, so relying on the worker's defaults can change results, especially with LIMIT.
@@ -434,48 +541,83 @@ provider-defined.
 
 ## 7. DuckDB integration and the fallback boundary
 
-### 7.1 Required core seam
+### 7.1 Preferred bound plan integration
 
-Add an opt-in **try-prepare hook before destructive rewriting**. Its exact C++ API should be
-reviewed against the target engine branch; the behavioral contract is more important than the
-illustrative name:
+Register a 2.0-only `OptimizerExtension::pre_optimize_function`. Limit the first implementation
+to complete eligible SELECT roots; explicitly recognize supported EXPLAIN/PREPARE wrappers or
+decline those wrappers until their lifecycle tests pass. Do not traverse arbitrary mixed-query
+subtrees, DML sources, or local joins in this milestone. The optimizer owns the original logical
+plan throughout export and worker preparation.
 
 ```text
-TryRemoteExecute(context, original_query_node_by_const_reference)
-    -> accepted replacement TableRef
-    -> no replacement (ordinary decline)
-    -> exception (actual query/protocol/backend error)
+Original bound plan remains owned by the optimizer
+    -> eligibility and snapshot checks
+    -> LogicalPlanSQLExporter::Export
+         unsupported -> return without substitution
+         invalid plan / malformed callback -> error
+    -> canonical AST and expected result mapping
+    -> catalog_query_prepare
+         declined -> return without substitution
+         accepted -> build and verify an independent replacement
+                         -> swap only after all checks pass
 ```
 
-The caller must still own an untouched, fully qualified candidate when invoking this hook. The
-extension performs validation/canonicalization on copies. On decline the optimizer continues
-with the original candidate; on acceptance it installs the replacement. Make ownership explicit
-in both statement-root and nested-node finishing sites, and preserve statement properties and
-query-location/error context. “Untouched” here means unchanged by this replacement attempt;
-normal preceding optimizer constant folding is not rolled back.
+Export can resolve/cache logical types during verification; do not promise byte-identical native
+objects after the attempt. The guarantee is no semantic or ownership-changing replacement on
+decline. No moved-out original plan, no second local execution, and no catch-all fallback on errors.
+Perform ordinary local optimization afterward whether the candidate was retained or replaced.
+Ensure that later passes cannot duplicate a nonrepeatable remote execution or push forbidden
+hints into the executor.
 
-Use an explicit engine capability or equivalent opt-in dispatch so legacy `RemoteExecute`
-implementations keep their current non-null, consuming contract. The new path must occur before
-the current `StripCatalogName` call. A null check added after moving and stripping the original
-is not sufficient. Changing the default behavior of every remote extension is unnecessary.
+The **first technical gate** is a compiling prototype against `80e17fc252` proving export of a
+VGI join+aggregate at this early stage, output/type/binding preservation, snapshot identity,
+and successful normal optimization after a decline. The exporter accepts planned trees but
+does not select a safe stage for its caller; its README explicitly calls distributed fragment
+export experimental. If this gate fails for a shape, decline that shape. Do not claim all
+exportable DuckDB queries are automatically remote-capable.
 
-The final ordinary binder still binds the accepted replacement, but it must not recursively
-propose that internal scan for remote execution. Guard the validation bind against reentry too.
-Test scoped CTE ownership, exceptions during preparation, and statement copies independently of
-the VGI worker by using a minimal test catalog.
+### 7.2 Optional parsed statement integration
 
-If this engine change cannot be carried or upstreamed, ship explicit query execution first and
-leave automatic pushdown unavailable. An extension-only reconstruction of a consumed query,
-using guessed catalog qualification and ad hoc binder fallback, is not the recommended design.
+If the early bound-plan route cannot meet the required coverage, a separate engine change can
+add the previously proposed `TryRemoteExecute(context, const QueryNode &original)` behavior:
+return an accepted `TableRef`, no replacement on decline, or an actual error. The optimizer must
+retain the qualified original and call before `StripCatalogName` or any ownership transfer.
+Use an explicit opt-in so existing consuming `RemoteExecute` implementations are unchanged.
+Both statement and nested-node finishing sites need tests for CTE ownership and error context.
 
-### 7.2 VGI adapter responsibilities
+This alternative requires its own local validation bind and output preservation checks. It is
+not part of the preferred initial implementation and must not run alongside the bound-plan path
+for the same candidate. If neither route passes the integration gate, explicit queries can ship
+without automatic pushdown. Reconstructing a consumed query from guessed qualification remains
+unacceptable.
 
-`VgiCatalog` implements the remote capability and syntax checks in the 2.0 build only. Its
-context-free `Supports(RemoteCapability)` answers come from immutable attachment capabilities.
-The context-aware try-prepare path checks the session's pushdown setting before making RPCs;
-do not store per-session settings in shared catalog state. `EXECUTE_STATEMENT` and `CONNECT`
-remain false. SELECT-bearing INSERT/CTAS optimization is a read-source optimization only; it
-must not claim atomic cross-database writes or bypass DuckDB's existing transaction constraints.
+### 7.3 VGI adapter responsibilities
+
+The preferred callback identifies attached VGI scans directly and checks the current session's
+pushdown setting before making preparation RPCs. It leaves VGI's parsed-statement
+`EXECUTE_QUERY_NODE`, `EXECUTE_STATEMENT`, and `CONNECT` delegation disabled. Do not store
+per-session settings in shared catalog state. Adding INSERT/CTAS source pushdown later is a
+separate read-source optimization; it must not imply atomic cross-database writes.
+
+Port the execution adapter against current 2.0 APIs, not the September headers:
+
+- `TableFunctionBindInput.table_function` is a `BoundTableFunction`; retained call arguments and
+  `FunctionSignature` belong to the bound/declaration split. Use `named_argument_map_t` and the
+  new serialization callback types in the 2.0 build without changing the portable wire encoding.
+- Parser construction is explicit (`Parser(context)`, context plus identifier-case mode, or
+  explicit options). Generated SQL must preserve resolved identifier spelling and allowed
+  dialect semantics; do not use a nonexistent default constructor or inherit arbitrary dialect
+  extensions into the wire profile.
+- `LogicalType` now owns intrusive ref-counted type information. Use supported copying and type
+  comparison APIs, including collation-sensitive checks where needed; no layout assumptions or
+  serialized pointers to type information.
+- Use `SupportsNestedSchemas`, `ResolveEntryName`, and schema-path APIs where appropriate, but
+  never split a known component on dots. String-path lookup and already-resolved identifiers are
+  different inputs. Keep the 1.5 depth-one compatibility rule in its adapter.
+- Leave the executor's new `is_repeatable` callback absent/false initially. Read-only, metadata
+  frozen, and one prepared recipe do not prove repeated executions return a stable result. Do
+  not attach a `TableCatalogEntry` to the synthetic executor that would incorrectly classify it
+  as a repeatable ordinary table scan.
 
 Construct a dedicated query bind-data type or an explicit discriminated query variant in the
 existing bind data. It owns the attachment reference, canonical preparation request, expected
@@ -502,12 +644,14 @@ reject persistence of prepared query receipts; if engine plan serialization is r
 only a versioned logical recipe and resolve/authorize/reprepare it in the destination context.
 Keep this separate from in-process copies of prepared statements.
 
-### 7.3 Precise fallback and retry policy
+### 7.4 Precise fallback and retry policy
 
 | Event | Automatic mode | Explicit mode |
 |---|---|---|
 | Capability/profile absent | Keep existing local plan | Clear unsupported-capability error |
 | Local eligibility fails | Keep existing local plan, no prepare RPC | Not applicable; provider validates remote query |
+| SQL exporter reports an unsupported construct | Keep original bound plan; record bounded reason | Not applicable |
+| SQL exporter reports invalid bindings/types or a malformed callback | Fail; do not hide a broken native plan | Not applicable |
 | Worker returns a valid decline | Keep existing local plan | Error with sanitized decline reason |
 | Metadata changed before acceptance | At most one refresh/recheck, then local plan | Refresh/reprepare or report change |
 | Permission/authentication error | Fail; do not retry locally | Fail |
@@ -517,7 +661,8 @@ Keep this separate from in-process copies of prepared statements.
 | Error after init or after any output | Abort stream and clean up; never restart locally | Same |
 
 The commit point is installation of the accepted replacement, not receipt of the first result
-batch. Only explicit declines before that point authorize automatic local fallback. Repreparing
+batch. Eligibility/export misses and explicit worker declines before that point keep execution
+local; actual query/protocol/backend errors do not authorize fallback. Repreparing
 an expired receipt is bounded, must preserve the already bound output/context/transaction, and
 does not mean executing the original query locally after failure.
 
@@ -549,6 +694,10 @@ wire response and adapts `start/read/close` to the reserved TABLE executor. The 
 validation, receipt sealing, output checks, cancellation bridging, telemetry, and limits. A
 provider owns dialect validation, logical-catalog equivalence, backend transaction integration,
 and actual execution resources. Capability advertisement must be cheap and not execute queries.
+
+The provider must enforce logical-table restrictions in explicit mode too: `vgi_query` is not an
+escape hatch around required filters, row/column policy, or unsupported scan branches. The reference
+provider should decline such objects until it can reproduce their existing contract safely.
 
 `PreparedQuery` contains a portable preparation recipe and output metadata, not a live result
 cursor. Recipes may be self-contained sealed data or identifiers into shared, bounded TTL
@@ -614,6 +763,14 @@ propagates to the backend's interrupt mechanism and releases the read transactio
 Use cancellation-aware blocking I/O; a serial result reader must not serialize cancellation behind
 an indefinitely blocked fetch. Coordinate owner lifetime with connection-pool return.
 
+Reuse the extension's `VgiCancelDispatcher` and prefetch-slot ownership rather than create another
+destructor-side network path. Early-exit cancellation transfers ownership off-thread; a refused
+enqueue drops the connection, not returns it to the pool. Test saturation, shutdown, in-flight
+prefetch, disabled cancellation, and the WASM explicit-start path. A query executor must never
+pool an incomplete result stream simply because cancellation is disabled or unavailable: close
+or poison it and let the owner lease expire. Reuse the scan's new interruption checks, and the
+Python client's early-close cleanup, without treating either as a remote deadline guarantee.
+
 ### 8.3 Transactions and freshness
 
 For a transactional catalog, preparation and execution use the same authenticated VGI transaction
@@ -632,13 +789,20 @@ must decline that context rather than advertise snapshot equivalence.
 
 For a nontransactional catalog, the provider must still execute the query with the consistency
 its backend promises for one statement. It must not advertise multi-statement snapshot isolation.
+Such providers can implement explicit queries, but the initial automatic profile declines their
+context because it cannot prove a shared binding/planning/execution snapshot. Capability negotiation
+should omit automatic mode for these providers rather than issuing predictable failing preparations.
 Concurrent metadata changes between prepare and execution are revalidated before starting; an
 incompatible schema/policy change fails rather than returning differently interpreted columns.
 
 Explicit and automatic execution do not bypass the attachment's resolved data version. Time
 travel remains excluded until query-level and per-table snapshot bindings have a defined contract.
-`catalog_version_frozen` freezes metadata, not table contents. Consequently neither it nor the
-current cache's SQL/arguments-plus-catalog-version key is sufficient for query-result reuse.
+`catalog_version_frozen` freezes metadata, not table contents. Neither catalog metadata etags nor
+versions validate a query result. The current extension also isolates caches per database and keys
+secret-dependent results with credential fingerprints/HMACs; those improvements establish identity
+isolation, not query-data freshness. Query scans must still bypass lookup, store, revalidation,
+and partition-result caches. Reuse the per-database owner for any future query caches rather than
+introduce a process-global singleton.
 
 ## 9. Security and operational controls
 
@@ -659,6 +823,20 @@ attachment generation, policy revision, transaction, and context. Validate on pr
 init, read, and cancellation as appropriate. Do not rely on handle possession alone when the
 authenticated caller changes. Apply existing token-sealing/storage machinery and review scope
 checks for the new dispatcher path explicitly.
+
+Use the established `CallContext.auth` identity and attach-token binding. HTTP now accepts sealed
+grants and `resolve_token` bearers through the existing authentication chain; do not add a second
+query-specific bearer or identity protocol. A query preparation receipt is not an identity grant.
+Capture and revalidate effective authority, including relevant grant restrictions/policy revision,
+not just a principal string. The same principal with narrower authority must not redeem a receipt
+prepared with broader access. Actual object authorization remains the provider's responsibility.
+
+Declared secret ATTACH options remain the credential input. Preserve their redaction and existing
+HMAC-based cache identities; do not add credential values to SQL, evaluation context, diagnostics,
+or native serialized plans. The explicit API takes an attached catalog name, not an arbitrary
+LOCATION. Reuse its already authorized connection path and existing `vgi_allowed_transports`
+policy. Current policy deliberately allows previously attached catalogs to continue after
+narrowing; do not silently change that rule or expose a new attach/transport bypass through queries.
 
 Remote SQL can contain personal data and literals. Default EXPLAIN/logging shows a redacted shape,
 profile, attachment alias, query fingerprint, acceptance reason, and expected result schema,
@@ -685,9 +863,13 @@ mode: a detected single-VGI-catalog candidate must be accepted or produce an act
 it is not an instruction to push writes or mixed-catalog queries. Queries with no such candidate
 are unaffected. Explicit `vgi_query` is an intentional separate entry point.
 
+Declare this session setting in `vgi/src/vgi_settings.json` and regenerate with
+`scripts/generate_settings.py`, using the existing flat-settings validation and scope rules.
+Do not add an unvalidated registration or a second stored setting on `VgiCatalog`.
+
 The first automatic policy is capability/shape based, not cost based. Prefer eligible joins,
 aggregations, DISTINCT once supported, and ordered reductions; skip trivial scans. Keep estimates
-optional and explicitly advisory. The pre-binding optimizer hook is not a full distributed cost
+optional and explicitly advisory. An early bound-plan extension is not a full distributed cost
 model, and incomparable local/backend cost units should not decide correctness-sensitive rewrites.
 Benchmark before enabling automatic mode by default for a certified provider.
 
@@ -704,10 +886,17 @@ disabled; do not invent a “rows avoided” metric when the baseline is unknown
 
 ## 11. Implementation map and sequencing
 
+Start two tracks: prove the early bound-plan exporter against the current 2.0 headers, and define
+the portable protocol/execution path. The first usable release remains explicit queries on 1.5;
+automatic mode depends on the exporter/snapshot/policy gate, not on optimistic API assumptions.
+The seven implementation units below are milestones, not claims that any query API is already built.
+
 ### PR 1: contract and executable corpus
 
-Turn the reviewed wire portion into a normative optional-extension specification. Add accepted
-and declined fixtures, exact Arrow schemas, malformed payloads, capability intersection cases,
+Pin the `vgi.v2` / proposed `2.2.0` contract and turn the reviewed wire portion into a normative
+optional-extension specification. Specify typed nested records, metadata version-0/etag rules,
+and the initial automatic snapshot requirement. Add accepted and declined fixtures, exact Arrow
+schemas, malformed payloads, capability intersection cases,
 and a language-neutral corpus under `conformance/catalog-query-v1/`. Pin semantic profile cases
 and type mappings before advertising automatic support. Add a reference stub provider that can
 accept, decline, and return deliberately malformed responses without executing a database.
@@ -720,10 +909,16 @@ Add capability/prepare dataclasses, RPC method, provider interface, reserved nam
 and consistent authorization/rehydration routing. Keep general TABLE execution unchanged for
 ordinary functions.
 
-Update `vgi/codegen/_common.py`'s explicit inner-record inventories and generated protocol/schema
-artifacts for C++, TypeScript, Rust, Go, and Java. Extend inventory, schema-parity, protocol-version,
-catalog-auth-binding, and client-catalog tests. A schema visible only as `binary` must not be
-accidentally omitted from generators.
+Update `vgi/codegen/_common.py`'s inventories and generated protocol/schema artifacts for C++,
+TypeScript, Rust, Go, Java, and C#. Regenerate the existing typed model/builders as well as schemas,
+protocol versions, and protocol-name artifacts; preserve the routing name `vgi.v2`. Extend
+inventory, nested-schema/type parity, protocol-name/version, catalog-auth-binding, and client-catalog
+tests. Add a Python client query convenience method that uses the same preparation and TABLE path;
+do not bypass the public client lifecycle with a private standalone HTTP call.
+
+Use `scripts/regen_generated.py` for the coordinated generation workflow rather than redirecting
+individual generators over checked-in files. Include `tests/test_generated_cpp_protocol_name.py`
+and `tests/test_generated_csharp.py` alongside the existing schema/version drift tests.
 
 ### PR 3: reference provider and execution ownership
 
@@ -738,31 +933,48 @@ after differential conformance against the actual client engine builds.
 ### PR 4: DuckDB 1.5 explicit adapter
 
 In the `vgi` repository, extend capability construction/parsing in `src/vgi_rpc_types.cpp` and
-catalog attachment state in `src/include/storage/vgi_catalog.hpp` / the storage implementation.
+`src/include/vgi_catalog_metadata.hpp`, with attachment state in
+`src/include/storage/vgi_catalog.hpp` / the storage implementation. Route the preparation method
+through `src/vgi_catalog_api.cpp`, `src/include/vgi_catalog_rpc.hpp`, pooled unary RPCs, and
+`VGI_MAIN_PROTOCOL`; register generated schema validation in `src/vgi_schema_registry.cpp`.
 Register `vgi_query` in `src/vgi_extension.cpp` and implement a dedicated query binder/scan adapter.
 Reuse the connection/Arrow scan lifecycle from `src/vgi_function_connection.cpp` and
-`src/vgi_table_function_impl.cpp` with explicit cache exclusion and fixed execution flags.
-Audit reconnect behavior, `Copy()`, serialization, and transaction dependency registration.
+`src/vgi_table_function_impl.cpp`, batch guards in `src/vgi_batch_validation.cpp`, and cleanup in
+`src/vgi_cancel_dispatcher.cpp`, with explicit cache exclusion and fixed execution flags. Reuse
+`VgiCatalog` metadata seeds/revalidation rather than introducing another inventory loader.
+Audit protocol routing, reconnect behavior, `Copy()`, serialization, transaction dependencies,
+secret options, grants, and LOCATION policy. Use the generated settings registry for new controls.
 
 This delivers useful protocol capability independently of the DuckDB 2.0 port. Test it against
 the existing scan path and all supported worker transports. Do not retrofit an unrelated
 optimizer extension into 1.5 as part of this milestone.
 
-### PR 5: DuckDB prepare-before-rewrite seam
+### PR 5: DuckDB 2.0 compatibility and export gate
 
-In the inspected engine tree, change the opt-in catalog API and
-`src/optimizer/remote_pushdown_optimizer.cpp`. Add a small test catalog proving accepted/declined
-ownership behavior, preserved qualification, nonrecursive replacement, and compatible legacy
-dispatch. Cover both `FinishPushdown` overloads and retain conservative CTE handling. Do not
-advertise general mixed-subtree pushdown as a side effect of this patch.
+Run the feasibility spike at the start, then land the proven adapter foundations here. Compile
+against `duckdb-3/duckdb` at `80e17fc252`: update the declaration/bound-function split, signature
+and argument APIs, explicit parser contexts, type ownership, and serialization callbacks in an
+isolated 2.0 compatibility layer. Add VGI table-source SQL reconstruction and structured export
+diagnostics. Leave the reserved executor nonrepeatable and nonexportable by default.
+
+Prove whole-root join+aggregate export before built-in optimization, unchanged local behavior on
+export/preparation decline, exact output remapping, and transaction snapshot reuse. Test callback
+order relative to multi-scan rewriting and required-filter enforcement. Porting the VGI execution
+path to the 2.0 API is real work even though the protocol remains portable.
+
+Only if that gate demonstrates a specific unresolvable limitation should a separate engine PR
+implement the optional prepare-before-rewrite catalog hook from section 7.2. The October exporter
+means a core change is no longer the assumed critical path.
 
 ### PR 6: DuckDB 2.0 automatic adapter
 
 Add a separate version-specific adapter, for example
-`src/storage/vgi_remote_query.cpp` plus its header. Implement coarse syntax checks, guarded local
-binding, canonical name/type/context validation, prepare RPC, exact output checking, and final
-scan replacement. Reuse the explicit execution machinery from PR 4. Keep version-dependent
-DuckDB headers/hooks outside the portable VGI wire layer and the 1.5 build.
+`src/storage/vgi_remote_query.cpp` plus its header. Register the early optimizer callback and
+implement bound-source eligibility, SQL export, canonical name/type/context validation, prepare
+RPC, exact output mapping, and verified plan replacement. Start with whole SELECT roots, no
+required-filter/branch placeholders, and a shared backend transaction. Reuse execution from PR 4
+and the compatibility/export layer from PR 5. Keep version-dependent DuckDB headers/hooks outside
+the portable VGI wire layer and the 1.5 build. Do not enable the consuming remote-catalog pass too.
 
 ### PR 7: hardening, documentation, and staged enablement
 
@@ -776,7 +988,12 @@ minimum semver. Enable `auto` by default only for certified providers after perf
 ### Protocol and semantic conformance
 
 - Capability absent, empty intersections, unknown selected IDs, version mismatch, size limits,
-  malformed inner IPC, duplicate/invalid fields, null versus empty, and invalid status unions.
+  malformed nested structs/schema IPC, duplicate/invalid fields, null versus empty, and invalid
+  status unions. Check typed models/builders as well as schemas across all six worker SDKs.
+- `vgi.v2` routing on raw transports and HTTP; new-method schema registration; protocol-name and
+  surface-version mismatch; the reserved executor still using normal routed `bind`/`init`.
+- Bulk metadata enabled/disabled, version 0 with/without etag, stale snapshot retry, etag
+  not-modified, transaction-local DDL, and two attachments with coincidentally equal versions.
 - Prepared token replay across users, attachments, transactions, capability revisions, and expiry;
   reserved-executor calls without negotiation; user definitions attempting to shadow the name.
 - Exact result schema and row multiplicity; empty/all-NULL results; zero-row grouped versus
@@ -788,6 +1005,8 @@ minimum semver. Enable `auto` by default only for certified providers after perf
 - Unsupported parameters, volatile/UDF/macros, nested write constructs, external table functions,
   unsupported types/settings, CTE scope, local correlations, and two-catalog joins decline safely.
 - Remote exception versus legitimate decline: only the latter follows the local path.
+- Same principal with narrowed grant authority; secret ATTACH options; token/SQL redaction;
+  new query APIs cannot bypass LOCATION restrictions or replay authorization from metadata caches.
 
 Run each accepted automatic query against an immutable fixture with pushdown `off` and `auto`;
 compare output names/types and result bags or ordered sequences as specified by the query. For
@@ -798,6 +1017,15 @@ start remotely. On mutable data, use a shared pinned snapshot when comparing pat
 
 ### Engine and lifecycle conformance
 
+- Early bound-plan export on the actual 2.0 headers; unsupported-export decline versus invalid
+  binding/type error; exact semantic/optimizer-type mapping; unchanged local result labels.
+- Constant/settings/statistics folding and snapshot changes; reject a provider unable to share
+  the planning transaction. Never fall back to late optimized SQL as an unvalidated workaround.
+- Required-filter rejection survives the new callback; native-delegation and multi-branch markers
+  are not hidden; scalar/aggregate and table-buffering rewrites do not acquire new bypasses.
+- `TableFunction::to_sql` does not execute, duplicate filters, or serialize receipts; the query
+  executor remains nonrepeatable and cannot recursively export itself. Respect both `extension`
+  and `remote_pushdown` optimizer opt-outs.
 - EXPLAIN and PREPARE do not execute; EXECUTE rebinds under changed transaction/settings/metadata;
   persistent plans do not retain live receipts; detach/reattach invalidates old attachment handles.
 - Set `threads=1` and a larger value; ordered streams stay ordered and one effective VGI reader
@@ -806,6 +1034,10 @@ start remotely. On mutable data, use a shared pinned snapshot when comparing pat
   Owner loss fails safely; replayed continuation never skips or duplicates acknowledged rows.
 - Cancellation during prepare, init, blocked fetch, and after partial output; idle abandonment,
   normal EOS, transaction commit/rollback, and double-close all release resources.
+- Cancel-dispatcher refusal/shutdown, WASM explicit start, disabled cancellation, and in-flight
+  prefetch never return an incomplete query connection to the pool. Test Python client early close.
+- Malformed buffers and wrong wire types through normal/externalized/shared-memory paths; verify
+  mandatory query-contract checks still run when general batch validation is configured `none`.
 - Transient bind reconnect does not execute twice; ambiguous init and post-output failures never
   trigger local replay or a second remote query. Verify the actual RPC client's retry settings.
 - Same transaction observes its own prior writes; separate transactions do not share connection
@@ -832,14 +1064,21 @@ universal speedup percentage; establish budgets from these measurements before d
 
 ## 13. Compatibility, alternatives, and launch gates
 
-The current protocol checks major/minor compatibility and the C++ consumer rejects unexpected
-return-schema column counts. Adding optional fields is not automatically wire-compatible with
-deployed clients. If these changes are still within the coordinated, unreleased VGI 2.0 contract,
-regenerate and release the SDKs/extension together. If `2.0.0` is already frozen/deployed as the
-supported contract, make this an additive `2.1.0` revision under the current versioning rules,
-or explicitly design tolerant decoding first. Do not silently alter deployed 2.0 schemas and
-claim capability gating makes them backward-compatible. Wire version, query-profile version,
-Python package version, and DuckDB engine version remain independent.
+The Python SDK and extension currently declare **2.1.0** under **`vgi.v2`**. The query capability
+and new RPC target the next coordinated additive surface revision, **2.2.0**, subject to release
+coordination if another feature claims that revision first. Do not append them silently to
+2.1.0 or rename the protocol to `vgi.v2.2`.
+
+The framework enforces exact major/minor compatibility. Some catalog-item decoders tolerate
+absent optional fields by name, but the generated request/response validators also compare schema
+shape; this is not general cross-version interoperability. Update the SDKs, typed models, generated
+schemas, C++ protocol identifiers, and integration fixtures together. Capability absence means
+unsupported query execution only after surface-version compatibility is established. A rolling
+deployment needs matched endpoints/releases or an explicit version-routing strategy; retaining
+the same major protocol name alone does not make 2.1 and 2.2 peers interoperable.
+
+Wire version, query-profile version, SDK package version, and DuckDB engine version remain
+independent. The feature belongs to the VGI 2 family even though its proposed wire release is 2.2.
 
 Alternatives considered:
 
@@ -853,14 +1092,21 @@ Alternatives considered:
   reserved executor has a much smaller conformance surface.
 - **DuckDB binary AST/logical-plan serialization:** tightly couples worker and client internals;
   unsuitable as VGI's language-neutral wire contract.
+- **Always require a new DuckDB remote-catalog hook:** no longer the first choice now that a
+  bound-plan exporter and optimizer-extension ownership can support a non-destructive attempt.
+  Retain the hook as a conditional alternative with separate tests, not an assumed prerequisite.
+- **Export the final optimized plan without checking context:** can ship folded observations from
+  another snapshot or lose source provenance. Use the early-stage/snapshot gate instead. The new
+  exporter reduces reconstruction work; it does not make arbitrary distributed plans safe.
 - **Substrait or a new engine-neutral relational IR immediately:** possible future encodings,
   but much larger than the required read-query capability and does not eliminate type/function
   semantics or authorization problems. Leave encoding negotiation extensible.
 - **Automatic retry locally on any remote error:** can duplicate execution, change snapshots,
   leak side effects through functions, or hide permissions and backend failures. Reject it.
 
-Launch gates, not optional follow-up work: exact supported-type mappings; safe decline ownership
-in the target DuckDB build; logical-table authorization equivalence; ordered streaming under
+Launch gates, not optional follow-up work: exact supported-type mappings; early-stage SQL export
+and safe decline ownership in the target DuckDB build; preserved required-filter/branch policy;
+logical-table authorization equivalence; ordered streaming under
 parallel client settings; process-safe execution ownership; transaction integration; no accidental
 result cache use; and coordinated wire-version/codegen validation.
 
@@ -881,14 +1127,25 @@ the top so future API drift is visible.
 | DuckDB: `src/optimizer/remote_pushdown_optimizer.cpp` | Single-catalog analysis, finishing sites, catalog stripping, wrappers, CTE restrictions |
 | DuckDB: `src/planner/planner.cpp`, `src/optimizer/optimizer.cpp` | Pre-binding invocation and optimizer gates |
 | DuckDB: `src/include/duckdb/function/table_function.hpp` | Table-function binding, order and parallelism controls |
+| DuckDB: `src/include/duckdb/optimizer/optimizer_extension.hpp`, `src/optimizer/optimizer.cpp` | Pre-optimizer callback ownership, ordering, and optimizer opt-outs |
+| DuckDB: `src/planner/sql_export/README.md`, `src/include/duckdb/planner/logical_plan_sql_exporter.hpp` | Export contract, folded observations, experimental fragment limits, result bindings/types |
+| DuckDB: `src/planner/sql_export/table_function_sql_export.cpp` | Source callbacks, logical-table reconstruction, and unsupported-source reasons |
+| DuckDB: `src/include/duckdb/parser/parser.hpp`, `src/include/duckdb/common/types.hpp` | Explicit parser contexts and intrusive logical-type ownership |
+| DuckDB: `src/planner/logical_operator_repeatability.cpp` | Conservative executor repeatability and ordinary table classification |
 | vgi-python: `vgi/protocol.py` | Client capabilities, bind/init requests, TABLE state rehydration, wire versioning |
 | vgi-python: `vgi/catalog/catalog_interface.py` | Attachment metadata, schema paths, function and scan contracts |
 | vgi-python: `vgi/catalog/descriptors.py`, `vgi/worker.py` | Declarative catalog construction, function routing, attachment context |
 | vgi-python: `vgi/transactor/server.py`, `vgi/transactor/_duckdb_compat.py` | Existing transaction-owner model, Arrow scans, fork-specific shared-transaction cursors |
-| vgi-python: `vgi/codegen/_common.py` | Explicit schema inventories for nested IPC records |
+| vgi-python: `vgi/codegen/_common.py`, `scripts/regen_generated.py` | Schema/type inventories and coordinated generation, including nested records and C# |
+| vgi-python: `vgi/auth.py`, `vgi/client/client.py` | Effective identity/grant integration and early-close cleanup |
 | vgi: `src/include/storage/vgi_catalog.hpp`, `src/storage/vgi_transaction.cpp` | Catalog state and transaction lifetime |
+| vgi: `src/storage/vgi_catalog.cpp`, `src/vgi_catalog_api.cpp` | Bulk metadata seeds, etag/version adoption, and pooled catalog RPC validation |
+| vgi: `src/include/vgi_catalog_metadata.hpp`, `src/include/vgi_rpc_client.hpp` | Attachment capability records and generated protocol routing |
 | vgi: `src/storage/vgi_table_entry.cpp`, `src/storage/vgi_table_function_set.cpp` | Existing catalog scan binding and metadata |
 | vgi: `src/vgi_function_connection.cpp`, `src/vgi_table_function_impl.cpp` | Bind/init transport, copies, ordering, result-cache integration |
+| vgi: `src/vgi_batch_validation.cpp`, `src/vgi_cancel_dispatcher.cpp` | Reusable batch guards and off-thread stream teardown |
+| vgi: `src/vgi_extension.cpp`, `src/vgi_multi_scan_rewriter.cpp` | Required-filter checks, branch rewriting, and per-database cache ownership |
+| vgi: `src/vgi_settings.json`, `scripts/generate_settings.py`, `src/vgi_location_policy.cpp` | Generated setting validation and existing-attachment transport policy |
 
 Related design documents: [VGI 2.0 audit](vgi-protocol-proposed-changes.md),
 [filter-v2 specification](vgi-filter-encoding-v2-spec.md), and
