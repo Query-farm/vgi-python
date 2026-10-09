@@ -1,6 +1,13 @@
 # Plan: attach tickets and `vgi_export_session()`
 
-Status: plan for review · 2026-10-06
+Status: original implementation plan · shipped (see [IMPLEMENTATION.md](IMPLEMENTATION.md))
+
+Reporting integration revised 2026-10-07: the export's location and catalog
+name do not uniquely identify an attachment. The reporting client adds an
+explicit attachment reference and stores distinct catalog delegations as
+specified in [credentials.md](credentials.md). Grant-only service delegations
+use Identity directly. Neither addition changes the shipped ticket format,
+`seal_attach`, or `vgi_export_session()` schema described below.
 
 Goal: serialize a user's attached DuckDB session so any runner can reattach it
 later as that user, without seeing the user's secrets. Design context is in

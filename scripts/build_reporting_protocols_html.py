@@ -2,12 +2,13 @@
 # requires-python = ">=3.12"
 # dependencies = ["markdown", "pygments"]
 # ///
-"""Combine the reporting-protocols markdown files into one HTML page.
+"""Build the reporting design page and separate Python reference pages.
 
 Run after editing a spec: ``uv run --script scripts/build_reporting_protocols_html.py``.
 """
 
 import re
+from html import escape
 from pathlib import Path
 
 import markdown
@@ -20,6 +21,8 @@ OUT = SRC / "reporting-protocols.html"
 # build rather than silently missing from the page.
 FILES = [
     "README.md",
+    "python-contracts.md",
+    "wire-contracts.md",
     "credentials.md",
     "reports.md",
     "render.md",
@@ -57,36 +60,36 @@ for name in FILES[1:]:
     title = (SRC / name).read_text().split("\n", 1)[0].removeprefix("# ")
     md_text = md_text.replace(f"]({name})", f"](#{slugify(title, '-')})")
 
-# Mermaid blocks bypass the highlighter.
-mermaids: list[str] = []
 
+def render_html(text: str, title: str, home: str) -> str:
+    """Render one standalone page, keeping Mermaid outside the highlighter."""
+    mermaids: list[str] = []
 
-def _stash(m: re.Match[str]) -> str:
-    mermaids.append(m.group(1))
-    return f"MERMAIDBLOCK{len(mermaids) - 1}"
+    def stash(match: re.Match[str]) -> str:
+        mermaids.append(match.group(1))
+        return f"MERMAIDBLOCK{len(mermaids) - 1}"
 
+    text = re.sub(r"```mermaid\n(.*?)```", stash, text, flags=re.S)
+    md = markdown.Markdown(
+        extensions=["tables", "fenced_code", "codehilite", "toc", "sane_lists"],
+        extension_configs={"codehilite": {"guess_lang": False}, "toc": {"toc_depth": "2-3"}},
+    )
+    body = md.convert(text)
+    for i, diagram in enumerate(mermaids):
+        body = body.replace(f"<p>MERMAIDBLOCK{i}</p>", f'<pre class="mermaid">{escape(diagram)}</pre>')
+    return HTML_TEMPLATE.format(title=escape(title), home=home, body=body, toc=md.toc, light=light, dark=dark)
 
-md_text = re.sub(r"```mermaid\n(.*?)```", _stash, md_text, flags=re.S)
-
-md = markdown.Markdown(
-    extensions=["tables", "fenced_code", "codehilite", "toc", "sane_lists"],
-    extension_configs={"codehilite": {"guess_lang": False}, "toc": {"toc_depth": "2-3"}},
-)
-body = md.convert(md_text)
-for i, src in enumerate(mermaids):
-    body = body.replace(f"<p>MERMAIDBLOCK{i}</p>", f'<pre class="mermaid">{src}</pre>')
-toc = md.toc
 
 light = HtmlFormatter(style="friendly").get_style_defs(".codehilite")
 dark = HtmlFormatter(style="github-dark").get_style_defs(".codehilite")
 dark = "\n".join("  " + line for line in dark.splitlines())
 
-html = f"""<!doctype html>
+HTML_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>VGI Reporting Protocols</title>
+<title>{title}</title>
 <style>
 :root {{
   --bg: #fbfbfa; --fg: #1d1d1f; --muted: #5f6368; --rule: #e3e3e0;
@@ -137,7 +140,7 @@ pre.mermaid {{ background: var(--panel); border-radius: 8px; padding: 16px; text
 </head>
 <body>
 <div class="layout">
-<nav><div class="brand">VGI Reporting Protocols</div>{toc}</nav>
+<nav><div class="brand"><a href="{home}">VGI Reporting Protocols</a></div>{toc}</nav>
 <main id="top">
 {body}
 </main>
@@ -150,5 +153,20 @@ mermaid.initialize({{ startOnLoad: true, theme: dark ? "dark" : "neutral" }});
 </body>
 </html>
 """
-OUT.write_text(html)
+# The overview links to reference pages; their source is never concatenated here.
+md_text = re.sub(r"\]\((reference/[^)#]+)\.md([#][^)]*)?\)", r"](\1.html\2)", md_text)
+OUT.write_text(render_html(md_text, "VGI Reporting Protocols", "#top"))
 print(OUT)
+
+for reference in sorted((SRC / "reference").glob("*.md")):
+    text = reference.read_text()
+    for name in FILES:
+        title = (SRC / name).read_text().split("\n", 1)[0].removeprefix("# ")
+        anchor = "top" if name == "README.md" else slugify(title, "-")
+        text = text.replace(f"](../{name})", f"](../{OUT.name}#{anchor})")
+        text = text.replace(f"](../{name}#", f"](../{OUT.name}#")
+    text = re.sub(r"\]\(([^/)#]+)\.md([#][^)]*)?\)", r"](\1.html\2)", text)
+    title = text.split("\n", 1)[0].removeprefix("# ")
+    output = reference.with_suffix(".html")
+    output.write_text(render_html(text, title, f"../{OUT.name}#python-reporting-contracts"))
+    print(output)

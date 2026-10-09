@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reports: Python reference</title>
+<style>
+:root {
+  --bg: #fbfbfa; --fg: #1d1d1f; --muted: #5f6368; --rule: #e3e3e0;
+  --panel: #f2f2ef; --accent: #2f6f4f; --code-bg: #f4f4f1;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #16171a; --fg: #e6e6e3; --muted: #a0a4a8; --rule: #2c2e33;
+          --panel: #1e2024; --accent: #7cc49c; --code-bg: #1e2024; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+.layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); max-width: 1320px; margin: 0 auto; }
+nav { position: sticky; top: 0; height: 100vh; overflow-y: auto; padding: 32px 20px;
+  border-right: 1px solid var(--rule); font-size: 14px; }
+nav .brand { font-weight: 650; margin-bottom: 16px; color: var(--accent); }
+nav ul { list-style: none; padding-left: 0; margin: 0; }
+nav ul ul { padding-left: 14px; }
+nav li { margin: 4px 0; }
+nav a { color: var(--muted); text-decoration: none; }
+nav a:hover { color: var(--fg); }
+main { padding: 40px 56px 96px; min-width: 0; }
+h1 { font-size: 2.1rem; line-height: 1.2; margin: 0 0 8px; }
+h2 { font-size: 1.55rem; margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--rule); }
+h3 { font-size: 1.15rem; margin-top: 32px; }
+a { color: var(--accent); }
+code { font: 0.88em/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+pre { margin: 0; }
+.codehilite { background: var(--code-bg) !important; border: 1px solid var(--rule);
+  border-radius: 8px; padding: 14px 16px; overflow-x: auto; margin: 16px 0; }
+.codehilite code { background: none; padding: 0; }
+table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 14.5px;
+  display: block; overflow-x: auto; }
+th, td { border-bottom: 1px solid var(--rule); padding: 8px 12px; text-align: left; vertical-align: top; }
+th { background: var(--panel); font-weight: 600; }
+pre.mermaid { background: var(--panel); border-radius: 8px; padding: 16px; text-align: center; }
+@media (max-width: 860px) {
+  .layout { grid-template-columns: 1fr; }
+  nav { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--rule); }
+  main { padding: 24px 16px 64px; }
+}
+pre { line-height: 125%; }
+td.linenos .normal { color: #666666; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+span.linenos { color: #666666; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+td.linenos .special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+.codehilite .hll { background-color: #ffffcc }
+.codehilite { background: #f0f0f0; }
+.codehilite .c { color: #60A0B0; font-style: italic } /* Comment */
+.codehilite .err { border: 1px solid #F00 } /* Error */
+.codehilite .k { color: #007020; font-weight: bold } /* Keyword */
+.codehilite .o { color: #666 } /* Operator */
+.codehilite .ch { color: #60A0B0; font-style: italic } /* Comment.Hashbang */
+.codehilite .cm { color: #60A0B0; font-style: italic } /* Comment.Multiline */
+.codehilite .cp { color: #007020 } /* Comment.Preproc */
+.codehilite .cpf { color: #60A0B0; font-style: italic } /* Comment.PreprocFile */
+.codehilite .c1 { color: #60A0B0; font-style: italic } /* Comment.Single */
+.codehilite .cs { color: #60A0B0; background-color: #FFF0F0 } /* Comment.Special */
+.codehilite .gd { color: #A00000 } /* Generic.Deleted */
+.codehilite .ge { font-style: italic } /* Generic.Emph */
+.codehilite .ges { font-weight: bold; font-style: italic } /* Generic.EmphStrong */
+.codehilite .gr { color: #F00 } /* Generic.Error */
+.codehilite .gh { color: #000080; font-weight: bold } /* Generic.Heading */
+.codehilite .gi { color: #00A000 } /* Generic.Inserted */
+.codehilite .go { color: #888 } /* Generic.Output */
+.codehilite .gp { color: #C65D09; font-weight: bold } /* Generic.Prompt */
+.codehilite .gs { font-weight: bold } /* Generic.Strong */
+.codehilite .gu { color: #800080; font-weight: bold } /* Generic.Subheading */
+.codehilite .gt { color: #04D } /* Generic.Traceback */
+.codehilite .kc { color: #007020; font-weight: bold } /* Keyword.Constant */
+.codehilite .kd { color: #007020; font-weight: bold } /* Keyword.Declaration */
+.codehilite .kn { color: #007020; font-weight: bold } /* Keyword.Namespace */
+.codehilite .kp { color: #007020 } /* Keyword.Pseudo */
+.codehilite .kr { color: #007020; font-weight: bold } /* Keyword.Reserved */
+.codehilite .kt { color: #902000 } /* Keyword.Type */
+.codehilite .m { color: #40A070 } /* Literal.Number */
+.codehilite .s { color: #4070A0 } /* Literal.String */
+.codehilite .na { color: #4070A0 } /* Name.Attribute */
+.codehilite .nb { color: #007020 } /* Name.Builtin */
+.codehilite .nc { color: #0E84B5; font-weight: bold } /* Name.Class */
+.codehilite .no { color: #60ADD5 } /* Name.Constant */
+.codehilite .nd { color: #555; font-weight: bold } /* Name.Decorator */
+.codehilite .ni { color: #D55537; font-weight: bold } /* Name.Entity */
+.codehilite .ne { color: #007020 } /* Name.Exception */
+.codehilite .nf { color: #06287E } /* Name.Function */
+.codehilite .nl { color: #002070; font-weight: bold } /* Name.Label */
+.codehilite .nn { color: #0E84B5; font-weight: bold } /* Name.Namespace */
+.codehilite .nt { color: #062873; font-weight: bold } /* Name.Tag */
+.codehilite .nv { color: #BB60D5 } /* Name.Variable */
+.codehilite .ow { color: #007020; font-weight: bold } /* Operator.Word */
+.codehilite .w { color: #BBB } /* Text.Whitespace */
+.codehilite .mb { color: #40A070 } /* Literal.Number.Bin */
+.codehilite .mf { color: #40A070 } /* Literal.Number.Float */
+.codehilite .mh { color: #40A070 } /* Literal.Number.Hex */
+.codehilite .mi { color: #40A070 } /* Literal.Number.Integer */
+.codehilite .mo { color: #40A070 } /* Literal.Number.Oct */
+.codehilite .sa { color: #4070A0 } /* Literal.String.Affix */
+.codehilite .sb { color: #4070A0 } /* Literal.String.Backtick */
+.codehilite .sc { color: #4070A0 } /* Literal.String.Char */
+.codehilite .dl { color: #4070A0 } /* Literal.String.Delimiter */
+.codehilite .sd { color: #4070A0; font-style: italic } /* Literal.String.Doc */
+.codehilite .s2 { color: #4070A0 } /* Literal.String.Double */
+.codehilite .se { color: #4070A0; font-weight: bold } /* Literal.String.Escape */
+.codehilite .sh { color: #4070A0 } /* Literal.String.Heredoc */
+.codehilite .si { color: #70A0D0; font-style: italic } /* Literal.String.Interpol */
+.codehilite .sx { color: #C65D09 } /* Literal.String.Other */
+.codehilite .sr { color: #235388 } /* Literal.String.Regex */
+.codehilite .s1 { color: #4070A0 } /* Literal.String.Single */
+.codehilite .ss { color: #517918 } /* Literal.String.Symbol */
+.codehilite .bp { color: #007020 } /* Name.Builtin.Pseudo */
+.codehilite .fm { color: #06287E } /* Name.Function.Magic */
+.codehilite .vc { color: #BB60D5 } /* Name.Variable.Class */
+.codehilite .vg { color: #BB60D5 } /* Name.Variable.Global */
+.codehilite .vi { color: #BB60D5 } /* Name.Variable.Instance */
+.codehilite .vm { color: #BB60D5 } /* Name.Variable.Magic */
+.codehilite .il { color: #40A070 } /* Literal.Number.Integer.Long */
+@media (prefers-color-scheme: dark) {
+  pre { line-height: 125%; }
+  td.linenos .normal { color: #6e7681; background-color: #0d1117; padding-left: 5px; padding-right: 5px; }
+  span.linenos { color: #6e7681; background-color: #0d1117; padding-left: 5px; padding-right: 5px; }
+  td.linenos .special { color: #e6edf3; background-color: #6e7681; padding-left: 5px; padding-right: 5px; }
+  span.linenos.special { color: #e6edf3; background-color: #6e7681; padding-left: 5px; padding-right: 5px; }
+  .codehilite .hll { background-color: #6e7681 }
+  .codehilite { background: #0d1117; color: #E6EDF3 }
+  .codehilite .c { color: #8B949E; font-style: italic } /* Comment */
+  .codehilite .err { color: #F85149 } /* Error */
+  .codehilite .esc { color: #E6EDF3 } /* Escape */
+  .codehilite .g { color: #E6EDF3 } /* Generic */
+  .codehilite .k { color: #FF7B72 } /* Keyword */
+  .codehilite .l { color: #A5D6FF } /* Literal */
+  .codehilite .n { color: #E6EDF3 } /* Name */
+  .codehilite .o { color: #FF7B72; font-weight: bold } /* Operator */
+  .codehilite .x { color: #E6EDF3 } /* Other */
+  .codehilite .p { color: #E6EDF3 } /* Punctuation */
+  .codehilite .ch { color: #8B949E; font-style: italic } /* Comment.Hashbang */
+  .codehilite .cm { color: #8B949E; font-style: italic } /* Comment.Multiline */
+  .codehilite .cp { color: #8B949E; font-weight: bold; font-style: italic } /* Comment.Preproc */
+  .codehilite .cpf { color: #8B949E; font-style: italic } /* Comment.PreprocFile */
+  .codehilite .c1 { color: #8B949E; font-style: italic } /* Comment.Single */
+  .codehilite .cs { color: #8B949E; font-weight: bold; font-style: italic } /* Comment.Special */
+  .codehilite .gd { color: #FFA198; background-color: #490202 } /* Generic.Deleted */
+  .codehilite .ge { color: #E6EDF3; font-style: italic } /* Generic.Emph */
+  .codehilite .ges { color: #E6EDF3; font-weight: bold; font-style: italic } /* Generic.EmphStrong */
+  .codehilite .gr { color: #FFA198 } /* Generic.Error */
+  .codehilite .gh { color: #79C0FF; font-weight: bold } /* Generic.Heading */
+  .codehilite .gi { color: #56D364; background-color: #0F5323 } /* Generic.Inserted */
+  .codehilite .go { color: #8B949E } /* Generic.Output */
+  .codehilite .gp { color: #8B949E } /* Generic.Prompt */
+  .codehilite .gs { color: #E6EDF3; font-weight: bold } /* Generic.Strong */
+  .codehilite .gu { color: #79C0FF } /* Generic.Subheading */
+  .codehilite .gt { color: #FF7B72 } /* Generic.Traceback */
+  .codehilite .g-Underline { color: #E6EDF3; text-decoration: underline } /* Generic.Underline */
+  .codehilite .kc { color: #79C0FF } /* Keyword.Constant */
+  .codehilite .kd { color: #FF7B72 } /* Keyword.Declaration */
+  .codehilite .kn { color: #FF7B72 } /* Keyword.Namespace */
+  .codehilite .kp { color: #79C0FF } /* Keyword.Pseudo */
+  .codehilite .kr { color: #FF7B72 } /* Keyword.Reserved */
+  .codehilite .kt { color: #FF7B72 } /* Keyword.Type */
+  .codehilite .ld { color: #79C0FF } /* Literal.Date */
+  .codehilite .m { color: #A5D6FF } /* Literal.Number */
+  .codehilite .s { color: #A5D6FF } /* Literal.String */
+  .codehilite .na { color: #E6EDF3 } /* Name.Attribute */
+  .codehilite .nb { color: #E6EDF3 } /* Name.Builtin */
+  .codehilite .nc { color: #F0883E; font-weight: bold } /* Name.Class */
+  .codehilite .no { color: #79C0FF; font-weight: bold } /* Name.Constant */
+  .codehilite .nd { color: #D2A8FF; font-weight: bold } /* Name.Decorator */
+  .codehilite .ni { color: #FFA657 } /* Name.Entity */
+  .codehilite .ne { color: #F0883E; font-weight: bold } /* Name.Exception */
+  .codehilite .nf { color: #D2A8FF; font-weight: bold } /* Name.Function */
+  .codehilite .nl { color: #79C0FF; font-weight: bold } /* Name.Label */
+  .codehilite .nn { color: #FF7B72 } /* Name.Namespace */
+  .codehilite .nx { color: #E6EDF3 } /* Name.Other */
+  .codehilite .py { color: #79C0FF } /* Name.Property */
+  .codehilite .nt { color: #7EE787 } /* Name.Tag */
+  .codehilite .nv { color: #79C0FF } /* Name.Variable */
+  .codehilite .ow { color: #FF7B72; font-weight: bold } /* Operator.Word */
+  .codehilite .pm { color: #E6EDF3 } /* Punctuation.Marker */
+  .codehilite .w { color: #6E7681 } /* Text.Whitespace */
+  .codehilite .mb { color: #A5D6FF } /* Literal.Number.Bin */
+  .codehilite .mf { color: #A5D6FF } /* Literal.Number.Float */
+  .codehilite .mh { color: #A5D6FF } /* Literal.Number.Hex */
+  .codehilite .mi { color: #A5D6FF } /* Literal.Number.Integer */
+  .codehilite .mo { color: #A5D6FF } /* Literal.Number.Oct */
+  .codehilite .sa { color: #79C0FF } /* Literal.String.Affix */
+  .codehilite .sb { color: #A5D6FF } /* Literal.String.Backtick */
+  .codehilite .sc { color: #A5D6FF } /* Literal.String.Char */
+  .codehilite .dl { color: #79C0FF } /* Literal.String.Delimiter */
+  .codehilite .sd { color: #A5D6FF } /* Literal.String.Doc */
+  .codehilite .s2 { color: #A5D6FF } /* Literal.String.Double */
+  .codehilite .se { color: #79C0FF } /* Literal.String.Escape */
+  .codehilite .sh { color: #79C0FF } /* Literal.String.Heredoc */
+  .codehilite .si { color: #A5D6FF } /* Literal.String.Interpol */
+  .codehilite .sx { color: #A5D6FF } /* Literal.String.Other */
+  .codehilite .sr { color: #79C0FF } /* Literal.String.Regex */
+  .codehilite .s1 { color: #A5D6FF } /* Literal.String.Single */
+  .codehilite .ss { color: #A5D6FF } /* Literal.String.Symbol */
+  .codehilite .bp { color: #E6EDF3 } /* Name.Builtin.Pseudo */
+  .codehilite .fm { color: #D2A8FF; font-weight: bold } /* Name.Function.Magic */
+  .codehilite .vc { color: #79C0FF } /* Name.Variable.Class */
+  .codehilite .vg { color: #79C0FF } /* Name.Variable.Global */
+  .codehilite .vi { color: #79C0FF } /* Name.Variable.Instance */
+  .codehilite .vm { color: #79C0FF } /* Name.Variable.Magic */
+  .codehilite .il { color: #A5D6FF } /* Literal.Number.Integer.Long */
+}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav><div class="brand"><a href="../reporting-protocols.html#python-reporting-contracts">VGI Reporting Protocols</a></div><div class="toc">
+<ul>
+<li><a href="#methods">Methods</a></li>
+<li><a href="#python-definitions">Python definitions</a></li>
+</ul>
+</div>
+</nav>
+<main id="top">
+<h1 id="reports-python-reference">Reports: Python reference</h1>
+<!-- Generated by vgi.codegen.reporting_docs; edit vgi/reporting/*.py. -->
+
+<p><a href="../reporting-protocols.html#python-reporting-contracts">All protocols</a> · <a href="../reporting-protocols.html#reporting-wire-contracts">Wire behavior</a></p>
+<p>Source: <code>vgi/reporting/reports.py</code>. Edit the Python module and regenerate this page.</p>
+<p><a href="../reporting-protocols.html#vgireportsv1">Behavior specification</a> · <a href="common.html">Shared records</a></p>
+<p>Protocol <code>vgi.reports.v1</code>, version <code>1.0.0</code>.</p>
+<h2 id="methods">Methods</h2>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Arguments</th>
+<th>Result / stream row</th>
+<th>RPC result envelope</th>
+<th>SQL read</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>commit_revision</code></td>
+<td><code>report_id</code>, <code>expected_revision_id</code>, <code>request_id</code>, <code>envelope</code>, <code>body</code>, <code>kind</code>, <code>message</code></td>
+<td><code>ReportResult</code></td>
+<td><code>result: binary</code> (IPC record)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>create_folder</code></td>
+<td><code>request_id</code>, <code>name</code>, <code>parent_folder_id</code>, <code>ownership</code></td>
+<td><code>FolderRecord</code></td>
+<td><code>result: binary</code> (IPC record)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>create_report</code></td>
+<td><code>request_id</code>, <code>envelope</code>, <code>body</code>, <code>message</code>, <code>ownership</code>, <code>folder_id</code></td>
+<td><code>ReportResult</code></td>
+<td><code>result: binary</code> (IPC record)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>delete_folder</code></td>
+<td><code>folder_id</code>, <code>expected_version</code>, <code>request_id</code></td>
+<td><code>Ack</code></td>
+<td><code>result: binary</code> (IPC record)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>delete_report</code></td>
+<td><code>report_id</code>, <code>expected_version</code>, <code>request_id</code></td>
+<td><code>Ack</code></td>
+<td><code>result: binary</code> (IPC record)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>get_folder</code></td>
+<td><code>folder_id</code></td>
+<td><code>FolderRecord</code></td>
+<td><code>result: binary</code> (IPC record)</td>
+<td>Function</td>
+</tr>
+<tr>
+<td><code>get_report</code></td>
+<td><code>report_id</code>, <code>revision_id</code></td>
+<td><code>ReportResult</code></td>
+<td><code>result: binary</code> (IPC record)</td>
+<td>Function</td>
+</tr>
+<tr>
+<td><code>get_report_service_info</code></td>
+<td>—</td>
+<td><code>ReportsInfo</code></td>
+<td><code>result: binary</code> (IPC record)</td>
+<td>Function; table <code>info</code></td>
+</tr>
+<tr>
+<td><code>list_folders</code></td>
+<td><code>parent_folder_id</code>, <code>recursive</code></td>
+<td><code>FolderRecord</code></td>
+<td>Producer batches</td>
+<td>Function; table <code>folders</code></td>
+</tr>
+<tr>
+<td><code>list_reports</code></td>
+<td><code>query</code>, <code>folder_id</code>, <code>recursive</code>, <code>tags</code>, <code>owned_by_me</code>, <code>published_only</code></td>
+<td><code>ReportRow</code></td>
+<td>Producer batches</td>
+<td>Function; table <code>reports</code></td>
+</tr>
+<tr>
+<td><code>list_revisions</code></td>
+<td><code>report_id</code></td>
+<td><code>RevisionRow</code></td>
+<td>Producer batches</td>
+<td>Function</td>
+</tr>
+<tr>
+<td><code>move_report</code></td>
+<td><code>report_id</code>, <code>expected_version</code>, <code>request_id</code>, <code>folder_id</code></td>
+<td><code>ReportRow</code></td>
+<td><code>result: binary</code> (IPC record)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>publish</code></td>
+<td><code>report_id</code>, <code>revision_id</code>, <code>expected_published_revision_id</code>, <code>request_id</code></td>
+<td><code>ReportResult</code></td>
+<td><code>result: binary</code> (IPC record)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>redact_revision</code></td>
+<td><code>report_id</code>, <code>revision_id</code>, <code>expected_version</code>, <code>request_id</code>, <code>reason</code></td>
+<td><code>RevisionRow</code></td>
+<td><code>result: binary</code> (IPC record)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>set_folder_ownership</code></td>
+<td><code>folder_id</code>, <code>expected_version</code>, <code>request_id</code>, <code>ownership</code></td>
+<td><code>FolderRecord</code></td>
+<td><code>result: binary</code> (IPC record)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>set_ownership</code></td>
+<td><code>report_id</code>, <code>expected_version</code>, <code>request_id</code>, <code>ownership</code></td>
+<td><code>ReportResult</code></td>
+<td><code>result: binary</code> (IPC record)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>update_folder</code></td>
+<td><code>folder_id</code>, <code>expected_version</code>, <code>request_id</code>, <code>name</code>, <code>parent_folder_id</code></td>
+<td><code>FolderRecord</code></td>
+<td><code>result: binary</code> (IPC record)</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<h2 id="python-definitions">Python definitions</h2>
+<div class="codehilite"><pre><span></span><code><span class="c1"># Copyright 2025, 2026 Query Farm LLC - https://query.farm</span>
+
+<span class="sd">"""Proposed vgi.reports.v1 records and RPC interface.</span>
+
+<span class="sd">These are importable protocol definitions, not a service implementation.</span>
+<span class="sd">Behavior and worker policy are documented in docs/design/reporting-protocols/.</span>
+<span class="sd">"""</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span><span class="p">,</span> <span class="n">field</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Annotated</span><span class="p">,</span> <span class="n">ClassVar</span><span class="p">,</span> <span class="n">Protocol</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">vgi_rpc</span><span class="w"> </span><span class="kn">import</span> <span class="n">ArrowSerializableDataclass</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">vgi_rpc.rpc</span><span class="w"> </span><span class="kn">import</span> <span class="n">ProducerState</span><span class="p">,</span> <span class="n">Stream</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">vgi.reporting._arrow</span><span class="w"> </span><span class="kn">import</span> <span class="n">Instant</span><span class="p">,</span> <span class="n">non_null_list</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">vgi.reporting._enums</span><span class="w"> </span><span class="kn">import</span> <span class="n">RevisionKind</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">vgi.reporting._metadata</span><span class="w"> </span><span class="kn">import</span> <span class="n">FetchedColumn</span><span class="p">,</span> <span class="n">sql_read</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">vgi.reporting.common</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">Ack</span><span class="p">,</span>
+    <span class="n">DataSource</span><span class="p">,</span>
+    <span class="n">Ownership</span><span class="p">,</span>
+    <span class="n">OwnershipInput</span><span class="p">,</span>
+    <span class="n">ParameterSpec</span><span class="p">,</span>
+    <span class="n">PrincipalRef</span><span class="p">,</span>
+    <span class="n">ResourceMeta</span><span class="p">,</span>
+    <span class="n">ServiceInfo</span><span class="p">,</span>
+<span class="p">)</span>
+
+
+<span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">slots</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">kw_only</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">ReportEnvelope</span><span class="p">(</span><span class="n">ArrowSerializableDataclass</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Public report metadata, source attachments and parameter declarations."""</span>
+
+    <span class="n">title</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">description</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">""</span>
+    <span class="n">tags</span><span class="p">:</span> <span class="n">Annotated</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">non_null_list</span><span class="p">(</span><span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">())]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
+    <span class="n">body_format</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">data_sources</span><span class="p">:</span> <span class="n">Annotated</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">DataSource</span><span class="p">],</span> <span class="n">non_null_list</span><span class="p">(</span><span class="n">pa</span><span class="o">.</span><span class="n">struct</span><span class="p">(</span><span class="n">DataSource</span><span class="o">.</span><span class="n">ARROW_SCHEMA</span><span class="p">))]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span>
+        <span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span>
+    <span class="p">)</span>
+    <span class="n">parameters</span><span class="p">:</span> <span class="n">Annotated</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">ParameterSpec</span><span class="p">],</span> <span class="n">non_null_list</span><span class="p">(</span><span class="n">pa</span><span class="o">.</span><span class="n">struct</span><span class="p">(</span><span class="n">ParameterSpec</span><span class="o">.</span><span class="n">ARROW_SCHEMA</span><span class="p">))]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span>
+        <span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span>
+    <span class="p">)</span>
+
+
+<span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">slots</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">kw_only</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">ReportRow</span><span class="p">(</span><span class="n">ResourceMeta</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Visible report revision, current folder and management metadata, without body bytes."""</span>
+
+    <span class="n">report_id</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">folder_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span>
+    <span class="n">head_revision_id</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">published_revision_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span>
+    <span class="n">revision_served</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">revision_number</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">envelope</span><span class="p">:</span> <span class="n">ReportEnvelope</span> <span class="o">|</span> <span class="kc">None</span>
+    <span class="n">body_sha256</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span>
+    <span class="n">redacted</span><span class="p">:</span> <span class="nb">bool</span>
+
+
+<span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">slots</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">kw_only</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">ReportResult</span><span class="p">(</span><span class="n">ReportRow</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""One visible report revision, including its nullable redacted body."""</span>
+
+    <span class="n">body</span><span class="p">:</span> <span class="nb">bytes</span> <span class="o">|</span> <span class="kc">None</span>
+
+
+<span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">slots</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">kw_only</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">RevisionRow</span><span class="p">(</span><span class="n">ArrowSerializableDataclass</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Immutable revision identity plus publication and redaction metadata."""</span>
+
+    <span class="n">report_id</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">revision_id</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">revision_number</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">author</span><span class="p">:</span> <span class="n">PrincipalRef</span>
+    <span class="n">created_at</span><span class="p">:</span> <span class="n">Instant</span>
+    <span class="n">kind</span><span class="p">:</span> <span class="n">RevisionKind</span>
+    <span class="n">message</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">envelope</span><span class="p">:</span> <span class="n">ReportEnvelope</span> <span class="o">|</span> <span class="kc">None</span>
+    <span class="n">body_sha256</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span>
+    <span class="n">published_at</span><span class="p">:</span> <span class="n">Instant</span> <span class="o">|</span> <span class="kc">None</span>
+    <span class="n">published_by</span><span class="p">:</span> <span class="n">PrincipalRef</span> <span class="o">|</span> <span class="kc">None</span>
+    <span class="n">redacted_at</span><span class="p">:</span> <span class="n">Instant</span> <span class="o">|</span> <span class="kc">None</span>
+    <span class="n">redacted_by</span><span class="p">:</span> <span class="n">PrincipalRef</span> <span class="o">|</span> <span class="kc">None</span>
+    <span class="n">redaction_reason</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span>
+
+
+<span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">slots</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">kw_only</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">FolderRecord</span><span class="p">(</span><span class="n">ResourceMeta</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Persistent folder; a null parent selects root.</span>
+
+<span class="sd">    Workers may set folder policies using their own authorization model.</span>
+<span class="sd">    Inherited allowed_actions reports caller-specific permission hints.</span>
+<span class="sd">    """</span>
+
+    <span class="n">folder_id</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">parent_folder_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
+
+
+<span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">slots</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">kw_only</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">ReportsInfo</span><span class="p">(</span><span class="n">ServiceInfo</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Report store formats, limits and caller-specific root actions."""</span>
+
+    <span class="n">body_formats</span><span class="p">:</span> <span class="n">Annotated</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">non_null_list</span><span class="p">(</span><span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">())]</span>
+    <span class="n">root_allowed_actions</span><span class="p">:</span> <span class="n">Annotated</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">non_null_list</span><span class="p">(</span><span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">())]</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">ReportsProtocol</span><span class="p">(</span><span class="n">Protocol</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Proposed vgi.reports.v1 records and RPC interface; implementations supply all methods.</span>
+
+<span class="sd">    Workers may define and enforce policies on folders and reports. The protocol</span>
+<span class="sd">    exposes permission hints and standard refusals; policy implementation and</span>
+<span class="sd">    inheritance are worker choices.</span>
+<span class="sd">    """</span>
+
+    <span class="n">protocol_name</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"vgi.reports.v1"</span>
+    <span class="n">protocol_version</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"1.0.0"</span>
+
+    <span class="nd">@sql_read</span><span class="p">(</span><span class="n">table</span><span class="o">=</span><span class="s2">"info"</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_report_service_info</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ReportsInfo</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""display_name, writable, body formats, limits and allowed actions at root."""</span>
+        <span class="o">...</span>
+
+    <span class="nd">@sql_read</span><span class="p">(</span>
+        <span class="n">row_type</span><span class="o">=</span><span class="n">ReportRow</span><span class="p">,</span>
+        <span class="n">table</span><span class="o">=</span><span class="s2">"reports"</span><span class="p">,</span>
+        <span class="n">fetched_columns</span><span class="o">=</span><span class="p">(</span>
+            <span class="n">FetchedColumn</span><span class="p">(</span>
+                <span class="n">column</span><span class="o">=</span><span class="s2">"body"</span><span class="p">,</span>
+                <span class="n">method</span><span class="o">=</span><span class="s2">"get_report"</span><span class="p">,</span>
+                <span class="n">arguments</span><span class="o">=</span><span class="p">((</span><span class="s2">"report_id"</span><span class="p">,</span> <span class="s2">"report_id"</span><span class="p">),</span> <span class="p">(</span><span class="s2">"revision_id"</span><span class="p">,</span> <span class="s2">"revision_served"</span><span class="p">)),</span>
+            <span class="p">),</span>
+        <span class="p">),</span>
+    <span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">list_reports</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">query</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">""</span><span class="p">,</span>
+        <span class="n">folder_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">recursive</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+        <span class="n">tags</span><span class="p">:</span> <span class="n">Annotated</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">non_null_list</span><span class="p">(</span><span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">())]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">owned_by_me</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+        <span class="n">published_only</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Stream</span><span class="p">[</span><span class="n">ProducerState</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">"""Visible reports beneath folder_id; None selects root, recursive=False selects direct children."""</span>
+        <span class="o">...</span>
+
+    <span class="nd">@sql_read</span><span class="p">()</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_report</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">report_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">revision_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ReportResult</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Envelope and body.</span>
+
+<span class="sd">        With no revision id, editors get the head and everyone else the published revision; revision_served says</span>
+<span class="sd">        which.</span>
+<span class="sd">        """</span>
+        <span class="o">...</span>
+
+    <span class="nd">@sql_read</span><span class="p">(</span><span class="n">row_type</span><span class="o">=</span><span class="n">RevisionRow</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">list_revisions</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">report_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Stream</span><span class="p">[</span><span class="n">ProducerState</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">"""History, newest first, tombstones included."""</span>
+        <span class="o">...</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">create_report</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">request_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+        <span class="n">envelope</span><span class="p">:</span> <span class="n">ReportEnvelope</span><span class="p">,</span>
+        <span class="n">body</span><span class="p">:</span> <span class="nb">bytes</span><span class="p">,</span>
+        <span class="n">message</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">""</span><span class="p">,</span>
+        <span class="n">ownership</span><span class="p">:</span> <span class="n">OwnershipInput</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">folder_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ReportResult</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""New report with revision 1 in folder_id, or at root when None."""</span>
+        <span class="o">...</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">move_report</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">report_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">expected_version</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">request_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">folder_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ReportRow</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Move a report, with None selecting root; preserve report ID, revisions and publication."""</span>
+        <span class="o">...</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">commit_revision</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">report_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+        <span class="n">expected_revision_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+        <span class="n">request_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+        <span class="n">envelope</span><span class="p">:</span> <span class="n">ReportEnvelope</span><span class="p">,</span>
+        <span class="n">body</span><span class="p">:</span> <span class="nb">bytes</span><span class="p">,</span>
+        <span class="n">kind</span><span class="p">:</span> <span class="n">RevisionKind</span> <span class="o">=</span> <span class="s2">"edit"</span><span class="p">,</span>
+        <span class="n">message</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">""</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ReportResult</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""New head; conflict if the head moved."""</span>
+        <span class="o">...</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">publish</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">report_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">revision_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span> <span class="n">expected_published_revision_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span> <span class="n">request_id</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ReportResult</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Move the published pointer; null revision_id unpublishes."""</span>
+        <span class="o">...</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">delete_report</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">report_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">expected_version</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">request_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Ack</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Delete report."""</span>
+        <span class="o">...</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">redact_revision</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">report_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">revision_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">expected_version</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">request_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">reason</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">RevisionRow</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Requires redact."""</span>
+        <span class="o">...</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">set_ownership</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">report_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">expected_version</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">request_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">ownership</span><span class="p">:</span> <span class="n">Ownership</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ReportResult</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Transfer management ownership; preserve author and execution credentials."""</span>
+        <span class="o">...</span>
+
+    <span class="nd">@sql_read</span><span class="p">(</span><span class="n">row_type</span><span class="o">=</span><span class="n">FolderRecord</span><span class="p">,</span> <span class="n">table</span><span class="o">=</span><span class="s2">"folders"</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">list_folders</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">parent_folder_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">recursive</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Stream</span><span class="p">[</span><span class="n">ProducerState</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">"""Visible child folders, including empty ones; None selects root, recursive=True includes descendants."""</span>
+        <span class="o">...</span>
+
+    <span class="nd">@sql_read</span><span class="p">()</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_folder</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">folder_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">FolderRecord</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Current folder metadata, ownership and caller-specific actions."""</span>
+        <span class="o">...</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">create_folder</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">request_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+        <span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+        <span class="n">parent_folder_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">ownership</span><span class="p">:</span> <span class="n">OwnershipInput</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">FolderRecord</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Create an empty folder under parent_folder_id, or at root when None."""</span>
+        <span class="o">...</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">update_folder</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">folder_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">expected_version</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">request_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">parent_folder_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">FolderRecord</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Atomically rename and/or move a folder; both destination values are required, cycles forbidden."""</span>
+        <span class="o">...</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">delete_folder</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">folder_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">expected_version</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">request_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Ack</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Delete only an empty folder, checking all children atomically, including those hidden from the caller."""</span>
+        <span class="o">...</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">set_folder_ownership</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">folder_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">expected_version</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">request_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">ownership</span><span class="p">:</span> <span class="n">Ownership</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">FolderRecord</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Transfer folder management; preserve descendants, their explicit ownership and all report content."""</span>
+        <span class="o">...</span>
+</code></pre></div>
+</main>
+</div>
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+mermaid.initialize({ startOnLoad: true, theme: dark ? "dark" : "neutral" });
+</script>
+</body>
+</html>

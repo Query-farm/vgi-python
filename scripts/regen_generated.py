@@ -73,6 +73,12 @@ _TARGETS: list[tuple[str, str, str]] = [
     ),
 ]
 
+# Reporting contracts have an index plus one reference page per source module.
+_TARGETS += [
+    (f"vgi.codegen.reporting_docs:{record}", relative, "vgi-python")
+    for record, relative in importlib.import_module("vgi.codegen.reporting_docs").targets()
+]
+
 # vgi-java's generated wire records: one file per record (Java allows one public
 # top-level type per file), so one target each. ``module:record`` tells
 # `_render` to call ``emit(out, record=...)``. Derived from the generator's own
@@ -94,6 +100,8 @@ _ROOT_ENV: dict[str, str] = {b.repo: b.root_env for b in _REGISTRY_BACKENDS}
 
 def _repo_root(name: str) -> Path | None:
     """Locate a sibling checkout, or ``None`` when it is not present."""
+    if name == "vgi-python":
+        return Path(__file__).resolve().parents[1]
     override = os.environ.get(_ROOT_ENV.get(name, ""))
     if override:
         return Path(override) if Path(override).is_dir() else None
@@ -131,11 +139,16 @@ def main() -> int:
         action="store_true",
         help="report drift without writing anything (exit 1 if any file is stale)",
     )
+    parser.add_argument("--only", metavar="REPO", help="generate/check only artifacts belonging to this repo")
     args = parser.parse_args()
+    if args.only is not None and args.only not in {repo for _, _, repo in _TARGETS}:
+        parser.error(f"unknown target repo: {args.only}")
 
     stale, wrote, skipped, failed = [], [], [], []
 
     for module_name, relative, repo in _TARGETS:
+        if args.only is not None and repo != args.only:
+            continue
         root = _repo_root(repo)
         if root is None:
             skipped.append(f"{repo} (not checked out)")

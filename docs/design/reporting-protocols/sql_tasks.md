@@ -1,7 +1,10 @@
 # vgi.sql_tasks.v1
 
-A SQL task runs SQL **that changes data** on a trigger, as its owner, in a
-session rebuilt from its data sources and the owner's delegations. A task can
+Python dataclasses and RPC interface: [generated reference](reference/sql_tasks.md).
+Lifecycle and encoding rules: [wire behavior](wire-contracts.md).
+
+A SQL task runs SQL **that changes data** on a trigger, as its execution principal, in a
+session rebuilt from its data sources and the execution principal's delegations. A task can
 load a query's result into a table (replace it, append to it, merge into it,
 or keep dated snapshots), fetch only what's new since the last run, or run a
 script of statements in one transaction, `CALL`s included. Each firing is a run
@@ -18,73 +21,13 @@ without the other; the reference service runs both on one engine.
 
 ## Model
 
-```python
-@dataclass
-class SqlTask:
-    title: str
-    description: str = ""
-    trigger: Trigger                     # as vgi.schedules.v1: cron | once
-    data_sources: list[DataSource]       # the session; credentials.md
-    body: TaskBody
-    incremental: Incremental = ...       # default kind = none
-    condition_sql: str = ""              # empty = always; see Conditions
-    parameter_values: list[ParamValue] = []
-    notify: TaskNotify = ...
-    stale_after_seconds: int = 0         # health is `stale` with no success this long; 0 = never
-    timeout_seconds: int = 3600
-    enabled: bool = True
+The fields, defaults and Arrow types are defined by the
+[Python dataclasses](reference/sql_tasks.md).
 
-@dataclass
-class TaskBody:
-    kind: str                            # load | script | <vendor>.<name>
-    load: LoadBody = ...                 # kind = load
-    script: ScriptBody = ...             # kind = script
-    custom_json: str = ""                # kind = <vendor>.<name>
-
-@dataclass
-class LoadBody:
-    setup_sql: str = ""
-    query: str                           # the rows to load; may use $watermark
-    target: Target
-    mode: str                            # replace | append | merge | snapshot
-    key_columns: list[str] = []          # mode = merge: match on these
-    delete_missing: bool = False         # mode = merge: delete target rows the query no longer returns
-    snapshot_column: str = "_snapshot_at"  # mode = snapshot
-    retain_snapshots: int = 0            # mode = snapshot: keep the newest N; 0 = all
-    on_schema_change: str = "fail"       # fail | add_columns
-
-@dataclass
-class ScriptBody:
-    statements: list[str]                # run in order; may use $watermark and parameters
-    transaction: str = "single"          # single | per_statement | none
-    watermark_sql: str = ""              # incremental.kind = stored: returns the new watermark
-
-@dataclass
-class Target:
-    kind: str                            # catalog | host
-    alias: str = ""                      # kind = catalog: one of data_sources, written under the owner's delegation
-    schema: str = "main"
-    table: str
-    create_if_missing: bool = True       # created from the query's result schema
-
-@dataclass
-class Incremental:
-    kind: str = "none"                   # none | derived | stored
-    cursor_column: str = ""              # load: the column that only grows (updated_at, id)
-    initial_json: str = ""               # the watermark for the first run; empty = NULL
-    lookback: str = ""                   # e.g. "PT2H": re-read late-arriving rows; needs mode = merge
-
-@dataclass
-class TaskNotify:
-    destinations: list[Destination] = [] # vgi.notify.v1
-    on: list[str] = ["failing", "recovered", "disabled"]
-                                         # failing | recovered | stale | disabled | every_failure | success
-```
-
-**Records** add `task_id`, `owner`, `version`, `next_fire_at`, `last_run`,
-`watermark_json`, `target_row_count` where the target reports it,
-`disabled_reason`, `credentials` (as schedules), `allowed_actions`, and the
-task's health (below).
+The canonical `TaskRecord` contains the definition, ownership, execution
+identity, health, stable resolved target and exact run/progress records. Unknown
+counts are NULL. `watermark_json` uses the lossless typed scalar encoding in the
+[wire contract](wire-contracts.md#canonical-keys-and-scalar-values).
 
 ## Bodies
 
@@ -100,6 +43,11 @@ transaction:
 | `merge` | Upserts on `key_columns`; with `delete_missing`, deletes target rows whose key the result no longer returns |
 | `snapshot` | Appends the result with `snapshot_column` set to the run's `scheduled_for`, then deletes snapshots beyond `retain_snapshots` |
 
+A `load` query must be read-only. Its setup may create session-local temporary
+objects but cannot mutate persistent data or invoke external effects; use a
+script for that work. This makes the target transaction the load's only
+persistent write boundary.
+
 A missing target is created from the result's schema when `create_if_missing`.
 A result whose schema no longer matches fails the run (`schema_mismatch`)
 unless `on_schema_change = add_columns`, which adds new columns as nullable and
@@ -111,14 +59,22 @@ Runs `statements` in order, with parameters bound as `$key`:
 
 | `transaction` | Meaning |
 | --- | --- |
-| `single` | One transaction around all statements: all commit or none do |
+| `single` | One transaction around all transactional statements: all commit or none do; nontransactional effects are refused |
 | `per_statement` | Each statement commits on its own; a failure stops the script and earlier statements stay committed |
 | `none` | No transaction is opened; for statements that can't run inside one |
 
 A `CALL` is a statement like any other. `CALL sales.main.refresh_extract(...)`
-invokes a table function on the sales worker under the owner's delegation, which
+invokes a table function on the sales worker under the execution principal's delegation, which
 is how a task asks a worker to do work that isn't SQL. Work outside any worker
 is a vendor kind.
+
+A `CALL` participates in `single` only when its worker explicitly guarantees
+that all effects enlist in the task's transaction. Unknown and external effects
+require `per_statement` or `none`; wrapping them in `BEGIN` does not make them
+reversible. This concerns data-worker functions: reporting mutations such as
+`notify.send` have no SQL entry point. Transaction-control statements in a
+`single` or `per_statement` body are `invalid_request`; the runner owns those
+boundaries.
 
 ### Vendor kinds
 
@@ -141,34 +97,74 @@ create time where they can and otherwise fail the run with
 commits through the worker's VGI catalog transaction. Atomicity, isolation and
 what readers see during the write are that catalog's guarantees.
 
+The [execution and retry contract](schedules.md#execution-and-retries) applies
+to setup, body, commit and notification steps. A retryable commit error with
+no confirmed outcome does not authorize another append or script execution.
+Persist the outcome of each statement in `per_statement`; a checkpoint is
+confirmed only after its commit result is known. Unknown commits require
+reconciliation and block automatic runs, including a later scheduled firing.
+
 ## Incremental loads
 
 The watermark is the high-water mark of what has been loaded. It's bound as
 `$watermark` in `query`, `statements` and `condition_sql` (`NULL` on the first
-run unless `initial_json` is set).
+run unless `initial_json` is non-null).
 
 | `kind` | Where the watermark comes from | Guarantee |
 | --- | --- | --- |
 | `none` | No watermark | |
-| `derived` | `SELECT max(cursor_column) FROM target`, read inside the run's transaction just before writing | **Exactly once.** The read and the write commit together, and at most one run is active, so a crashed run loads nothing and the next run starts where the target ends |
-| `stored` | Saved by the service after a successful run: `max(cursor_column)` of the loaded rows (`load`), or the single value `watermark_sql` returns, run last inside the transaction (`script`) | **At least once.** The service saves the watermark after the target commits, so a crash between the two re-reads the last window. Make the write idempotent (`merge`) and that is harmless |
+| `derived` | `SELECT max(cursor_column) FROM target`, read inside the run's transaction just before writing | Atomic target data and progress, under the preconditions below. A confirmed rollback leaves neither advanced; after a confirmed commit, the target contains the progress |
+| `stored` | Saved after a confirmed successful run: `max(cursor_column)` of loaded rows (`load`), or the single value `watermark_sql` returns (`script`) | Data may commit before service progress. Reprocessing the last window is at least once, not safe replay for arbitrary writes; use an idempotent merge or reconcile progress before another run |
 
-`derived` needs a `load` with a target that has `cursor_column`. `stored` works
-for any body, including a script whose watermark isn't a column, a target the
-runner can't query, and a source-side cursor such as an API page token. On a
-`host` target an implementation may store the watermark in the same database as
-the data, which makes `stored` exactly once too; `get_tasks_info` says whether
-it does.
+Validate the following matrix at create/update, `test_run` and run admission:
 
-**`lookback`** subtracts an ISO 8601 duration from a timestamp watermark to
+| Body / load mode | Allowed incremental kinds | Additional rules |
+| --- | --- | --- |
+| `load`, `replace` or `snapshot` | `none` | Query represents the complete dataset; no incremental window |
+| `load`, `append` | `none`, `derived`, `stored` | No lookback; a repeated stored window needs reconciliation before appending again |
+| `load`, `merge` | `none`, `derived`, `stored` | `delete_missing` requires `none`; incremental merges require `delete_missing = false` |
+| `script` | `none`, `stored` | Stored progress requires `transaction = single` and `watermark_sql`; no lookback |
+| Vendor body | `none` in v1 | Other combinations require a later specified contract |
+
+Violations are `invalid_request` with field-level details. In particular,
+`WHERE cursor > $watermark` is a partial result: it must never delete old rows
+through `replace` or `delete_missing`. Bounded deletion and incremental
+snapshots are deferred. An explicit `full_refresh` of an incremental load is
+the sole override: it requires a query whose NULL-watermark branch returns
+the complete dataset, replaces the target, and resets progress to that result
+using the selected watermark kind's commit protocol. An empty full refresh
+clears progress. Record the override on the run. On `stored`, a committed
+refresh whose progress update is unconfirmed must be reconciled before any
+incremental run; do not reuse the old watermark against the replaced target.
+
+`derived` requires a queryable transactional target with `cursor_column` and
+one writer for that target, including other tasks and external writers. The
+cursor must order complete source windows: use `cursor > $watermark` (or the
+documented merge lookback), with no later-arriving row at an already passed
+cursor unless it lies within that lookback. An initial NULL watermark must
+select the initial window explicitly. These source guarantees are the task
+author's responsibility; `max(cursor_column)` alone does not establish them.
+Exactly-once advancement applies only with these guarantees and a confirmed
+transaction outcome, not to arbitrary SQL or external effects.
+
+`stored` supports a single-transaction script whose cursor is not a column;
+`watermark_sql` runs last inside that transaction. On a `host` load, an
+implementation may atomically store progress with the target data;
+`get_tasks_info` advertises that narrower guarantee. It does not make a
+script's external effects or unrelated databases atomic. Empty incremental
+results retain the previous watermark; invalid/null cursors in nonempty load
+results fail with `watermark_invalid`. Validate progress before target commit.
+
+**`lookback`** subtracts the fixed-duration ISO 8601 subset in the wire contract from a timestamp watermark to
 re-read rows that arrived late, and requires `mode = merge` so the overlap
 doesn't duplicate. **A watermark never moves backwards** on its own: a run whose
 new watermark is lower than the old one fails with `watermark_invalid`. Moving
-it back is a backfill, done explicitly with `set_watermark`.
+it back requires explicit `set_watermark` for stored progress, or the
+documented `full_refresh` override.
 
 ## Destinations
 
-- **`catalog`:** one of the task's `data_sources`, written under the owner's
+- **`catalog`:** one of the task's `data_sources`, written under the execution principal's
   delegation for it. The data lands on that worker (a DuckLake catalog, a
   database worker, anything with VGI write support), and that worker's access
   control governs both the write and every later read.
@@ -176,6 +172,19 @@ it back is a backfill, done explicitly with `set_watermark`.
   read-only catalog over `vgi.v2`. The catalog's name and location are in
   `get_tasks_info`. Who can read it is the service's `AccessPolicy`; by default,
   the task's owner and whoever the owner shares the task with.
+
+**Host isolation is required on the execution path too.** User SQL must never
+receive an unrestricted attachment to a shared store or the scheduler's
+control database. `enable_external_access = false` and locked configuration
+do not authorize access to already attached tables. A host must provide an
+isolated per-owner store or route every table operation through a catalog
+that enforces the execution principal's permissions within the task's
+authorized target namespace, including reads, writes, DDL, views
+and function calls. A schema naming convention is not an access boundary.
+`Target.schema` and `Target.table` resolve within that authorized namespace;
+task sharing grants the documented read access, not write access to another
+owner's store. Host-managed progress and run records are never exposed as
+writable user tables.
 
 ## Conditions
 
@@ -189,16 +198,8 @@ can read `$watermark`, so "only if anything is newer than what we have" is
 Every task carries a health summary, kept current by the service as runs
 finish and as time passes:
 
-```python
-@dataclass
-class TaskHealth:
-    state: str                    # healthy | failing | stale | paused | disabled | new
-    since: str                    # when the task entered this state
-    last_success_at: str = ""
-    last_failure_at: str = ""
-    last_error: RunError = ...    # the most recent failure's error
-    consecutive_failures: int = 0
-```
+The fields, defaults and Arrow types are defined by the
+[Python dataclasses](reference/sql_tasks.md).
 
 | State | Meaning |
 | --- | --- |
@@ -224,23 +225,32 @@ U = unary, S = producer stream. All are required.
 
 | Method | Kind | Purpose |
 | --- | --- | --- |
-| `get_tasks_info()` | U | Body kinds, modes, `host` store catalog and location, whether `host` watermarks are atomic, minimum interval, limits |
-| `preview_trigger(trigger, count)` | U | As in schedules |
-| `list_tasks(owned_by_me, target, health_state)` / `get_task(task_id)` | S / U | Read, with health; `health_state` filters ("everything failing") |
-| `create_task(request_id, task)` | U | Owner is the caller; `grant_required` for any source without a usable delegation |
-| `update_task(task_id, expected_version, task)` | U | Includes pausing via `enabled`. Changing the target, mode or cursor column clears a `stored` watermark |
-| `delete_task(task_id, expected_version, drop_target)` | U | `drop_target` drops a `host` table; a `catalog` target is never dropped |
-| `test_run(task)` | U | Runs an unsaved task inside a transaction that is always rolled back. Returns row counts per statement, the old and new watermark, the target schema it would create and the condition value. A `CALL` whose function acts outside DuckDB still has that effect |
-| `run_now(task_id, request_id, ignore_condition, full_refresh)` | U | Manual run, also the way to retry. `full_refresh` runs with `$watermark = NULL` and, for `load`, `replace` semantics |
-| `set_watermark(task_id, expected_version, watermark_json)` | U | Backfill or reset a `stored` watermark; empty clears it. Refused for `derived`, whose watermark is the target's data |
-| `list_runs(task_id, status, since)` / `get_run(run_id)` | S / U | Run history. `task_id` empty lists runs across every task the caller can read, so "what failed overnight" is one call |
-| `cancel_run(run_id)` | U | Rolls back an open transaction; `per_statement` keeps what already committed |
+| `get_tasks_info(…)` | U | Body kinds, modes, `host` store catalog and location, whether `host` watermarks are atomic, minimum interval, limits |
+| `preview_trigger(…)` | U | As in schedules |
+| `list_tasks(…)` / `get_task(…)` | S / U | Read, with health; `health_state` filters ("everything failing") |
+| `create_task(…)` | U | Ownership and execution identity are independently resolved by the host; `grant_required` for any source without a usable delegation |
+| `update_task(…)` | U | Includes pausing via `enabled`. Changing the target, mode or cursor column clears a `stored` watermark |
+| `delete_task(…)` | U | `drop_target` drops a `host` table; a `catalog` target is never dropped |
+| `test_run(…)` | U | Tests a load or `single` script in a transaction that is always rolled back; returns counts, old/new watermark, target schema and condition value. Refuses bodies, statements or CALLs whose effects cannot be rolled back, including `per_statement` and `none` scripts |
+| `run_now(…)` | U | New manual run; use `retry_run` to recover an existing run. `full_refresh` runs with `$watermark = NULL` and, for `load`, `replace` semantics |
+| `set_watermark(…)` | U | Backfill or reset a `stored` watermark; null clears it. Refused for `derived`, whose watermark is the target's data |
+| `list_runs(…)` / `get_run(…)` | S / U | Run history. `task_id` empty lists runs across every task the caller can read, so "what failed overnight" is one call |
+| `cancel_run(…)` | U | Rolls back an open transaction; `per_statement` keeps what already committed |
+| `retry_run(…)` | U | Resume frozen work from a safe checkpoint |
+| `resolve_run(…)` | U | Record worker-verified outcomes; never replay a step |
+| `set_ownership(…)` | U | Transfer management; preserve data and execution authority |
+| `set_execution_principal(…)` | U | Select a separately authorized execution identity for future work |
 
 **Errors:** the shared kinds in [README.md](README.md#errors).
 
 ## Runs
 
-As in schedules (unique on `(task_id, scheduled_for)`, at most one active run,
+Recovery uses schedules' `retry_run` and `resolve_run` contracts, including
+stored-watermark reconciliation. Changing credentials or owner cannot clear
+unknown writes. An ownership transfer preserves the stable target and data;
+hosts using per-owner stores retain or migrate its authorized mapping.
+
+As in schedules (automatic runs unique on `(task_id, scheduled_for)`, at most one active run,
 an overlapping firing is `skipped` with reason `overlap`), recording in
 addition: `watermark_before`, `watermark_after`, per statement its index, kind
 and `rows_affected`, and for `load` the rows inserted, updated and deleted and
@@ -249,25 +259,35 @@ retried within the run. `RunError.kind` adds `transaction_failed`,
 `schema_mismatch`, `watermark_invalid` and `target_unwritable` to the schedule
 kinds.
 
+## Ownership and execution
+
+`created_by`, `ownership` (owner and durable parent), and `execution_identity`
+are distinct fields. The worker resolves and enforces them. `set_ownership`
+transfers management without deleting data or copying grants;
+`set_execution_principal` separately selects authorized future execution and
+requires the resource to be idle with no unresolved effects. Neither operation
+rewrites prior runs or attribution. Author offboarding and automatic parent
+inheritance are worker policy. Exact methods and transition rules are in the
+[lifecycle contract](wire-contracts.md#ownership-and-execution-lifecycle).
+
 ## SQL binding
 
-Schema `sql_tasks`. Derived by the rules in [README.md](README.md#sql-binding); this is the annotation.
+Schema `sql_tasks`. Derived by the [shared read-binding rules](README.md#sql-binding).
 
-| Table | List / get | `INSERT` | `UPDATE` | `DELETE` |
-| --- | --- | --- | --- | --- |
-| `tasks` | `list_tasks` / `get_task` | `create_task` | `update_task`, expected = the row's `version` | `delete_task`, same (`drop_target` false; use `CALL` to drop) |
-| `runs` | `list_runs` / `get_run` | | | |
+| Table | List / get |
+| --- | --- |
+| `tasks` | `list_tasks` / `get_task` |
+| `runs` | `list_runs` / `get_run` |
 
-`run_now`, `cancel_run`, `test_run`, `set_watermark` and `preview_trigger` are
-procedures. A task's own script can call them, and any other protocol's
-procedures (`CALL ops.notify.send(…)`).
+Read table functions: `get_tasks_info`, `preview_trigger`, `list_tasks`,
+`get_task`, `list_runs` and `get_run`. All other methods, including `test_run`,
+`run_now` and watermark changes, are RPC-only. Scripts can query these tables,
+but cannot invoke reporting mutations such as `notify.send` through SQL.
+The run engine sends configured notifications through RPC after execution.
 
 ```sql
-SELECT title, health.state, health.consecutive_failures, health.last_error.message
+SELECT definition.title, health.state, health.consecutive_failures, health.last_error.message
 FROM ops.sql_tasks.tasks WHERE health.state IN ('failing', 'stale');
-
-CALL ops.sql_tasks.run_now(task_id := 't_orders', request_id := 'manual-2026-10-08',
-                           ignore_condition := false, full_refresh := true);
 ```
 
 ## Reference implementation (non-normative)
@@ -275,12 +295,20 @@ CALL ops.sql_tasks.run_now(task_id := 't_orders', request_id := 'manual-2026-10-
 - **Engine.** The same `tick` / `advance_run` engine as the reference scheduler,
   so tasks run long-running or serverless alike. A task's step list is
   condition, body, save watermark, notify.
-- **Sessions** are built like schedule sessions (fresh, hardened, limited). The
-  `host` store is attached writable before configuration is locked; every other
-  source is attached with the owner's delegation.
-- **The `host` store** is a DuckLake catalog by default, so `replace` and
-  `snapshot` keep time travel for free, and the stored watermark lives in the
-  same catalog, which makes `host` targets exactly once.
+- **Sessions** are built like schedule sessions (fresh, hardened, limited).
+  User SQL receives only the task's authorized host target namespace and sources attached
+  with the execution principal's catalog delegations. Shared reads use the authorized VGI
+  catalog. No other owner's raw store or service control store is attached.
+- **The `host` store** starts as a separate DuckLake catalog per management
+  owner by default. Stable target mappings survive ownership transfers; neither
+  identity changes nor transfers expose unrelated tables from the old store.
+  Service progress remains in `FunctionStorage`, outside user SQL's attached
+  store, so the reference advertises non-atomic `stored` watermarks. `derived`
+  progress still uses the target transaction. An implementation advertising
+  atomic host progress must enforce an authorized catalog boundary around
+  private progress tables even for owner scripts; per-owner isolation alone
+  does not hide those tables from their owner. Sharing is enforced by the
+  read-only VGI catalog, not by handing out raw store access.
 - **Bodies compile to SQL.** `merge` is `MERGE INTO` where the target supports
   it, or a delete-and-insert in one transaction where it doesn't. Runs record
   the compiled statements.

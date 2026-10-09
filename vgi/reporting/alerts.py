@@ -1,0 +1,322 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
+"""Proposed vgi.alerts.v1 records and RPC interface.
+
+These are importable protocol definitions, not a service implementation.
+Behavior and worker policy are documented in docs/design/reporting-protocols/.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Annotated, ClassVar, Protocol
+
+import pyarrow as pa
+from vgi_rpc import ArrowSerializableDataclass
+from vgi_rpc.rpc import ProducerState, Stream
+
+from vgi.reporting._arrow import Instant, Json, RowIpc, non_null_list
+from vgi.reporting._enums import AlertEventKind, AlertInstanceState, AlertRuleState, Severity
+from vgi.reporting._metadata import sql_read
+from vgi.reporting.common import (
+    Ack,
+    CredentialStatus,
+    DataSource,
+    Destination,
+    DestinationResult,
+    ExecutionIdentity,
+    ExecutionInput,
+    Notification,
+    Ownership,
+    OwnershipInput,
+    ParameterSpec,
+    ParamValue,
+    PrincipalRef,
+    ResourceMeta,
+    RetryPolicy,
+    RunError,
+    ServiceInfo,
+)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AlertMessages(ArrowSerializableDataclass):
+    """Portable alert templates and highlighted detail columns."""
+
+    title_template: str = "{{rule.title}}: {{instance.key}}"
+    summary_template: str = ""
+    resolved_template: str = ""
+    field_columns: Annotated[list[str], non_null_list(pa.string())] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AlertRule(ArrowSerializableDataclass):
+    """Read-only alert query, identity keys, timing and disclosure settings."""
+
+    title: str
+    description: str = ""
+    severity: Severity = "warning"
+    data_sources: Annotated[list[DataSource], non_null_list(pa.struct(DataSource.ARROW_SCHEMA))]
+    setup_sql: str = ""
+    sql: str
+    key_columns: Annotated[list[str], non_null_list(pa.string())] = field(default_factory=list)
+    parameters: Annotated[list[ParameterSpec], non_null_list(pa.struct(ParameterSpec.ARROW_SCHEMA))] = field(
+        default_factory=list
+    )
+    parameter_values: Annotated[list[ParamValue], non_null_list(pa.struct(ParamValue.ARROW_SCHEMA))] = field(
+        default_factory=list
+    )
+    evaluate_every_seconds: int = 300
+    pending_for_seconds: int = 0
+    resolve_after_seconds: int = 0
+    repeat_every_seconds: int = 0
+    max_instances: int = 100
+    messages: AlertMessages = field(default_factory=AlertMessages)
+    owner_destinations: Annotated[list[Destination], non_null_list(pa.struct(Destination.ARROW_SCHEMA))] = field(
+        default_factory=list
+    )
+    share_details_with_subscribers: bool = False
+    enabled: bool = True
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RuleRecord(ResourceMeta):
+    """Versioned rule, execution identity, generation and evaluation state."""
+
+    rule_id: str
+    definition: AlertRule
+    execution_identity: ExecutionIdentity
+    key_generation: int
+    state: AlertRuleState
+    state_since: Instant
+    last_evaluated_at: Instant | None
+    next_evaluation_at: Instant | None
+    pending_count: int
+    firing_count: int
+    resolving_count: int
+    last_error: RunError | None
+    credentials: Annotated[list[CredentialStatus], non_null_list(pa.struct(CredentialStatus.ARROW_SCHEMA))]
+    disabled_reason: str | None
+    details_shared_at: Instant | None
+    details_shared_by: PrincipalRef | None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Instance(ArrowSerializableDataclass):
+    """Fixed outer alert schema with typed one-row Arrow detail batches."""
+
+    instance_id: str
+    rule_id: str
+    version: int
+    key_generation: int
+    canonical_key: Json
+    state: AlertInstanceState
+    severity: Severity
+    first_seen_at: Instant
+    last_seen_at: Instant
+    fired_at: Instant | None
+    resolved_at: Instant | None
+    updated_at: Instant
+    latest_details: RowIpc | None
+    fired_details: RowIpc | None
+    acknowledged: bool
+    acknowledged_at: Instant | None
+    acknowledged_by: PrincipalRef | None
+    acknowledgement_note: str | None
+    allowed_actions: Annotated[list[str], non_null_list(pa.string())]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Snooze(ArrowSerializableDataclass):
+    """Bounded rule or instance silence; evaluation continues."""
+
+    snooze_id: str
+    version: int
+    rule_id: str
+    instance_id: str | None
+    until: Instant
+    until_resolved: bool
+    reason: str
+    created_at: Instant
+    created_by: PrincipalRef
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Subscription(ArrowSerializableDataclass):
+    """Caller-owned destinations subscribed to one alert rule."""
+
+    subscription_id: str
+    version: int
+    rule_id: str
+    principal: PrincipalRef
+    destinations: Annotated[list[Destination], non_null_list(pa.struct(Destination.ARROW_SCHEMA))]
+    created_at: Instant
+    updated_at: Instant
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AlertEvent(ArrowSerializableDataclass):
+    """Persisted transition, delivery, action or evaluation failure."""
+
+    event_id: str
+    rule_id: str
+    instance_id: str | None
+    key_generation: int
+    occurred_at: Instant
+    kind: AlertEventKind
+    actor: PrincipalRef | None
+    note: str
+    from_state: str | None
+    to_state: str | None
+    error: RunError | None
+    destination_results: Annotated[list[DestinationResult], non_null_list(pa.struct(DestinationResult.ARROW_SCHEMA))]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AlertTestInstance(ArrowSerializableDataclass):
+    """Prospective instance and message from a read-only test."""
+
+    canonical_key: Json
+    details: RowIpc
+    notification: Notification
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AlertTest(ArrowSerializableDataclass):
+    """Read-only test results at a specified evaluation instant."""
+
+    evaluated_at: Instant
+    parameter_values: Annotated[list[ParamValue], non_null_list(pa.struct(ParamValue.ARROW_SCHEMA))]
+    instances: Annotated[list[AlertTestInstance], non_null_list(pa.struct(AlertTestInstance.ARROW_SCHEMA))]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AlertsInfo(ServiceInfo):
+    """Alert limits, relative parameters, clock version and retry policy."""
+
+    relative_tokens: Annotated[list[str], non_null_list(pa.string())]
+    tzdb_version: str
+    retry_policy: RetryPolicy
+
+
+class AlertsProtocol(Protocol):
+    """Proposed vgi.alerts.v1 records and RPC interface; implementations supply all methods."""
+
+    protocol_name: ClassVar[str] = "vgi.alerts.v1"
+    protocol_version: ClassVar[str] = "1.0.0"
+
+    @sql_read(table="info")
+    def get_alerts_info(self) -> AlertsInfo:
+        """Minimum evaluation interval, max_instances ceiling, maximum snooze, limits."""
+        ...
+
+    @sql_read(row_type=RuleRecord, table="rules")
+    def list_rules(self, query: str = "", owned_by_me: bool = False, state: str = "") -> Stream[ProducerState]:
+        """Rules with their state (ok, firing, error, disabled) and instance counts."""
+        ...
+
+    @sql_read()
+    def get_rule(self, rule_id: str) -> RuleRecord:
+        """Rules with their state (ok, firing, error, disabled) and instance counts."""
+        ...
+
+    def create_rule(
+        self,
+        request_id: str,
+        rule: AlertRule,
+        ownership: OwnershipInput | None = None,
+        execution: ExecutionInput | None = None,
+    ) -> RuleRecord:
+        """Create rule.
+
+        Ownership and execution identity are independently resolved by the host; grant_required if the execution
+        principal lacks a grant for a required location.
+        """
+        ...
+
+    def update_rule(self, rule_id: str, expected_version: int, request_id: str, rule: AlertRule) -> RuleRecord:
+        """Includes pausing via enabled.
+
+        Changing ordered key columns increments key_generation; old instances close as superseded atomically.
+        """
+        ...
+
+    def delete_rule(self, rule_id: str, expected_version: int, request_id: str) -> Ack:
+        """Instances close as superseded."""
+        ...
+
+    def test_rule(self, rule: AlertRule, *, execution: ExecutionInput | None = None, as_of: Instant) -> AlertTest:
+        """Evaluate an unsaved rule once: the instances it would create, rendered messages, template errors.
+
+        Sends nothing.
+        """
+        ...
+
+    @sql_read(row_type=Instance, table="instances")
+    def list_instances(self, rule_id: str = "", state: str = "", since: Instant | None = None) -> Stream[ProducerState]:
+        """Instances with state and times; detail values only for callers who may see them."""
+        ...
+
+    @sql_read()
+    def get_instance(self, instance_id: str) -> Instance:
+        """Instances with state and times; detail values only for callers who may see them."""
+        ...
+
+    def set_acknowledged(
+        self, instance_id: str, expected_version: int, request_id: str, acknowledged: bool, note: str = ""
+    ) -> Instance:
+        """Set acknowledged."""
+        ...
+
+    def snooze(
+        self,
+        rule_id: str,
+        *,
+        instance_id: str | None = None,
+        expected_version: int,
+        request_id: str,
+        until: Instant,
+        until_resolved: bool = False,
+        reason: str = "",
+    ) -> Snooze:
+        """Null instance_id snoozes the rule."""
+        ...
+
+    def unsnooze(self, snooze_id: str, expected_version: int, request_id: str) -> Ack:
+        """Null instance_id snoozes the rule."""
+        ...
+
+    def subscribe(
+        self,
+        rule_id: str,
+        request_id: str,
+        destinations: Annotated[list[Destination], non_null_list(pa.struct(Destination.ARROW_SCHEMA))],
+    ) -> Subscription:
+        """Subscribe."""
+        ...
+
+    def unsubscribe(self, subscription_id: str, expected_version: int, request_id: str) -> Ack:
+        """Unsubscribe."""
+        ...
+
+    @sql_read(row_type=Subscription)
+    def list_subscriptions(self, rule_id: str) -> Stream[ProducerState]:
+        """List subscriptions."""
+        ...
+
+    @sql_read(row_type=AlertEvent, table="events")
+    def list_events(
+        self, rule_id: str = "", instance_id: str = "", since: Instant | None = None
+    ) -> Stream[ProducerState]:
+        """Timeline: transitions, notifications, acknowledgements, snoozes, errors."""
+        ...
+
+    def set_ownership(self, rule_id: str, expected_version: int, request_id: str, ownership: Ownership) -> RuleRecord:
+        """Transfer management; preserve data and execution authority."""
+        ...
+
+    def set_execution_principal(
+        self, rule_id: str, expected_version: int, request_id: str, principal_id: str
+    ) -> RuleRecord:
+        """Select a separately authorized execution identity for future work."""
+        ...

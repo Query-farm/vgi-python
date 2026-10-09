@@ -1,7 +1,7 @@
 # VGI 2 catalog query pushdown
 
 **Status:** proposed implementation design, not an implemented or normative wire contract.
-**Updated:** 2026-10-06. **Original proposal:** 2026-09-13.
+**Updated:** 2026-10-08. **Original proposal:** 2026-09-13.
 **Scope:** optional, read-only catalog query execution; Python SDK; DuckDB 1.5 explicit-query adapter;
 DuckDB 2.0-development automatic-pushdown adapter.
 
@@ -1068,6 +1068,12 @@ The Python SDK and extension currently declare **2.1.0** under **`vgi.v2`**. The
 and new RPC target the next coordinated additive surface revision, **2.2.0**, subject to release
 coordination if another feature claims that revision first. Do not append them silently to
 2.1.0 or rename the protocol to `vgi.v2.2`.
+
+The [reporting SQL binding](../design/reporting-protocols/README.md#scope-and-compatibility)
+now exposes reads only, with mutations on RPC. It uses existing VGI facilities and does not
+reserve a surface revision for SQL execution context or depend on query pushdown. Future SQL
+mutation support, if needed, requires its own design. A reporting source's attachment reference
+still does not authorize merging distinct live VGI attachments in query pushdown.
 
 The framework enforces exact major/minor compatibility. Some catalog-item decoders tolerate
 absent optional fields by name, but the generated request/response validators also compare schema
