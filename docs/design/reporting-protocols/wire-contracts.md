@@ -127,10 +127,7 @@ Replaying the same cursor must return the same authorized suffix or an explicit
 cursor error; it must not advance a live cursor twice and silently skip rows.
 
 Empty text/list filters select all accessible objects. Folder selectors use the
-root/recursive rules below. Report queries inspect the served envelope; schedule/task/rule predicates
-inspect their `definition` fields. `query` is a case-sensitive literal
-substring of title (destination display name or address for destinations), not
-SQL LIKE or full-text syntax. Tags require all supplied tags. `owned_by_me` means direct
+root/recursive rules below. Report queries inspect the served envelope title, description and tags, joined with newlines: normalize both the query and searchable text to NFC and lowercase Unicode, then compare a literal substring. Leading/trailing query whitespace is ignored. This does not search report bodies. Schedule/task/rule predicates inspect their `definition` fields; their `query` remains a case-sensitive literal substring of title (destination display name or address for destinations). Queries are not SQL LIKE or full-text syntax. Tags require all supplied tags. `owned_by_me` means direct
 principal ownership by the caller, not authorship or team membership. `since`
 is inclusive: runs compare `scheduled_for`, instances `updated_at`, and events
 `occurred_at`. Status/kind/state filters are exact. No implicit server result
@@ -353,7 +350,7 @@ before validation and storage. Names cannot be `.` or `..`, contain `/`,
 backslash, or ASCII control characters (U+0000–001F and U+007F), or start/end
 with Unicode whitespace. Length limits count UTF-8 bytes after normalization.
 Sibling folder names are unique under case-sensitive comparison of the
-normalized name, including at root. Duplicate names fail `conflict` without
+normalized name, including at root. Duplicate names fail `ALREADY_EXISTS` with kind `folder_name_in_use`, without
 revealing a hidden sibling. Report titles are independent and may duplicate
 each other or a folder name. IDs, not display paths, identify every operation.
 
@@ -640,3 +637,25 @@ protect delegated credentials, and expose failures and limits through this
 interface. After restoration, an implementation that cannot establish a
 dispatched operation's outcome must report unknown and reconcile rather than
 silently replay it. The mechanism for satisfying that contract is the worker's.
+
+## Optional report ownership lookup
+
+`vgi.reports.ownership.v1` is independently advertised alongside `vgi.reports.v1`.
+Its exact [Python contract](reference/ownership.md) defines `find_owners(resource_kind, resource_id, query="", limit=20)`.
+`resource_kind` is `report` or `folder`; `limit` is an int64 in 1–100.
+The unary result is the usual `result: binary` Arrow IPC record: `OwnershipOptions`
+contains non-null `query_hint: string`, `candidates: list<OwnershipCandidate>`
+with non-null elements, and `has_more: bool`. Each candidate has non-null
+`label`, `description` strings and a complete `Ownership` value.
+
+Discovery requires authority to transfer the selected resource. Workers control
+search matching and input, including exact email lookup or directory search,
+and disclose only eligible candidates. Empty queries may return suggestions or
+an empty list with instructions in `query_hint`. `has_more` asks the user to
+refine the query; clients never infer identities from labels, emails, or kinds.
+Clients submit the selected complete ownership unchanged to `set_ownership` or
+`set_folder_ownership` with the current resource version and a stable request ID.
+The mutation must revalidate the caller, canonical identities, parent authority
+and eligibility atomically. Discovery is not a grant and may become stale.
+Authorship and execution credentials are unchanged. Workers without this optional
+interface retain their existing ownership mutations and administration workflows.

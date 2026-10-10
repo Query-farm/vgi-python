@@ -42,6 +42,7 @@ _RECORDS = [
 ]
 _NAMES = {
     "vgi.reports.v1": 17,
+    "vgi.reports.ownership.v1": 1,
     "vgi.report_render.v1": 4,
     "vgi.schedules.v1": 16,
     "vgi.sql_tasks.v1": 17,
@@ -129,7 +130,7 @@ def test_every_effectful_request_has_a_request_id() -> None:
     """Mutation admission always has a stable ID, including transfer and recovery methods."""
     for protocol in PROTOCOLS:
         for name, method in rpc_methods(protocol).items():
-            if name.startswith(("get_", "list_", "check_", "preview_", "test_")):
+            if name.startswith(("get_", "list_", "check_", "preview_", "test_", "find_")):
                 continue
             schema = method.params_schema
             assert schema.field("request_id") == pa.field("request_id", pa.string(), nullable=False)

@@ -256,6 +256,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <li><a href="#mutation-and-error-conventions">Mutation and error conventions</a></li>
 <li><a href="#required-conformance-examples">Required conformance examples</a></li>
 <li><a href="#worker-operational-discretion">Worker operational discretion</a></li>
+<li><a href="#optional-report-ownership-lookup">Optional report ownership lookup</a></li>
 </ul>
 </li>
 <li><a href="#unattended-sessions">Unattended sessions</a><ul>
@@ -276,6 +277,7 @@ span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 
 <li><a href="#sql-binding_2">SQL binding</a></li>
 <li><a href="#read-only-publisher">Read-only publisher</a></li>
 <li><a href="#import">Import</a></li>
+<li><a href="#choosing-an-owner-in-a-client">Choosing an owner in a client</a></li>
 </ul>
 </li>
 <li><a href="#vgireport_renderv1">vgi.report_render.v1</a><ul>
@@ -1122,6 +1124,10 @@ worker choices.</p>
 <td><code>vgi/reporting/reports.py</code></td>
 </tr>
 <tr>
+<td><a href="reference/ownership.html">Report ownership discovery (optional)</a></td>
+<td><code>vgi/reporting/ownership.py</code></td>
+</tr>
+<tr>
 <td><a href="reference/render.html">Rendering</a></td>
 <td><code>vgi/reporting/render.py</code></td>
 </tr>
@@ -1259,10 +1265,7 @@ the client restarts explicitly. Workers choose cursor retention and storage.
 Replaying the same cursor must return the same authorized suffix or an explicit
 cursor error; it must not advance a live cursor twice and silently skip rows.</p>
 <p>Empty text/list filters select all accessible objects. Folder selectors use the
-root/recursive rules below. Report queries inspect the served envelope; schedule/task/rule predicates
-inspect their <code>definition</code> fields. <code>query</code> is a case-sensitive literal
-substring of title (destination display name or address for destinations), not
-SQL LIKE or full-text syntax. Tags require all supplied tags. <code>owned_by_me</code> means direct
+root/recursive rules below. Report queries inspect the served envelope title, description and tags, joined with newlines: normalize both the query and searchable text to NFC and lowercase Unicode, then compare a literal substring. Leading/trailing query whitespace is ignored. This does not search report bodies. Schedule/task/rule predicates inspect their <code>definition</code> fields; their <code>query</code> remains a case-sensitive literal substring of title (destination display name or address for destinations). Queries are not SQL LIKE or full-text syntax. Tags require all supplied tags. <code>owned_by_me</code> means direct
 principal ownership by the caller, not authorship or team membership. <code>since</code>
 is inclusive: runs compare <code>scheduled_for</code>, instances <code>updated_at</code>, and events
 <code>occurred_at</code>. Status/kind/state filters are exact. No implicit server result
@@ -1457,7 +1460,7 @@ before validation and storage. Names cannot be <code>.</code> or <code>..</code>
 backslash, or ASCII control characters (U+0000–001F and U+007F), or start/end
 with Unicode whitespace. Length limits count UTF-8 bytes after normalization.
 Sibling folder names are unique under case-sensitive comparison of the
-normalized name, including at root. Duplicate names fail <code>conflict</code> without
+normalized name, including at root. Duplicate names fail <code>ALREADY_EXISTS</code> with kind <code>folder_name_in_use</code>, without
 revealing a hidden sibling. Report titles are independent and may duplicate
 each other or a folder name. IDs, not display paths, identify every operation.</p>
 <p><code>list_folders(parent_folder_id, recursive)</code> returns children of that folder,
@@ -1789,6 +1792,25 @@ protect delegated credentials, and expose failures and limits through this
 interface. After restoration, an implementation that cannot establish a
 dispatched operation's outcome must report unknown and reconcile rather than
 silently replay it. The mechanism for satisfying that contract is the worker's.</p>
+<h3 id="optional-report-ownership-lookup">Optional report ownership lookup</h3>
+<p><code>vgi.reports.ownership.v1</code> is independently advertised alongside <code>vgi.reports.v1</code>.
+Its exact <a href="reference/ownership.html">Python contract</a> defines <code>find_owners(resource_kind, resource_id, query="", limit=20)</code>.
+<code>resource_kind</code> is <code>report</code> or <code>folder</code>; <code>limit</code> is an int64 in 1–100.
+The unary result is the usual <code>result: binary</code> Arrow IPC record: <code>OwnershipOptions</code>
+contains non-null <code>query_hint: string</code>, <code>candidates: list&lt;OwnershipCandidate&gt;</code>
+with non-null elements, and <code>has_more: bool</code>. Each candidate has non-null
+<code>label</code>, <code>description</code> strings and a complete <code>Ownership</code> value.</p>
+<p>Discovery requires authority to transfer the selected resource. Workers control
+search matching and input, including exact email lookup or directory search,
+and disclose only eligible candidates. Empty queries may return suggestions or
+an empty list with instructions in <code>query_hint</code>. <code>has_more</code> asks the user to
+refine the query; clients never infer identities from labels, emails, or kinds.
+Clients submit the selected complete ownership unchanged to <code>set_ownership</code> or
+<code>set_folder_ownership</code> with the current resource version and a stable request ID.
+The mutation must revalidate the caller, canonical identities, parent authority
+and eligibility atomically. Discovery is not a grant and may become stale.
+Authorship and execution credentials are unchanged. Workers without this optional
+interface retain their existing ownership mutations and administration workflows.</p>
 <h2 id="unattended-sessions">Unattended sessions</h2>
 <p>Python dataclasses and RPC interface: <a href="reference/delegations.html">generated reference</a>.
 Lifecycle and encoding rules: <a href="#reporting-wire-contracts">wire behavior</a>.</p>
@@ -2283,6 +2305,15 @@ kinds kept in the message. Cupola's "remove from history" maps to
 An importer creates the destination folders first and supplies the resulting
 <code>folder_id</code> to <code>create_report</code>. A legacy path is an import hint, never the
 identity or location of an immutable revision in the new protocol.</p>
+<h3 id="choosing-an-owner-in-a-client">Choosing an owner in a client</h3>
+<p>Workers may also host the optional <a href="reference/ownership.html">ownership discovery interface</a>.
+It supplies searchable, resource-specific transfer targets and complete canonical
+ownership assignments. The client displays the worker's labels and search hint;
+it does not require an email directory or impose principal kinds or parent-owner
+policy. The final transfer still validates identities, policy and resource version.
+Library <code>display_name</code> is a friendly worker-supplied label, configurable by its
+operator. It is independent of catalog names and is not a stable identifier; the
+service endpoint and resource IDs remain the location and object identities.</p>
 <h2 id="vgireport_renderv1">vgi.report_render.v1</h2>
 <p>Python dataclasses and RPC interface: <a href="reference/render.html">generated reference</a>.
 Lifecycle and encoding rules: <a href="#reporting-wire-contracts">wire behavior</a>.</p>

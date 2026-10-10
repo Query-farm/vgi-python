@@ -23,6 +23,7 @@ from vgi.reporting._metadata import read_annotation
 _TITLES = {
     "common": "Shared records",
     "reports": "Reports",
+    "ownership": "Report ownership discovery (optional)",
     "render": "Rendering",
     "schedules": "Schedules",
     "sql_tasks": "SQL tasks",

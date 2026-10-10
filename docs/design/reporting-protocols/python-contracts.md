@@ -10,6 +10,7 @@ Methods take direct named arguments, with dataclasses for structured values such
 | --- | --- |
 | [Shared records](reference/common.md) | `vgi/reporting/common.py` |
 | [Reports](reference/reports.md) | `vgi/reporting/reports.py` |
+| [Report ownership discovery (optional)](reference/ownership.md) | `vgi/reporting/ownership.py` |
 | [Rendering](reference/render.md) | `vgi/reporting/render.py` |
 | [Schedules](reference/schedules.md) | `vgi/reporting/schedules.py` |
 | [SQL tasks](reference/sql_tasks.md) | `vgi/reporting/sql_tasks.py` |

@@ -187,3 +187,14 @@ kinds kept in the message. Cupola's "remove from history" maps to
 An importer creates the destination folders first and supplies the resulting
 `folder_id` to `create_report`. A legacy path is an import hint, never the
 identity or location of an immutable revision in the new protocol.
+
+## Choosing an owner in a client
+
+Workers may also host the optional [ownership discovery interface](reference/ownership.md).
+It supplies searchable, resource-specific transfer targets and complete canonical
+ownership assignments. The client displays the worker's labels and search hint;
+it does not require an email directory or impose principal kinds or parent-owner
+policy. The final transfer still validates identities, policy and resource version.
+Library `display_name` is a friendly worker-supplied label, configurable by its
+operator. It is independent of catalog names and is not a stable identifier; the
+service endpoint and resource IDs remain the location and object identities.
