@@ -14,15 +14,21 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar
 
+from vgi_rpc.errors import Code
+
 if TYPE_CHECKING:
     import pyarrow as pa
 
 __all__ = [
+    "ArgumentTypeError",
     "BindStateNotFoundError",
     "CatalogReadOnlyError",
     "ExecutionIdentifierError",
+    "InvalidArgumentError",
+    "NotFoundError",
     "OpaqueDataNotRecognizedError",
     "SchemaValidationError",
+    "UnsupportedOperationError",
 ]
 
 
@@ -55,7 +61,13 @@ class CatalogReadOnlyError(Exception):
     - table_get(), view_get() - get table/view info
     - table_scan_function_get() - get scan function for tables
 
+    Also raised when a write targets a table that has no write function.
+    ``FAILED_PRECONDITION``: the request is well-formed, the catalog is just
+    not in a state that permits it.
+
     """
+
+    error_code: ClassVar[Code] = Code.FAILED_PRECONDITION
 
 
 class OpaqueDataNotRecognizedError(ValueError):
@@ -72,7 +84,7 @@ class OpaqueDataNotRecognizedError(ValueError):
     working.
     """
 
-    error_code: ClassVar[str] = "INVALID_ARGUMENT"
+    error_code: ClassVar[Code] = Code.INVALID_ARGUMENT
     error_kind: ClassVar[str] = "opaque_data_not_recognized"
 
     def __init__(self, field: str) -> None:
@@ -230,3 +242,52 @@ class SchemaValidationError(Exception):
             lines.append(f"    {field.name}: {field.type}{nullable}")
 
         return "\n".join(lines)
+
+
+class ArgumentTypeError(SchemaValidationError):
+    """An argument or input column has a type the function does not accept.
+
+    Raised when a value fails an ``Arg[AnyArrow]`` ``type_bound`` -- e.g.
+    ``double('abc')`` against a numeric-only bound. Unlike its base class,
+    which reports a worker's *own* output violating its declared schema (a
+    bug, sent as ``UNKNOWN``), this is the caller's input being wrong, so it is
+    ``INVALID_ARGUMENT``. Subclasses [`SchemaValidationError`][] so existing
+    handlers keep working.
+    """
+
+    error_code: ClassVar[Code] = Code.INVALID_ARGUMENT
+
+
+class InvalidArgumentError(ValueError):
+    """A request's arguments cannot be accepted (``INVALID_ARGUMENT``).
+
+    For argument problems that are not a single argument's constraint (those
+    raise [`ArgumentValidationError`][vgi.arguments.ArgumentValidationError]):
+    no overload matching the supplied argument types, an ambiguous call, or a
+    call shape the function does not take. Subclasses ``ValueError`` so
+    existing handlers keep working.
+    """
+
+    error_code: ClassVar[Code] = Code.INVALID_ARGUMENT
+
+
+class NotFoundError(ValueError):
+    """A named function, table, schema, or catalog does not exist (``NOT_FOUND``).
+
+    Subclasses ``ValueError`` so existing handlers keep working.
+    """
+
+    error_code: ClassVar[Code] = Code.NOT_FOUND
+
+
+class UnsupportedOperationError(NotImplementedError):
+    """An operation the SDK or catalog explicitly does not support (``UNIMPLEMENTED``).
+
+    Raised by the [`CatalogInterface`][vgi.catalog.CatalogInterface] defaults
+    for DDL/DML a catalog has not implemented, and by framework paths that are
+    not supported yet. Subclasses ``NotImplementedError`` so existing handlers
+    -- including the ones that treat an unimplemented optional hook as
+    "absent" -- keep working.
+    """
+
+    error_code: ClassVar[Code] = Code.UNIMPLEMENTED

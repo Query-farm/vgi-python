@@ -19,10 +19,11 @@ import typing
 import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, TypeVar, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Final, TypeVar, overload
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
+from vgi_rpc.errors import Code
 
 if TYPE_CHECKING:
     from pyarrow import Scalar
@@ -638,6 +639,7 @@ class ArgumentValidationError(ValueError):
         valid_range: Human-readable description of valid values.
         default: Default value (if any) that could be used instead.
         choices: Valid choices, if the argument is constrained to a set.
+        error_code: ``INVALID_ARGUMENT`` -- the caller's input is wrong, not the worker.
 
     """
 
@@ -649,6 +651,7 @@ class ArgumentValidationError(ValueError):
     valid_range: str | None
     default: Any
     choices: Sequence[Any] | None
+    error_code: ClassVar[Code] = Code.INVALID_ARGUMENT
 
     def __init__(
         self,
@@ -1429,10 +1432,12 @@ class Arg[ArgT]:
             field_type: The Arrow type of the column to validate.
 
         Raises:
-            [`SchemaValidationError`][]: If the type bound is not satisfied.
+            [`ArgumentTypeError`][vgi.exceptions.ArgumentTypeError]: If the type bound is
+                not satisfied (a [`SchemaValidationError`][vgi.exceptions.SchemaValidationError]
+                coded ``INVALID_ARGUMENT``).
 
         """
-        from vgi.exceptions import SchemaValidationError
+        from vgi.exceptions import ArgumentTypeError
 
         if self.type_bound is None:
             return
@@ -1446,7 +1451,7 @@ class Arg[ArgT]:
         # OR logic: at least one predicate must pass
         if not any(predicate(field_type) for predicate in predicates):
             predicate_names = [getattr(p, "__name__", str(p)) for p in predicates]
-            raise SchemaValidationError(
+            raise ArgumentTypeError(
                 self.format_error(f"column type {field_type} does not match any of: {', '.join(predicate_names)}")
             )
 

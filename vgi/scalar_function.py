@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Any, cast, final, get_args, get_origin, get_ty
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
+from vgi_rpc.errors import Code
 from vgi_rpc.rpc import AuthContext, CallContext
 
 import vgi.function
@@ -438,6 +439,10 @@ class TypeMismatchError(TypeError):
         expected_type: The declared Arrow type.
         actual_type: The actual Arrow type found.
         function_name: Name of the function class.
+        error_code: ``INVALID_ARGUMENT`` for an input parameter the caller
+            supplied with the wrong type; ``None`` (sent as ``UNKNOWN``) for
+            ``param_name == "return"``, where the worker's own output is wrong
+            -- a bug, which must keep its traceback and not read as bad input.
 
     """
 
@@ -445,6 +450,7 @@ class TypeMismatchError(TypeError):
     expected_type: pa.DataType | None
     actual_type: pa.DataType | None
     function_name: str
+    error_code: Code | None
 
     def __init__(
         self,
@@ -469,6 +475,7 @@ class TypeMismatchError(TypeError):
         self.expected_type = expected_type
         self.actual_type = actual_type
         self.function_name = function_name
+        self.error_code = None if param_name == "return" else Code.INVALID_ARGUMENT
 
         if expected_type is not None and actual_type is not None:
             full_message = self._build_detailed_message(message, param_name, expected_type, actual_type)

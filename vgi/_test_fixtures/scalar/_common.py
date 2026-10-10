@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from vgi.exceptions import SchemaValidationError
+from vgi.exceptions import ArgumentTypeError
 
 
 def _is_addable_type(dtype: pa.DataType) -> bool:
@@ -66,4 +66,4 @@ def _promote_for_addition(dtype: pa.DataType) -> pa.DataType:
         # accepts that values >= 5e37 will overflow at compute time.
         new_precision = min(dtype.precision + 1, 38)
         return pa.decimal128(new_precision, dtype.scale)
-    raise SchemaValidationError(f"Unsupported numeric type for addition: {dtype}")
+    raise ArgumentTypeError(f"Unsupported numeric type for addition: {dtype}")

@@ -38,6 +38,7 @@ from vgi_rpc.rpc import CallContext, Stream
 
 from vgi._redact import short_hash
 from vgi.catalog.catalog_interface import CatalogAttachResult
+from vgi.exceptions import NotFoundError
 from vgi.invocation import GlobalInitResponse
 from vgi.protocol import (
     BindRequest,
@@ -228,7 +229,7 @@ class MetaWorker:
                 f"Cannot route {method_name}: attach_opaque_data carries no catalog name "
                 f"this process recognizes (known catalogs: {sorted(self._name_to_index)})."
             )
-            raise ValueError(msg)
+            raise NotFoundError(msg)
         return worker
 
     def _maybe_worker_for_attach(self, attach_opaque_data: bytes | None) -> Worker | None:
@@ -344,7 +345,7 @@ class MetaWorker:
         if fallback_worker is not None:
             return fallback_worker._resolve_function(request)
         msg = f"Unknown function: '{request.function_name}'"
-        raise ValueError(msg)
+        raise NotFoundError(msg)
 
     # ========== Catalog listing ==========
 
@@ -389,7 +390,7 @@ class MetaWorker:
                     continue
             else:
                 msg = f"No worker handles catalog '{request.name}'"
-                raise ValueError(msg)
+                raise NotFoundError(msg)
 
         # Record which catalog this attach belongs to, inside the seal. Without
         # it nothing downstream can tell two sub-workers apart: the catalog's own
@@ -429,7 +430,7 @@ class MetaWorker:
             self._workers[idx].catalog_drop(name=name)
         else:
             msg = f"No worker owns catalog '{name}'"
-            raise ValueError(msg)
+            raise NotFoundError(msg)
 
     # ========== Request-object methods (attach_opaque_data inside request) ==========
 
@@ -469,7 +470,7 @@ class MetaWorker:
             return fallback_worker.bind(request, ctx=ctx)
 
         msg = f"Unknown function '{request.function_name}'"
-        raise ValueError(msg)
+        raise NotFoundError(msg)
 
     def init(self, request: InitRequest, ctx: CallContext) -> Stream[ProcessState, GlobalInitResponse]:
         """Dispatch init to the right worker."""
@@ -490,7 +491,7 @@ class MetaWorker:
             return fallback_worker.init(request, ctx=ctx)
 
         msg = f"Unknown function '{fn_name}'"
-        raise ValueError(msg)
+        raise NotFoundError(msg)
 
     def _unwrap_bind_call_attach_opaque_data(
         self,
@@ -539,7 +540,7 @@ class MetaWorker:
             if fn_name in registry:
                 return w.table_function_cardinality(request, ctx=ctx)
         msg = f"Unknown function '{fn_name}'"
-        raise ValueError(msg)
+        raise NotFoundError(msg)
 
     def table_function_plan(self, request: Any, ctx: CallContext) -> Any:
         """Dispatch scan planning to the right worker."""
@@ -555,7 +556,7 @@ class MetaWorker:
             if fn_name in registry:
                 return w.table_function_plan(request, ctx=ctx)
         msg = f"Unknown function '{fn_name}'"
-        raise ValueError(msg)
+        raise NotFoundError(msg)
 
     def table_function_statistics(self, request: Any, ctx: CallContext) -> Any:
         """Dispatch per-column statistics lookup to the right worker."""
@@ -571,7 +572,7 @@ class MetaWorker:
             if fn_name in registry:
                 return w.table_function_statistics(request, ctx=ctx)
         msg = f"Unknown function '{fn_name}'"
-        raise ValueError(msg)
+        raise NotFoundError(msg)
 
     def table_function_dynamic_to_string(self, request: Any, ctx: CallContext) -> Any:
         """Dispatch the dynamic_to_string profiler hook to the right worker."""
@@ -616,7 +617,7 @@ class MetaWorker:
                     fn_name,
                 )
                 return getattr(w, method_name)(request, ctx=ctx)
-        raise ValueError(f"Unknown aggregate function '{fn_name}'")
+        raise NotFoundError(f"Unknown aggregate function '{fn_name}'")
 
     def aggregate_bind(self, request: Any, ctx: CallContext) -> Any:
         """Dispatch aggregate_bind to the right worker."""
@@ -720,7 +721,7 @@ class MetaWorker:
                     ctx,
                     attach_already_unwrapped=attach_already_unwrapped,
                 )
-        raise ValueError(f"Unknown table_buffering function '{fn_name}'")
+        raise NotFoundError(f"Unknown table_buffering function '{fn_name}'")
 
     def hosted_protocols(self) -> tuple[tuple[type, object], ...]:
         """Return every child worker class's ``hosted_protocols()``, in order.

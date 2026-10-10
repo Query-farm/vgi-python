@@ -14,7 +14,7 @@ from vgi.catalog.catalog_interface import (
     TableInfo,
     WriteFunctionResult,
 )
-from vgi.exceptions import CatalogReadOnlyError
+from vgi.exceptions import CatalogReadOnlyError, NotFoundError
 from vgi.invocation import BindResponse
 from vgi.table_function import BindParams, TableFunctionGenerator
 from vgi.table_in_out_function import TableInOutGenerator
@@ -307,8 +307,8 @@ class TestReadOnlyCatalogInterfaceWriteMethods:
             )
 
     def test_nonexistent_table_raises(self, catalog_with_writable_table: ReadOnlyCatalogInterface) -> None:
-        """Non-existent tables raise NotImplementedError."""
-        with pytest.raises(NotImplementedError, match="not found"):
+        """Non-existent tables raise NotFoundError (NOT_FOUND)."""
+        with pytest.raises(NotFoundError, match="not found"):
             catalog_with_writable_table.table_insert_function_get(
                 attach_opaque_data=AttachOpaqueData(b"test"),
                 transaction_opaque_data=None,

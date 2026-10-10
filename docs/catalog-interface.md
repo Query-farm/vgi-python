@@ -214,36 +214,39 @@ class MyCatalog(CatalogInterface):
 
 | Category | Method | Default Behavior |
 |----------|--------|------------------|
-| **Catalog** | `catalog_create()` | `NotImplementedError` |
-| | `catalog_drop()` | `NotImplementedError` |
+| **Catalog** | `catalog_create()` | `UnsupportedOperationError` |
+| | `catalog_drop()` | `UnsupportedOperationError` |
 | | `catalog_detach()` | No-op |
 | | `catalog_version()` | Returns `0` |
-| **Transaction** | `catalog_transaction_begin()` | `NotImplementedError` |
-| | `catalog_transaction_commit()` | `NotImplementedError` |
-| | `catalog_transaction_rollback()` | `NotImplementedError` |
+| **Transaction** | `catalog_transaction_begin()` | `UnsupportedOperationError` |
+| | `catalog_transaction_commit()` | `UnsupportedOperationError` |
+| | `catalog_transaction_rollback()` | `UnsupportedOperationError` |
 | **Schema** | `schemas()` | Returns `["main"]` |
-| | `schema_create()` | `NotImplementedError` |
-| | `schema_drop()` | `NotImplementedError` |
-| | `schema_contents()` | `NotImplementedError` |
-| **Table** | `table_create()` | `NotImplementedError` |
-| | `table_drop()` | `NotImplementedError` |
-| | `table_rename()` | `NotImplementedError` |
-| | `table_comment_set()` | `NotImplementedError` |
-| | `table_column_add()` | `NotImplementedError` |
-| | `table_column_drop()` | `NotImplementedError` |
-| | `table_column_rename()` | `NotImplementedError` |
-| | `table_column_type_change()` | `NotImplementedError` |
-| | `table_column_default_set()` | `NotImplementedError` |
-| | `table_column_default_drop()` | `NotImplementedError` |
-| | `table_not_null_set()` | `NotImplementedError` |
-| | `table_not_null_drop()` | `NotImplementedError` |
-| | `table_scan_function_get()` | `NotImplementedError` |
-| **View** | `view_create()` | `NotImplementedError` |
-| | `view_drop()` | `NotImplementedError` |
-| | `view_rename()` | `NotImplementedError` |
-| | `view_comment_set()` | `NotImplementedError` |
+| | `schema_create()` | `UnsupportedOperationError` |
+| | `schema_drop()` | `UnsupportedOperationError` |
+| | `schema_contents()` | `UnsupportedOperationError` |
+| **Table** | `table_create()` | `UnsupportedOperationError` |
+| | `table_drop()` | `UnsupportedOperationError` |
+| | `table_rename()` | `UnsupportedOperationError` |
+| | `table_comment_set()` | `UnsupportedOperationError` |
+| | `table_column_add()` | `UnsupportedOperationError` |
+| | `table_column_drop()` | `UnsupportedOperationError` |
+| | `table_column_rename()` | `UnsupportedOperationError` |
+| | `table_column_type_change()` | `UnsupportedOperationError` |
+| | `table_column_default_set()` | `UnsupportedOperationError` |
+| | `table_column_default_drop()` | `UnsupportedOperationError` |
+| | `table_not_null_set()` | `UnsupportedOperationError` |
+| | `table_not_null_drop()` | `UnsupportedOperationError` |
+| | `table_scan_function_get()` | `UnsupportedOperationError` |
+| **View** | `view_create()` | `UnsupportedOperationError` |
+| | `view_drop()` | `UnsupportedOperationError` |
+| | `view_rename()` | `UnsupportedOperationError` |
+| | `view_comment_set()` | `UnsupportedOperationError` |
 | **Observability** | `loggable_attach_options()` | Returns `{}` (no options logged — see below) |
 | **Bulk load** | `catalog_contents()` | Composes `schemas()` + `schema_contents()` per kind; no etag (see below) |
+
+`UnsupportedOperationError` (from `vgi.exceptions`) subclasses `NotImplementedError` and is
+sent to the client with error code `UNIMPLEMENTED`.
 
 ---
 
@@ -847,7 +850,7 @@ Errors are returned as exceptions that propagate through the VGI protocol:
 | Error | When Raised |
 |-------|-------------|
 | `ValueError` | Invalid arguments, object not found |
-| `NotImplementedError` | Method not supported |
+| `UnsupportedOperationError` | Method not supported |
 | `CatalogReadOnlyError` | DDL on read-only catalog |
 
 Example error handling:

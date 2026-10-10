@@ -103,7 +103,12 @@ from vgi.catalog.catalog_interface import (
 )
 from vgi.catalog.secret_type import SecretTypeSpec
 from vgi.catalog.setting import SettingSpec, extract_setting_specs
-from vgi.exceptions import OpaqueDataNotRecognizedError
+from vgi.exceptions import (
+    InvalidArgumentError,
+    NotFoundError,
+    OpaqueDataNotRecognizedError,
+    UnsupportedOperationError,
+)
 from vgi.function import (
     Function,
 )
@@ -1437,7 +1442,7 @@ class Worker:
             # does live rather than the generic unknown-function list.
             if function_name in registry:
                 schemas = sorted({schema for (schema, name) in self._build_schema_registry() if name == function_name})
-                raise ValueError(
+                raise NotFoundError(
                     f"Function '{function_name}' is not registered in schema {schema_path_display(schema_path)}. "
                     f"It is available in: {[schema_path_display(path) for path in schemas]}"
                 )
@@ -1451,7 +1456,7 @@ class Worker:
                 for suggestion in suggestions[:3]:
                     msg_lines.append(f"    - {suggestion}")
             msg_lines.append(f"  Available functions: {available}")
-            raise ValueError("\n".join(msg_lines))
+            raise NotFoundError("\n".join(msg_lines))
 
         return list(registry[function_name])
 
@@ -2255,7 +2260,7 @@ class Worker:
                 cols = [f"{f.name}: {f.type}" for f in input_schema]
                 input_schema_str = f"input_columns=[{', '.join(cols)}], "
 
-            raise ValueError(
+            raise InvalidArgumentError(
                 f"No matching function '{function_name}' for arguments: "
                 f"{input_schema_str}{_format_arguments_for_error(args)}. "
                 f"Available overloads:\n" + "\n".join(param_summaries)
@@ -2276,7 +2281,7 @@ class Worker:
                         f". These are declared in different schemas ({owners}) — "
                         f"qualify the call with a schema to disambiguate"
                     )
-            raise ValueError(
+            raise InvalidArgumentError(
                 f"Ambiguous function call '{function_name}': multiple overloads match: {match_names}{hint}"
             )
 
@@ -2579,7 +2584,7 @@ class Worker:
         if function_type is not None:
             candidates = [c for c in candidates if issubclass(c, function_type)]
             if not candidates:
-                raise ValueError(
+                raise NotFoundError(
                     f"No {function_type.__name__} named '{function_name}' found. "
                     f"Candidates exist but are not {function_type.__name__}."
                 )
@@ -2941,7 +2946,7 @@ class Worker:
         all", i.e. the caller used the wrong `Client` method entirely.
         """
         if issubclass(func_cls, TableInOutGenerator) and request.input_schema is None:
-            raise ValueError(
+            raise InvalidArgumentError(
                 f"'{request.function_name}' is a table-in-out function (it requires an input row "
                 "stream) but no input schema was supplied — use "
                 "Client.table_in_out_function(input=...), not Client.table_function()."
@@ -2951,7 +2956,7 @@ class Worker:
             and not issubclass(func_cls, TableInOutGenerator)
             and request.input_schema is not None
         ):
-            raise ValueError(
+            raise InvalidArgumentError(
                 f"'{request.function_name}' is a plain table function (it takes no input row "
                 "stream) but an input schema was supplied — use Client.table_function(), not "
                 "Client.table_in_out_function()."
@@ -3283,7 +3288,7 @@ class Worker:
         result = func_cls.on_bind(bind_params)
 
         if bind_params.secrets.needs_resolution:
-            raise NotImplementedError(
+            raise UnsupportedOperationError(
                 f"Aggregate function '{request.function_name}' requires secret resolution, "
                 "which is not yet supported for aggregate functions."
             )
@@ -4525,7 +4530,7 @@ class Worker:
                 # blended-row-transform worker: the client polls for more
                 # output, the server polls for more input, neither ever
                 # arrives). Name the mismatch immediately instead.
-                raise ValueError(
+                raise InvalidArgumentError(
                     f"'{request.bind_call.function_name}' is a table-in-out function "
                     "(it requires an input row stream) but was called with no input "
                     "phase — use Client.table_in_out_function(input=...), not "
@@ -4543,7 +4548,7 @@ class Worker:
                 # immediately rather than silently ignoring the phase/input
                 # stream and running as an ordinary producer while the caller
                 # is left feeding batches nobody reads.
-                raise ValueError(
+                raise InvalidArgumentError(
                     f"'{request.bind_call.function_name}' is a plain table function "
                     "(it takes no input row stream) but was called with init "
                     f"phase={request.phase!r} — use Client.table_function(), not "
