@@ -38,6 +38,7 @@ from vgi.catalog.catalog_interface import (
     scan_arguments_from,
     serialize_column_statistics,
 )
+from vgi.column_path import RequiredFilterPaths, column_path_key
 from vgi.invocation import BindResponse, FunctionType
 from vgi.metadata import CatalogFunctionType
 from vgi.schema_path import SchemaPath, schema_path_display, schema_path_key
@@ -288,21 +289,13 @@ class Table:
         column_comments: Dict mapping column names to comment strings.
             Comments are transported as Arrow field metadata and visible
             via ``duckdb_columns()`` in DuckDB.
-        required_filters: Required WHERE-filter groups in conjunctive normal
-            form — an AND (outer tuple) of OR-groups (inner tuples) of dotted-path
-            column references that MUST appear in a WHERE expression for any scan
-            of this table. A group is satisfied when any one of its paths has a
-            filter; every group must be satisfied. So
-            ``(("accession_number",), ("ticker", "cik"))`` means "accession_number
-            AND one of (ticker, cik)"; a single-path group ``(("country",),)`` is
-            a plain mandatory filter. Paths are top-level names (``"country"``) or
-            struct subfields (``"bbox.xmin"``, ``"nested.outer.inner"``). Empty
-            (default) means no enforcement. Satisfaction is prefix-based: a present
-            filter on a shorter path satisfies any required path it is a prefix of
-            (a whole-struct filter on ``bbox`` satisfies all of ``bbox.xmin`` /
-            ``.xmax`` / ``.ymin`` / ``.ymax``). The VGI DuckDB extension's
-            optimizer pass consults this at bind time and throws
-            ``BinderException`` listing any unsatisfied groups.
+        required_filters: AND-of-OR groups of raw component paths, e.g.
+            ``((("bbox", "xmin"),), (("ticker",), ("cik",)))``. Dots and quotes
+            are literal characters. Every path must resolve in ``columns``.
+            A filter on a parent struct satisfies requirements on its children;
+            a child filter does not satisfy a requirement on its parent.
+            Empty means no enforcement. Use ``RequiredFilterPaths.from_legacy``
+            explicitly when migrating old dotted strings; ambiguous names fail.
         statistics: Mapping of column name to ``ColumnStatisticsInput``
             providing inlined column statistics for the optimizer.
         statistics_cache_max_age_seconds: How long clients may cache the inlined
@@ -345,7 +338,7 @@ class Table:
     defaults: dict[str, DefaultValue] = field(default_factory=dict)
     generated_columns: dict[str, str] = field(default_factory=dict)
     column_comments: dict[str, str] = field(default_factory=dict)
-    required_filters: tuple[tuple[str, ...], ...] = ()
+    required_filters: tuple[tuple[tuple[str, ...], ...], ...] = ()
     statistics: dict[str, ColumnStatisticsInput] = field(default_factory=dict)
     statistics_cache_max_age_seconds: int | None = None
     cardinality_estimate: int | None = None
@@ -488,22 +481,11 @@ class Table:
                     f"in schema. Available columns: {sorted(column_names)}"
                 )
 
-        # Validate required_filters: each OR-group must be non-empty, and the
-        # leading dotted segment of each path must be a real column on this table.
-        # Struct subfield validity is not checked here — DuckDB's binder catches
-        # typos at scan time, and the descriptor doesn't unpack STRUCT subfields.
-        for group in self.required_filters:
-            if not group:
-                raise ValueError(f"Table '{self.name}': required_filters must not contain empty groups")
-            for path in group:
-                if not path:
-                    raise ValueError(f"Table '{self.name}': required_filters must not contain empty strings")
-                head = path.split(".", 1)[0]
-                if head not in column_names:
-                    raise ValueError(
-                        f"Table '{self.name}': required_filters path '{path}' references "
-                        f"unknown column '{head}'. Available columns: {sorted(column_names)}"
-                    )
+        # Validate full raw paths; never reinterpret dotted names.
+        required = RequiredFilterPaths(
+            groups=[[list(column_path_key(path)) for path in group] for group in self.required_filters]
+        )
+        required.validate_schema(resolved)
 
         # Validate statistics column names
         for col in self.statistics:
@@ -687,7 +669,7 @@ class Table:
             cardinality_estimate=self.cardinality_estimate,
             cardinality_max=self.cardinality_max,
             column_statistics=column_statistics_blob,
-            required_filters=[list(group) for group in self.required_filters],
+            required_filters=[[list(path) for path in group] for group in self.required_filters],
         )
 
     def resolve_column_statistics(self) -> TableColumnStatisticsResult | None:

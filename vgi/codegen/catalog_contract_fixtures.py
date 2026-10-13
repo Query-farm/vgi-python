@@ -143,6 +143,7 @@ def render() -> str:
             not_null_constraints=[],
             unique_constraints=[],
             check_constraints=[],
+            required_filters=[[["optional"], ["record", "a.b"]]],
             options=OptionState(values=values, explicit_names=["optional"]),
             layout=layout,
         ),

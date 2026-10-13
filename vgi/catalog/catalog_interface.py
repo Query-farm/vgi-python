@@ -497,19 +497,13 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
             path; workers can still inline manually inside their own
             ``schema_contents`` override when the bind output is independently
             known to be stable.
-        required_filters: Required WHERE-filter groups the VGI extension's
-            optimizer pass verifies against any scan (conjunctive normal form):
-            the outer list is an AND of groups, each inner group is an OR of
-            dotted-path column references (top-level names like ``"country"`` or
-            struct subfields like ``"bbox.xmin"``). A group is satisfied when any
-            one of its paths has a filter; every group must be satisfied. So
-            ``[["accession_number"], ["ticker", "cik"]]`` means "accession_number
-            AND one of (ticker, cik)". Empty (default) means no enforcement — the
-            zero-cost fast path. Satisfaction is prefix-based: a present filter on
-            a shorter dotted path satisfies any required path it's a prefix of (a
-            whole-struct filter on ``bbox`` satisfies every ``"bbox.*"`` path).
-            The C++ extension throws ``BinderException`` listing any unsatisfied
-            groups.
+        required_filters: AND-of-OR groups of raw column paths. Each path is
+            a nonempty list of exact field names, e.g. ``[[["bbox", "xmin"]],
+            [["ticker"], ["cik"]]]``. Dots and quotes are literal characters.
+            A filter on a component prefix satisfies a path; a filter on
+            ``["bbox"]`` satisfies ``["bbox", "xmin"]``, while ``["bbox.xmin"]``
+            is a different identity. Empty means no enforcement. These are
+            column-presence requirements, not proof of remote enforcement.
         options: Negotiated typed option readback, or None when unsupported.
         layout: Negotiated partition/sort policy, or None when unsupported.
             This metadata never guarantees scan output order.
@@ -543,7 +537,7 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
 
     bind_result: Annotated[bytes | None, ArrowType(pa.binary())] = None
 
-    required_filters: Annotated[list[list[str]], ArrowType(pa.list_(pa.list_(pa.string())))] = field(
+    required_filters: Annotated[list[list[list[str]]], ArrowType(pa.list_(pa.list_(pa.list_(pa.string()))))] = field(
         default_factory=list
     )
 

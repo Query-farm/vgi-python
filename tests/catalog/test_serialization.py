@@ -1212,7 +1212,7 @@ class TestArrowSchemaCorrectness:
         assert schema.field("cardinality_estimate").type == pa.int64()
         assert schema.field("column_statistics").type == pa.binary()
         assert schema.field("bind_result").type == pa.binary()
-        assert schema.field("required_filters").type == pa.list_(pa.list_(pa.string()))
+        assert schema.field("required_filters").type == pa.list_(pa.list_(pa.list_(pa.string())))
         assert schema.get_field_index("required_filters") == 20
         assert schema.field("options").type == pa.binary() and schema.field("options").nullable
         assert schema.field("layout").type == pa.binary() and schema.field("layout").nullable

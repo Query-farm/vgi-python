@@ -118,11 +118,31 @@ predicate selectivity, authorization, or remote enforcement. The adapter must
 still enforce the independently negotiated filter semantics.
 
 `RequiredFilterPaths.from_legacy(groups, schema=...)` is an explicit migration
-helper for the existing dotted `TableInfo.required_filters`. It enumerates
+helper for the formerly dotted `TableInfo.required_filters`. It enumerates
 schema paths and accepts a legacy spelling only if it identifies exactly one
 path. When both a literal column `a.b` and struct field `a.b` exist, migration
 fails and requires the catalog author to choose the intended components. It is
 never an automatic fallback when decoding the successor representation.
+
+The successor `TableInfo.required_filters` carries these groups directly as
+non-null `list<list<list<utf8>>>`: AND groups, OR alternatives, raw components.
+An explicit empty outer list means no requirements. Missing or NULL metadata,
+legacy two-level lists, NULL/empty groups or paths, NULL/empty/NUL components,
+duplicate alternatives, and paths missing or ambiguous in the complete table
+schema are invalid. A traversal must pass through struct fields; list/map/union
+traversal is not implicit. The pinned native 1.5 parser rejects invalid metadata
+before scanning instead of silently substituting an empty requirement. Its
+`vgi_required_filters` table tag contains the same three-level JSON structure.
+
+The native optimizer retains raw components through table filters and bound
+struct-extract chains, using the engine's resolved field indexes for canonical
+names. A deep child reference does not additionally register a whole-parent
+filter. Diagnostics quote individual components when needed so literal dots and
+quotes remain distinguishable from traversal. This is an unpublished breaking
+change in the same successor release; it has no automatic legacy wire fallback.
+`TableInfo` is nested IPC inside a binary RPC result, so its schema change does
+not by itself change the RPC reflection hash. The generated schema inventory,
+shared IPC corpus, and coordinated major-version transition remain required.
 
 The unpublished successor uses `column_path: list<utf8>` in the nine existing
 column mutation RPCs: add, drop, rename, type change, default set/drop,
@@ -156,9 +176,9 @@ diff breaking; retaining them requires a major version and corresponding
 routing transition. Existing 2.1 deployments retain their published contract.
 No duplicate field-add/drop/rename RPC family is needed. Shared expression
 profiles for DEFAULT/USING, generated dependencies, full column metadata,
-cross-object CASCADE, and the `TableInfo.required_filters` migration remain
-part of the combined contract work. The limited reference is not evidence that
-those remaining semantics or every logical type are qualified.
+and cross-object CASCADE remain part of the combined contract work. The limited
+reference is not evidence that those remaining semantics or every logical type
+are qualified.
 
 ## Cross-SDK evidence
 

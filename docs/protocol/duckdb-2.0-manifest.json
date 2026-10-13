@@ -12,7 +12,7 @@
       "Overload collections replacing single macro definitions"
     ],
     "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
-    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets",
+    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups",
     "version_requirement": "Retaining the raw-path migration requires a major version and matching routing name. Complete the combined diff and migration guide before freeze."
   },
   "sources": {
@@ -31,7 +31,7 @@
     "capabilities": "Agreement scoped to sealed attachment state; validate per-object requirements and current write eligibility at execution.",
     "mutation": "Whole-operation validation, worker authority, coherent transactions and metadata/dependency updates. Durable operation identity is required for replay.",
     "rollout": "Use versioned endpoints/processes with draining; prove transaction/reconnect and downgrade behavior. The existing dispatcher cannot host two versions under one protocol name.",
-    "column_paths": "Nine existing column RPCs use raw component paths, with per-operation nested DDL profiles and one-component 1.5 adapter targets. RequiredFilterPaths codecs exist; TableInfo required-filter migration and native 2.0 integration remain open."
+    "column_paths": "Nine existing column RPCs use raw component paths, with per-operation nested DDL profiles and one-component 1.5 adapter targets. TableInfo.required_filters now uses AND-of-OR raw component paths across SDKs and the native 1.5 optimizer; native 2.0 integration remains open."
   },
   "areas": {
     "capabilities": {
@@ -234,6 +234,19 @@
             "docs/protocol/shared-catalog-values.md"
           ],
           "limits": "Nested row edits, parent NULL preservation, default/nullability changes, rollback/conflicts and profile guards are implemented in the durable reference. Shared expression qualification, generated columns, complete metadata/dependencies, required-filter migration, and native 2.0 bindings remain open."
+        },
+        {
+          "status": "required_filter_paths_implemented_on_15",
+          "sources": [
+            "vgi/catalog/catalog_interface.py",
+            "vgi/catalog/descriptors.py",
+            "vgi/column_path.py",
+            "tests/catalog/test_required_filters.py",
+            "tests/catalog/required_filters_native.py",
+            "conformance/catalog-contracts.json",
+            "docs/protocol/shared-catalog-values.md"
+          ],
+          "limits": "Native 1.5 validates full raw paths and preserves component prefixes through filters/struct extracts. Presence requirements are not a proof of authorization or remote predicate enforcement. Native 2.0 optimizer bindings and mutation/dependency semantics remain open."
         }
       ]
     },
@@ -3595,6 +3608,114 @@
       "java": "5c6348bd28126e7ddba29d79047e5754d99de61e",
       "csharp": "927ac7cd132faf9229478711c45ba6db239ee8ef",
       "cpp": "dde72f5349ca324e0c62738c3ece8882d530f5ab"
+    }
+  },
+  "required_filter_paths_validation": {
+    "status": "partial_protocol_implementation_on_15",
+    "engine": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "remote_workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+    "source_manifest": "state/sources.json",
+    "rpc_methods": 77,
+    "protocol_hash": "4b77dc42e39231dec67e31739ab31ae1f7291a8f92ea4e6767db61f39afb5dfd",
+    "hash_limit": "TableInfo is nested IPC inside binary RPC results; payload-only schema changes do not change the RPC reflection hash. All-SDK schema/corpus qualification and a coordinated major transition remain required.",
+    "python": {
+      "passed": 912,
+      "scope": "Catalog, raw paths, shared corpus, generated artifacts, generation inventory and manifest; not the full Python suite.",
+      "mypy_sources": 210,
+      "ruff": "passed",
+      "strict_generation": "--check --require-all passed",
+      "final_manifest_corpus_regeneration_passed": 21,
+      "counts_overlap": true
+    },
+    "native": {
+      "release_build": "passed",
+      "column_and_required_path_sql_assertions": 153,
+      "required_path_sql_assertions": 71,
+      "malformed_metadata_modes": 13,
+      "language_matrix": {
+        "python": {
+          "passed": 344,
+          "skipped": 33,
+          "failed": 0
+        },
+        "go": {
+          "passed": 336,
+          "skipped": 40,
+          "failed": 0
+        },
+        "rust": {
+          "passed": 323,
+          "skipped": 42,
+          "failed": 0
+        },
+        "typescript": {
+          "passed": 328,
+          "skipped": 46,
+          "failed": 0
+        },
+        "java": {
+          "passed": 324,
+          "skipped": 37,
+          "failed": 0
+        },
+        "csharp": {
+          "passed": 328,
+          "skipped": 37,
+          "failed": 0
+        }
+      },
+      "python_java_crash_probes": "Two separate crash probes per language included in their totals.",
+      "qualification_runs": {
+        "initial_make_test_languages_exit_code": 2,
+        "initial_failures": "Python/Go/Rust shared SQL expectation assumed bare wrapper; the diagnostic now quotes that identifier. TypeScript, Java and C# lanes passed after the expectation was updated.",
+        "final_make_test_python_test_go_test_rust_exit_code": 0,
+        "logs": [
+          "logs/required-native-languages.log",
+          "logs/required-native-rerun.log",
+          "logs/required-native-typescript.log",
+          "logs/required-native-paths-qualified.log"
+        ]
+      },
+      "cpp": {
+        "passed": 324,
+        "skipped": 47,
+        "assertions": 12042,
+        "http_bearer_passed": 2,
+        "http_bearer_assertions": 13,
+        "exit_code": 0,
+        "log": "logs/required-native-cpp-final.log",
+        "limits": "Includes six .test_slow cases, unlike the six-language matrix."
+      }
+    },
+    "limits": [
+      "No protocol version published; required raw paths remain part of the combined major transition.",
+      "No P0-P3 or M0-M4 gate closed.",
+      "The DuckDB 2.0 optimizer/API port and the other catalog/query/type contracts remain open."
+    ],
+    "sdk_units": {
+      "go": "13 tested packages passed",
+      "rust": {
+        "passed": 482,
+        "ignored": 4
+      },
+      "typescript": {
+        "passed": 599,
+        "skipped": 68,
+        "flechette_codec_passed": 8,
+        "bundle_build": "passed"
+      },
+      "java": {
+        "passed": 655,
+        "skipped": 2
+      },
+      "csharp": {
+        "passed": 593,
+        "solution_build": "passed"
+      },
+      "cpp_ctest": {
+        "passed": 68,
+        "failed": 0
+      }
     }
   }
 }
