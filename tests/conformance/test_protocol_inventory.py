@@ -184,12 +184,7 @@ _RPC_ALLOWLIST: dict[str, tuple[str, ...] | NotExposed] = {
         ),
     ),
     "catalog_table_comment_set": ("table_comment_set",),
-    "catalog_table_column_comment_set": NotExposed(
-        reason=(
-            "DuckDB-only metadata path. Column comments travel with DDL; not a "
-            "non-DuckDB-client concern. Add a wrapper here if a use case arises."
-        )
-    ),
+    "catalog_table_column_comment_set": ("table_column_comment_set",),
     "catalog_table_rename": ("table_rename",),
     "catalog_table_column_add": ("table_column_add",),
     "catalog_table_column_drop": ("table_column_drop",),

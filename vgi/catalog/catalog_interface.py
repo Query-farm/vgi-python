@@ -2300,7 +2300,7 @@ class CatalogInterface(ABC):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: SchemaPath,
         name: str,
-        column_name: str,
+        column_path: list[str],
         comment: str | None,
         ignore_not_found: bool,
     ) -> None:
@@ -2329,6 +2329,7 @@ class CatalogInterface(ABC):
         name: str,
         # Arrow schema with single field for column to add.
         # Serialized via schema.serialize().to_pybytes()
+        column_path: list[str],
         column_definition: SerializedSchema,
         ignore_not_found: bool,
         if_column_not_exists: bool,
@@ -2343,7 +2344,7 @@ class CatalogInterface(ABC):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: SchemaPath,
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool,
         if_column_exists: bool,
         cascade: bool,
@@ -2358,7 +2359,7 @@ class CatalogInterface(ABC):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: SchemaPath,
         name: str,
-        column_name: str,
+        column_path: list[str],
         new_column_name: str,
         ignore_not_found: bool,
     ) -> None:
@@ -2372,7 +2373,7 @@ class CatalogInterface(ABC):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: SchemaPath,
         name: str,
-        column_name: str,
+        column_path: list[str],
         expression: SqlExpression,
         ignore_not_found: bool,
     ) -> None:
@@ -2386,7 +2387,7 @@ class CatalogInterface(ABC):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: SchemaPath,
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool,
     ) -> None:
         """Drop the default expression for the column."""
@@ -2401,13 +2402,14 @@ class CatalogInterface(ABC):
         name: str,
         # Arrow schema with single field for the new column type.
         # Serialized via schema.serialize().to_pybytes()
+        column_path: list[str],
         column_definition: SerializedSchema,
         expression: SqlExpression | None,
         ignore_not_found: bool,
     ) -> None:
         """Change the type of the column in the table with the given name.
 
-        The name of the column to change is taken from the field in the provided schema.
+        The explicit path selects the field; the definition name must match its final component.
         """
         raise NotImplementedError("Table column type change not implemented.")
 
@@ -2418,7 +2420,7 @@ class CatalogInterface(ABC):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: SchemaPath,
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool,
     ) -> None:
         """Drop the NOT NULL constraint from the column."""
@@ -2431,7 +2433,7 @@ class CatalogInterface(ABC):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: SchemaPath,
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool,
     ) -> None:
         """Set the NOT NULL constraint on the column."""

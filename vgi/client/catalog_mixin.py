@@ -1348,6 +1348,39 @@ class CatalogClientMixin:
                 transaction_opaque_data=transaction_opaque_data,
             )
 
+    def table_column_comment_set(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        schema_path: list[str],
+        name: str,
+        column_path: list[str],
+        comment: str | None = None,
+        ignore_not_found: bool = False,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+    ) -> None:
+        """Set or remove a comment on an exact raw column path.
+
+        Args:
+            attach_opaque_data: The attachment ID from catalog_attach.
+            schema_path: The owning schema's raw components.
+            name: The table name.
+            column_path: Raw components identifying the target field.
+            comment: The replacement comment, or None to clear it.
+            ignore_not_found: Ignore a missing table.
+            transaction_opaque_data: Optional transaction handle.
+        """
+        with self._catalog_connect() as proxy:
+            proxy.catalog_table_column_comment_set(
+                attach_opaque_data=attach_opaque_data,
+                schema_path=schema_path,
+                name=name,
+                column_path=column_path,
+                comment=comment,
+                ignore_not_found=ignore_not_found,
+                transaction_opaque_data=transaction_opaque_data,
+            )
+
     def table_column_add(
         self,
         *,
@@ -1355,6 +1388,7 @@ class CatalogClientMixin:
         transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_path: list[str],
         name: str,
+        column_path: list[str],
         column_definition: SerializedSchema,
         ignore_not_found: bool = False,
         if_column_not_exists: bool = False,
@@ -1366,6 +1400,7 @@ class CatalogClientMixin:
             transaction_opaque_data: Optional transaction ID.
             schema_path: The schema containing the table.
             name: The table name.
+            column_path: Raw components identifying the target field.
             column_definition: Serialized schema with single field for the new column.
             ignore_not_found: If True, don't error if table doesn't exist.
             if_column_not_exists: If True, don't error if column already exists.
@@ -1376,6 +1411,7 @@ class CatalogClientMixin:
                 attach_opaque_data=attach_opaque_data,
                 schema_path=schema_path,
                 name=name,
+                column_path=column_path,
                 column_definition=column_definition,
                 ignore_not_found=ignore_not_found,
                 if_column_not_exists=if_column_not_exists,
@@ -1389,7 +1425,7 @@ class CatalogClientMixin:
         transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool = False,
         if_column_exists: bool = False,
         cascade: bool = False,
@@ -1401,7 +1437,7 @@ class CatalogClientMixin:
             transaction_opaque_data: Optional transaction ID.
             schema_path: The schema containing the table.
             name: The table name.
-            column_name: The name of the column to drop.
+            column_path: The name of the column to drop.
             ignore_not_found: If True, don't error if table doesn't exist.
             if_column_exists: If True, don't error if column doesn't exist.
             cascade: If True, drop dependent constraints.
@@ -1412,7 +1448,7 @@ class CatalogClientMixin:
                 attach_opaque_data=attach_opaque_data,
                 schema_path=schema_path,
                 name=name,
-                column_name=column_name,
+                column_path=column_path,
                 ignore_not_found=ignore_not_found,
                 if_column_exists=if_column_exists,
                 cascade=cascade,
@@ -1426,7 +1462,7 @@ class CatalogClientMixin:
         transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         new_column_name: str,
         ignore_not_found: bool = False,
     ) -> None:
@@ -1437,7 +1473,7 @@ class CatalogClientMixin:
             transaction_opaque_data: Optional transaction ID.
             schema_path: The schema containing the table.
             name: The table name.
-            column_name: The current name of the column.
+            column_path: The current name of the column.
             new_column_name: The new name for the column.
             ignore_not_found: If True, don't error if table doesn't exist.
 
@@ -1447,7 +1483,7 @@ class CatalogClientMixin:
                 attach_opaque_data=attach_opaque_data,
                 schema_path=schema_path,
                 name=name,
-                column_name=column_name,
+                column_path=column_path,
                 new_column_name=new_column_name,
                 ignore_not_found=ignore_not_found,
                 transaction_opaque_data=transaction_opaque_data,
@@ -1460,7 +1496,7 @@ class CatalogClientMixin:
         transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         expression: SqlExpression,
         ignore_not_found: bool = False,
     ) -> None:
@@ -1471,7 +1507,7 @@ class CatalogClientMixin:
             transaction_opaque_data: Optional transaction ID.
             schema_path: The schema containing the table.
             name: The table name.
-            column_name: The column to set the default for.
+            column_path: The column to set the default for.
             expression: The SQL expression for the default value.
             ignore_not_found: If True, don't error if table doesn't exist.
 
@@ -1481,7 +1517,7 @@ class CatalogClientMixin:
                 attach_opaque_data=attach_opaque_data,
                 schema_path=schema_path,
                 name=name,
-                column_name=column_name,
+                column_path=column_path,
                 expression=expression,
                 ignore_not_found=ignore_not_found,
                 transaction_opaque_data=transaction_opaque_data,
@@ -1494,7 +1530,7 @@ class CatalogClientMixin:
         transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool = False,
     ) -> None:
         """Remove the default value from a column.
@@ -1504,7 +1540,7 @@ class CatalogClientMixin:
             transaction_opaque_data: Optional transaction ID.
             schema_path: The schema containing the table.
             name: The table name.
-            column_name: The column to remove the default from.
+            column_path: The column to remove the default from.
             ignore_not_found: If True, don't error if table doesn't exist.
 
         """
@@ -1513,7 +1549,7 @@ class CatalogClientMixin:
                 attach_opaque_data=attach_opaque_data,
                 schema_path=schema_path,
                 name=name,
-                column_name=column_name,
+                column_path=column_path,
                 ignore_not_found=ignore_not_found,
                 transaction_opaque_data=transaction_opaque_data,
             )
@@ -1525,6 +1561,7 @@ class CatalogClientMixin:
         transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_path: list[str],
         name: str,
+        column_path: list[str],
         column_definition: SerializedSchema,
         expression: SqlExpression | None = None,
         ignore_not_found: bool = False,
@@ -1536,6 +1573,7 @@ class CatalogClientMixin:
             transaction_opaque_data: Optional transaction ID.
             schema_path: The schema containing the table.
             name: The table name.
+            column_path: Raw components identifying the target field.
             column_definition: Serialized schema with single field defining the
                 new type. Column name is taken from the schema field name.
             expression: Optional SQL expression to convert existing values.
@@ -1547,6 +1585,7 @@ class CatalogClientMixin:
                 attach_opaque_data=attach_opaque_data,
                 schema_path=schema_path,
                 name=name,
+                column_path=column_path,
                 column_definition=column_definition,
                 expression=expression,
                 ignore_not_found=ignore_not_found,
@@ -1560,7 +1599,7 @@ class CatalogClientMixin:
         transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool = False,
     ) -> None:
         """Remove NOT NULL constraint from a column.
@@ -1570,7 +1609,7 @@ class CatalogClientMixin:
             transaction_opaque_data: Optional transaction ID.
             schema_path: The schema containing the table.
             name: The table name.
-            column_name: The column to remove NOT NULL from.
+            column_path: The column to remove NOT NULL from.
             ignore_not_found: If True, don't error if table doesn't exist.
 
         """
@@ -1579,7 +1618,7 @@ class CatalogClientMixin:
                 attach_opaque_data=attach_opaque_data,
                 schema_path=schema_path,
                 name=name,
-                column_name=column_name,
+                column_path=column_path,
                 ignore_not_found=ignore_not_found,
                 transaction_opaque_data=transaction_opaque_data,
             )
@@ -1591,7 +1630,7 @@ class CatalogClientMixin:
         transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool = False,
     ) -> None:
         """Add NOT NULL constraint to a column.
@@ -1601,7 +1640,7 @@ class CatalogClientMixin:
             transaction_opaque_data: Optional transaction ID.
             schema_path: The schema containing the table.
             name: The table name.
-            column_name: The column to add NOT NULL to.
+            column_path: The column to add NOT NULL to.
             ignore_not_found: If True, don't error if table doesn't exist.
 
         """
@@ -1610,7 +1649,7 @@ class CatalogClientMixin:
                 attach_opaque_data=attach_opaque_data,
                 schema_path=schema_path,
                 name=name,
-                column_name=column_name,
+                column_path=column_path,
                 ignore_not_found=ignore_not_found,
                 transaction_opaque_data=transaction_opaque_data,
             )

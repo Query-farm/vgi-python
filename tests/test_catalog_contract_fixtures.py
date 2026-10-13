@@ -7,6 +7,8 @@ import base64
 import json
 from pathlib import Path
 
+import pyarrow as pa
+
 from vgi.catalog.capabilities import SCHEMA_OPTIONS_CREATE, SCHEMA_OPTIONS_READ, CatalogCapabilities
 from vgi.catalog.catalog_interface import TableInfo
 from vgi.catalog.layout import LayoutChangeMode, SortKey, SqlExpression, TableLayout, TableLayoutChange
@@ -15,6 +17,25 @@ from vgi.codegen.catalog_contract_fixtures import render
 from vgi.column_path import RequiredFilterPaths
 from vgi.protocol import TableCreateRequest
 from vgi.typed_values import TypedValueBatch
+
+
+def test_column_requests_preserve_raw_paths_and_definitions() -> None:
+    fixtures = json.loads(render())["records"]
+    names = [name for name in fixtures if name.startswith(("column_", "not_null_"))]
+    assert len(names) == 18
+    for name in names:
+        with pa.ipc.open_stream(base64.b64decode(fixtures[name])) as reader:
+            (row,) = reader.read_all().to_pylist()
+        nested = name.endswith("_nested")
+        assert row["column_path"] == (["a", 'b."quoted'] if nested else ["a.b"])
+        assert row["transaction_opaque_data"] == (b"transaction" if nested else None)
+        if "column_definition" in row:
+            definition = pa.ipc.read_schema(pa.BufferReader(row["column_definition"]))
+            assert definition.field(0).name == row["column_path"][-1]
+            if name.startswith("column_add_"):
+                assert definition.field(0).metadata == {b"default": b"7"}
+        if "comment" in row:
+            assert row["comment"] == ("kept" if nested else None)
 
 
 def test_checked_in_corpus_and_contents() -> None:

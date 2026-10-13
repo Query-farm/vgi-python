@@ -3,8 +3,9 @@
 These definitions are implemented on the DuckDB 2.0 preparation branch in the
 normal SDK modules and generator inventories. They are part of the combined
 successor contract. The published protocol is still `vgi.v2` / `2.1.0`; the
-unpublished development snapshot now carries schema options and capability
-negotiation. See the operation contract below.
+unpublished development snapshot now carries typed schema/table options,
+layouts, raw column mutation paths, and capability negotiation. See the
+operation contracts below.
 Completing these codecs does not complete the release gates in the
 [combined manifest](duckdb-2.0-manifest.json).
 
@@ -123,9 +124,41 @@ path. When both a literal column `a.b` and struct field `a.b` exist, migration
 fails and requires the catalog author to choose the intended components. It is
 never an automatic fallback when decoding the successor representation.
 
-Replacing the existing dotted metadata and flat column-operation parameters
-still requires the combined version decision and engine integration. Existing
-2.1 clients retain their current contract until that transition.
+The unpublished successor uses `column_path: list<utf8>` in the nine existing
+column mutation RPCs: add, drop, rename, type change, default set/drop,
+nullability set/drop, and comment set. ADD and type change also carry an explicit
+path before `column_definition`. That IPC schema must contain exactly one field,
+whose name equals the last path component, with no schema metadata or trailing
+payload. A type-change definition carries the new type and its logical-type
+annotations; column defaults, comments, tags, compression, and nullability must
+be changed through their own contracts rather than silently discarded.
+
+`["a.b"]` identifies one literal top-level column; `["a", "b"]` identifies a
+field in a struct. A rename's `new_column_name` is one raw component and leaves
+the owning path and field position unchanged. ADD appends within its immediate
+parent. Nested edits preserve parent metadata and NULL parent structs; they do
+not materialize a non-NULL struct merely to hold a new defaulted field. The
+reference rejects removing the last field of a table or struct, invalid paths,
+failed casts, invalid defaults, and nullability violations before publishing any
+metadata, data, or version change. Metadata-only edits preserve existing
+physical partitions, including after a future-writes-only layout change.
+
+Each nested operation requires its selected attachment profile:
+`vgi.column.nested.{add,drop,rename,type,default,nullability,comment}.v1`.
+The worker rechecks current provider support before dispatch. Transactional
+nested DDL also requires `vgi.transaction.ddl.v1`. One-component paths keep
+baseline flat DDL behavior; the pinned 1.5 adapter emits one component without
+splitting dots. Flat-only SDK providers reject deeper paths. The CLI continues
+to accept a literal column name and encodes it as one component.
+
+These changed parameter types and required targets make the current combined
+diff breaking; retaining them requires a major version and corresponding
+routing transition. Existing 2.1 deployments retain their published contract.
+No duplicate field-add/drop/rename RPC family is needed. Shared expression
+profiles for DEFAULT/USING, generated dependencies, full column metadata,
+cross-object CASCADE, and the `TableInfo.required_filters` migration remain
+part of the combined contract work. The limited reference is not evidence that
+those remaining semantics or every logical type are qualified.
 
 ## Cross-SDK evidence
 
@@ -142,6 +175,12 @@ SDK decodes Python-written IPC through its real codec and encodes it again;
 Go exercises its codec through an HTTP echo service. TypeScript checks both
 Arrow implementations. The tests compare opaque value payloads byte-for-byte;
 they do not claim those SDKs can interpret every logical-type annotation yet.
+
+The corpus also contains 18 column mutation requests: all nine operations with
+both literal dotted targets and nested paths. SDK tests preserve the definition,
+transaction, nullable comment/expression, rename component, and boolean flags.
+TypeScript's public client-to-handler checks also use the raw RPC list-scalar
+representation, which can be an Arrow vector rather than a JavaScript array.
 
 Regenerate and require every checkout with
 `scripts/regen_generated.py --require-all`, then check drift with

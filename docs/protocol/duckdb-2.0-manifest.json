@@ -11,7 +11,9 @@
       "Shared constraint definitions replacing index-based groups",
       "Overload collections replacing single macro definitions"
     ],
-    "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases."
+    "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
+    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets",
+    "version_requirement": "Retaining the raw-path migration requires a major version and matching routing name. Complete the combined diff and migration guide before freeze."
   },
   "sources": {
     "native_revision": "1a0a059",
@@ -29,7 +31,7 @@
     "capabilities": "Agreement scoped to sealed attachment state; validate per-object requirements and current write eligibility at execution.",
     "mutation": "Whole-operation validation, worker authority, coherent transactions and metadata/dependency updates. Durable operation identity is required for replay.",
     "rollout": "Use versioned endpoints/processes with draining; prove transaction/reconnect and downgrade behavior. The existing dispatcher cannot host two versions under one protocol name.",
-    "column_paths": "ColumnPath raw components and RequiredFilterPaths AND-of-OR groups; explicit schema-checked migration of legacy dotted filters. Implemented codecs; catalog/engine replacement pending."
+    "column_paths": "Nine existing column RPCs use raw component paths, with per-operation nested DDL profiles and one-component 1.5 adapter targets. RequiredFilterPaths codecs exist; TableInfo required-filter migration and native 2.0 integration remain open."
   },
   "areas": {
     "capabilities": {
@@ -186,7 +188,6 @@
       "records": [
         "ColumnPath",
         "SqlExpression",
-        "RequiredFilterPaths",
         "RequiredFilterPaths"
       ],
       "existing_methods": [
@@ -197,13 +198,10 @@
         "catalog_table_column_default_set",
         "catalog_table_column_default_drop",
         "catalog_table_not_null_set",
-        "catalog_table_not_null_drop"
+        "catalog_table_not_null_drop",
+        "catalog_table_column_comment_set"
       ],
-      "new_methods": [
-        "catalog_table_field_add",
-        "catalog_table_field_drop",
-        "catalog_table_field_rename"
-      ],
+      "new_methods": [],
       "scope": [
         "Raw component `ColumnPath`; add/drop/rename/type/default/nullability operations; defaults, generated expressions, comments, tags, and supported compression policy",
         "Consistent create/alter/read representation, USING expression semantics, generated dependencies, quoted dotted names, and complete validation before mutation. Keep existing Arrow metadata keys where sufficient."
@@ -222,7 +220,20 @@
             "tests/test_column_path.py",
             "conformance/catalog-contracts.json"
           ],
-          "limits": "Existing flat DDL and dotted required_filters remain unchanged until the combined transition. No native enforcement migration yet."
+          "limits": "Original shared-record increment only; superseded for DDL targets by the raw-path increment below. Dotted required_filters still need operation/native migration."
+        },
+        {
+          "status": "column_path_reference_implemented",
+          "sources": [
+            "vgi/protocol.py",
+            "vgi/column_path.py",
+            "vgi/worker.py",
+            "tests/catalog/column_paths_reference.py",
+            "tests/catalog/test_column_paths_protocol.py",
+            "tests/catalog/column_native_reference.py",
+            "docs/protocol/shared-catalog-values.md"
+          ],
+          "limits": "Nested row edits, parent NULL preservation, default/nullability changes, rollback/conflicts and profile guards are implemented in the durable reference. Shared expression qualification, generated columns, complete metadata/dependencies, required-filter migration, and native 2.0 bindings remain open."
         }
       ]
     },
@@ -1401,7 +1412,17 @@
       "disposition": "existing_contract",
       "target": "Arrow.field.metadata.default",
       "status": "pending_contract_review",
-      "evidence": []
+      "evidence": [
+        {
+          "status": "partial_column_path_qualification",
+          "sources": [
+            "tests/catalog/test_column_paths_protocol.py",
+            "vgi/protocol.py",
+            "../vgi/test/sql/duckdb2/column_paths.test"
+          ],
+          "limits": "Raw paths and the durable reference are implemented; flat 1.5 SQL, defaults, metadata readback, and rollback pass. Shared expressions, complete attributes/dependencies, and native 2.0 binding remain open."
+        }
+      ]
     },
     {
       "id": "audit-158",
@@ -1688,7 +1709,17 @@
       "disposition": "existing_contract",
       "target": "column_rename.column_path/new_name",
       "status": "pending_contract_review",
-      "evidence": []
+      "evidence": [
+        {
+          "status": "partial_column_path_qualification",
+          "sources": [
+            "tests/catalog/test_column_paths_protocol.py",
+            "vgi/protocol.py",
+            "../vgi/test/sql/duckdb2/column_paths.test"
+          ],
+          "limits": "Raw paths and the durable reference are implemented; flat 1.5 SQL, defaults, metadata readback, and rollback pass. Shared expressions, complete attributes/dependencies, and native 2.0 binding remain open."
+        }
+      ]
     },
     {
       "id": "audit-214",
@@ -1718,7 +1749,17 @@
       "disposition": "existing_contract",
       "target": "column_add.column/ignore_if_exists",
       "status": "pending_contract_review",
-      "evidence": []
+      "evidence": [
+        {
+          "status": "partial_column_path_qualification",
+          "sources": [
+            "tests/catalog/test_column_paths_protocol.py",
+            "vgi/protocol.py",
+            "../vgi/test/sql/duckdb2/column_paths.test"
+          ],
+          "limits": "Raw paths and the durable reference are implemented; flat 1.5 SQL, defaults, metadata readback, and rollback pass. Shared expressions, complete attributes/dependencies, and native 2.0 binding remain open."
+        }
+      ]
     },
     {
       "id": "audit-216",
@@ -1733,7 +1774,17 @@
       "disposition": "existing_contract",
       "target": "column_drop.column_path/ignore_not_found/cascade",
       "status": "pending_contract_review",
-      "evidence": []
+      "evidence": [
+        {
+          "status": "partial_column_path_qualification",
+          "sources": [
+            "tests/catalog/test_column_paths_protocol.py",
+            "vgi/protocol.py",
+            "../vgi/test/sql/duckdb2/column_paths.test"
+          ],
+          "limits": "Raw paths and the durable reference are implemented; flat 1.5 SQL, defaults, metadata readback, and rollback pass. Shared expressions, complete attributes/dependencies, and native 2.0 binding remain open."
+        }
+      ]
     },
     {
       "id": "audit-217",
@@ -1748,7 +1799,17 @@
       "disposition": "include",
       "target": "column_type_change.column_path/type/using_expression",
       "status": "pending_contract_review",
-      "evidence": []
+      "evidence": [
+        {
+          "status": "partial_column_path_qualification",
+          "sources": [
+            "tests/catalog/test_column_paths_protocol.py",
+            "vgi/protocol.py",
+            "../vgi/test/sql/duckdb2/column_paths.test"
+          ],
+          "limits": "Raw paths and the durable reference are implemented; flat 1.5 SQL, defaults, metadata readback, and rollback pass. Shared expressions, complete attributes/dependencies, and native 2.0 binding remain open."
+        }
+      ]
     },
     {
       "id": "audit-218",
@@ -1763,7 +1824,17 @@
       "disposition": "include",
       "target": "column_default_set.column_path/expression",
       "status": "pending_contract_review",
-      "evidence": []
+      "evidence": [
+        {
+          "status": "partial_column_path_qualification",
+          "sources": [
+            "tests/catalog/test_column_paths_protocol.py",
+            "vgi/protocol.py",
+            "../vgi/test/sql/duckdb2/column_paths.test"
+          ],
+          "limits": "Raw paths and the durable reference are implemented; flat 1.5 SQL, defaults, metadata readback, and rollback pass. Shared expressions, complete attributes/dependencies, and native 2.0 binding remain open."
+        }
+      ]
     },
     {
       "id": "audit-219",
@@ -1793,7 +1864,17 @@
       "disposition": "include",
       "target": "not_null_set.column_path",
       "status": "pending_contract_review",
-      "evidence": []
+      "evidence": [
+        {
+          "status": "partial_column_path_qualification",
+          "sources": [
+            "tests/catalog/test_column_paths_protocol.py",
+            "vgi/protocol.py",
+            "../vgi/test/sql/duckdb2/column_paths.test"
+          ],
+          "limits": "Raw paths and the durable reference are implemented; flat 1.5 SQL, defaults, metadata readback, and rollback pass. Shared expressions, complete attributes/dependencies, and native 2.0 binding remain open."
+        }
+      ]
     },
     {
       "id": "audit-221",
@@ -1808,7 +1889,17 @@
       "disposition": "include",
       "target": "not_null_drop.column_path",
       "status": "pending_contract_review",
-      "evidence": []
+      "evidence": [
+        {
+          "status": "partial_column_path_qualification",
+          "sources": [
+            "tests/catalog/test_column_paths_protocol.py",
+            "vgi/protocol.py",
+            "../vgi/test/sql/duckdb2/column_paths.test"
+          ],
+          "limits": "Raw paths and the durable reference are implemented; flat 1.5 SQL, defaults, metadata readback, and rollback pass. Shared expressions, complete attributes/dependencies, and native 2.0 binding remain open."
+        }
+      ]
     },
     {
       "id": "audit-222",
@@ -1899,9 +1990,19 @@
       ],
       "area": "columns",
       "disposition": "include",
-      "target": "field_add.column_path/field/ignore_if_exists",
+      "target": "catalog_table_column_add.column_path/column_definition/if_column_not_exists",
       "status": "pending_contract_review",
-      "evidence": []
+      "evidence": [
+        {
+          "status": "partial_column_path_qualification",
+          "sources": [
+            "tests/catalog/test_column_paths_protocol.py",
+            "vgi/protocol.py",
+            "../vgi/test/sql/duckdb2/column_paths.test"
+          ],
+          "limits": "Raw paths and the durable reference are implemented; flat 1.5 SQL, defaults, metadata readback, and rollback pass. Shared expressions, complete attributes/dependencies, and native 2.0 binding remain open."
+        }
+      ]
     },
     {
       "id": "audit-227",
@@ -1914,9 +2015,19 @@
       ],
       "area": "columns",
       "disposition": "include",
-      "target": "field_drop.column_path/ignore_not_found/cascade",
+      "target": "catalog_table_column_drop.column_path/if_column_exists/cascade",
       "status": "pending_contract_review",
-      "evidence": []
+      "evidence": [
+        {
+          "status": "partial_column_path_qualification",
+          "sources": [
+            "tests/catalog/test_column_paths_protocol.py",
+            "vgi/protocol.py",
+            "../vgi/test/sql/duckdb2/column_paths.test"
+          ],
+          "limits": "Raw paths and the durable reference are implemented; flat 1.5 SQL, defaults, metadata readback, and rollback pass. Shared expressions, complete attributes/dependencies, and native 2.0 binding remain open."
+        }
+      ]
     },
     {
       "id": "audit-228",
@@ -1929,9 +2040,19 @@
       ],
       "area": "columns",
       "disposition": "include",
-      "target": "field_rename.column_path/new_name",
+      "target": "catalog_table_column_rename.column_path/new_column_name",
       "status": "pending_contract_review",
-      "evidence": []
+      "evidence": [
+        {
+          "status": "partial_column_path_qualification",
+          "sources": [
+            "tests/catalog/test_column_paths_protocol.py",
+            "vgi/protocol.py",
+            "../vgi/test/sql/duckdb2/column_paths.test"
+          ],
+          "limits": "Raw paths and the durable reference are implemented; flat 1.5 SQL, defaults, metadata readback, and rollback pass. Shared expressions, complete attributes/dependencies, and native 2.0 binding remain open."
+        }
+      ]
     },
     {
       "id": "audit-229",
@@ -3330,6 +3451,150 @@
       "java": "4e90c0845edad5bef027c9b7f0a7812aaf726634",
       "csharp": "34bda80895612dada0d2d451f5b1bb77a0d18211",
       "cpp": "f7f593c71fe3b26b0b360655583bdbcf92110304"
+    }
+  },
+  "column_paths_validation": {
+    "status": "partial_protocol_implementation_on_15",
+    "rpc_methods": 77,
+    "protocol_hash": "4b77dc42e39231dec67e31739ab31ae1f7291a8f92ea4e6767db61f39afb5dfd",
+    "version_requirement": "Major transition required if the current required raw-path replacements are retained; development version strings remain unpublished placeholders.",
+    "engine": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "environment": "Linux ARM64; local source edits synchronized to the task-owned EC2 workspace",
+    "remote_workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+    "source_manifest": "state/sources.json",
+    "python": {
+      "passed": 977,
+      "skipped": 30,
+      "final_column_and_manifest_passed": 21,
+      "counts_overlap": true,
+      "mypy_sources": 210,
+      "ruff": "passed",
+      "strict_generation": "--check --require-all passed",
+      "scope": "Catalog, shared codecs, generation, inventory, documentation and transactor startup; not the full Python suite."
+    },
+    "sdk_units": {
+      "go": "13 tested packages passed (go test ./...)",
+      "rust": {
+        "passed": 482,
+        "ignored": 4
+      },
+      "typescript": {
+        "passed": 599,
+        "skipped": 68,
+        "flechette_codec_passed": 8,
+        "bundle_build": "passed"
+      },
+      "java": {
+        "passed": 654,
+        "skipped": 2
+      },
+      "csharp": {
+        "passed": 593
+      },
+      "cpp_ctest": {
+        "passed": 68,
+        "failed": 0
+      }
+    },
+    "native": {
+      "release_build": "passed",
+      "column_sql_assertions": 82,
+      "language_matrix": {
+        "python": {
+          "passed": 344,
+          "skipped": 33,
+          "failed": 0
+        },
+        "go": {
+          "passed": 336,
+          "skipped": 40,
+          "failed": 0
+        },
+        "rust": {
+          "passed": 323,
+          "skipped": 42,
+          "failed": 0
+        },
+        "typescript": {
+          "passed": 328,
+          "skipped": 46,
+          "failed": 0
+        },
+        "java": {
+          "passed": 324,
+          "skipped": 37,
+          "failed": 0
+        },
+        "csharp": {
+          "passed": 328,
+          "skipped": 37,
+          "failed": 0
+        }
+      },
+      "language_matrix_exit_code": 0,
+      "python_java_crash_probes": "Two separate crash probes per language included in their totals.",
+      "cpp": {
+        "passed": 324,
+        "skipped": 47,
+        "assertions": 12042,
+        "http_bearer_passed": 2,
+        "http_bearer_assertions": 13,
+        "exit_code": 0,
+        "limits": "Separate C++ harness includes six .test_slow cases; its inventory and skips differ from the six-language matrix."
+      }
+    },
+    "fixes": [
+      "Preserve ADD COLUMN defaults through the shared native column encoder.",
+      "Invalidate metadata loaded during an aborted remote transaction even when the committed catalog version is unchanged.",
+      "Mark a catalog listing incomplete after removing an altered entry so metadata scans reload it.",
+      "Normalize TypeScript RPC Arrow list scalars without splitting literal dotted identifiers.",
+      "Update the C# bad-enum fixture delegation signatures alongside generated service methods."
+    ],
+    "dependencies": {
+      "go_rpc": "1fa10b93d9493a81949ac6ffce8e7359bd260b9a",
+      "java_rpc": "a1676f5c16c6bf27da8e9f579dbb5414de9d15a2",
+      "cpp_libsodium": "Pinned 1.0.21 plus task-local overlay applying upstream GCC/aarch64 fix 6702f69bef6044163acc7715e6ac7e430890ce78; no repository dependency pin changes.",
+      "go_rpc_validation": "Full go test ./... passed on Linux ARM64, including the shared-memory case that failed on macOS."
+    },
+    "limits": [
+      "This increment closes no P0-P3 or M0-M4 gate.",
+      "Shared expressions, generated columns, complete column attributes/dependencies, required-filter operation migration and native 2.0 bindings remain open.",
+      "The SQL bridge is a durable reference with count INSERT only; it is not the older transactor or proof of all production write semantics.",
+      "The older Python transactor requires fork-only cursor APIs absent from the pinned Python engine; its startup annotation fix does not resolve that limitation.",
+      "Expected skips do not count as passes; SDK schema/codec support does not advertise new profiles."
+    ],
+    "logs": [
+      "logs/python-qualified.log",
+      "logs/python-column-final.log",
+      "logs/python-reference-lint.log",
+      "logs/python-mypy.log",
+      "logs/generation-check.log",
+      "logs/native-build-final.log",
+      "logs/native-column-paths-final.log",
+      "logs/native-languages-qualified.log",
+      "logs/native-typescript-final.log",
+      "logs/go-test.log",
+      "logs/go-rpc-test.log",
+      "logs/rust-test.log",
+      "logs/ts-test-final.log",
+      "logs/ts-flechette-final.log",
+      "logs/ts-build-final.log",
+      "logs/java-test.log",
+      "logs/csharp-test.log",
+      "logs/cpp-configure-final.log",
+      "logs/cpp-build.log",
+      "logs/cpp-test.log",
+      "logs/native-cpp.log",
+      "state/cpp-native/run.log",
+      "state/cpp-native/worker.log"
+    ],
+    "revisions": {
+      "go": "029e087f7ff76fc69188dffb26bc99854e084550",
+      "rust": "554c9763899f8b671635c919ca6eb5ba5c4479da",
+      "typescript": "fabd48774cff80641891649be545eb11af6c4f53",
+      "java": "5c6348bd28126e7ddba29d79047e5754d99de61e",
+      "csharp": "927ac7cd132faf9229478711c45ba6db239ee8ef",
+      "cpp": "dde72f5349ca324e0c62738c3ece8882d530f5ab"
     }
   }
 }

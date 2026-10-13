@@ -16,8 +16,10 @@ per catalog attachment.
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Annotated, Protocol
 
+import pyarrow as pa
+from vgi_rpc import ArrowType
 from vgi_rpc.rpc import ExchangeState, ProducerState, Stream
 
 from vgi.schema_path import SchemaPath
@@ -61,7 +63,7 @@ class TransactorProtocol(Protocol):
         tx_id: bytes,
         table_name: str,
         schema_path: SchemaPath | None = None,
-        result_mode: WriteResultMode = "count",
+        result_mode: Annotated[WriteResultMode, ArrowType(pa.string())] = "count",
     ) -> Stream[ExchangeState]:
         """Insert rows into a table via lockstep exchange."""
         ...
@@ -72,7 +74,7 @@ class TransactorProtocol(Protocol):
         tx_id: bytes,
         table_name: str,
         schema_path: SchemaPath | None = None,
-        result_mode: WriteResultMode = "count",
+        result_mode: Annotated[WriteResultMode, ArrowType(pa.string())] = "count",
     ) -> Stream[ExchangeState]:
         """Delete rows from a table via lockstep exchange."""
         ...
@@ -84,7 +86,7 @@ class TransactorProtocol(Protocol):
         table_name: str,
         schema_path: SchemaPath | None = None,
         columns: list[str] | None = None,
-        result_mode: WriteResultMode = "count",
+        result_mode: Annotated[WriteResultMode, ArrowType(pa.string())] = "count",
     ) -> Stream[ExchangeState]:
         """Update rows in a table via lockstep exchange."""
         ...

@@ -16,6 +16,7 @@ from typing import Any, TextIO
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
+from vgi_rpc.rpc._types import rpc_methods
 
 from vgi.catalog.capabilities import SCHEMA_OPTIONS_CREATE, SCHEMA_OPTIONS_READ, CatalogCapabilities
 from vgi.catalog.catalog_interface import OnConflict, TableInfo
@@ -30,8 +31,52 @@ from vgi.catalog.layout import (
 )
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
 from vgi.column_path import RequiredFilterPaths
-from vgi.protocol import TableCreateRequest
+from vgi.protocol import TableCreateRequest, VgiProtocol
 from vgi.typed_values import TypedValueBatch
+
+
+def column_requests() -> dict[str, bytes]:
+    """Encode literal and nested targets through each actual RPC parameter schema."""
+    methods = rpc_methods(VgiProtocol)
+    result = {}
+    for operation in (
+        "column_add",
+        "column_drop",
+        "column_rename",
+        "column_type_change",
+        "column_default_set",
+        "column_default_drop",
+        "column_comment_set",
+        "not_null_set",
+        "not_null_drop",
+    ):
+        schema = methods[f"catalog_table_{operation}"].params_schema
+        for variant, path in (("literal", ["a.b"]), ("nested", ["a", 'b."quoted'])):
+            nested = variant == "nested"
+            definition = pa.schema(
+                [pa.field(path[-1], pa.int32(), metadata={b"default": b"7"} if operation == "column_add" else None)]
+            )
+            values = dict(
+                attach_opaque_data=b"attach",
+                transaction_opaque_data=b"transaction" if nested else None,
+                schema_path=["one.two", "nested"],
+                name="table.with.dot",
+                column_path=path,
+                column_definition=definition.serialize().to_pybytes(),
+                new_column_name='new."name',
+                expression=None if operation == "column_type_change" and not nested else "7",
+                comment="kept" if nested else None,
+                ignore_not_found=nested,
+                if_column_exists=nested,
+                if_column_not_exists=nested,
+                cascade=nested,
+            )
+            batch = pa.RecordBatch.from_pylist([{field.name: values[field.name] for field in schema}], schema=schema)
+            sink = pa.BufferOutputStream()
+            with pa.ipc.new_stream(sink, schema) as writer:
+                writer.write_batch(batch)
+            result[f"{operation}_{variant}"] = sink.getvalue().to_pybytes()
+    return result
 
 
 def render() -> str:
@@ -102,15 +147,14 @@ def render() -> str:
             layout=layout,
         ),
     }
+    encoded = {name: record.serialize_to_bytes() for name, record in records.items()}
+    encoded.update(column_requests())
     return (
         json.dumps(
             {
                 "format_version": 1,
                 "generator": "vgi.codegen.catalog_contract_fixtures",
-                "records": {
-                    name: base64.b64encode(record.serialize_to_bytes()).decode("ascii")
-                    for name, record in records.items()
-                },
+                "records": {name: base64.b64encode(payload).decode("ascii") for name, payload in encoded.items()},
             },
             indent=2,
         )

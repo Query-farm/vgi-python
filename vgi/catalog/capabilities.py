@@ -30,6 +30,13 @@ TABLE_LAYOUT_CREATE = "vgi.table.layout.create.v1"
 TABLE_LAYOUT_ALTER_FUTURE = "vgi.table.layout.alter_future.v1"
 TABLE_LAYOUT_ALTER_REWRITE = "vgi.table.layout.alter_rewrite.v1"
 TABLE_METADATA_CREATE = "vgi.table.metadata.create.v1"
+COLUMN_NESTED_ADD = "vgi.column.nested.add.v1"
+COLUMN_NESTED_DROP = "vgi.column.nested.drop.v1"
+COLUMN_NESTED_RENAME = "vgi.column.nested.rename.v1"
+COLUMN_NESTED_TYPE = "vgi.column.nested.type.v1"
+COLUMN_NESTED_DEFAULT = "vgi.column.nested.default.v1"
+COLUMN_NESTED_NULLABILITY = "vgi.column.nested.nullability.v1"
+COLUMN_NESTED_COMMENT = "vgi.column.nested.comment.v1"
 TRANSACTION_DDL = "vgi.transaction.ddl.v1"
 
 _PROFILE = re.compile(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*\.v[1-9][0-9]*\Z")
@@ -54,6 +61,13 @@ class CatalogCapabilities(ArrowSerializableDataclass):
         "read": frozenset({SCHEMA_OPTIONS_READ, TABLE_OPTIONS_READ, TABLE_LAYOUT_READ, ROW_SCALAR_EXPRESSION}),
         "ddl": frozenset(
             {
+                COLUMN_NESTED_ADD,
+                COLUMN_NESTED_DROP,
+                COLUMN_NESTED_RENAME,
+                COLUMN_NESTED_TYPE,
+                COLUMN_NESTED_DEFAULT,
+                COLUMN_NESTED_NULLABILITY,
+                COLUMN_NESTED_COMMENT,
                 SCHEMA_OPTIONS_CREATE,
                 SCHEMA_OPTIONS_ALTER,
                 TABLE_OPTIONS_CREATE,

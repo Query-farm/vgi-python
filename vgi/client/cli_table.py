@@ -368,6 +368,7 @@ def column_add(
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_path=schema_path,
         name=table_name,
+        column_path=[arrow_schema.field(0).name],
         column_definition=SerializedSchema(arrow_schema.serialize().to_pybytes()),
         ignore_not_found=ignore_not_found,
         if_column_not_exists=if_not_exists,
@@ -420,7 +421,7 @@ def column_drop(
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_path=schema_path,
         name=table_name,
-        column_name=column_name,
+        column_path=[column_name],
         ignore_not_found=ignore_not_found,
         if_column_exists=if_exists,
         cascade=cascade,
@@ -472,7 +473,7 @@ def column_rename(
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_path=schema_path,
         name=table_name,
-        column_name=column_name,
+        column_path=[column_name],
         new_column_name=new_column_name,
         ignore_not_found=ignore_not_found,
     )
@@ -524,7 +525,7 @@ def column_set_default(
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_path=schema_path,
         name=table_name,
-        column_name=column_name,
+        column_path=[column_name],
         expression=SqlExpression(expression),
         ignore_not_found=ignore_not_found,
     )
@@ -572,7 +573,7 @@ def column_drop_default(
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_path=schema_path,
         name=table_name,
-        column_name=column_name,
+        column_path=[column_name],
         ignore_not_found=ignore_not_found,
     )
     output_json(
@@ -631,8 +632,9 @@ def column_set_type(
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_path=schema_path,
         name=table_name,
+        column_path=[arrow_schema.field(0).name],
         column_definition=SerializedSchema(arrow_schema.serialize().to_pybytes()),
-        expression=SqlExpression(expression) if expression else None,
+        expression=SqlExpression(expression) if expression is not None else None,
         ignore_not_found=ignore_not_found,
     )
     output_json(
@@ -679,7 +681,7 @@ def column_set_not_null(
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_path=schema_path,
         name=table_name,
-        column_name=column_name,
+        column_path=[column_name],
         ignore_not_found=ignore_not_found,
     )
     output_json(
@@ -726,7 +728,7 @@ def column_drop_not_null(
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_path=schema_path,
         name=table_name,
-        column_name=column_name,
+        column_path=[column_name],
         ignore_not_found=ignore_not_found,
     )
     output_json(

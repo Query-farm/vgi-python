@@ -49,6 +49,8 @@ from vgi.catalog import (
     ViewInfo,
 )
 from vgi.catalog.layout import TableLayout
+from vgi.column_path import column_definition as decode_column_definition
+from vgi.column_path import single_column_name
 from vgi.protocol import ClientCapabilities
 from vgi.schema_path import sql_qualified_name
 from vgi.typed_values import TypedValueBatch
@@ -401,15 +403,24 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: list[str],
         name: str,
+        column_path: list[str],
         column_definition: SerializedSchema,
         ignore_not_found: bool,
         if_column_not_exists: bool,
     ) -> None:
         """Add a column to a table."""
-        col_schema = pa.ipc.read_schema(pa.BufferReader(column_definition))  # type: ignore[arg-type]
-        field = col_schema.field(0)
+        column_name = single_column_name(column_path)
+        field = decode_column_definition(column_definition, [column_name])
+        if not field.nullable:
+            raise NotImplementedError("NOT NULL on ADD COLUMN is not supported; use a separate nullability change")
+        if any(key in (field.metadata or {}) for key in (b"comment", b"tags", b"compression")):
+            raise NotImplementedError("ADD COLUMN comments, tags, and compression require a definition profile")
         if_not_exists = " IF NOT EXISTS" if if_column_not_exists else ""
-        col_sql = f"{_qi(field.name)} {_arrow_type_to_sql(field.type)}"
+        col_sql = f"{_qi(column_name)} {_arrow_type_to_sql(field.type)}"
+        if field.metadata and b"default" in field.metadata:
+            col_sql += f" DEFAULT {field.metadata[b'default'].decode('utf-8')}"
+        if field.metadata and b"generated_expression" in field.metadata:
+            raise NotImplementedError("generated column creation is not supported")
         ddl = f"ALTER TABLE {_qn(schema_path, name)} ADD COLUMN{if_not_exists} {col_sql};"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
         logger.info("table_column_add: %s.%s", name, field.name)
@@ -421,12 +432,13 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool,
         if_column_exists: bool,
         cascade: bool,
     ) -> None:
         """Drop a column from a table."""
+        column_name = single_column_name(column_path)
         if_exists = " IF EXISTS" if if_column_exists else ""
         cascade_sql = " CASCADE" if cascade else ""
         ddl = f"ALTER TABLE {_qn(schema_path, name)} DROP COLUMN{if_exists} {_qi(column_name)}{cascade_sql};"
@@ -440,11 +452,12 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         new_column_name: str,
         ignore_not_found: bool,
     ) -> None:
         """Rename a column in a table."""
+        column_name = single_column_name(column_path)
         ddl = f"ALTER TABLE {_qn(schema_path, name)} RENAME COLUMN {_qi(column_name)} TO {_qi(new_column_name)};"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
         logger.info("table_column_rename: %s.%s -> %s", name, column_name, new_column_name)
@@ -471,11 +484,12 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         comment: str | None,
         ignore_not_found: bool,
     ) -> None:
         """Set or clear the comment on a table column."""
+        column_name = single_column_name(column_path)
         target = f"COLUMN {_qn(schema_path, name)}.{_qi(column_name)}"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, _comment_sql(target, comment))
 
@@ -486,17 +500,18 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: list[str],
         name: str,
+        column_path: list[str],
         column_definition: SerializedSchema,
         expression: str | None,
         ignore_not_found: bool,
     ) -> None:
         """Change the type of a column in a table."""
-        col_schema = pa.ipc.read_schema(pa.BufferReader(column_definition))  # type: ignore[arg-type]
-        field = col_schema.field(0)
+        column_name = single_column_name(column_path)
+        field = decode_column_definition(column_definition, [column_name])
         col_type = _arrow_type_to_sql(field.type)
         sql = f"ALTER TABLE {_qn(schema_path, name)} ALTER COLUMN {_qi(field.name)} TYPE {col_type}"
         if expression:
-            # expression comes from DuckDB's binder (serialized AST), not raw user input
+            # This is SQL text from the caller; the backend remains responsible for binding it.
             sql += f" USING {expression}"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, sql + ";")
 
@@ -507,11 +522,12 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         expression: str,
         ignore_not_found: bool,
     ) -> None:
         """Set the default expression for a column."""
+        column_name = single_column_name(column_path)
         ddl = f"ALTER TABLE {_qn(schema_path, name)} ALTER COLUMN {_qi(column_name)} SET DEFAULT {expression};"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
 
@@ -522,10 +538,11 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool,
     ) -> None:
         """Drop the default expression for a column."""
+        column_name = single_column_name(column_path)
         ddl = f"ALTER TABLE {_qn(schema_path, name)} ALTER COLUMN {_qi(column_name)} DROP DEFAULT;"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
 
@@ -536,10 +553,11 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool,
     ) -> None:
         """Set NOT NULL constraint on a column."""
+        column_name = single_column_name(column_path)
         ddl = f"ALTER TABLE {_qn(schema_path, name)} ALTER COLUMN {_qi(column_name)} SET NOT NULL;"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
 
@@ -550,10 +568,11 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool,
     ) -> None:
         """Drop NOT NULL constraint from a column."""
+        column_name = single_column_name(column_path)
         ddl = f"ALTER TABLE {_qn(schema_path, name)} ALTER COLUMN {_qi(column_name)} DROP NOT NULL;"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
 

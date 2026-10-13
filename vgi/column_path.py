@@ -135,3 +135,84 @@ class RequiredFilterPaths(ArrowSerializableDataclass):
                 alternatives.append(matches[0])
             result.append(alternatives)
         return cls(groups=result)
+
+
+def single_column_name(path: Sequence[str]) -> str:
+    """Adapt one raw component to a flat provider; never join nested components."""
+    key = column_path_key(path)
+    if len(key) != 1:
+        raise NotImplementedError("provider does not support nested column paths")
+    return key[0]
+
+
+def column_definition(payload: bytes, path: Sequence[str], *, type_only: bool = False) -> pa.Field[Any]:
+    """Decode exactly one field whose name agrees with the explicit target path.
+
+    Type changes use a plain nullable field as a type carrier. Nullability and
+    metadata must be changed through their own operations, never discarded.
+    """
+    key = column_path_key(path)
+    reader = pa.BufferReader(payload)
+    # The Arrow stubs omit NativeFile, which read_schema accepts at runtime.
+    schema = pa.ipc.read_schema(reader)  # type: ignore[arg-type]
+    if reader.tell() != len(payload) or len(schema) != 1 or schema.metadata:
+        raise ValueError("column definition must contain exactly one field and no schema metadata or trailing bytes")
+    result = schema.field(0)
+    if result.name != key[-1]:
+        raise ValueError("column definition name must match the last column path component")
+    attributes = {b"default", b"generated_expression", b"comment", b"tags", b"compression"}
+    if type_only and (attributes.intersection(result.metadata or {}) or not result.nullable):
+        raise ValueError("type change field must contain only the target type and name")
+    return result
+
+
+def replace_column_field(
+    schema: pa.Schema,
+    path: Sequence[str],
+    replacement: pa.Field[Any] | None,
+    *,
+    add: bool = False,
+) -> pa.Schema:
+    """Build a new schema after a field edit, preserving unrelated metadata.
+
+    Adding appends to the target's immediate parent. Replacing retains its
+    position, including a rename. Removing the last field of a table or struct
+    is rejected. The caller owns data rewrites, constraints and dependencies.
+    """
+    key = column_path_key(path)
+    if replacement is not None:
+        column_path_key([replacement.name])
+    if add and (replacement is None or replacement.name != key[-1]):
+        raise ValueError("added field must match the last column path component")
+
+    def edit(fields: list[pa.Field[Any]], depth: int) -> list[pa.Field[Any]]:
+        matches = [i for i, definition in enumerate(fields) if definition.name == key[depth]]
+        if len(matches) > 1:
+            raise ValueError("column path is ambiguous")
+        if depth == len(key) - 1 and add:
+            if matches:
+                raise ValueError("column already exists")
+            assert replacement is not None
+            return [*fields, replacement]
+        if not matches:
+            raise ValueError("column path does not exist")
+        index = matches[0]
+        definition = fields[index]
+        if depth != len(key) - 1:
+            if not pa.types.is_struct(definition.type):
+                raise ValueError("column path has a non-struct parent")
+            updated = definition.with_type(pa.struct(edit(list(definition.type), depth + 1)))
+        elif replacement is None:
+            if len(fields) == 1:
+                raise ValueError("cannot drop the last column or struct field")
+            return fields[:index] + fields[index + 1 :]
+        else:
+            if any(i != index and field.name == replacement.name for i, field in enumerate(fields)):
+                raise ValueError("column already exists")
+            updated = replacement
+        return fields[:index] + [updated] + fields[index + 1 :]
+
+    metadata: dict[bytes | str, bytes | str] | None = (
+        {key: value for key, value in schema.metadata.items()} if schema.metadata else None
+    )
+    return pa.schema(edit(list(schema), 0), metadata=metadata)

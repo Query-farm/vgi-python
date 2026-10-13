@@ -91,6 +91,13 @@ from vgi.arguments import Arguments
 from vgi.catalog import CatalogInterface
 from vgi.catalog.attach_option import AttachOptionSpec, extract_attach_option_specs
 from vgi.catalog.capabilities import (
+    COLUMN_NESTED_ADD,
+    COLUMN_NESTED_COMMENT,
+    COLUMN_NESTED_DEFAULT,
+    COLUMN_NESTED_DROP,
+    COLUMN_NESTED_NULLABILITY,
+    COLUMN_NESTED_RENAME,
+    COLUMN_NESTED_TYPE,
     SCHEMA_OPTIONS_ALTER,
     SCHEMA_OPTIONS_CREATE,
     SCHEMA_OPTIONS_READ,
@@ -122,6 +129,8 @@ from vgi.catalog.layout import LayoutChangeMode, LayoutCoverage, TableLayout, Ta
 from vgi.catalog.options import OptionChanges, OptionDefinitions
 from vgi.catalog.secret_type import SecretTypeSpec
 from vgi.catalog.setting import SettingSpec, extract_setting_specs
+from vgi.column_path import column_definition as decode_column_definition
+from vgi.column_path import column_path_key
 from vgi.exceptions import OpaqueDataNotRecognizedError
 from vgi.function import (
     Function,
@@ -5542,12 +5551,16 @@ class Worker:
         attach_opaque_data: bytes,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         comment: str | None = None,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Set or clear the comment on a table column."""
+        if len(column_path_key(column_path)) > 1:
+            self._require_catalog_capability(
+                attach_opaque_data, COLUMN_NESTED_COMMENT, "catalog_table_column_comment_set", transaction_opaque_data
+            )
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_comment_set(
@@ -5555,7 +5568,7 @@ class Worker:
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
             name=name,
-            column_name=column_name,
+            column_path=column_path,
             comment=comment,
             ignore_not_found=ignore_not_found,
         )
@@ -5586,12 +5599,18 @@ class Worker:
         attach_opaque_data: bytes,
         schema_path: list[str],
         name: str,
+        column_path: list[str],
         column_definition: bytes,
         ignore_not_found: bool = False,
         if_column_not_exists: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Add a new column to a table."""
+        if len(column_path_key(column_path)) > 1:
+            self._require_catalog_capability(
+                attach_opaque_data, COLUMN_NESTED_ADD, "catalog_table_column_add", transaction_opaque_data
+            )
+        decode_column_definition(column_definition, column_path, type_only=False)
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_add(
@@ -5599,6 +5618,7 @@ class Worker:
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
             name=name,
+            column_path=column_path,
             column_definition=SerializedSchema(column_definition),
             ignore_not_found=ignore_not_found,
             if_column_not_exists=if_column_not_exists,
@@ -5609,13 +5629,17 @@ class Worker:
         attach_opaque_data: bytes,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool = False,
         if_column_exists: bool = False,
         cascade: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a column from a table."""
+        if len(column_path_key(column_path)) > 1:
+            self._require_catalog_capability(
+                attach_opaque_data, COLUMN_NESTED_DROP, "catalog_table_column_drop", transaction_opaque_data
+            )
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_drop(
@@ -5623,7 +5647,7 @@ class Worker:
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
             name=name,
-            column_name=column_name,
+            column_path=column_path,
             ignore_not_found=ignore_not_found,
             if_column_exists=if_column_exists,
             cascade=cascade,
@@ -5634,12 +5658,17 @@ class Worker:
         attach_opaque_data: bytes,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         new_column_name: str,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Rename a column."""
+        if len(column_path_key(column_path)) > 1:
+            self._require_catalog_capability(
+                attach_opaque_data, COLUMN_NESTED_RENAME, "catalog_table_column_rename", transaction_opaque_data
+            )
+        column_path_key([new_column_name])
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_rename(
@@ -5647,7 +5676,7 @@ class Worker:
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
             name=name,
-            column_name=column_name,
+            column_path=column_path,
             new_column_name=new_column_name,
             ignore_not_found=ignore_not_found,
         )
@@ -5657,12 +5686,16 @@ class Worker:
         attach_opaque_data: bytes,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         expression: str,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Set the default value expression for a column."""
+        if len(column_path_key(column_path)) > 1:
+            self._require_catalog_capability(
+                attach_opaque_data, COLUMN_NESTED_DEFAULT, "catalog_table_column_default_set", transaction_opaque_data
+            )
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_default_set(
@@ -5670,7 +5703,7 @@ class Worker:
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
             name=name,
-            column_name=column_name,
+            column_path=column_path,
             expression=SqlExpression(expression),
             ignore_not_found=ignore_not_found,
         )
@@ -5680,11 +5713,15 @@ class Worker:
         attach_opaque_data: bytes,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Remove the default value from a column."""
+        if len(column_path_key(column_path)) > 1:
+            self._require_catalog_capability(
+                attach_opaque_data, COLUMN_NESTED_DEFAULT, "catalog_table_column_default_drop", transaction_opaque_data
+            )
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_default_drop(
@@ -5692,7 +5729,7 @@ class Worker:
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
             name=name,
-            column_name=column_name,
+            column_path=column_path,
             ignore_not_found=ignore_not_found,
         )
 
@@ -5701,12 +5738,18 @@ class Worker:
         attach_opaque_data: bytes,
         schema_path: list[str],
         name: str,
+        column_path: list[str],
         column_definition: bytes,
         expression: str | None = None,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Change the type of a column."""
+        if len(column_path_key(column_path)) > 1:
+            self._require_catalog_capability(
+                attach_opaque_data, COLUMN_NESTED_TYPE, "catalog_table_column_type_change", transaction_opaque_data
+            )
+        decode_column_definition(column_definition, column_path, type_only=True)
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_type_change(
@@ -5714,8 +5757,9 @@ class Worker:
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
             name=name,
+            column_path=column_path,
             column_definition=SerializedSchema(column_definition),
-            expression=SqlExpression(expression) if expression else None,
+            expression=SqlExpression(expression) if expression is not None else None,
             ignore_not_found=ignore_not_found,
         )
 
@@ -5724,11 +5768,15 @@ class Worker:
         attach_opaque_data: bytes,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Remove NOT NULL constraint from a column."""
+        if len(column_path_key(column_path)) > 1:
+            self._require_catalog_capability(
+                attach_opaque_data, COLUMN_NESTED_NULLABILITY, "catalog_table_not_null_drop", transaction_opaque_data
+            )
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_not_null_drop(
@@ -5736,7 +5784,7 @@ class Worker:
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
             name=name,
-            column_name=column_name,
+            column_path=column_path,
             ignore_not_found=ignore_not_found,
         )
 
@@ -5745,11 +5793,15 @@ class Worker:
         attach_opaque_data: bytes,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Add NOT NULL constraint to a column."""
+        if len(column_path_key(column_path)) > 1:
+            self._require_catalog_capability(
+                attach_opaque_data, COLUMN_NESTED_NULLABILITY, "catalog_table_not_null_set", transaction_opaque_data
+            )
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_not_null_set(
@@ -5757,7 +5809,7 @@ class Worker:
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
             name=name,
-            column_name=column_name,
+            column_path=column_path,
             ignore_not_found=ignore_not_found,
         )
 
