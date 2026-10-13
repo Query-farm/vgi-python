@@ -1,0 +1,3063 @@
+{
+  "format_version": 1,
+  "objective": "Complete P0-P3 and M0-M4 of the VGI DuckDB 2.0 plan, preparing the combined protocol on the 1.5 engine before the separate native port.",
+  "status": "in_progress",
+  "version_decision": {
+    "status": "pending_complete_diff",
+    "published_protocol": "vgi.v2/2.1.0",
+    "additive_candidate": "vgi.v2/2.2.0",
+    "breaking_candidates": [
+      "Raw column paths replacing flat/dotted targets",
+      "Shared constraint definitions replacing index-based groups",
+      "Overload collections replacing single macro definitions"
+    ],
+    "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases."
+  },
+  "sources": {
+    "native_revision": "1a0a059",
+    "engine_15": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "engine_20": "e1784fa4231072d7152b8aaa20977bdb8ff4ace3",
+    "duckdb_upstream": "c65ca930b9fe39b2e8d8ed8821018dca650965f4",
+    "audit_path": "docs/duckdb-2.0-catalog-audit.md",
+    "audit_sha256": "72f4fc9d8e63a0e98e6ab0caa6dc5d7ee2db1c50bfff6c6c9b94c9c568ba5139",
+    "plan_path": "docs/duckdb-2.0-plan.md"
+  },
+  "shared_representations": {
+    "identity": "Raw components and attachment-relative CatalogObjectRef; no local aliases, pointers or OIDs. Full identity in all caches.",
+    "values": "TypedValueBatch preserving original Arrow metadata and typed NULLs. Option RESET differs from NULL and omission.",
+    "expressions": "SqlExpression declares semantic profile and owner schema. No private AST/bound-plan serialization.",
+    "capabilities": "Agreement scoped to sealed attachment state; validate per-object requirements and current write eligibility at execution.",
+    "mutation": "Whole-operation validation, worker authority, coherent transactions and metadata/dependency updates. Durable operation identity is required for replay.",
+    "rollout": "Use versioned endpoints/processes with draining; prove transaction/reconnect and downgrade behavior. The existing dispatcher cannot host two versions under one protocol name.",
+    "column_paths": "ColumnPath raw components and RequiredFilterPaths AND-of-OR groups; explicit schema-checked migration of legacy dotted filters. Implemented codecs; catalog/engine replacement pending."
+  },
+  "areas": {
+    "capabilities": {
+      "title": "Catalog and client capabilities",
+      "disposition": "include",
+      "status": "pending_contract_review",
+      "records": [
+        "CatalogCapabilities",
+        "CapabilityAgreement",
+        "ObjectRequirements"
+      ],
+      "existing_methods": [
+        "catalog_attach"
+      ],
+      "new_methods": [],
+      "scope": [
+        "Structured attachment capabilities, per-object restrictions where needed, client support for catalog/type semantics, and operation-specific unsupported errors",
+        "Distinguish read/materialize support, DDL support, data-write support, and transaction guarantees. A read-only worker may consume the same schema while advertising no mutations. An incapable client must reject a secure view, not ignore its security field."
+      ],
+      "capability_contract": "pending_P1",
+      "gates": [
+        "P1",
+        "P2",
+        "P3"
+      ],
+      "evidence": []
+    },
+    "schemas": {
+      "title": "Schema lifecycle and options",
+      "disposition": "include",
+      "status": "pending_contract_review",
+      "records": [
+        "SchemaInfo",
+        "SchemaCreateRequest",
+        "OptionChanges",
+        "OptionState"
+      ],
+      "existing_methods": [
+        "catalog_schema_create",
+        "catalog_schema_get",
+        "catalog_schema_drop"
+      ],
+      "new_methods": [
+        "catalog_schema_options_set"
+      ],
+      "scope": [
+        "Creation options, SET/RESET operations, option readback in `SchemaInfo`, and complete schema comment/tag mutations",
+        "Typed values, supported option names, expression policy, NULL versus absent versus RESET, nested targets, conflict policy, version changes, and rollback. Existing path/comment/tag create fields are reused."
+      ],
+      "capability_contract": "pending_P1",
+      "gates": [
+        "P1",
+        "P2",
+        "P3"
+      ],
+      "evidence": [
+        {
+          "status": "shared_representation_implemented",
+          "sources": [
+            "vgi/catalog/options.py",
+            "tests/catalog/test_options.py",
+            "docs/protocol/shared-catalog-values.md"
+          ],
+          "limits": "Catalog RPC integration, capability selection, option-definition discovery, durable mutation and rollback remain pending."
+        }
+      ]
+    },
+    "tables": {
+      "title": "Table creation and layout",
+      "disposition": "include",
+      "status": "pending_contract_review",
+      "records": [
+        "TableCreateRequest",
+        "TableInfo",
+        "TableLayout",
+        "SortKey",
+        "SqlExpression",
+        "OptionChanges",
+        "OptionState"
+      ],
+      "existing_methods": [
+        "catalog_table_create",
+        "catalog_table_get"
+      ],
+      "new_methods": [
+        "catalog_table_options_set",
+        "catalog_table_layout_set"
+      ],
+      "scope": [
+        "Complete create metadata; table options and SET/RESET; partition and sort definitions on create, alter, and discovery",
+        "Preserve sort expression/direction/null order and distinguish desired layout from guarantees about scan output. Define whether alteration rewrites existing data, affects future writes, or rejects the change."
+      ],
+      "capability_contract": "pending_P1",
+      "gates": [
+        "P1",
+        "P2",
+        "P3"
+      ],
+      "evidence": [
+        {
+          "status": "shared_representation_implemented",
+          "sources": [
+            "vgi/catalog/options.py",
+            "tests/catalog/test_options.py",
+            "docs/protocol/shared-catalog-values.md"
+          ],
+          "limits": "Catalog RPC integration, capability selection, option-definition discovery, durable mutation and rollback remain pending."
+        }
+      ]
+    },
+    "columns": {
+      "title": "Columns and nested fields",
+      "disposition": "include",
+      "status": "pending_contract_review",
+      "records": [
+        "ColumnPath",
+        "SqlExpression",
+        "RequiredFilterPaths",
+        "RequiredFilterPaths"
+      ],
+      "existing_methods": [
+        "catalog_table_column_add",
+        "catalog_table_column_drop",
+        "catalog_table_column_rename",
+        "catalog_table_column_type_change",
+        "catalog_table_column_default_set",
+        "catalog_table_column_default_drop",
+        "catalog_table_not_null_set",
+        "catalog_table_not_null_drop"
+      ],
+      "new_methods": [
+        "catalog_table_field_add",
+        "catalog_table_field_drop",
+        "catalog_table_field_rename"
+      ],
+      "scope": [
+        "Raw component `ColumnPath`; add/drop/rename/type/default/nullability operations; defaults, generated expressions, comments, tags, and supported compression policy",
+        "Consistent create/alter/read representation, USING expression semantics, generated dependencies, quoted dotted names, and complete validation before mutation. Keep existing Arrow metadata keys where sufficient."
+      ],
+      "capability_contract": "pending_P1",
+      "gates": [
+        "P1",
+        "P2",
+        "P3"
+      ],
+      "evidence": [
+        {
+          "status": "shared_representation_implemented",
+          "sources": [
+            "vgi/column_path.py",
+            "tests/test_column_path.py",
+            "conformance/catalog-contracts.json"
+          ],
+          "limits": "Existing flat DDL and dotted required_filters remain unchanged until the combined transition. No native enforcement migration yet."
+        }
+      ]
+    },
+    "views": {
+      "title": "Views",
+      "disposition": "include",
+      "status": "pending_contract_review",
+      "records": [
+        "ViewInfo",
+        "ViewCreateRequest",
+        "SqlExpression"
+      ],
+      "existing_methods": [
+        "catalog_view_create",
+        "catalog_view_get",
+        "catalog_view_drop",
+        "catalog_view_rename"
+      ],
+      "new_methods": [
+        "catalog_view_column_comment_set"
+      ],
+      "scope": [
+        "Ordered aliases, security mode, create/read metadata, column comments and their mutation",
+        "Preserve the SELECT-definition contract or explicitly version its replacement. Security barriers must survive create/discovery/refresh/rebind; define name resolution, replacement, dependencies, and unsupported-reader behavior."
+      ],
+      "capability_contract": "pending_P1",
+      "gates": [
+        "P1",
+        "P2",
+        "P3"
+      ],
+      "evidence": []
+    },
+    "constraints": {
+      "title": "Constraints and indexes",
+      "disposition": "include",
+      "status": "pending_contract_review",
+      "records": [
+        "ConstraintDefinition",
+        "IndexInfo",
+        "IndexCreateRequest",
+        "TypedValueBatch"
+      ],
+      "existing_methods": [
+        "catalog_index_create",
+        "catalog_index_get",
+        "catalog_index_drop",
+        "catalog_schema_contents_indexes"
+      ],
+      "new_methods": [
+        "catalog_table_constraint_add",
+        "catalog_table_constraint_drop"
+      ],
+      "scope": [
+        "Constraint addition and supported mutation/discovery; full native integration of existing index RPCs; typed index options if string values are insufficient",
+        "Worker enforcement versus metadata-only declaration, existing-data validation, logical column identity, FK target paths, dependent objects, and atomic changes. Do not promise SQL constraint forms the selected engine itself rejects."
+      ],
+      "capability_contract": "pending_P1",
+      "gates": [
+        "P1",
+        "P2",
+        "P3"
+      ],
+      "evidence": []
+    },
+    "macros": {
+      "title": "Macros",
+      "disposition": "include",
+      "status": "pending_contract_review",
+      "records": [
+        "MacroInfo",
+        "MacroCreateRequest",
+        "MacroOverload",
+        "MacroParameter",
+        "SqlExpression"
+      ],
+      "existing_methods": [
+        "catalog_macro_create",
+        "catalog_macro_get",
+        "catalog_macro_drop",
+        "catalog_schema_contents_macros"
+      ],
+      "new_methods": [],
+      "scope": [
+        "Overload collections, declared parameter types, expression/default representation, documentation, and owner-relative definitions",
+        "Reconcile the existing single-definition request and typed-value defaults with engine overloads and expression defaults. Define resolution and stable round trips; do not introduce a function overload handle just to mirror DuckDB internals."
+      ],
+      "capability_contract": "pending_P1",
+      "gates": [
+        "P1",
+        "P2",
+        "P3"
+      ],
+      "evidence": []
+    },
+    "dependencies": {
+      "title": "Dependencies and catalog consistency",
+      "disposition": "include",
+      "status": "pending_contract_review",
+      "records": [
+        "CatalogObjectRef",
+        "ObjectDependency",
+        "MetadataPatch",
+        "MetadataSnapshot"
+      ],
+      "existing_methods": [
+        "catalog_version",
+        "catalog_contents",
+        "catalog_schema_drop",
+        "catalog_table_drop",
+        "catalog_view_drop"
+      ],
+      "new_methods": [
+        "catalog_object_metadata_set"
+      ],
+      "scope": [
+        "Shared qualified object references; explicit ownership/drop/alter dependency semantics; mutation visibility and metadata-version rules",
+        "Settle worker versus engine authority, RESTRICT/CASCADE, rename effects, transaction-local reads, committed versions/etags, and retained entries. Include dependency records where enforcement across clients requires them; no DuckDB pointers or OIDs on the wire."
+      ],
+      "capability_contract": "pending_P1",
+      "gates": [
+        "P1",
+        "P2",
+        "P3"
+      ],
+      "evidence": []
+    },
+    "transactions": {
+      "title": "Transactions and write replay",
+      "disposition": "include",
+      "status": "pending_contract_review",
+      "records": [
+        "TransactionCapabilities",
+        "OperationIdentity",
+        "MutationReceipt",
+        "WriteRequirements"
+      ],
+      "existing_methods": [
+        "catalog_transaction_begin",
+        "catalog_transaction_commit",
+        "catalog_transaction_rollback"
+      ],
+      "new_methods": [
+        "catalog_operation_status"
+      ],
+      "scope": [
+        "Explicit DDL rollback and mixed DDL/DML atomicity guarantees; operation identity/deduplication if retry support is included",
+        "Expanded ADD COLUMN, CTAS, multi-DML CTEs, and triggers use coherent transaction state. Reuse begin/commit/rollback and OLD/NEW `changes` mode. Define ambiguous commit/reply-loss behavior; never retry side effects just because transport failed. No distributed atomicity claim across independent catalogs."
+      ],
+      "capability_contract": "pending_P1",
+      "gates": [
+        "P1",
+        "P2",
+        "P3"
+      ],
+      "evidence": []
+    },
+    "triggers": {
+      "title": "Triggers \u2014 design required",
+      "disposition": "include",
+      "status": "pending_contract_review",
+      "records": [
+        "TriggerInfo",
+        "TriggerCreateRequest",
+        "WriteRequirements"
+      ],
+      "existing_methods": [],
+      "new_methods": [
+        "catalog_table_triggers",
+        "catalog_trigger_get",
+        "catalog_trigger_create",
+        "catalog_trigger_drop"
+      ],
+      "scope": [
+        "Table-owned identity, list/get/create/drop and metadata mutation, event/timing/granularity, UPDATE OF, transition aliases, action definition, dependencies, and execution mode",
+        "Prefer worker authority for persistent definitions. Distinguish engine-executed from backend-executed triggers so they cannot fire twice. Define SQL dialect, ordering, supported row/statement forms, OLD/NEW requirements, rollback, detach/reconnect, and cross-client discovery."
+      ],
+      "capability_contract": "pending_P1",
+      "gates": [
+        "P1",
+        "P2",
+        "P3"
+      ],
+      "evidence": []
+    },
+    "query": {
+      "title": "Catalog query execution \u2014 existing design to consolidate",
+      "disposition": "include",
+      "status": "pending_contract_review",
+      "records": [
+        "CatalogQueryPrepareRequest",
+        "CatalogQueryPrepareResult",
+        "QueryParameters",
+        "PreparedQueryHandle",
+        "QueryCapabilities"
+      ],
+      "existing_methods": [
+        "bind",
+        "init"
+      ],
+      "new_methods": [
+        "catalog_query_prepare",
+        "catalog_query_release"
+      ],
+      "scope": [
+        "Negotiated query preparation, typed parameters/context, prepared-result schema and lifetime, and execution through the existing TABLE stream",
+        "Reuse the existing read-query proposal. Separate explicit provider-dialect queries from automatic semantic-equivalence pushdown; define decline-before-execution, transaction/identity binding, ordered results, cancellation, token cleanup, and reconnect behavior."
+      ],
+      "capability_contract": "pending_P1",
+      "gates": [
+        "P1",
+        "P2",
+        "P3"
+      ],
+      "evidence": []
+    },
+    "logical_types": {
+      "title": "Logical type preservation \u2014 design required",
+      "disposition": "include",
+      "status": "pending_contract_review",
+      "records": [
+        "LogicalTypeAnnotation",
+        "TypedValueBatch"
+      ],
+      "existing_methods": [
+        "bind",
+        "init"
+      ],
+      "new_methods": [],
+      "scope": [
+        "Recursive type annotations/capabilities for ambiguous Arrow mappings, particularly TUPLE and VARIANT",
+        "Verify actual import/export at the selected engine pin. Define nested round trips, missing versus NULL, numeric/time identity, and SDK metadata preservation. Reject opaque aggregate-state layouts unless a portable state contract is proven."
+      ],
+      "capability_contract": "pending_P1",
+      "gates": [
+        "P1",
+        "P2",
+        "P3"
+      ],
+      "evidence": []
+    },
+    "optimizer": {
+      "title": "Optimizer and observability additions \u2014 design required",
+      "disposition": "include",
+      "status": "pending_contract_review",
+      "records": [
+        "ProjectionExpression",
+        "ResultMapping",
+        "RepeatabilityInfo",
+        "TypedMetric"
+      ],
+      "existing_methods": [
+        "table_function_plan",
+        "table_function_cardinality",
+        "table_function_statistics",
+        "table_function_dynamic_to_string"
+      ],
+      "new_methods": [],
+      "scope": [
+        "Projection expressions and result mapping, repeatability, typed metrics, and any necessary partition-selection/parallelism additions",
+        "Reuse Filter v2 and existing split/partition/ordering metadata first. Define decline and local residual behavior, type/NULL semantics, query-scoped repeatability, metric units/lifetime, and selected-partition identity. Existing monotonicity and runtime-filter fields are not new additions."
+      ],
+      "capability_contract": "pending_P1",
+      "gates": [
+        "P1",
+        "P2",
+        "P3"
+      ],
+      "evidence": []
+    },
+    "sequences_types": {
+      "title": "Sequences and user-defined types",
+      "disposition": "decision_required",
+      "status": "pending_contract_review",
+      "records": [
+        "SequenceInfo",
+        "SequenceAllocation",
+        "TypeInfo",
+        "TypeCreateRequest"
+      ],
+      "existing_methods": [],
+      "new_methods": [
+        "catalog_sequences",
+        "catalog_sequence_get",
+        "catalog_sequence_create",
+        "catalog_sequence_drop",
+        "catalog_sequence_allocate",
+        "catalog_types",
+        "catalog_type_get",
+        "catalog_type_create",
+        "catalog_type_drop"
+      ],
+      "scope": [
+        "Define discovery/create/alter/drop, sequence allocation/concurrency/rollback rules, and portable enum/type definitions. Separate transferable metadata from engine constructor callbacks."
+      ],
+      "capability_contract": "pending_P1",
+      "gates": [
+        "P1",
+        "P2",
+        "P3"
+      ],
+      "evidence": []
+    },
+    "collations_coordinates": {
+      "title": "Collations and coordinate systems",
+      "disposition": "decision_required",
+      "status": "pending_contract_review",
+      "records": [
+        "CollationInfo",
+        "CoordinateSystemInfo"
+      ],
+      "existing_methods": [],
+      "new_methods": [
+        "catalog_collations",
+        "catalog_coordinate_systems",
+        "catalog_coordinate_system_get"
+      ],
+      "scope": [
+        "Determine which descriptions can be shared and which execution semantics require engine-local implementation; qualify equality/order behavior before advertising a collation."
+      ],
+      "capability_contract": "pending_P1",
+      "gates": [
+        "P1",
+        "P2",
+        "P3"
+      ],
+      "evidence": []
+    },
+    "windows": {
+      "title": "Standalone window functions",
+      "disposition": "decision_required",
+      "status": "pending_contract_review",
+      "records": [
+        "WindowFunctionInfo",
+        "WindowFrame"
+      ],
+      "existing_methods": [
+        "aggregate_window_init",
+        "aggregate_window",
+        "aggregate_window_batch",
+        "aggregate_window_destructor"
+      ],
+      "new_methods": [],
+      "scope": [
+        "Inventory 2.0 registration and execution separately from existing aggregate-window support; establish whether a portable request/lifecycle can be included now."
+      ],
+      "capability_contract": "pending_P1",
+      "gates": [
+        "P1",
+        "P2",
+        "P3"
+      ],
+      "evidence": []
+    },
+    "statements": {
+      "title": "Raw SQL CONNECT and statement execution",
+      "disposition": "decision_required",
+      "status": "pending_contract_review",
+      "records": [
+        "StatementRequest",
+        "StatementResult",
+        "OperationIdentity"
+      ],
+      "existing_methods": [],
+      "new_methods": [
+        "catalog_statement_execute"
+      ],
+      "scope": [
+        "Review alongside read-query preparation, but specify writes/DDL, session state, result kinds, transaction effects, and retry rules separately. The read-query contract does not imply these capabilities."
+      ],
+      "capability_contract": "pending_P1",
+      "gates": [
+        "P1",
+        "P2",
+        "P3"
+      ],
+      "evidence": []
+    },
+    "multi_input": {
+      "title": "Multiple relational inputs",
+      "disposition": "decision_required",
+      "status": "pending_contract_review",
+      "records": [
+        "RelationalInputInfo",
+        "RelationalInputState"
+      ],
+      "existing_methods": [],
+      "new_methods": [],
+      "scope": [
+        "Review the [existing engine proposal](multi_input_table_functions.md) for per-input identity/schema, ordering, backpressure, completion, cancellation, and transaction semantics. Include a wire contract only after the execution model has a working feasibility test."
+      ],
+      "capability_contract": "pending_P1",
+      "gates": [
+        "P1",
+        "P2",
+        "P3"
+      ],
+      "evidence": []
+    },
+    "cleanup": {
+      "title": "Existing protocol cleanup",
+      "disposition": "decision_required",
+      "status": "pending_contract_review",
+      "records": [
+        "ColumnPath",
+        "ConstraintDefinition",
+        "MacroOverload"
+      ],
+      "existing_methods": [],
+      "new_methods": [],
+      "scope": [
+        "Review inconsistent names/types, scalar default-schema absence, duplicate operations, and weak metadata conventions together. Decide whether a clean major change is preferable to parallel legacy/new forms. Nested default search paths are not an upstream capability at the current pin."
+      ],
+      "capability_contract": "pending_P1",
+      "gates": [
+        "P1",
+        "P2",
+        "P3"
+      ],
+      "evidence": []
+    },
+    "identity": {
+      "title": "Full catalog identity",
+      "disposition": "existing_contract_plus_engine_port",
+      "status": "pending_native_qualification",
+      "records": [
+        "CatalogObjectRef",
+        "SchemaPath",
+        "ColumnPath"
+      ],
+      "existing_methods": [
+        "catalog_schemas",
+        "catalog_schema_get",
+        "catalog_contents"
+      ],
+      "new_methods": [],
+      "scope": [
+        "Raw paths, nested ownership, nullable default schema, complete metadata/result cache identity and dependency invalidation. Never split a SQL rendering."
+      ],
+      "capability_contract": "pending_P1",
+      "gates": [
+        "P1",
+        "M1",
+        "M3"
+      ],
+      "evidence": []
+    }
+  },
+  "audit_fields": [
+    {
+      "id": "audit-057",
+      "source_line": 57,
+      "section": "Shared creation fields and object identity",
+      "field": "`CreateInfo.type`",
+      "audit_evidence": [
+        "Existing",
+        "Carried as native dispatch and choice of RPC. Unsupported object kinds reject; see the object inventory below."
+      ],
+      "area": "dependencies",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-058",
+      "source_line": 58,
+      "section": "Shared creation fields and object identity",
+      "field": "`qualified_name` and object-name accessors",
+      "audit_evidence": [
+        "2.0 replaces public catalog/schema/name strings with `QualifiedName` and `Identifier`",
+        "Gap. Resolve the owning catalog and preserve every raw schema component; send the object name separately. Port accessors rather than assembling or splitting dotted SQL."
+      ],
+      "area": "dependencies",
+      "disposition": "include",
+      "target": "CatalogObjectRef.schema_path/name",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-059",
+      "source_line": 59,
+      "section": "Shared creation fields and object identity",
+      "field": "`on_conflict`",
+      "audit_evidence": [
+        "Existing",
+        "ERROR, IGNORE, REPLACE are carried by `MapOnConflict`. Its default maps other values, including ALTER, to ERROR. Make supported values explicit and reject any unsupported value; do not imply every conflict enum is accepted by every grammar production."
+      ],
+      "area": "dependencies",
+      "disposition": "existing_contract",
+      "target": "OnConflict",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-060",
+      "source_line": 60,
+      "section": "Shared creation fields and object identity",
+      "field": "`temporary`",
+      "audit_evidence": [
+        "Existing",
+        "Engine-managed routing to the temporary catalog; the binder rejects a temporary object explicitly assigned to an incompatible catalog. No remote temporary-object field is required merely to preserve this routing."
+      ],
+      "area": "dependencies",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-061",
+      "source_line": 61,
+      "section": "Shared creation fields and object identity",
+      "field": "`internal`",
+      "audit_evidence": [
+        "Existing",
+        "Engine bookkeeping/access control. Preserve when constructing local catalog entries; do not expose it as a worker privilege switch."
+      ],
+      "area": "dependencies",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-062",
+      "source_line": 62,
+      "section": "Shared creation fields and object identity",
+      "field": "`extension_name`",
+      "audit_evidence": [
+        "2.0",
+        "Engine bookkeeping for extension-owned entries. Preserve where applicable to locally registered objects; ordinary remote DDL does not need an extension-name RPC field."
+      ],
+      "area": "dependencies",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-063",
+      "source_line": 63,
+      "section": "Shared creation fields and object identity",
+      "field": "`sql`",
+      "audit_evidence": [
+        "Existing",
+        "Original/rendered SQL is not sent as a general DDL envelope. Structured table creation and SELECT-only view definitions have separate contracts. This field cannot substitute for auditing those fields."
+      ],
+      "area": "dependencies",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-064",
+      "source_line": 64,
+      "section": "Shared creation fields and object identity",
+      "field": "`dependencies`",
+      "audit_evidence": [
+        "Existing",
+        "Gap in remote dependency handling. No dependency list is sent with table/view creation. Clearing view caches after some DDL is not dependency enforcement. Define who checks RESTRICT, executes CASCADE, and rewrites or invalidates dependent definitions."
+      ],
+      "area": "dependencies",
+      "disposition": "include",
+      "target": "ObjectDependency",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-065",
+      "source_line": 65,
+      "section": "Shared creation fields and object identity",
+      "field": "`comment`",
+      "audit_evidence": [
+        "Existing",
+        "Lost on native schema/table/view creation if supplied through the API. Schema-create wire already accepts it but the adapter sends null. Table/view create requests lack dedicated fields; later table/view comment RPCs exist. Read metadata does preserve object comments."
+      ],
+      "area": "dependencies",
+      "disposition": "include",
+      "target": "create.comment",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-066",
+      "source_line": 66,
+      "section": "Shared creation fields and object identity",
+      "field": "`tags`",
+      "audit_evidence": [
+        "Existing; 2.0 uses an insertion-preserving map",
+        "Same create-side omission as comments. Schema-create wire accepts tags but receives null. Table/view reads preserve tags. No corresponding general native tag mutation path is implemented. Do not assume arbitrary tags are schema/table options."
+      ],
+      "area": "dependencies",
+      "disposition": "include",
+      "target": "create.tags",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-080",
+      "source_line": 80,
+      "section": "Paths and catalog enumeration",
+      "field": "Schema path on schema/table/view/function/macro/index metadata",
+      "audit_evidence": [
+        "Retain vectors throughout decoding and local ownership. Include `catalog_contents` and per-schema discovery, lazy/eager lookup, scan branches, and FK references."
+      ],
+      "area": "identity",
+      "disposition": "existing_contract",
+      "target": "SchemaPath",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-081",
+      "source_line": 81,
+      "section": "Paths and catalog enumeration",
+      "field": "`SupportsNestedSchemas()` and schema parent links",
+      "audit_evidence": [
+        "Implement a schema tree before opting in. Flat `VgiSchemaSet` entries cannot represent parent/child ownership."
+      ],
+      "area": "identity",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-082",
+      "source_line": 82,
+      "section": "Paths and catalog enumeration",
+      "field": "`CreateSchemaInfo` schema name convention",
+      "audit_evidence": [
+        "Use `SchemaName()`, `SchemaCatalog()`, `ParentSchemas()`, and `IsNested()`. Its qualified name reserves the object-name position; treating it like a table name selects the wrong component."
+      ],
+      "area": "identity",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-083",
+      "source_line": 83,
+      "section": "Paths and catalog enumeration",
+      "field": "`EntryLookupInfo` and `LookupEntry`",
+      "audit_evidence": [
+        "Port typed names and lookup behavior for each object kind, including missing-entry policy and overload lookup where applicable."
+      ],
+      "area": "identity",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-084",
+      "source_line": 84,
+      "section": "Paths and catalog enumeration",
+      "field": "`GetDefaultSchema()`",
+      "audit_evidence": [
+        "Return the new `optional<Identifier>` correctly; preserve absent versus specified defaults. At this pin, nested schemas cannot be used in the search path; keep that upstream rejection distinct from VGI's full-path object lookup support."
+      ],
+      "area": "identity",
+      "disposition": "existing_contract",
+      "target": "CatalogAttachResult.default_schema",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-085",
+      "source_line": 85,
+      "section": "Paths and catalog enumeration",
+      "field": "Schema `Scan` overloads and recursive scans",
+      "audit_evidence": [
+        "Implement the required context/transaction paths. Current context-free `VgiSchemaEntry::Scan` throws. Recursive/committed schema-tree enumeration must be tested explicitly, not inferred from a successful context-based flat scan."
+      ],
+      "area": "identity",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-086",
+      "source_line": 86,
+      "section": "Paths and catalog enumeration",
+      "field": "Cache keys and invalidation",
+      "audit_evidence": [
+        "Identify objects by attachment, full schema path, kind, and raw name. Test `a.x.t` versus `b.x.t`, and schema component `\"a.b\"` versus components `a`, `b`. Propagate that distinction through metadata/result caches, retained entries, version reloads, and prepared-statement rebinding."
+      ],
+      "area": "identity",
+      "disposition": "include",
+      "target": "attachment/schema_path/kind/name/metadata_revision",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-087",
+      "source_line": 87,
+      "section": "Paths and catalog enumeration",
+      "field": "Schema/drop/rename dependencies",
+      "audit_evidence": [
+        "Invalidate the affected descendants and dependent objects. A leaf-name cache purge is insufficient once distinct parents can contain the same name."
+      ],
+      "area": "dependencies",
+      "disposition": "include",
+      "target": "ObjectDependency",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-100",
+      "source_line": 100,
+      "section": "Schema fields",
+      "field": "`CreateSchemaInfo.qualified_name`",
+      "audit_evidence": [
+        "2.0 representation",
+        "Gap for nested names; shared identity rules above."
+      ],
+      "area": "schemas",
+      "disposition": "existing_contract",
+      "target": "SchemaCreateRequest.path",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-101",
+      "source_line": 101,
+      "section": "Schema fields",
+      "field": "`CreateSchemaInfo.options`",
+      "audit_evidence": [
+        "2.0",
+        "Rejected by inherited `SupportsCreateSchema()` when non-empty. To support WITH, define option names, types, expression evaluation, persistence, and worker capabilities. Schema-create has no general options payload."
+      ],
+      "area": "schemas",
+      "disposition": "include",
+      "target": "SchemaCreateRequest.options",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-102",
+      "source_line": 102,
+      "section": "Schema fields",
+      "field": "Inherited `on_conflict`",
+      "audit_evidence": [
+        "Existing",
+        "Carried. Port `ShouldReplaceOnConflict()`/nested replacement behavior and test the parent and descendant effects of REPLACE."
+      ],
+      "area": "schemas",
+      "disposition": "existing_contract",
+      "target": "SchemaCreateRequest.on_conflict",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-103",
+      "source_line": 103,
+      "section": "Schema fields",
+      "field": "Inherited `comment`, `tags`",
+      "audit_evidence": [
+        "Existing",
+        "Lost at native create: both optional wire arguments are explicitly null. Adapter work can carry them without adding those fields to the protocol."
+      ],
+      "area": "schemas",
+      "disposition": "existing_contract",
+      "target": "SchemaCreateRequest.comment/tags",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-104",
+      "source_line": 104,
+      "section": "Schema fields",
+      "field": "`AlterSchemaInfo.alter_schema_type`",
+      "audit_evidence": [
+        "2.0",
+        "No VGI schema-alter implementation or option RPC. Reject SET/RESET until implemented."
+      ],
+      "area": "schemas",
+      "disposition": "include",
+      "target": "catalog_schema_options_set",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-105",
+      "source_line": 105,
+      "section": "Schema fields",
+      "field": "`SetSchemaOptionsInfo.options`",
+      "audit_evidence": [
+        "2.0",
+        "Expression map. New negotiated request/SDK behavior needed for supported options; define whether values are evaluated in DuckDB or interpreted by the worker."
+      ],
+      "area": "schemas",
+      "disposition": "include",
+      "target": "OptionChanges.set_values",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-106",
+      "source_line": 106,
+      "section": "Schema fields",
+      "field": "`ResetSchemaOptionsInfo.options`",
+      "audit_evidence": [
+        "2.0",
+        "Identifier set. RESET is removal/restoration of defaults, not SET to an empty string or null. Needs a distinct defined operation."
+      ],
+      "area": "schemas",
+      "disposition": "include",
+      "target": "OptionChanges.reset_names",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-107",
+      "source_line": 107,
+      "section": "Schema fields",
+      "field": "Schema `DropInfo` path, `if_not_found`, `cascade`",
+      "audit_evidence": [
+        "Path changes in 2.0",
+        "Flags are carried today; path is flat. Extend path handling and qualify actual subtree/dependency deletion and rollback."
+      ],
+      "area": "schemas",
+      "disposition": "existing_contract",
+      "target": "catalog_schema_drop.path/ignore_not_found/cascade",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-125",
+      "source_line": 125,
+      "section": "CreateTableInfo and BoundCreateTableInfo",
+      "field": "`CreateTableInfo.qualified_name`",
+      "audit_evidence": [
+        "2.0 representation",
+        "Gap for typed/nested identity; ordinary flat name is carried today."
+      ],
+      "area": "tables",
+      "disposition": "existing_contract",
+      "target": "TableCreateRequest.schema_path/name",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-126",
+      "source_line": 126,
+      "section": "CreateTableInfo and BoundCreateTableInfo",
+      "field": "`columns`",
+      "audit_evidence": [
+        "Existing, typed names in 2.0",
+        "Partially carried as an Arrow schema; see each column field below."
+      ],
+      "area": "tables",
+      "disposition": "existing_contract",
+      "target": "TableCreateRequest.columns",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-127",
+      "source_line": 127,
+      "section": "CreateTableInfo and BoundCreateTableInfo",
+      "field": "`constraints`",
+      "audit_evidence": [
+        "Existing",
+        "NOT NULL, UNIQUE, PRIMARY KEY, CHECK, FK are encoded separately. Enforcement and complete metadata round trips need worker-specific tests."
+      ],
+      "area": "tables",
+      "disposition": "existing_contract",
+      "target": "TableCreateRequest.constraints",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-128",
+      "source_line": 128,
+      "section": "CreateTableInfo and BoundCreateTableInfo",
+      "field": "`query`",
+      "audit_evidence": [
+        "Existing",
+        "Engine-managed CTAS binding and physical child plan. VGI's CTAS insert operator creates the table and streams query results; the SELECT is not a table-create RPC field. Qualify rollback if insert fails after create."
+      ],
+      "area": "tables",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-129",
+      "source_line": 129,
+      "section": "CreateTableInfo and BoundCreateTableInfo",
+      "field": "`partition_keys`",
+      "audit_evidence": [
+        "Existing",
+        "Rejected by inherited `SupportsCreateTable()` for non-empty keys. No table-create wire field. Supporting it requires a defined partition-expression contract and worker capability."
+      ],
+      "area": "tables",
+      "disposition": "include",
+      "target": "TableLayout.partition_by",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-130",
+      "source_line": 130,
+      "section": "CreateTableInfo and BoundCreateTableInfo",
+      "field": "`sort_keys`",
+      "audit_evidence": [
+        "Existing",
+        "Rejected by the same guard. No table-create wire field. Define expression ordering semantics if enabled."
+      ],
+      "area": "tables",
+      "disposition": "include",
+      "target": "TableLayout.sort_by",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-131",
+      "source_line": 131,
+      "section": "CreateTableInfo and BoundCreateTableInfo",
+      "field": "`options`",
+      "audit_evidence": [
+        "Existing",
+        "Rejected by the same guard; current 1.5 runtime confirms WITH rejection. No table-create options payload. This is not a silently ignored clause today."
+      ],
+      "area": "tables",
+      "disposition": "include",
+      "target": "TableCreateRequest.options",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-132",
+      "source_line": 132,
+      "section": "CreateTableInfo and BoundCreateTableInfo",
+      "field": "`BoundCreateTableInfo.schema`",
+      "audit_evidence": [
+        "Existing, schema API changes",
+        "Engine/local owner reference. Must refer to the correct nested VGI schema; never serialize the pointer."
+      ],
+      "area": "tables",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-133",
+      "source_line": 133,
+      "section": "CreateTableInfo and BoundCreateTableInfo",
+      "field": "`base`",
+      "audit_evidence": [
+        "Existing",
+        "Native create reads the parsed `CreateTableInfo` here. Audit its fields even when the surrounding bound structure compiles."
+      ],
+      "area": "tables",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-134",
+      "source_line": 134,
+      "section": "CreateTableInfo and BoundCreateTableInfo",
+      "field": "`column_dependency_manager`",
+      "audit_evidence": [
+        "Existing",
+        "Engine binding data, not sent. Preserve generated-column dependency semantics through the reconstructed column definitions."
+      ],
+      "area": "tables",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-135",
+      "source_line": 135,
+      "section": "CreateTableInfo and BoundCreateTableInfo",
+      "field": "Bound `constraints`",
+      "audit_evidence": [
+        "Existing",
+        "Native serialization uses `base->constraints`, not this separate collection. Compare normalized/implicit constraints with the worker request; do not assume local binding proves worker enforcement."
+      ],
+      "area": "constraints",
+      "disposition": "include",
+      "target": "ConstraintDefinition",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-136",
+      "source_line": 136,
+      "section": "CreateTableInfo and BoundCreateTableInfo",
+      "field": "`data`",
+      "audit_evidence": [
+        "Existing",
+        "DuckDB persistent-table storage data. Engine-managed; not a generic remote catalog payload."
+      ],
+      "area": "tables",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-137",
+      "source_line": 137,
+      "section": "CreateTableInfo and BoundCreateTableInfo",
+      "field": "Bound `query`",
+      "audit_evidence": [
+        "Existing",
+        "Logical CTAS plan. Rebuild/port the physical execution hook rather than serializing the plan into DDL."
+      ],
+      "area": "tables",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-138",
+      "source_line": 138,
+      "section": "CreateTableInfo and BoundCreateTableInfo",
+      "field": "`indexes`",
+      "audit_evidence": [
+        "Existing",
+        "DuckDB index storage data. Distinct from remote index definitions and not directly transferable."
+      ],
+      "area": "tables",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-151",
+      "source_line": 151,
+      "section": "Every ColumnDefinition field",
+      "field": "`name`",
+      "audit_evidence": [
+        "Carried",
+        "Carried",
+        "Port `Identifier`; preserve quoted names and distinguish top-level names from nested paths."
+      ],
+      "area": "columns",
+      "disposition": "existing_contract",
+      "target": "Arrow.field.name",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-152",
+      "source_line": 152,
+      "section": "Every ColumnDefinition field",
+      "field": "`type`",
+      "audit_evidence": [
+        "Carried through Arrow",
+        "Carried through Arrow",
+        "Qualify supported type parameters and nested types against the 2.0 Arrow bridge. This audit does not certify every DuckDB logical type."
+      ],
+      "area": "columns",
+      "disposition": "existing_contract",
+      "target": "Arrow.field.type",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-153",
+      "source_line": 153,
+      "section": "Every ColumnDefinition field",
+      "field": "`compression_type`",
+      "audit_evidence": [
+        "Lost if supplied",
+        "Lost if supplied",
+        "Explicitly reject non-default compression unless a worker contract defines it. DuckDB's storage compression enum is not automatically meaningful remotely."
+      ],
+      "area": "columns",
+      "disposition": "include",
+      "target": "Arrow.field.metadata.compression",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-154",
+      "source_line": 154,
+      "section": "Every ColumnDefinition field",
+      "field": "`storage_oid`",
+      "audit_evidence": [
+        "Derived locally",
+        "Derived locally",
+        "Engine-managed storage identity; do not copy DuckDB OIDs into remote metadata."
+      ],
+      "area": "columns",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-155",
+      "source_line": 155,
+      "section": "Every ColumnDefinition field",
+      "field": "`oid`",
+      "audit_evidence": [
+        "Derived locally",
+        "Derived locally",
+        "Engine-managed logical index; preserve constraint mapping when reconstructing entries."
+      ],
+      "area": "columns",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-156",
+      "source_line": 156,
+      "section": "Every ColumnDefinition field",
+      "field": "`category`",
+      "audit_evidence": [
+        "Generated versus ordinary category is lost on create",
+        "No category encoding",
+        "Carry/validate generated-column semantics or reject them before mutation."
+      ],
+      "area": "columns",
+      "disposition": "include",
+      "target": "Arrow.field.metadata.generated_expression",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-157",
+      "source_line": 157,
+      "section": "Every ColumnDefinition field",
+      "field": "`expression` for DEFAULT",
+      "audit_evidence": [
+        "Carried as Arrow field metadata `default`",
+        "**Lost**",
+        "Reuse one column encoder for create/add. Recorder probe confirms `ADD ... DEFAULT 9` reaches the worker with empty metadata."
+      ],
+      "area": "columns",
+      "disposition": "existing_contract",
+      "target": "Arrow.field.metadata.default",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-158",
+      "source_line": 158,
+      "section": "Every ColumnDefinition field",
+      "field": "`expression` for GENERATED",
+      "audit_evidence": [
+        "**Lost**",
+        "No generated-expression encoding",
+        "Current create succeeds and the reconstructed column is ordinary. Existing read path already recognizes `generated_expression`; align outbound metadata and worker behavior with that contract."
+      ],
+      "area": "columns",
+      "disposition": "existing_contract",
+      "target": "Arrow.field.metadata.generated_expression",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-159",
+      "source_line": 159,
+      "section": "Every ColumnDefinition field",
+      "field": "`comment`",
+      "audit_evidence": [
+        "Lost if supplied",
+        "Lost if supplied",
+        "Read path recognizes Arrow field `comment`; table-column COMMENT RPC also exists. Carry metadata or reject API-level values. The tested inline SQL COMMENT spelling is rejected by the 1.5 parser, so it is not a demonstrated silent SQL loss."
+      ],
+      "area": "columns",
+      "disposition": "existing_contract",
+      "target": "Arrow.field.metadata.comment",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-160",
+      "source_line": 160,
+      "section": "Every ColumnDefinition field",
+      "field": "`tags`",
+      "audit_evidence": [
+        "Not encoded",
+        "Not encoded",
+        "2.0 exposes tags through accessors, but the underlying field existed in 1.5. Define an Arrow metadata convention and worker persistence before supporting it; current reconstruction does not install column tags."
+      ],
+      "area": "columns",
+      "disposition": "include",
+      "target": "Arrow.field.metadata.tags",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-174",
+      "source_line": 174,
+      "section": "Constraint fields",
+      "field": "`Constraint.type`",
+      "audit_evidence": [
+        "Dispatches the four engine constraint kinds. Replace silent fallback for an unknown kind with an explicit unsupported error if the engine adds another."
+      ],
+      "area": "constraints",
+      "disposition": "existing_contract",
+      "target": "ConstraintDefinition.kind",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-175",
+      "source_line": 175,
+      "section": "Constraint fields",
+      "field": "`Constraint.backing_index_oid`",
+      "audit_evidence": [
+        "New 2.0 binding/storage association. Engine-local, not a worker index ID."
+      ],
+      "area": "constraints",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-176",
+      "source_line": 176,
+      "section": "Constraint fields",
+      "field": "`NotNullConstraint.index`",
+      "audit_evidence": [
+        "Carried as a logical column index. Test remapping with synthetic row IDs and generated columns."
+      ],
+      "area": "constraints",
+      "disposition": "existing_contract",
+      "target": "ConstraintDefinition.columns",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-177",
+      "source_line": 177,
+      "section": "Constraint fields",
+      "field": "`UniqueConstraint.index` or `columns`",
+      "audit_evidence": [
+        "Single-column index or resolved column-name group becomes an index vector."
+      ],
+      "area": "constraints",
+      "disposition": "existing_contract",
+      "target": "ConstraintDefinition.columns",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-178",
+      "source_line": 178,
+      "section": "Constraint fields",
+      "field": "`UniqueConstraint.is_primary_key`",
+      "audit_evidence": [
+        "Selects `primary_key_constraints` versus `unique_constraints`; both are present in the wire request."
+      ],
+      "area": "constraints",
+      "disposition": "existing_contract",
+      "target": "ConstraintDefinition.kind",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-179",
+      "source_line": 179,
+      "section": "Constraint fields",
+      "field": "`CheckConstraint.expression`",
+      "audit_evidence": [
+        "Carried as SQL expression text, without the outer CHECK wrapper. Define supported expression semantics and worker enforcement."
+      ],
+      "area": "constraints",
+      "disposition": "existing_contract",
+      "target": "ConstraintDefinition.expression",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-180",
+      "source_line": 180,
+      "section": "Constraint fields",
+      "field": "`ForeignKeyConstraint.pk_columns`, `fk_columns`",
+      "audit_evidence": [
+        "Carried as column names in serialized FK specifications."
+      ],
+      "area": "constraints",
+      "disposition": "existing_contract",
+      "target": "ConstraintDefinition.columns/referenced_columns",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-181",
+      "source_line": 181,
+      "section": "Constraint fields",
+      "field": "`ForeignKeyInfo.schema`, `table`",
+      "audit_evidence": [
+        "Carried, but schema conversion is currently one component. The wire has `referenced_schema_path`; resolve target-engine FK qualification rules before extending nested references. The target structure still has a single schema `Identifier`."
+      ],
+      "area": "constraints",
+      "disposition": "existing_contract",
+      "target": "ConstraintDefinition.referenced_table",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-182",
+      "source_line": 182,
+      "section": "Constraint fields",
+      "field": "`ForeignKeyInfo.type`",
+      "audit_evidence": [
+        "Engine direction/self-reference bookkeeping, not explicitly sent. Qualify self-references and reverse dependency handling; user FK definitions alone do not establish both."
+      ],
+      "area": "constraints",
+      "disposition": "existing_contract",
+      "target": "ObjectDependency",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-183",
+      "source_line": 183,
+      "section": "Constraint fields",
+      "field": "`ForeignKeyInfo.pk_keys`, `fk_keys`",
+      "audit_evidence": [
+        "Bound physical indices, not sent. Recompute locally where required; remote definitions use column names."
+      ],
+      "area": "constraints",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-200",
+      "source_line": 200,
+      "section": "ALTER TABLE and shared alteration fields",
+      "field": "`type`",
+      "audit_evidence": [
+        "Dispatch supports ALTER TABLE, view rename, table/view comments, and table-column comments. Other kinds need an explicit capability decision."
+      ],
+      "area": "columns",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-201",
+      "source_line": 201,
+      "section": "ALTER TABLE and shared alteration fields",
+      "field": "`qualified_name`",
+      "audit_evidence": [
+        "2.0 representation change; preserve the full target path."
+      ],
+      "area": "columns",
+      "disposition": "existing_contract",
+      "target": "CatalogObjectRef",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-202",
+      "source_line": 202,
+      "section": "ALTER TABLE and shared alteration fields",
+      "field": "`if_not_found`",
+      "audit_evidence": [
+        "DuckDB catalog lookup handles a missing target before VGI's alter hook. Several existing RPC calls nevertheless hardcode `ignore_not_found=false`; qualify a target disappearing between lookup and worker execution. This is not evidence that ordinary ALTER IF EXISTS is always broken."
+      ],
+      "area": "columns",
+      "disposition": "existing_contract",
+      "target": "mutation.ignore_not_found",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-203",
+      "source_line": 203,
+      "section": "ALTER TABLE and shared alteration fields",
+      "field": "`allow_internal`",
+      "audit_evidence": [
+        "Engine access-control bookkeeping; no remote privilege flag required."
+      ],
+      "area": "columns",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-204",
+      "source_line": 204,
+      "section": "ALTER TABLE and shared alteration fields",
+      "field": "`bind_mode`",
+      "audit_evidence": [
+        "Engine binding instruction. Respect skipped binding; do not assume every expression has been bound at the hook."
+      ],
+      "area": "columns",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-205",
+      "source_line": 205,
+      "section": "ALTER TABLE and shared alteration fields",
+      "field": "`new_dependencies`",
+      "audit_evidence": [
+        "No remote representation or dependency update. Define maintenance and invalidation when expressions/types change."
+      ],
+      "area": "dependencies",
+      "disposition": "include",
+      "target": "ObjectDependency",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-213",
+      "source_line": 213,
+      "section": "ALTER TABLE and shared alteration fields",
+      "field": "`RENAME_COLUMN`: `old_name`, `new_name`",
+      "audit_evidence": [
+        "Carried to column-rename RPC",
+        "Port typed names and verify dependency/view invalidation."
+      ],
+      "area": "columns",
+      "disposition": "existing_contract",
+      "target": "column_rename.column_path/new_name",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-214",
+      "source_line": 214,
+      "section": "ALTER TABLE and shared alteration fields",
+      "field": "`RENAME_TABLE`: `new_table_name`",
+      "audit_evidence": [
+        "Carried to table-rename RPC",
+        "Preserve schema ownership and qualified dependent references."
+      ],
+      "area": "columns",
+      "disposition": "existing_contract",
+      "target": "table_rename.name/new_name",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-215",
+      "source_line": 215,
+      "section": "ALTER TABLE and shared alteration fields",
+      "field": "`ADD_COLUMN`: `new_column`, `if_column_not_exists`",
+      "audit_evidence": [
+        "Names/type and IF NOT EXISTS carried; default and other column attributes omitted",
+        "Fix the column encoder; see expanded statements below."
+      ],
+      "area": "columns",
+      "disposition": "existing_contract",
+      "target": "column_add.column/ignore_if_exists",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-216",
+      "source_line": 216,
+      "section": "ALTER TABLE and shared alteration fields",
+      "field": "`REMOVE_COLUMN`: `removed_column`, `if_column_exists`, `cascade`",
+      "audit_evidence": [
+        "Carried",
+        "Qualify generated-column dependencies, actual cascade behavior, rollback, and column ordering."
+      ],
+      "area": "columns",
+      "disposition": "existing_contract",
+      "target": "column_drop.column_path/ignore_not_found/cascade",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-217",
+      "source_line": 217,
+      "section": "ALTER TABLE and shared alteration fields",
+      "field": "`ALTER_COLUMN_TYPE`: `column_path`, `target_type`, `expression`",
+      "audit_evidence": [
+        "Flat column name, target Arrow type, and optional USING SQL are carried in 1.5",
+        "**2.0 replaces `column_name` with a vector path.** Existing RPC lacks a nested path. Support a single component explicitly; reject deeper paths until the contract is extended."
+      ],
+      "area": "columns",
+      "disposition": "include",
+      "target": "column_type_change.column_path/type/using_expression",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-218",
+      "source_line": 218,
+      "section": "ALTER TABLE and shared alteration fields",
+      "field": "`SET_DEFAULT`: `column_path`, `expression`",
+      "audit_evidence": [
+        "Set expression or null-expression DROP maps to separate RPCs",
+        "Same new path gap. Preserve absence versus SQL NULL expression."
+      ],
+      "area": "columns",
+      "disposition": "include",
+      "target": "column_default_set.column_path/expression",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-219",
+      "source_line": 219,
+      "section": "ALTER TABLE and shared alteration fields",
+      "field": "`FOREIGN_KEY_CONSTRAINT`: `fk_table`, `pk_columns`, `fk_columns`, `pk_keys`, `fk_keys`, `type`",
+      "audit_evidence": [
+        "Rejected",
+        "No implemented ALTER FK path. Keep unsupported unless worker dependency/enforcement operations are defined; physical key vectors are local."
+      ],
+      "area": "constraints",
+      "disposition": "existing_contract",
+      "target": "ConstraintDefinition/ObjectDependency",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-220",
+      "source_line": 220,
+      "section": "ALTER TABLE and shared alteration fields",
+      "field": "`SET_NOT_NULL`: `column_path`",
+      "audit_evidence": [
+        "Flat column RPC carried",
+        "New path gap. Enforce against existing data and writes."
+      ],
+      "area": "columns",
+      "disposition": "include",
+      "target": "not_null_set.column_path",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-221",
+      "source_line": 221,
+      "section": "ALTER TABLE and shared alteration fields",
+      "field": "`DROP_NOT_NULL`: `column_path`",
+      "audit_evidence": [
+        "Flat column RPC carried",
+        "New path gap; retain other constraints when removing it."
+      ],
+      "area": "columns",
+      "disposition": "include",
+      "target": "not_null_drop.column_path",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-222",
+      "source_line": 222,
+      "section": "ALTER TABLE and shared alteration fields",
+      "field": "`SET_COLUMN_COMMENT`",
+      "audit_evidence": [
+        "No case in the table-variant switch",
+        "Actual COMMENT handling uses outer `AlterType::SET_COLUMN_COMMENT`; audit that payload separately below. Do not count this enum spelling as an additional working operation."
+      ],
+      "area": "columns",
+      "disposition": "existing_contract",
+      "target": "object_metadata_set.column_path/comment",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-223",
+      "source_line": 223,
+      "section": "ALTER TABLE and shared alteration fields",
+      "field": "`ADD_CONSTRAINT`: `constraint`",
+      "audit_evidence": [
+        "Rejected by VGI; index-related binding can reject earlier",
+        "Needed for supported ALTER constraint changes and some new ADD COLUMN rewrites. Do not conflate CREATE-time constraint transport with ALTER support."
+      ],
+      "area": "constraints",
+      "disposition": "include",
+      "target": "ConstraintDefinition",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-224",
+      "source_line": 224,
+      "section": "ALTER TABLE and shared alteration fields",
+      "field": "`SET_PARTITIONED_BY`: `partition_keys`",
+      "audit_evidence": [
+        "Rejected",
+        "Define expression contract and repartitioning/atomicity if enabled."
+      ],
+      "area": "tables",
+      "disposition": "include",
+      "target": "TableLayout.partition_by",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-225",
+      "source_line": 225,
+      "section": "ALTER TABLE and shared alteration fields",
+      "field": "`SET_SORTED_BY`: `orders`",
+      "audit_evidence": [
+        "Rejected",
+        "Preserve expression, direction, and null order in any new contract."
+      ],
+      "area": "tables",
+      "disposition": "include",
+      "target": "TableLayout.sort_by",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-226",
+      "source_line": 226,
+      "section": "ALTER TABLE and shared alteration fields",
+      "field": "`ADD_FIELD`: `column_path`, `new_field`, `if_field_not_exists`",
+      "audit_evidence": [
+        "Rejected",
+        "Needs nested field path and complete new-column metadata plus worker data rewrite semantics."
+      ],
+      "area": "columns",
+      "disposition": "include",
+      "target": "field_add.column_path/field/ignore_if_exists",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-227",
+      "source_line": 227,
+      "section": "ALTER TABLE and shared alteration fields",
+      "field": "`REMOVE_FIELD`: `column_path`, `if_column_exists`, `cascade`",
+      "audit_evidence": [
+        "Rejected",
+        "Needs nested field deletion and dependencies."
+      ],
+      "area": "columns",
+      "disposition": "include",
+      "target": "field_drop.column_path/ignore_not_found/cascade",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-228",
+      "source_line": 228,
+      "section": "ALTER TABLE and shared alteration fields",
+      "field": "`RENAME_FIELD`: `column_path`, `new_name`",
+      "audit_evidence": [
+        "Rejected",
+        "Needs path-preserving rename. A field named `\"a.b\"` must remain distinct from path `[\"a\", \"b\"]`."
+      ],
+      "area": "columns",
+      "disposition": "include",
+      "target": "field_rename.column_path/new_name",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-229",
+      "source_line": 229,
+      "section": "ALTER TABLE and shared alteration fields",
+      "field": "`SET_TABLE_OPTIONS`: `table_options` expression map",
+      "audit_evidence": [
+        "Rejected",
+        "Define supported values/evaluation and worker persistence."
+      ],
+      "area": "tables",
+      "disposition": "include",
+      "target": "OptionChanges.set_values",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-230",
+      "source_line": 230,
+      "section": "ALTER TABLE and shared alteration fields",
+      "field": "`RESET_TABLE_OPTIONS`: `table_options` identifier set",
+      "audit_evidence": [
+        "Rejected",
+        "Define removal/default restoration separately from SET."
+      ],
+      "area": "tables",
+      "disposition": "include",
+      "target": "OptionChanges.reset_names",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-241",
+      "source_line": 241,
+      "section": "ADD COLUMN can execute several statements",
+      "field": "Simple constant default, possibly a normal cast",
+      "audit_evidence": [
+        "Plain ADD COLUMN",
+        "Preserve the default in the column payload; current adapter loses it."
+      ],
+      "area": "transactions",
+      "disposition": "existing_contract",
+      "target": "Arrow.field.metadata.default",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-242",
+      "source_line": 242,
+      "section": "ADD COLUMN can execute several statements",
+      "field": "Non-simple default without IF NOT EXISTS",
+      "audit_evidence": [
+        "ADD with null default, UPDATE existing rows, SET DEFAULT",
+        "All operations must use coherent transaction state. Prove rollback if UPDATE or the final ALTER fails, including for nontransactional workers that must reject the shape."
+      ],
+      "area": "transactions",
+      "disposition": "include",
+      "target": "TransactionCapabilities.ddl_rollback/mixed_atomicity",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-243",
+      "source_line": 243,
+      "section": "ADD COLUMN can execute several statements",
+      "field": "NOT NULL or UNIQUE on the new column",
+      "audit_evidence": [
+        "ADD, then SET NOT NULL and/or ADD CONSTRAINT",
+        "Check support for the complete operation before accepting it. Current VGI lacks ADD CONSTRAINT, so a partial implementation risks an ADD followed by failure. Establish where validation occurs and test that no remote mutation survives failure."
+      ],
+      "area": "transactions",
+      "disposition": "include",
+      "target": "TransactionCapabilities.ddl_rollback/mixed_atomicity",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-244",
+      "source_line": 244,
+      "section": "ADD COLUMN can execute several statements",
+      "field": "IF NOT EXISTS with NOT NULL or UNIQUE",
+      "audit_evidence": [
+        "Rejected by the target transformer",
+        "Preserve upstream rejection; no additional worker feature required for this rejected shape."
+      ],
+      "area": "transactions",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-245",
+      "source_line": 245,
+      "section": "ADD COLUMN can execute several statements",
+      "field": "IF NOT EXISTS with a non-simple default",
+      "audit_evidence": [
+        "Kept as a plain ALTER",
+        "Do not assume all nonconstant defaults are materialized by the engine; the worker path still needs defined default behavior."
+      ],
+      "area": "transactions",
+      "disposition": "existing_contract",
+      "target": "Arrow.field.metadata.default",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-258",
+      "source_line": 258,
+      "section": "Views and comments",
+      "field": "`qualified_name` / `GetViewName()`",
+      "audit_evidence": [
+        "2.0 representation",
+        "Port typed/nested ownership. Flat schema and view name are carried today."
+      ],
+      "area": "views",
+      "disposition": "existing_contract",
+      "target": "ViewCreateRequest.schema_path/name",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-259",
+      "source_line": 259,
+      "section": "Views and comments",
+      "field": "`query`",
+      "audit_evidence": [
+        "Existing",
+        "Carried as `query->ToString()`, a SELECT definition. Read path parses that SELECT. Test owner-relative names, nested schemas, and search-path independence."
+      ],
+      "area": "views",
+      "disposition": "existing_contract",
+      "target": "ViewCreateRequest.definition",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-260",
+      "source_line": 260,
+      "section": "Views and comments",
+      "field": "`aliases`",
+      "audit_evidence": [
+        "Existing",
+        "**Lost.** Explicit `CREATE VIEW v(alias_name) AS SELECT ... AS original_name` comes back with `original_name` in the 1.5 probe. Preserve explicit output aliases in a defined representation."
+      ],
+      "area": "views",
+      "disposition": "include",
+      "target": "ViewCreateRequest.aliases",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-261",
+      "source_line": 261,
+      "section": "Views and comments",
+      "field": "`types`",
+      "audit_evidence": [
+        "Existing",
+        "Not persisted by view-create RPC; recomputed when binding the definition. Qualify changed source types and prepared statements. Persist/validate if worker semantics require a fixed output contract."
+      ],
+      "area": "views",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-262",
+      "source_line": 262,
+      "section": "Views and comments",
+      "field": "`names`",
+      "audit_evidence": [
+        "Existing",
+        "Not sent separately. Correct recomputation depends on preserving aliases and the query."
+      ],
+      "area": "views",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-263",
+      "source_line": 263,
+      "section": "Views and comments",
+      "field": "`column_comments_map`",
+      "audit_evidence": [
+        "Existing",
+        "Not sent on create; read metadata can install column comments. Define writable view-column metadata."
+      ],
+      "area": "views",
+      "disposition": "include",
+      "target": "ViewInfo.column_comments",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-264",
+      "source_line": 264,
+      "section": "Views and comments",
+      "field": "`binding_mode`",
+      "audit_evidence": [
+        "2.0",
+        "Engine-managed BIND_ON_CREATE/SKIP_BINDING. The binder skips validation of an existing IF NOT EXISTS view. Do not introduce unconditional rebinding that changes this behavior."
+      ],
+      "area": "views",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-265",
+      "source_line": 265,
+      "section": "Views and comments",
+      "field": "`security_type`",
+      "audit_evidence": [
+        "**2.0**",
+        "**Gap with security consequences.** The new SECURE_VIEW flag is an optimization barrier. Existing create/read representations have no flag. Preserve it across worker storage, discovery, refresh, and rebinding, or reject secure view creation before any mutation. Never silently reconstruct it as REGULAR_VIEW."
+      ],
+      "area": "views",
+      "disposition": "include",
+      "target": "ViewInfo.security",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-266",
+      "source_line": 266,
+      "section": "Views and comments",
+      "field": "Inherited comment, tags, dependencies",
+      "audit_evidence": [
+        "Existing",
+        "See shared fields. Reading these fields from worker metadata does not establish create/update support."
+      ],
+      "area": "dependencies",
+      "disposition": "include",
+      "target": "ViewCreateRequest.comment/tags/dependencies",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-279",
+      "source_line": 279,
+      "section": "Views and comments",
+      "field": "`RenameViewInfo.new_view_name`, `alter_view_type`",
+      "audit_evidence": [
+        "Rename is carried; other view variants reject. Port typed identity and verify dependent view behavior."
+      ],
+      "area": "views",
+      "disposition": "existing_contract",
+      "target": "catalog_view_rename.name/new_name",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-280",
+      "source_line": 280,
+      "section": "Views and comments",
+      "field": "`SetCommentInfo.entry_catalog_type`, `comment_value`",
+      "audit_evidence": [
+        "Correct table/view dispatch; SQL NULL is distinguished from a string. Other object kinds reject, including schema comments through this path."
+      ],
+      "area": "dependencies",
+      "disposition": "existing_contract",
+      "target": "MetadataPatch.comment",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-281",
+      "source_line": 281,
+      "section": "Views and comments",
+      "field": "`SetColumnCommentInfo.catalog_entry_type`",
+      "audit_evidence": [
+        "**Lost dispatch information.** VGI always calls table-column-comment RPC and invalidates the table cache, even though DuckDB resolves table or view. Add view-column support or reject view targets explicitly."
+      ],
+      "area": "views",
+      "disposition": "include",
+      "target": "CatalogObjectRef.kind",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-282",
+      "source_line": 282,
+      "section": "Views and comments",
+      "field": "`SetColumnCommentInfo.column_name`, `comment_value`",
+      "audit_evidence": [
+        "Carried for table columns, including null comment removal. Port `Identifier`; do not invent nested comment syntax beyond what the target resolves."
+      ],
+      "area": "views",
+      "disposition": "include",
+      "target": "MetadataPatch.column_path/comment",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-283",
+      "source_line": 283,
+      "section": "Views and comments",
+      "field": "`ChangeOwnershipInfo.entry_catalog_type`, `owner_schema`, `owner_name`",
+      "audit_evidence": [
+        "Rejected; no ownership contract."
+      ],
+      "area": "dependencies",
+      "disposition": "include",
+      "target": "ObjectDependency.ownership",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-284",
+      "source_line": 284,
+      "section": "Views and comments",
+      "field": "`ALTER_SEQUENCE`, `ALTER_SCALAR_FUNCTION`, `ALTER_TABLE_FUNCTION`",
+      "audit_evidence": [
+        "No native VGI alteration support. Function registration/execution migration is separate from exposing SQL mutation of worker definitions."
+      ],
+      "area": "views",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-294",
+      "source_line": 294,
+      "section": "DROP fields and object lifecycle",
+      "field": "`type`",
+      "audit_evidence": [
+        "Native DROP supports schemas, tables, and views. Other kinds require integration even where a wire operation already exists."
+      ],
+      "area": "dependencies",
+      "disposition": "existing_contract",
+      "target": "CatalogObjectRef.kind",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-295",
+      "source_line": 295,
+      "section": "DROP fields and object lifecycle",
+      "field": "`qualified_name`",
+      "audit_evidence": [
+        "Port full identity; no splitting SQL strings."
+      ],
+      "area": "dependencies",
+      "disposition": "existing_contract",
+      "target": "CatalogObjectRef.schema_path/name",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-296",
+      "source_line": 296,
+      "section": "DROP fields and object lifecycle",
+      "field": "`if_not_found`",
+      "audit_evidence": [
+        "Carried as `ignore_not_found` for supported drops. Test both local absence and stale local metadata."
+      ],
+      "area": "dependencies",
+      "disposition": "existing_contract",
+      "target": "drop.ignore_not_found",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-297",
+      "source_line": 297,
+      "section": "DROP fields and object lifecycle",
+      "field": "`cascade`",
+      "audit_evidence": [
+        "Carried for schema/table/view drops. Worker action and dependency enforcement are not proven by transporting the boolean."
+      ],
+      "area": "dependencies",
+      "disposition": "existing_contract",
+      "target": "drop.cascade",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-298",
+      "source_line": 298,
+      "section": "DROP fields and object lifecycle",
+      "field": "`allow_drop_internal`",
+      "audit_evidence": [
+        "Engine access-control field, not a worker privilege switch."
+      ],
+      "area": "dependencies",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-299",
+      "source_line": 299,
+      "section": "DROP fields and object lifecycle",
+      "field": "`extra_drop_info` / `info_type`",
+      "audit_evidence": [
+        "Type-specific dispatch. New trigger support needs the trigger form below; do not discard the discriminator."
+      ],
+      "area": "dependencies",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-300",
+      "source_line": 300,
+      "section": "DROP fields and object lifecycle",
+      "field": "`ExtraDropTriggerInfo.base_table`",
+      "audit_evidence": [
+        "Resolve trigger ownership to its target table, then use trigger hooks/storage. No VGI lifecycle implementation today."
+      ],
+      "area": "triggers",
+      "disposition": "include",
+      "target": "TriggerInfo.table",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-301",
+      "source_line": 301,
+      "section": "DROP fields and object lifecycle",
+      "field": "`ExtraDropSecretInfo.persist_mode`, `secret_storage`",
+      "audit_evidence": [
+        "Secret-manager path, outside ordinary VGI schema DDL. Preserve the existing remote-secret integration in its own port; these are not table/schema RPC omissions."
+      ],
+      "area": "dependencies",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-323",
+      "source_line": 323,
+      "section": "Index fields",
+      "field": "Index `qualified_name`, `table`",
+      "audit_evidence": [
+        "Native CREATE INDEX rejected. Wire already has `schema_path`, `name`, `table_name`; port identity and integrate binding/create/drop."
+      ],
+      "area": "constraints",
+      "disposition": "existing_contract",
+      "target": "IndexCreateRequest.schema_path/name/table_name",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-324",
+      "source_line": 324,
+      "section": "Index fields",
+      "field": "`index_type`",
+      "audit_evidence": [
+        "Wire already has a string field. Negotiate supported algorithms; do not promise ART behavior for an unrelated remote backend."
+      ],
+      "area": "constraints",
+      "disposition": "existing_contract",
+      "target": "IndexCreateRequest.index_type",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-325",
+      "source_line": 325,
+      "section": "Index fields",
+      "field": "`constraint_type`",
+      "audit_evidence": [
+        "Wire already represents NONE/UNIQUE/PRIMARY. Enforcement must be verified."
+      ],
+      "area": "constraints",
+      "disposition": "existing_contract",
+      "target": "IndexCreateRequest.constraint_type",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-326",
+      "source_line": 326,
+      "section": "Index fields",
+      "field": "`options`",
+      "audit_evidence": [
+        "Engine values are typed `Value`; wire currently uses `dict<string,string>`. Define lossless supported value encoding or typed protocol extension before enabling arbitrary WITH options."
+      ],
+      "area": "constraints",
+      "disposition": "include",
+      "target": "IndexCreateRequest.options",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-327",
+      "source_line": 327,
+      "section": "Index fields",
+      "field": "`expressions`, `parsed_expressions`",
+      "audit_evidence": [
+        "Wire already accepts SQL expression strings. Select the correct original/bound representation and preserve names and qualification."
+      ],
+      "area": "constraints",
+      "disposition": "existing_contract",
+      "target": "IndexCreateRequest.expressions",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-328",
+      "source_line": 328,
+      "section": "Index fields",
+      "field": "`column_ids`, `scan_types`, `names`",
+      "audit_evidence": [
+        "Engine index build/scan data. Adapt binding/planning locally; these are not inherently missing remote index-definition fields."
+      ],
+      "area": "constraints",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-343",
+      "source_line": 343,
+      "section": "Macro and function creation fields",
+      "field": "`CreateFunctionInfo.qualified_name`",
+      "audit_evidence": [
+        "Discovered worker scalar/aggregate/table functions and macros are installed locally. SQL CREATE through `VgiSchemaEntry::CreateFunction` rejects. Preserve this distinction during the API port."
+      ],
+      "area": "macros",
+      "disposition": "existing_contract",
+      "target": "CatalogObjectRef",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-344",
+      "source_line": 344,
+      "section": "Macro and function creation fields",
+      "field": "`alias_of`",
+      "audit_evidence": [
+        "Function metadata/registration field; no general native SQL mutation path. Qualify local aliases during registration port."
+      ],
+      "area": "macros",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-345",
+      "source_line": 345,
+      "section": "Macro and function creation fields",
+      "field": "`descriptions`: `parameter_types`, `parameter_names`, `description`, `examples`, `categories`",
+      "audit_evidence": [
+        "Local descriptive/signature data. Existing discovery has documentation channels; do not equate these structures with an implemented worker CREATE FUNCTION request."
+      ],
+      "area": "macros",
+      "disposition": "existing_contract",
+      "target": "MacroOverload.arguments_schema/documentation",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-346",
+      "source_line": 346,
+      "section": "Macro and function creation fields",
+      "field": "`CreateMacroInfo.macros`",
+      "audit_evidence": [
+        "Vector of overloads. Native creation rejected, although macro-create/get/list/drop RPCs exist. Current `MacroCreateRequest` represents one definition, not this whole overload vector."
+      ],
+      "area": "macros",
+      "disposition": "include",
+      "target": "MacroInfo.overloads",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-347",
+      "source_line": 347,
+      "section": "Macro and function creation fields",
+      "field": "Each macro's `type`, `parameters`",
+      "audit_evidence": [
+        "Wire has `macro_type` and ordered parameter names. Define accepted parameter forms and scalar/table distinction."
+      ],
+      "area": "macros",
+      "disposition": "existing_contract",
+      "target": "MacroOverload.kind/parameters",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-348",
+      "source_line": 348,
+      "section": "Macro and function creation fields",
+      "field": "`default_parameters`",
+      "audit_evidence": [
+        "Engine stores expressions; wire carries typed values in a one-row batch. Define which default expressions can be represented; do not evaluate arbitrary expressions merely to force them into value fields."
+      ],
+      "area": "macros",
+      "disposition": "include",
+      "target": "MacroParameter.default_expression",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-349",
+      "source_line": 349,
+      "section": "Macro and function creation fields",
+      "field": "`types`",
+      "audit_evidence": [
+        "Typed macro parameters need a semantic mapping. Wire `arguments_schema` currently describes parameter/default types and docs; qualify that it can express the desired declared-type contract."
+      ],
+      "area": "macros",
+      "disposition": "existing_contract",
+      "target": "MacroOverload.arguments_schema",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-350",
+      "source_line": 350,
+      "section": "Macro and function creation fields",
+      "field": "`ScalarMacroFunction.expression`, `TableMacroFunction.query_node`",
+      "audit_evidence": [
+        "Wire has SQL `definition`; preserve owner-relative name resolution, overload selection, and dependencies."
+      ],
+      "area": "macros",
+      "disposition": "existing_contract",
+      "target": "MacroOverload.definition",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-362",
+      "source_line": 362,
+      "section": "Other creation structures",
+      "field": "`CreateSequenceInfo`: name, `usage_count`, `increment`, `min_value`, `max_value`, `start_value`, `cycle`, `last_value`",
+      "audit_evidence": [
+        "Native creation rejected; no sequence lifecycle/state RPC. A sequence feature needs allocation, concurrency, rollback policy, and metadata semantics, not just numeric field transport."
+      ],
+      "area": "sequences_types",
+      "disposition": "decision_required",
+      "target": "SequenceInfo/SequenceAllocation",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-363",
+      "source_line": 363,
+      "section": "Other creation structures",
+      "field": "`CreateTypeInfo`: name, `type`, `query`, `constructors`",
+      "audit_evidence": [
+        "Native creation rejected. 2.0 constructor representation differs from 1.5 bind-function registration. User type/enum creation and discovery require an explicit contract; opaque C++ constructor callbacks cannot simply cross the wire."
+      ],
+      "area": "sequences_types",
+      "disposition": "decision_required",
+      "target": "TypeInfo/TypeCreateRequest",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-364",
+      "source_line": 364,
+      "section": "Other creation structures",
+      "field": "`CreateCollationInfo`: name, `function`, `combinable`, `not_required_for_equality`",
+      "audit_evidence": [
+        "Native creation rejected. Collation execution and comparison semantics need engine-local integration; no generic callback serialization."
+      ],
+      "area": "collations_coordinates",
+      "disposition": "decision_required",
+      "target": "CollationInfo",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-365",
+      "source_line": 365,
+      "section": "Other creation structures",
+      "field": "`CreateCoordinateSystemInfo`: name, `authority`, `code`, `projjson_definition`, `wkt2_2019_definition`",
+      "audit_evidence": [
+        "No VGI creation/discovery integration. This structure already exists in the 1.5 baseline; it is not solely a new 2.0 gap."
+      ],
+      "area": "collations_coordinates",
+      "disposition": "decision_required",
+      "target": "CoordinateSystemInfo",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-366",
+      "source_line": 366,
+      "section": "Other creation structures",
+      "field": "`CreateTableFunctionInfo`, `CreateCopyFunctionInfo`, `CreatePragmaFunctionInfo` callable definitions",
+      "audit_evidence": [
+        "Native schema creation hooks reject. Existing extension registration and worker function discovery are separate supported paths; port their callbacks in the function/COPY workstream."
+      ],
+      "area": "sequences_types",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-381",
+      "source_line": 381,
+      "section": "Trigger fields",
+      "field": "Inherited `qualified_name`, conflict/lifecycle/metadata fields",
+      "audit_evidence": [
+        "Define identity, replacement, persistence, and dependencies."
+      ],
+      "area": "triggers",
+      "disposition": "include",
+      "target": "TriggerInfo.name/comment/tags/dependencies",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-382",
+      "source_line": 382,
+      "section": "Trigger fields",
+      "field": "`base_table`",
+      "audit_evidence": [
+        "Resolve full table ownership, including nested schema paths."
+      ],
+      "area": "triggers",
+      "disposition": "include",
+      "target": "TriggerInfo.table",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-383",
+      "source_line": 383,
+      "section": "Trigger fields",
+      "field": "`timing`",
+      "audit_evidence": [
+        "Implement the advertised before/after behavior and failure ordering."
+      ],
+      "area": "triggers",
+      "disposition": "include",
+      "target": "TriggerInfo.timing",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-384",
+      "source_line": 384,
+      "section": "Trigger fields",
+      "field": "`event_type`",
+      "audit_evidence": [
+        "Select the correct write events; qualify INSERT/UPDATE/DELETE and any combined write plans."
+      ],
+      "area": "triggers",
+      "disposition": "include",
+      "target": "TriggerInfo.events",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-385",
+      "source_line": 385,
+      "section": "Trigger fields",
+      "field": "`columns`",
+      "audit_evidence": [
+        "Preserve UPDATE OF column filtering; typed names must resolve to the target table."
+      ],
+      "area": "triggers",
+      "disposition": "include",
+      "target": "TriggerInfo.update_columns",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-386",
+      "source_line": 386,
+      "section": "Trigger fields",
+      "field": "`for_each`",
+      "audit_evidence": [
+        "Preserve row versus statement execution count."
+      ],
+      "area": "triggers",
+      "disposition": "include",
+      "target": "TriggerInfo.granularity",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-387",
+      "source_line": 387,
+      "section": "Trigger fields",
+      "field": "`referencing_new_table`, `referencing_old_table`",
+      "audit_evidence": [
+        "Bind transition-table names to the correct NEW/OLD data."
+      ],
+      "area": "triggers",
+      "disposition": "include",
+      "target": "TriggerInfo.new_table_alias/old_table_alias",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-388",
+      "source_line": 388,
+      "section": "Trigger fields",
+      "field": "`trigger_action`",
+      "audit_evidence": [
+        "Preserve query semantics and dependencies; establish execution location, transaction scope, and recursion policy."
+      ],
+      "area": "triggers",
+      "disposition": "include",
+      "target": "TriggerInfo.action",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-404",
+      "source_line": 404,
+      "section": "Attachment and capability boundaries",
+      "field": "`AttachInfo.name`",
+      "audit_evidence": [
+        "2.0 `Identifier`; engine attachment alias. Keep distinct from the remote catalog name in `path`."
+      ],
+      "area": "capabilities",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-405",
+      "source_line": 405,
+      "section": "Attachment and capability boundaries",
+      "field": "`path`",
+      "audit_evidence": [
+        "VGI interprets it as remote catalog selection/connection input. Preserve existing parsing, redaction, and cache identity."
+      ],
+      "area": "capabilities",
+      "disposition": "existing_contract",
+      "target": "CatalogAttachRequest.name",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-406",
+      "source_line": 406,
+      "section": "Attachment and capability boundaries",
+      "field": "`parsed_path`",
+      "audit_evidence": [
+        "New expression form; engine binds it into the path. Qualify prepared/dynamic attach rather than sending an AST to the worker."
+      ],
+      "area": "capabilities",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-407",
+      "source_line": 407,
+      "section": "Attachment and capability boundaries",
+      "field": "`parsed_options`, `options`",
+      "audit_evidence": [
+        "Engine binds expressions into values; VGI consumes extension options and validates/forwards declared worker options. Preserve typed values and secret handling through the signature port."
+      ],
+      "area": "capabilities",
+      "disposition": "existing_contract",
+      "target": "CatalogAttachRequest.options",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-408",
+      "source_line": 408,
+      "section": "Attachment and capability boundaries",
+      "field": "`on_conflict`",
+      "audit_evidence": [
+        "Engine manages attachment conflicts. Test IF NOT EXISTS/REPLACE and resource cleanup; do not substitute table-create conflict handling."
+      ],
+      "area": "capabilities",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-409",
+      "source_line": 409,
+      "section": "Attachment and capability boundaries",
+      "field": "`external_resource`",
+      "audit_evidence": [
+        "New engine resource path. Provisioning/borrowing is handled before attachment, which receives the applied endpoint/options. Not automatically a missing catalog RPC. Qualify resource output compatibility with VGI LOCATION/catalog selection."
+      ],
+      "area": "capabilities",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-410",
+      "source_line": 410,
+      "section": "Attachment and capability boundaries",
+      "field": "External resource `parsed_params`, `params`, `provider`, `reference_name`",
+      "audit_evidence": [
+        "Engine binds parameters, provisions or borrows the provider, and owns teardown rules. Test failed attach, DETACH, and borrowed-resource lifetime; do not duplicate provider ownership in the worker."
+      ],
+      "area": "capabilities",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-411",
+      "source_line": 411,
+      "section": "Attachment and capability boundaries",
+      "field": "`RenameDatabaseInfo.new_name` and target name",
+      "audit_evidence": [
+        "Engine DatabaseManager renames the attachment. No remote catalog rename RPC is inherently needed. Qualify VGI cached names, published global functions, owner-qualified definitions, companion attachments, and detach cleanup."
+      ],
+      "area": "capabilities",
+      "disposition": "engine_only",
+      "target": null,
+      "status": "pending_native_qualification",
+      "evidence": []
+    },
+    {
+      "id": "audit-412",
+      "source_line": 412,
+      "section": "Attachment and capability boundaries",
+      "field": "`SupportsMultipleDMLCTEs()`",
+      "audit_evidence": [
+        "Explicit opt-in. Leave disabled until multiple writes, failure/rollback, and RETURNING share correct worker transaction state. It does not enable ADD COLUMN's rewritten operations by itself."
+      ],
+      "area": "transactions",
+      "disposition": "include",
+      "target": "TransactionCapabilities.multiple_dml",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-413",
+      "source_line": 413,
+      "section": "Attachment and capability boundaries",
+      "field": "`Supports(RemoteCapability)`",
+      "audit_evidence": [
+        "IS_REMOTE, EXECUTE_QUERY_NODE, EXECUTE_STATEMENT, CONNECT are separate capabilities. VGI has no target implementations; define a SQL-capable worker profile if desired."
+      ],
+      "area": "statements",
+      "disposition": "decision_required",
+      "target": "QueryCapabilities",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-414",
+      "source_line": 414,
+      "section": "Attachment and capability boundaries",
+      "field": "`RemoteExecute(...)`, `SupportsPushdown(...)`",
+      "audit_evidence": [
+        "New optional execution integration, distinct from ordinary catalog metadata RPCs. Do not claim CONNECT or general SQL delegation merely because table scans work."
+      ],
+      "area": "query",
+      "disposition": "include",
+      "target": "CatalogQueryPrepareRequest/CatalogQueryPrepareResult",
+      "status": "pending_contract_review",
+      "evidence": []
+    },
+    {
+      "id": "audit-415",
+      "source_line": 415,
+      "section": "Attachment and capability boundaries",
+      "field": "DDL `transaction_opaque_data`",
+      "audit_evidence": [
+        "Existing requests carry the transaction token. Qualify transaction lifetime across create/alter/drop, CTAS, expanded ALTER, nested writes, and retries. Presence of a token is not proof of rollback."
+      ],
+      "area": "transactions",
+      "disposition": "existing_contract",
+      "target": "mutation.transaction_opaque_data",
+      "status": "pending_contract_review",
+      "evidence": []
+    }
+  ],
+  "proposals": [
+    {
+      "source": "docs/protocol/vgi-protocol-proposed-changes.md",
+      "areas": [
+        "identity",
+        "logical_types",
+        "optimizer",
+        "columns",
+        "constraints",
+        "triggers",
+        "transactions",
+        "cleanup"
+      ],
+      "existing_contracts": [
+        "function signatures and typed defaults",
+        "schema paths",
+        "Filter v2",
+        "OLD/NEW changes write mode"
+      ],
+      "remaining_reviews": [
+        "runtime filter algorithm envelopes",
+        "standalone window feasibility"
+      ]
+    },
+    {
+      "source": "docs/protocol/vgi-catalog-query-pushdown-design.md",
+      "areas": [
+        "query",
+        "capabilities",
+        "transactions",
+        "statements",
+        "logical_types"
+      ],
+      "reconciliation": "Absorb its phases into P0-P3/M0-M4 and include typed parameters in this design instead of automatically deferring them."
+    },
+    {
+      "source": "native:docs/multi_input_table_functions.md",
+      "areas": [
+        "multi_input"
+      ],
+      "reconciliation": "Require executable binder/operator feasibility, per-input delivery and transaction semantics before deciding the wire shape."
+    }
+  ],
+  "sdk_inventory": {
+    "sources": [
+      "vgi/protocol.py",
+      "vgi/catalog/catalog_interface.py",
+      "vgi/codegen/_common.py",
+      "vgi/catalog/options.py",
+      "vgi/column_path.py",
+      "vgi/codegen/catalog_contract_fixtures.py"
+    ],
+    "required_targets": [
+      "vgi-python",
+      "vgi",
+      "vgi-go",
+      "vgi-rust",
+      "vgi-typescript",
+      "vgi-java",
+      "vgi-csharp",
+      "vgi-c++"
+    ],
+    "browser_client": "vgi/http/vgi-client.js",
+    "gates": [
+      "scripts/regen_generated.py --check --require-all",
+      "make schema_parity",
+      "make test_languages",
+      "cross-SDK vectors for every included record and lifecycle"
+    ],
+    "limits": "The separate C++ SDK registry is also a strict generation target. No new RPC registry entries are emitted for currently unreferenced shared records.",
+    "preparation_revisions": {
+      "python": "7e61efa",
+      "go": "983e34b",
+      "rust": "b6283c3",
+      "typescript": "4d6ff3e",
+      "java": "96ca66c",
+      "csharp": "5ad2026"
+    },
+    "tested_dependencies": {
+      "python_rpc": "0.50.0",
+      "python_arrow": "25.0.1",
+      "go_rpc": "0.32.0",
+      "go_arrow": "v18.7.0 replaced by Query-farm/arrow-go v18.0.0-20260220022719-2d45cbd918a4",
+      "rust_rpc": "0.31.4",
+      "rust_arrow": "60.0.0",
+      "typescript_rpc": "0.28.0",
+      "java_rpc_source": "b0af459109f0f26a4e163f219b48b682be897f49",
+      "csharp_rpc_source": "2062329652ee045466aebe3581dcd60b407db5f2",
+      "native_arrow": "21.0.0"
+    }
+  },
+  "gates": {
+    "P0": {
+      "status": "in_progress",
+      "evidence": [
+        {
+          "status": "inventory_coverage_only",
+          "sources": [
+            "scripts/check_duckdb2_manifest.py",
+            "tests/test_duckdb2_manifest.py"
+          ],
+          "limits": "All 151 audit rows and 19 plan target/candidate areas inventoried, plus identity. Scope/capability/field decisions remain open."
+        }
+      ]
+    },
+    "P1": {
+      "status": "in_progress",
+      "evidence": [
+        {
+          "status": "partial_common_contract_proof",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md",
+            "tests/catalog/test_options.py",
+            "tests/test_column_path.py",
+            "conformance/catalog-contracts.json"
+          ],
+          "limits": "Shared records and reference semantics only; broader catalog operations and lifecycle contracts remain pending."
+        }
+      ]
+    },
+    "P2": {
+      "status": "preparation_only",
+      "evidence": [
+        {
+          "status": "shared_codec_preparation",
+          "source": "preparation_validation",
+          "limits": "The combined protocol is not frozen; remaining records and operations have not been ported."
+        }
+      ]
+    },
+    "P3": {
+      "status": "not_started",
+      "evidence": []
+    },
+    "M0": {
+      "status": "preparation_only",
+      "evidence": [
+        {
+          "status": "haybarn_refresh_and_source_audit",
+          "source": "native:docs/duckdb-2.0-plan.md",
+          "limits": "No pinned native VGI 2.0 build/CI lane or complete compilation inventory yet."
+        }
+      ]
+    },
+    "M1": {
+      "status": "not_started",
+      "evidence": []
+    },
+    "M2": {
+      "status": "not_started",
+      "evidence": []
+    },
+    "M3": {
+      "status": "not_started",
+      "evidence": []
+    },
+    "M4": {
+      "status": "not_started",
+      "evidence": []
+    }
+  },
+  "preparation_validation": {
+    "engine": "1.5 source 105edd31b57fe7e6d32ee648efad562e45a9f908; existing release unittest",
+    "coverage": "Shared option/path records and unchanged 2.1 RPC behavior. No new catalog operation or native 2.0 qualification.",
+    "python_focused_checks": 232,
+    "manifest_after_scope_guard": 11,
+    "shared_documentation_examples": 2,
+    "language_matrix": {
+      "test_python": {
+        "passed": 344,
+        "skipped": 33,
+        "failed": 0
+      },
+      "test_go": {
+        "passed": 336,
+        "skipped": 40,
+        "failed": 0
+      },
+      "test_rust": {
+        "passed": 323,
+        "skipped": 42,
+        "failed": 0
+      },
+      "test_typescript": {
+        "passed": 328,
+        "skipped": 46,
+        "failed": 0
+      },
+      "test_java": {
+        "passed": 324,
+        "skipped": 37,
+        "failed": 0
+      },
+      "test_csharp": {
+        "passed": 328,
+        "skipped": 37,
+        "failed": 0
+      }
+    },
+    "language_matrix_exit_code": 0,
+    "typescript_http": {
+      "passed": 311,
+      "skipped": 53,
+      "failed": 0
+    },
+    "generated_codec_checks": {
+      "go": "schema derivation and 6 typed HTTP echo corpus cases",
+      "rust": "schema parity plus 2 IPC corpus tests",
+      "typescript": "3 corpus tests with each of 2 Arrow backends; build passed",
+      "java": "69 schema checks plus 2 corpus tests",
+      "csharp": "225 schema checks plus 2 corpus tests",
+      "cpp": "generated schema header syntax-check against Arrow 21.0.0"
+    },
+    "logs": [
+      "/tmp/vgi-duckdb2-shared-codegen-tests.log",
+      "/tmp/vgi-duckdb2-shared-languages.log",
+      "/tmp/vgi-duckdb2-shared-typescript-launcher.log",
+      "/tmp/vgi-duckdb2-shared-typescript-http-details.log",
+      "/tmp/vgi-duckdb2-shared-java.log",
+      "/tmp/vgi-duckdb2-shared-csharp.log",
+      "/tmp/vgi-duckdb2-shared-docs.log"
+    ],
+    "limitations": [
+      "Expected environment/transport skips are recorded separately, not counted as passes.",
+      "Native tests used the existing 1.5 release binary; only generated C++ schemas changed and received a separate compile check.",
+      "Shared-record codec proof is not full logical-type semantic support or operation/transaction support."
+    ]
+  }
+}
