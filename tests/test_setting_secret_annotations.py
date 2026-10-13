@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Annotated, Any
 
 import pyarrow as pa
+import pytest
 
 from tests.conftest import FIXTURE_WORKER
 from vgi.arguments import (
@@ -418,6 +419,16 @@ class TestSecretsTypeInParams:
         assert len(outputs) > 0
 
 
+def _wire_secrets(*secrets: dict[str, str]) -> pa.RecordBatch:
+    """Build a secrets batch the way the DuckDB extension does.
+
+    One row, one struct column per secret, the column named by the secret's
+    ``name``; ``type``, ``provider``, ``name`` and ``scope`` are fields.
+    """
+    columns = {s["name"]: [{"provider": "config", **s}] for s in secrets}
+    return pa.RecordBatch.from_pydict(columns)
+
+
 # ---------------------------------------------------------------------------
 # Tests for SecretsAccessor
 # ---------------------------------------------------------------------------
@@ -461,57 +472,157 @@ class TestSecretsAccessor:
         assert entry.secret_type == "s3"
         assert entry.scope == "s3://bucket/"
 
-    def test_to_dict_combines_unscoped_and_scoped(self) -> None:
-        """to_dict() includes both unscoped and scoped entries."""
-        # Build a batch with an unscoped column and a scoped column
-        struct_type = pa.struct([("k", pa.string())])
-        unscoped_arr = pa.array([{"k": "unscoped_val"}], type=struct_type)
-
-        scoped_field = pa.field(
-            "secret_0",
-            struct_type,
-            metadata={"secret_type": "scoped_type", "scope": "s3://x/"},
+    def test_to_dict_is_keyed_by_secret_name(self) -> None:
+        """to_dict() keeps every resolved secret under its own name, nulls dropped."""
+        batch = _wire_secrets(
+            {"type": "s3", "name": "prod", "scope": "s3://prod/", "key_id": "P"},
+            {"type": "s3", "name": "dev", "scope": "s3://dev/", "key_id": "D"},
         )
-        scoped_arr = pa.array([{"k": "scoped_val"}], type=struct_type)
-
-        batch = pa.RecordBatch.from_arrays(
-            [unscoped_arr, scoped_arr],
-            schema=pa.schema([pa.field("my_type", struct_type), scoped_field]),
-        )
+        struct_type = pa.struct([("type", pa.string())])
+        batch = batch.append_column(pa.field("gone", struct_type), pa.array([None], type=struct_type))
         result = SecretsAccessor(batch).to_dict()
-        assert "my_type" in result
-        assert result["my_type"]["k"].as_py() == "unscoped_val"
-        assert "scoped_type" in result
-        assert result["scoped_type"]["k"].as_py() == "scoped_val"
+        assert sorted(result) == ["dev", "prod"]
+        assert result["prod"]["key_id"].as_py() == "P"
 
-    def test_to_dict_skips_null_scoped(self) -> None:
-        """to_dict() skips scoped entries with null values."""
-        struct_type = pa.struct([("k", pa.string())])
-        scoped_field = pa.field(
-            "secret_0",
-            struct_type,
-            metadata={"secret_type": "null_type"},
+    def test_a_secret_named_like_the_old_wire_columns_is_an_ordinary_secret(self) -> None:
+        """A user may name a secret ``secret_0``; it is not a special column."""
+        batch = _wire_secrets({"type": "s3", "name": "secret_0", "scope": "s3://", "key_id": "K"})
+        accessor = SecretsAccessor(batch, is_retry=True)
+        assert accessor.to_dict()["secret_0"]["key_id"].as_py() == "K"
+        found = accessor.get("s3", name="secret_0")
+        assert found is not None
+        assert found["key_id"].as_py() == "K"
+
+    def test_get_by_name_on_retry_returns_the_secret(self) -> None:
+        """The two-phase bind: a by-name lookup registers, then the retry returns it.
+
+        Regression: the retry looked for ``secret_N`` columns that no client
+        sends, so the lookup came back ``None`` although the secret was in the
+        batch, and ``required=True`` raised.
+        """
+        first = SecretsAccessor(None)
+        assert first.get("s3", name="prod", required=True) is None
+        assert first.pending_lookups == [SecretLookupEntry(secret_type="s3", secret_name="prod")]
+
+        batch = _wire_secrets({"type": "s3", "name": "prod", "scope": "s3://", "key_id": "P"})
+        retry = SecretsAccessor(batch, is_retry=True)
+        found = retry.get("s3", name="prod", required=True)
+        assert found is not None
+        assert found["key_id"].as_py() == "P"
+        assert retry.all_resolved
+
+    def test_get_by_name_checks_the_type(self) -> None:
+        """A secret with the right name but another type is not a match."""
+        batch = _wire_secrets({"type": "gcs", "name": "prod", "scope": "gcs://"})
+        accessor = SecretsAccessor(batch, is_retry=True)
+        assert accessor.get("s3", name="prod") is None
+        with pytest.raises(ValueError, match="Required secret 's3' not found"):
+            accessor.get("s3", name="prod", required=True)
+
+    def test_get_by_name_already_resolved_needs_no_retry(self) -> None:
+        """A by-name lookup the client pre-resolved is answered on the first bind."""
+        batch = _wire_secrets({"type": "s3", "name": "prod", "scope": "s3://", "key_id": "P"})
+        accessor = SecretsAccessor(batch)
+        assert accessor.get("s3", name="prod") is not None
+        assert not accessor.needs_resolution
+
+    def test_get_by_scope_on_retry_picks_the_longest_prefix(self) -> None:
+        """A scope lookup returns the secret whose scope is the longest prefix."""
+        batch = _wire_secrets(
+            {"type": "s3", "name": "any", "scope": "s3://", "key_id": "ANY"},
+            {"type": "s3", "name": "prod", "scope": "s3://prod/\ns3n://prod/", "key_id": "PROD"},
+            {"type": "gcs", "name": "other", "scope": "s3://prod/data/", "key_id": "WRONG-TYPE"},
         )
-        scoped_arr = pa.array([None], type=struct_type)
-        batch = pa.RecordBatch.from_arrays(
-            [scoped_arr],
-            schema=pa.schema([scoped_field]),
+        accessor = SecretsAccessor(batch, is_retry=True)
+        prod = accessor.get("s3", scope="s3://prod/data/x.parquet", required=True)
+        assert prod is not None and prod["key_id"].as_py() == "PROD"
+        other = accessor.get("s3", scope="s3://elsewhere/x.parquet", required=True)
+        assert other is not None and other["key_id"].as_py() == "ANY"
+        assert accessor.get("s3", scope="az://nope/") is None
+
+    def test_get_by_scope_always_asks_the_client_first(self) -> None:
+        """Only the client knows whether a longer-scoped secret exists."""
+        batch = _wire_secrets({"type": "s3", "name": "any", "scope": "s3://", "key_id": "ANY"})
+        accessor = SecretsAccessor(batch)
+        assert accessor.get("s3", scope="s3://prod/x") is None
+        assert accessor.pending_lookups == [SecretLookupEntry(secret_type="s3", scope="s3://prod/x")]
+
+    def test_get_by_type_finds_a_secret_whatever_its_name(self) -> None:
+        """A by-type lookup matches the ``type`` field, not the column name."""
+        batch = _wire_secrets(
+            {"type": "vgi_example", "name": "scoped", "scope": "x://a/", "v": "scoped"},
+            {"type": "vgi_example", "name": "__default_vgi_example", "scope": "", "v": "default"},
+            {"type": "s3", "name": "aaa", "scope": "", "v": "s3"},
         )
-        result = SecretsAccessor(batch).to_dict()
-        assert "null_type" not in result
+        accessor = SecretsAccessor(batch)
+        found = accessor.get("vgi_example")
+        assert found is not None
+        assert found["v"].as_py() == "default"
+        assert not accessor.needs_resolution
+
+    def test_get_by_type_falls_back_to_a_scoped_secret(self) -> None:
+        """With no unscoped secret of the type, the first one of that type is used."""
+        batch = _wire_secrets({"type": "s3", "name": "prod", "scope": "s3://", "v": "p"})
+        found = SecretsAccessor(batch).get("s3")
+        assert found is not None
+        assert found["v"].as_py() == "p"
+
+    def test_annotated_secret_is_selected_by_name_and_scope(self) -> None:
+        """A ``Secret()`` annotation on on_bind gets the secret it names, through a real bind.
+
+        Regression: the table-function path looked for a column named by the
+        secret *type*, so an annotated secret arrived as ``None`` unless the
+        user had named the secret after its type.
+        """
+        from vgi.arguments import Arguments
+        from vgi.invocation import FunctionType
+        from vgi.protocol import BindRequest
+
+        seen: dict[str, Any] = {}
+
+        @dataclass(slots=True, frozen=True)
+        class _Args:
+            count: Annotated[int, Arg(0, doc="Count")] = 10
+
+        class _TestFunc(TableFunctionGenerator[_Args]):
+            @classmethod
+            def on_bind(
+                cls,
+                params: BindParams[_Args],
+                *,
+                by_name: Annotated[dict[str, pa.Scalar[Any]] | None, Secret("s3", name="dev")] = None,
+                by_scope: Annotated[dict[str, pa.Scalar[Any]] | None, Secret("s3", scope="s3://prod/x")] = None,
+                missing: Annotated[dict[str, pa.Scalar[Any]] | None, Secret("gcs")] = None,
+            ) -> BindResponse:
+                seen.update(by_name=by_name, by_scope=by_scope, missing=missing)
+                return BindResponse(output_schema=pa.schema([pa.field("x", pa.int64())]))
+
+            @classmethod
+            def process(cls, params: Any, state: Any, out: Any) -> None: ...
+
+        request = BindRequest(
+            function_name="_test_func",
+            arguments=Arguments(positional=(pa.scalar(1),)),
+            function_type=FunctionType.TABLE,
+            secrets=_wire_secrets(
+                {"type": "s3", "name": "dev", "scope": "s3://dev/", "key_id": "DEV"},
+                {"type": "s3", "name": "prod", "scope": "s3://prod/", "key_id": "PROD"},
+            ),
+        )
+        _TestFunc.bind(request)
+
+        assert seen["by_name"]["key_id"].as_py() == "DEV"
+        assert seen["by_scope"]["key_id"].as_py() == "PROD"
+        assert seen["missing"] is None
 
     def test_required_raises_on_retry(self) -> None:
         """required=True raises ValueError when secret is genuinely missing on retry."""
-        import pytest
-
         accessor = SecretsAccessor(None, is_retry=True)
         with pytest.raises(ValueError, match="Required secret"):
             accessor.get("missing_type", required=True)
 
     def test_scoped_required_raises_on_retry(self) -> None:
         """required=True with scope raises ValueError on retry when not found."""
-        import pytest
-
         accessor = SecretsAccessor(None, is_retry=True)
         with pytest.raises(ValueError, match="Required secret"):
             accessor.get("s3", scope="s3://bucket/", required=True)
@@ -557,7 +668,6 @@ class TestTStateValidation:
         still rejected, and rejected at class-definition time rather than
         silently falling back to initial_state() on every HTTP exchange.
         """
-        import pytest
 
         @dataclass
         class BadState:

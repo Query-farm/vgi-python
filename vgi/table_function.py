@@ -225,171 +225,6 @@ def _struct_scalar_to_dict(scalar: pa.StructScalar) -> dict[str, pa.Scalar[Any]]
     return {key: scalar[key] for key in scalar}
 
 
-class SecretsAccessor:
-    """Unified access to secrets — pre-resolved and dynamically requested.
-
-    Pre-resolved secrets (from Secret() annotations with static scope/name, or
-    unscoped lookups) are available immediately. Dynamic lookups (computed scope
-    from function arguments) register pending requests — the framework
-    automatically triggers a two-phase bind retry to resolve them.
-    """
-
-    __slots__ = ("_unscoped", "_scoped", "_is_retry", "_pending_lookups")
-
-    def __init__(self, secrets_batch: pa.RecordBatch | None, *, is_retry: bool = False) -> None:
-        """Initialize from a secrets RecordBatch.
-
-        Args:
-            secrets_batch: Single-row RecordBatch of resolved secrets, or None.
-            is_retry: True when invoked on a two-phase bind retry, so unresolved
-                dynamic lookups are treated as genuinely missing.
-
-        """
-        self._is_retry = is_retry
-        self._pending_lookups: list[SecretLookupEntry] = []
-
-        # Parse unscoped secrets (columns named by secret_type)
-        self._unscoped: dict[str, dict[str, pa.Scalar[Any]]] = {}
-        # Parse scoped secrets (columns named "secret_N" with field metadata)
-        self._scoped: list[tuple[dict[str, str], dict[str, pa.Scalar[Any]] | None]] = []
-
-        if secrets_batch is not None:
-            for i, name in enumerate(secrets_batch.schema.names):
-                col_field = secrets_batch.schema.field(i)
-                scalar = secrets_batch.column(i)[0]
-
-                if name.startswith("secret_"):
-                    # Scoped secret with metadata on the Arrow field
-                    raw_meta = col_field.metadata or {}
-                    entry_meta = {
-                        (k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v)
-                        for k, v in raw_meta.items()
-                    }
-                    if scalar.is_valid:
-                        self._scoped.append((entry_meta, _struct_scalar_to_dict(scalar)))
-                    else:
-                        self._scoped.append((entry_meta, None))
-                else:
-                    # Unscoped secret (column name = secret_type)
-                    if scalar.is_valid:
-                        self._unscoped[name] = _struct_scalar_to_dict(scalar)
-
-    def get(
-        self,
-        secret_type: str,
-        *,
-        name: str | None = None,
-        scope: str | None = None,
-        required: bool = False,
-    ) -> dict[str, pa.Scalar[Any]] | None:
-        """Get a secret by type, with optional name and/or scope.
-
-        Args:
-            secret_type: The secret type (e.g., "vgi_example", "s3").
-            name: Optional secret name for name-based lookup.
-            scope: Optional scope for scoped lookup (longest-prefix match).
-            required: If True, raises ValueError when the secret is genuinely
-                not found (after resolution).
-
-        Returns:
-            dict of string keys to Arrow scalars, or None if not found.
-
-        """
-        # Simple unscoped lookup (no dynamic scope/name)
-        if not scope and not name:
-            result = self._unscoped.get(secret_type)
-            if result is not None:
-                return result
-            if self._is_retry:
-                # Retry but still not found — genuinely missing
-                if required:
-                    raise ValueError(f"Required secret '{secret_type}' not found")
-                return None
-            # First call, not found — register pending lookup for two-phase bind
-            self._pending_lookups.append(SecretLookupEntry(secret_type=secret_type))
-            return None
-
-        # Check resolved scoped secrets (from retry)
-        if self._is_retry:
-            result = self._find_scoped(secret_type, name, scope)
-            if required and result is None:
-                raise ValueError(f"Required secret '{secret_type}' not found (scope={scope!r}, name={name!r})")
-            return result
-
-        # First call, dynamic scope/name — register pending lookup
-        self._pending_lookups.append(SecretLookupEntry(secret_type=secret_type, scope=scope, secret_name=name))
-        return None
-
-    @property
-    def all_resolved(self) -> bool:
-        """True if all requested secrets have been resolved (no pending lookups).
-
-        Use this to distinguish 'not yet resolved' from 'genuinely not found'
-        when not using required=True on get().
-        """
-        return len(self._pending_lookups) == 0
-
-    @property
-    def needs_resolution(self) -> bool:
-        """True if there are pending lookups that need resolution."""
-        return len(self._pending_lookups) > 0
-
-    @property
-    def pending_lookups(self) -> list[SecretLookupEntry]:
-        """Return the list of pending secret lookups."""
-        return list(self._pending_lookups)
-
-    def to_dict(self) -> ResolvedSecrets:
-        """Return all resolved secrets keyed by secret name.
-
-        Resolved secrets are keyed by their unique DuckDB secret name, so several
-        secrets of the same type (e.g. one per S3 bucket) coexist. Each carries a
-        ``type`` field (the DuckDB secret type) and a ``scope`` field
-        (newline-joined scope prefixes). Scoped ``secret_N`` columns (keyed by
-        ``secret_type`` from Arrow field metadata) are merged in. Null/unresolved
-        entries are omitted.
-
-        Returns:
-            A :class:`ResolvedSecrets` (a dict keyed by secret name) with
-            type- and scope-aware selection helpers.
-
-        """
-        result = dict(self._unscoped)
-        for meta, secret_dict in self._scoped:
-            if secret_dict is not None:
-                key = meta.get("secret_name") or meta.get("secret_type", "")
-                if key:
-                    result[key] = secret_dict
-        return ResolvedSecrets(result)
-
-    def _find_scoped(
-        self,
-        secret_type: str,
-        name: str | None,
-        scope: str | None,
-    ) -> dict[str, pa.Scalar[Any]] | None:
-        """Find a resolved scoped secret matching the given criteria.
-
-        Args:
-            secret_type: The secret type to match.
-            name: Optional secret name to match.
-            scope: Optional scope to match.
-
-        Returns:
-            The matching secret's key/scalar dict, or None if not found.
-
-        """
-        for meta, secret_dict in self._scoped:
-            if meta.get("secret_type") != secret_type:
-                continue
-            if scope is not None and meta.get("scope") != scope:
-                continue
-            if name is not None and meta.get("secret_name") != name:
-                continue
-            return secret_dict
-        return None
-
-
 def _secret_scalar_str(v: Any) -> str:
     """Render a resolved-secret field (a pyarrow Scalar or plain value) to str."""
     if v is None:
@@ -430,6 +265,42 @@ class ResolvedSecrets(dict[str, dict[str, Any]]):
         """Like :meth:`for_scope` but only over secrets of ``secret_type``."""
         return self._select_for_scope(path, secret_type)
 
+    def lookup(
+        self,
+        secret_type: str,
+        *,
+        name: str | None = None,
+        scope: str | None = None,
+    ) -> dict[str, Any] | None:
+        """The resolved secret a ``(secret_type, name, scope)`` request refers to.
+
+        Mirrors how the client resolves a lookup, so a worker can find the
+        secret it asked for among everything that was resolved:
+
+        * ``name`` — the secret with that name, if it has the requested type.
+          ``scope`` is ignored, as it is on the client.
+        * ``scope`` — the secret of that type whose scope is the longest prefix
+          of ``scope``, else one of that type with an empty scope.
+        * neither — a secret of that type with an empty scope, else the first
+          secret of that type.
+
+        When no secret has the requested type, a secret *named* ``secret_type``
+        is returned. That keeps clients working that key the batch by type and
+        send bare key/value structs, as the Python ``Client`` allows.
+        """
+        if name:
+            fields = self.get(name)
+            if fields is None:
+                return None
+            return fields if _secret_scalar_str(fields.get("type")) in ("", secret_type) else None
+        if scope:
+            found = self._select_for_scope(scope, secret_type)
+        else:
+            found = self._select_for_scope("", secret_type)
+            if found is None:
+                found = next(iter(self.of_type(secret_type)), None)
+        return found if found is not None else self.get(secret_type)
+
     def field_for(self, path: str, field: str) -> Any | None:
         """A field of the best scope-matching secret for ``path``."""
         fields = self.for_scope(path)
@@ -452,6 +323,119 @@ class ResolvedSecrets(dict[str, dict[str, Any]]):
                     best_len = len(prefix)
                     best = fields
         return best if best is not None else fallback
+
+
+class SecretsAccessor:
+    """Bind-time access to secrets: the resolved ones, plus requests for more.
+
+    The secrets batch carries one struct column per resolved secret, named by
+    the secret's DuckDB name (see ``docs/protocol/vgi-secrets.md``). ``get()``
+    answers from that batch. When the secret is not there yet it records a
+    lookup, and the framework answers the bind with a secret-scope request so
+    the client resolves it and binds again.
+    """
+
+    __slots__ = ("_resolved", "_is_retry", "_pending_lookups")
+
+    def __init__(self, secrets_batch: pa.RecordBatch | None, *, is_retry: bool = False) -> None:
+        """Initialize from a secrets RecordBatch.
+
+        Args:
+            secrets_batch: Single-row RecordBatch of resolved secrets, or None.
+            is_retry: True when invoked on a two-phase bind retry, so unresolved
+                dynamic lookups are treated as genuinely missing.
+
+        """
+        self._is_retry = is_retry
+        self._pending_lookups: list[SecretLookupEntry] = []
+        self._resolved = ResolvedSecrets()
+
+        if secrets_batch is not None:
+            for i, name in enumerate(secrets_batch.schema.names):
+                scalar = secrets_batch.column(i)[0]
+                if scalar.is_valid:
+                    self._resolved[name] = _struct_scalar_to_dict(scalar)
+
+    def get(
+        self,
+        secret_type: str,
+        *,
+        name: str | None = None,
+        scope: str | None = None,
+        required: bool = False,
+    ) -> dict[str, pa.Scalar[Any]] | None:
+        """Get a secret by type, with optional name and/or scope.
+
+        A secret that is already resolved is returned at once when it was asked
+        for by ``name`` or by type alone. A ``scope`` lookup always goes to the
+        client on the first bind, because only the client knows whether a
+        secret with a longer matching scope exists; the first call returns
+        ``None`` and the retry returns the secret. Use :attr:`all_resolved` to
+        tell "not resolved yet" from "not found".
+
+        Args:
+            secret_type: The secret type (e.g., "vgi_example", "s3").
+            name: Optional secret name for name-based lookup. Takes precedence
+                over ``scope``, as it does on the client.
+            scope: Optional scope for scoped lookup (longest-prefix match).
+            required: If True, raises ValueError when the secret is genuinely
+                not found (after resolution).
+
+        Returns:
+            dict of string keys to Arrow scalars, or None if not found.
+
+        """
+        if self._is_retry or (not scope or name):
+            result = self._resolved.lookup(secret_type, name=name, scope=scope)
+            if result is not None:
+                return result
+            if self._is_retry:
+                # Retry but still not found — genuinely missing
+                if required:
+                    if not scope and not name:
+                        raise ValueError(f"Required secret '{secret_type}' not found")
+                    raise ValueError(f"Required secret '{secret_type}' not found (scope={scope!r}, name={name!r})")
+                return None
+
+        # First call, not resolved — register pending lookup for two-phase bind
+        self._pending_lookups.append(
+            SecretLookupEntry(secret_type=secret_type, scope=scope or None, secret_name=name or None)
+        )
+        return None
+
+    @property
+    def all_resolved(self) -> bool:
+        """True if all requested secrets have been resolved (no pending lookups).
+
+        Use this to distinguish 'not yet resolved' from 'genuinely not found'
+        when not using required=True on get().
+        """
+        return len(self._pending_lookups) == 0
+
+    @property
+    def needs_resolution(self) -> bool:
+        """True if there are pending lookups that need resolution."""
+        return len(self._pending_lookups) > 0
+
+    @property
+    def pending_lookups(self) -> list[SecretLookupEntry]:
+        """Return the list of pending secret lookups."""
+        return list(self._pending_lookups)
+
+    def to_dict(self) -> ResolvedSecrets:
+        """Return all resolved secrets keyed by secret name.
+
+        Resolved secrets are keyed by their unique DuckDB secret name, so several
+        secrets of the same type (e.g. one per S3 bucket) coexist. Each carries a
+        ``type`` field (the DuckDB secret type) and a ``scope`` field
+        (newline-joined scope prefixes). Null/unresolved entries are omitted.
+
+        Returns:
+            A :class:`ResolvedSecrets` (a dict keyed by secret name) with
+            type- and scope-aware selection helpers.
+
+        """
+        return ResolvedSecrets(self._resolved)
 
 
 def project_schema(projection_ids: list[int] | None, schema: pa.Schema) -> pa.Schema:
@@ -1070,10 +1054,9 @@ class TableFunctionBase[TArgs](vgi.function.Function):
 
         # Secret params: extract dict[str, pa.Scalar] from secrets RecordBatch
         if input.secrets is not None and cls._secret_params:
-            secrets_schema = input.secrets.schema
+            resolved = SecretsAccessor(input.secrets).to_dict()
             for name, secret in cls._secret_params.items():
-                col_idx = secrets_schema.get_field_index(secret.secret_type)
-                kwargs[name] = _struct_scalar_to_dict(input.secrets.column(col_idx)[0]) if col_idx >= 0 else None
+                kwargs[name] = resolved.lookup(secret.secret_type, name=secret.name, scope=secret.scope)
 
         return kwargs
 
