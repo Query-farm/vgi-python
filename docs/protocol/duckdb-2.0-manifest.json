@@ -118,6 +118,16 @@
             "tests/catalog/test_schema_options_protocol.py"
           ],
           "limits": "Python reference proves durable option creation/readback/alteration and transactional isolation/rollback/reconnect. Schema comment/tag alteration, dependency semantics and native adapter support remain pending."
+        },
+        {
+          "status": "schema_creation_metadata_implemented",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md",
+            "tests/catalog/test_view_metadata_cross_sdk.py",
+            "tests/catalog/test_schema_metadata_protocol.py",
+            "native:test/cpp/test_schema_metadata.cpp"
+          ],
+          "limits": "Creation, discovery, ERROR/IGNORE and empty-schema REPLACE only. Schema comment/tag mutation, nonempty/descendant/dependency lifecycle and native 2.0 qualification remain open."
         }
       ]
     },
@@ -1032,9 +1042,20 @@
       ],
       "area": "schemas",
       "disposition": "existing_contract",
-      "target": "SchemaCreateRequest.comment/tags",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "catalog_schema_create.comment/tags; SchemaInfo.comment/tags",
+      "status": "existing_contract_qualified_on_duckdb_15_native_2_pending",
+      "evidence": [
+        {
+          "status": "creation_uses_existing_fields",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md",
+            "tests/catalog/test_view_metadata_cross_sdk.py",
+            "tests/catalog/test_schema_metadata_protocol.py",
+            "native:test/cpp/test_schema_metadata.cpp"
+          ],
+          "limits": "Existing comment/tag field semantics reviewed; native 2.0 port and schema metadata mutation remain pending."
+        }
+      ]
     },
     {
       "id": "audit-104",
@@ -4221,5 +4242,95 @@
       "errors": 0
     },
     "counts_overlap": true
+  },
+  "schema_metadata_validation": {
+    "status": "creation_metadata_qualified_on_duckdb_15",
+    "engine_revision": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "protocol_hash": "18fc1d304bafc3ea667bc77e20dbbd0028444ec7587cca7f03a428067942a4f7",
+    "protocol_method_count": 78,
+    "wire_changes": [],
+    "contract": [
+      "Reuse catalog_schema_create comment/tags/on_conflict and SchemaInfo metadata.",
+      "NULL and empty comments are distinct; omitted/NULL tags mean empty.",
+      "ERROR/IGNORE preserve metadata and catalog version. Empty-schema REPLACE resets omitted metadata.",
+      "Get/list/catalog_contents preserve metadata; estimated object counts may differ by route.",
+      "Raw schema path components distinguish literal dotted names from nested names."
+    ],
+    "ec2_workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+    "checks": {
+      "python_catalog_and_codegen": {
+        "passed": 769,
+        "skipped": 2
+      },
+      "public_rpc_schema_and_view_lifecycles": {
+        "passed": 15,
+        "sdk_count": 7
+      },
+      "manifest_corpus_native_inventory": {
+        "passed": 23
+      },
+      "go": {
+        "packages": 13
+      },
+      "typescript": {
+        "passed": 602,
+        "skipped": 68,
+        "bundle_entries": 4
+      },
+      "cpp": {
+        "ctests_passed": 68
+      },
+      "ruff": "passed",
+      "mypy": {
+        "sources": 210
+      },
+      "all_sdk_generation": "passed",
+      "native_build": "passed",
+      "native_parsed_create_copy_cache": {
+        "sdk_count": 7,
+        "test_cases_per_sdk": 1,
+        "assertions_per_sdk": 99
+      },
+      "native_reference": {
+        "passed": 3,
+        "assertions": 218
+      },
+      "source_verification": {
+        "repositories": 15,
+        "files": 33017,
+        "errors": 0
+      }
+    },
+    "limits": [
+      "Native DuckDB 2.0 remains unimplemented.",
+      "Schema comment/tag mutation and full capability mapping remain pending.",
+      "Nonempty/descendant schema REPLACE/drop dependency semantics remain pending.",
+      "Transaction qualification is the durable Python reference, not every SDK/provider.",
+      "Go static schema descriptors retain historical empty-string default; its older writable provider rejects tags and empty comments.",
+      "Older Python transactor rejects schema creation metadata and REPLACE.",
+      "Previously recorded Flechette stdio limitation remains open.",
+      "No combined protocol freeze, phase completion or release."
+    ],
+    "logs": [
+      "schema-native-build.log",
+      "schema-native-catalog-build.log",
+      "schema-native-{python,go,rust,typescript,java,csharp,cpp}.log",
+      "schema-cross-sdk.log",
+      "schema-python.log",
+      "schema-go.log",
+      "schema-ts.log",
+      "schema-cpp.log",
+      "schema-native-reference.log"
+    ],
+    "native_revision": "11a5fc5ee691712086d9fe25f6a7f739d0735a25",
+    "python_base_revision": "f490399eccdafec1a82924cb4622784b7b03e542",
+    "sdk_revisions": {
+      "go": "195324414236dac994512d603702bc9d317a31cd",
+      "rust": "799dc68d47e8b532d3123ff413b15459a8d462c1",
+      "typescript": "b7eff8767719d4b9fe85d188b51c08879dc9f112",
+      "java": "81e84af967189a68988aff71109aaff0ef9ebf3a",
+      "csharp": "b01d9a48536001e27eed9727cd2392bf73d3ea93",
+      "cpp": "47d1aa24e0cb9fff0da9539c619158ac71f3fb32"
+    }
   }
 }

@@ -678,6 +678,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         """Create a new schema in the transactor's DuckDB database."""
         if options is not None:
             raise NotImplementedError("Schema options are not supported by this fixture")
+        if comment is not None or tags or on_conflict == OnConflict.REPLACE:
+            raise NotImplementedError("Schema metadata and replacement are not supported by this fixture")
         if_not_exists = " IF NOT EXISTS" if on_conflict == OnConflict.IGNORE else ""
         qualified_path = ".".join(_qi(component) for component in path)
         self._execute_ddl(

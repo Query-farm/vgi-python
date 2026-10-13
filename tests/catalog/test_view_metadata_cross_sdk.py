@@ -68,3 +68,49 @@ def test_view_metadata_lifecycle_over_public_rpc(sdk: str) -> None:
         client.view_column_comment_set(**target, column_path=["a.b"], comment="unused", ignore_not_found=True)
         with pytest.raises(Exception, match="not found|does not exist"):
             client.view_column_comment_set(**target, column_path=["a.b"], comment="unused")
+
+
+@pytest.mark.parametrize("sdk", sorted(WORKERS))
+def test_schema_creation_metadata_over_public_rpc(sdk: str) -> None:
+    with Client(server_path=WORKERS[sdk], worker_limit=1) as client:
+        token = client.catalog_attach(
+            name="contents_reval", data_version_spec=None, implementation_version=None
+        ).attach_opaque_data
+        target = dict(attach_opaque_data=token, path=["a.b"])
+        tags = {"owner": "one", "empty": "", "__proto__": "literal", "a.b": "quoted"}
+        initial_version = client.catalog_version(attach_opaque_data=token)
+        client.schema_create(**target, comment="", tags=tags)
+        original = client.schema_get(**target)
+        assert original.comment == "" and original.tags == tags
+        assert client.catalog_version(attach_opaque_data=token) > initial_version
+        client.schema_create(attach_opaque_data=token, path=["a"], comment="parent")
+        client.schema_create(attach_opaque_data=token, path=["a", "b"], comment="nested", tags={"owner": "two"})
+        assert client.schema_get(attach_opaque_data=token, path=["a", "b"]).comment == "nested"
+        assert client.schema_get(**target) == original
+        listed = next(s for s in client.schemas(attach_opaque_data=token) if s.path == ["a.b"])
+        assert replace(listed, estimated_object_count=original.estimated_object_count) == original
+        snapshot = client.contents(attach_opaque_data=token)
+        cached = next(s.schema for s in snapshot.schemas if s.schema.path == ["a.b"])
+        assert replace(cached, estimated_object_count=original.estimated_object_count) == original
+        version = client.catalog_version(attach_opaque_data=token)
+        with pytest.raises(Exception, match="already exists"):
+            client.schema_create(**target, comment="bad", tags={"bad": "bad"})
+        assert client.schema_get(**target) == original
+        assert client.catalog_version(attach_opaque_data=token) == version
+        client.schema_create(**target, on_conflict=OnConflict.IGNORE, comment="ignored", tags={"ignored": "yes"})
+        assert client.schema_get(**target) == original
+        assert client.catalog_version(attach_opaque_data=token) == version
+        client.schema_create(**target, on_conflict=OnConflict.REPLACE)
+        replacement = client.schema_get(**target)
+        assert replacement.comment is None and replacement.tags == {}
+        assert client.catalog_version(attach_opaque_data=token) > version
+        assert client.schema_get(attach_opaque_data=token, path=["a", "b"]).tags == {"owner": "two"}
+        client.schema_create(**target, on_conflict=OnConflict.REPLACE, comment="reset", tags=tags)
+        replacement = client.schema_get(**target)
+        assert replacement.comment == "reset" and replacement.tags == tags
+        snapshot = client.contents(attach_opaque_data=token)
+        cached = next(s.schema for s in snapshot.schemas if s.schema.path == ["a.b"])
+        assert replace(cached, estimated_object_count=replacement.estimated_object_count) == replacement
+        client.schema_drop(**target)
+        assert client.schema_get(**target) is None
+        assert client.schema_get(attach_opaque_data=token, path=["a", "b"]).comment == "nested"

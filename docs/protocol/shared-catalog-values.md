@@ -394,3 +394,48 @@ mutation and register unsupported RPCs with structured UNIMPLEMENTED errors.
 The native 1.5 adapter sends NULL for the four new creation fields and continues
 to advertise no new catalog profiles. SQL enablement, production provider
 implementations, and the native 2.0 adapter remain separate unfinished work.
+
+## Schema creation metadata
+
+`catalog_schema_create` already carries nullable `comment`, nullable string-map
+`tags`, and `on_conflict`. The successor preparation reuses these fields; it
+adds no method or field for creation metadata. A NULL comment means absence and
+an empty string is a present comment. NULL/omitted tags create an empty map.
+Tag keys and values are literal strings, including empty values and dotted keys.
+Get, list, and whole-catalog snapshots preserve this metadata; optional
+`estimated_object_count` hints may differ between discovery routes.
+
+ERROR leaves an existing schema and its catalog version unchanged. IGNORE also
+preserves its complete metadata and version. For replacement of an empty schema,
+REPLACE installs the supplied metadata and clears omitted comments/tags. New
+schema creation and replacement advance the mutable catalog version. This
+checkpoint does not settle replacement of nonempty schemas, descendant schemas,
+or cross-object dependencies; their combined lifecycle contract remains open.
+
+All seven bundled mutable `contents_reval` providers run the same public-client
+creation/readback/conflict test. It distinguishes a literal dotted component
+from a nested path. The durable Python schema-options reference additionally
+qualifies metadata together with typed options across HTTP reconnect, committed
+replacement, option alteration and rollback. The older Python transactor rejects
+schema metadata and REPLACE before executing DDL; Go's older writable provider
+rejects unsupported tags and empty comments. These references do not establish
+transaction guarantees for every provider.
+
+The Go wire `SchemaInfo.Comment` uses `*string`; static author-facing schema
+comment descriptors keep their historical empty-string default. TypeScript's
+provider `schemaCreate` receives the existing conflict policy as a final optional
+argument, and decodes the Arrow tag map before delegation.
+
+Native DuckDB 1.5 forwards both CreateSchemaInfo metadata fields and distinguishes
+NULL from empty comments during either cache-loading path. Because that engine
+rejects `COMMENT ON SCHEMA`, the native integration test creates metadata through
+DuckDB's parsed CREATE API, then uses SQL database copy and catalog discovery.
+Build with `-DBUILD_VGI_CATALOG_TESTS=ON`, set `VGI_TEST_WORKER` to a worker location,
+and run `build/release/extension/vgi/vgi_catalog_tests '[catalog-metadata]'`.
+The public-client tests are in `tests/catalog/test_view_metadata_cross_sdk.py`
+(set `VGI_METADATA_WORKERS` to SDK-name/worker-argv JSON); durable HTTP coverage is
+in `tests/catalog/test_schema_metadata_protocol.py`.
+
+Schema comment/tag **mutation** still needs its contract, capability mapping,
+and implementation. Native nested-schema routing and native 2.0 qualification
+also remain open. This checkpoint does not freeze or release the protocol.

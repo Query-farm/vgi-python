@@ -700,6 +700,7 @@ class CatalogClientMixin:
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
         path: list[str],
+        on_conflict: OnConflict = OnConflict.ERROR,
         comment: str | None = None,
         tags: dict[str, str] | None = None,
         options: TypedValueBatch | None = None,
@@ -710,6 +711,7 @@ class CatalogClientMixin:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID.
             path: Raw schema identifier components for the new schema.
+            on_conflict: ERROR, IGNORE, or REPLACE for an existing schema.
             comment: Optional description of the schema.
             tags: Optional key-value tags for the schema.
             options: Typed literal overrides; requires negotiated schema-option creation.
@@ -719,6 +721,7 @@ class CatalogClientMixin:
             proxy.catalog_schema_create(
                 attach_opaque_data=attach_opaque_data,
                 path=path,
+                on_conflict=on_conflict,
                 comment=comment,
                 tags=tags,
                 transaction_opaque_data=transaction_opaque_data,

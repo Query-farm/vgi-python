@@ -367,14 +367,19 @@ class InMemoryCatalog(CatalogInterface):
         catalog = self._get_catalog(attach_opaque_data)
         path_key = schema_path_key(path)
         if path_key in catalog.schemas:
-            msg = f"Schema {path!r} already exists"
-            raise ValueError(msg)
+            if on_conflict == OnConflict.IGNORE:
+                return
+            if on_conflict != OnConflict.REPLACE:
+                msg = f"Schema {path!r} already exists"
+                raise ValueError(msg)
+        if len(path) > 1 and schema_path_key(path[:-1]) not in catalog.schemas:
+            raise ValueError("Parent schema does not exist")
         catalog.schemas[path_key] = SchemaData(
             info=SchemaInfo(
                 attach_opaque_data=attach_opaque_data,
                 path=list(path),
                 comment=comment,
-                tags=tags,
+                tags=dict(tags),
             )
         )
         self._increment_version(attach_opaque_data)
