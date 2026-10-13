@@ -5,6 +5,7 @@ Run from anywhere:
 
     uv run --project ~/Development/vgi-python python scripts/regen_generated.py
     uv run --project ~/Development/vgi-python python scripts/regen_generated.py --check
+    uv run --project ~/Development/vgi-python python scripts/regen_generated.py --check --require-all
 
 Why this exists rather than a shell one-liner per artifact: the obvious form,
 ``python -m vgi.codegen.X > path/to/generated.file``, truncates the destination
@@ -17,6 +18,8 @@ and only then written.
 Targets in sibling repos that are not checked out are skipped, not failed:
 nobody has all of them. A registry backend's ``root_env`` (``VGI_JAVA_ROOT``,
 ``VGI_TYPESCRIPT_ROOT``, ...) points its SDK target at another checkout.
+Release checks use ``--require-all`` to reject a missing checkout before any
+artifact is written. With ``--only``, it requires that selected repository.
 """
 
 from __future__ import annotations
@@ -140,16 +143,28 @@ def main() -> int:
         help="report drift without writing anything (exit 1 if any file is stale)",
     )
     parser.add_argument("--only", metavar="REPO", help="generate/check only artifacts belonging to this repo")
+    parser.add_argument(
+        "--require-all",
+        action="store_true",
+        help="fail before writing if any selected repository is missing (for coordinated release checks)",
+    )
     args = parser.parse_args()
     if args.only is not None and args.only not in {repo for _, _, repo in _TARGETS}:
         parser.error(f"unknown target repo: {args.only}")
 
+    targets = [(module, relative, repo) for module, relative, repo in _TARGETS if args.only in (None, repo)]
+    roots = {repo: _repo_root(repo) for _, _, repo in targets}
+    if args.require_all:
+        missing = sorted(repo for repo, root in roots.items() if root is None)
+        if missing:
+            for repo in missing:
+                print(f"FAIL   required repository {repo} is not checked out", file=sys.stderr)
+            return 2
+
     stale, wrote, skipped, failed = [], [], [], []
 
-    for module_name, relative, repo in _TARGETS:
-        if args.only is not None and repo != args.only:
-            continue
-        root = _repo_root(repo)
+    for module_name, relative, repo in targets:
+        root = roots[repo]
         if root is None:
             skipped.append(f"{repo} (not checked out)")
             continue

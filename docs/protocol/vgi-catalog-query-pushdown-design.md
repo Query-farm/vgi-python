@@ -919,6 +919,8 @@ do not bypass the public client lifecycle with a private standalone HTTP call.
 Use `scripts/regen_generated.py` for the coordinated generation workflow rather than redirecting
 individual generators over checked-in files. Include `tests/test_generated_cpp_protocol_name.py`
 and `tests/test_generated_csharp.py` alongside the existing schema/version drift tests.
+For the coordinated release, use `scripts/regen_generated.py --check --require-all`
+without `--only`; this fails if any SDK checkout or generated artifact is missing.
 
 ### PR 3: reference provider and execution ownership
 
