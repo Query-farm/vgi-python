@@ -39,6 +39,7 @@ from vgi_rpc.rpc import CallContext, OutputCollector
 from vgi.catalog import AttachOpaqueData, Catalog, CatalogAttachResult, ReadOnlyCatalogInterface, Schema, Table
 from vgi.catalog.attach_option import AttachOption
 from vgi.invocation import BindResponse
+from vgi.protocol import ClientCapabilities
 from vgi.table_function import BindParams, ProcessParams, TableFunctionGenerator, init_single_worker
 from vgi.worker import Worker
 
@@ -139,6 +140,7 @@ class TicketProbeCatalog(ReadOnlyCatalogInterface):
         options: dict[str, Any],
         data_version_spec: str | None,
         implementation_version: str | None,
+        client_capabilities: ClientCapabilities | None = None,
         ctx: CallContext | None = None,
     ) -> CatalogAttachResult:
         """Attach, recording ``region`` and ``sha256(api_key)[:12]`` (never the key)."""
@@ -147,6 +149,7 @@ class TicketProbeCatalog(ReadOnlyCatalogInterface):
             options=options,
             data_version_spec=data_version_spec,
             implementation_version=implementation_version,
+            client_capabilities=client_capabilities,
             ctx=ctx,
         )
         lowered = {key.lower(): value for key, value in options.items()}

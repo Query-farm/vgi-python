@@ -56,6 +56,7 @@ from vgi.catalog import (
 )
 from vgi.catalog.descriptors import Catalog, Schema
 from vgi.invocation import BindResponse, GlobalInitResponse
+from vgi.protocol import ClientCapabilities
 from vgi.schema_utils import schema as build_schema
 from vgi.table_function import BindParams, InitParams, ProcessParams, TableFunctionGenerator
 from vgi.table_in_out_function import TableInOutGenerator
@@ -599,6 +600,7 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
         options: dict[str, Any],
         data_version_spec: str | None,
         implementation_version: str | None,
+        client_capabilities: ClientCapabilities | None = None,
         ctx: Any | None = None,
     ) -> CatalogAttachResult:
         del options, data_version_spec, implementation_version, ctx

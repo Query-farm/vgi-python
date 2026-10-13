@@ -38,6 +38,7 @@ from vgi.catalog.catalog_interface import (
     ReadOnlyCatalogInterface,
 )
 from vgi.exceptions import CatalogReadOnlyError
+from vgi.protocol import ClientCapabilities
 
 # Common test data
 TEST_ATTACH_ID = AttachOpaqueData(b"test")
@@ -81,6 +82,7 @@ class MinimalCatalog(CatalogInterface):
         options: dict[str, Any],
         data_version_spec: str | None,
         implementation_version: str | None,
+        client_capabilities: "ClientCapabilities | None" = None,
         ctx: Any = None,
     ) -> CatalogAttachResult:
         """Attach to catalog."""
@@ -347,6 +349,7 @@ class MinimalReadOnlyCatalog(ReadOnlyCatalogInterface):
         options: dict[str, Any],
         data_version_spec: str | None,
         implementation_version: str | None,
+        client_capabilities: "ClientCapabilities | None" = None,
         ctx: Any = None,
     ) -> CatalogAttachResult:
         """Attach to catalog."""

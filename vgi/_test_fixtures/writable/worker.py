@@ -48,6 +48,7 @@ from vgi.catalog import (
     TransactionOpaqueData,
     ViewInfo,
 )
+from vgi.protocol import ClientCapabilities
 from vgi.schema_path import sql_qualified_name
 from vgi.worker import Worker
 
@@ -206,6 +207,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         options: dict[str, Any],
         data_version_spec: str | None,
         implementation_version: str | None,
+        client_capabilities: ClientCapabilities | None = None,
         ctx: CallContext | None = None,
     ) -> CatalogAttachResult:
         """Attach: generate unique attach_opaque_data and register a fresh database in the transactor."""

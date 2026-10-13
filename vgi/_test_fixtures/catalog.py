@@ -35,6 +35,7 @@ from vgi.catalog import (
     TransactionOpaqueData,
     ViewInfo,
 )
+from vgi.protocol import ClientCapabilities
 from vgi.schema_path import SchemaKey, schema_path_key
 from vgi.worker import Worker
 
@@ -154,6 +155,7 @@ class InMemoryCatalog(CatalogInterface):
         options: dict[str, Any],
         data_version_spec: str | None,
         implementation_version: str | None,
+        client_capabilities: ClientCapabilities | None = None,
         ctx: CallContext | None = None,
     ) -> CatalogAttachResult:
         """Attach to a catalog with the given name.

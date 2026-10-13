@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from vgi.catalog.descriptors import Catalog, Index, Macro, Schema, Table, View
     from vgi.catalog.secret_type import SecretTypeSpec
     from vgi.catalog.setting import SettingSpec
+    from vgi.protocol import ClientCapabilities
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass, ArrowType
@@ -1858,6 +1859,7 @@ class CatalogInterface(ABC):
         options: dict[str, Any],
         data_version_spec: str | None,
         implementation_version: str | None,
+        client_capabilities: "ClientCapabilities | None" = None,
         ctx: "CallContext | None" = None,
     ) -> CatalogAttachResult:
         """Attach to a catalog with the given name and options.
@@ -1869,6 +1871,15 @@ class CatalogInterface(ABC):
         cannot satisfy a requested version MUST raise an exception with a
         human-readable message; the error surfaces on the client as the
         ATTACH failure.
+
+        ``client_capabilities`` describes the consuming engine's offered
+        capabilities. ``None`` means unspecified support, not full support.
+        Implementations may tailor their response and catalog metadata to the
+        offer. Retain any selected behavior in attachment-scoped state (or the
+        returned opaque token) so subsequent calls on other worker processes
+        honor the same agreement. Do not store it on the shared catalog
+        instance or reuse attachment-independent metadata caches for content
+        that varies with this agreement. Client offers are not authorization.
 
         ``ctx`` is injected by the RPC dispatcher when available. Over HTTP it
         enables setting a per-session routing cookie via ``ctx.set_cookie()``;
@@ -3007,6 +3018,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         options: dict[str, Any],
         data_version_spec: str | None,
         implementation_version: str | None,
+        client_capabilities: "ClientCapabilities | None" = None,
         ctx: "CallContext | None" = None,
     ) -> CatalogAttachResult:
         """Attach to the catalog. Version constraints are ignored by default."""

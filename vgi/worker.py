@@ -4689,6 +4689,7 @@ class Worker:
             options=options,
             data_version_spec=request.data_version_spec,
             implementation_version=request.implementation_version,
+            client_capabilities=request.client_capabilities,
             ctx=ctx,
         )
         # Mint the shard identity: prepend a fresh framework UUID to the

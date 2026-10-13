@@ -77,6 +77,7 @@ from vgi.catalog.catalog_interface import deserialize_column_statistics
 from vgi.protocol import (
     CatalogAttachRequest,
     CatalogCreateRequest,
+    ClientCapabilities,
     MacroCreateRequest,
     SchemaContents,
     TableCreateRequest,
@@ -367,6 +368,7 @@ class CatalogClientMixin:
         options: dict[str, Any] | None = None,
         data_version_spec: str | None,
         implementation_version: str | None,
+        client_capabilities: ClientCapabilities | None = None,
     ) -> CatalogAttachResult:
         """Attach to a catalog.
 
@@ -377,6 +379,9 @@ class CatalogClientMixin:
                 (``None`` = unconstrained — worker picks).
             implementation_version: Semver constraint for the worker's
                 implementation version (``None`` = unconstrained).
+            client_capabilities: Capabilities of the consuming engine. ``None``
+                leaves support unspecified; the worker must not infer support
+                for optional semantics from the Python SDK version.
 
         Returns:
             [`CatalogAttachResult`][] with attach_opaque_data, catalog capabilities, and
@@ -390,6 +395,7 @@ class CatalogClientMixin:
                     options=self._options_to_batch(options),
                     data_version_spec=data_version_spec,
                     implementation_version=implementation_version,
+                    client_capabilities=client_capabilities,
                 )
             )
 
