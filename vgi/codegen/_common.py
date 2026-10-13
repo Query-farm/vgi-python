@@ -38,6 +38,8 @@ from vgi.catalog.catalog_interface import (
     TableInfo,
     ViewInfo,
 )
+from vgi.catalog.options import OptionChanges, OptionState
+from vgi.column_path import RequiredFilterPaths
 from vgi.invocation import GlobalInitResponse
 from vgi.protocol import (
     AggregateBindRequest,
@@ -88,9 +90,15 @@ INFO_TYPES: tuple[type, ...] = (
     CopyFromFormatInfo,
 )
 
+# Shared successor-contract records are emitted in every SDK during protocol
+# preparation, before the catalog methods using them are frozen. Keep a single
+# inventory for schemas and typed models, including otherwise opaque IPC bodies.
+SHARED_CONTRACT_TYPES: tuple[type, ...] = (OptionChanges, OptionState, RequiredFilterPaths)
+
 # Extra dataclasses whose ARROW_SCHEMA is referenced by methods whose return
 # type is `bytes` (raw IPC). Not inferable from method signatures alone.
 EXTRA_RESPONSE_TYPES: tuple[type, ...] = (
+    *SHARED_CONTRACT_TYPES,
     ScanFunctionResult,  # catalog_table_{scan,insert,update,delete}_function_get
     ScanBranchesResult,  # catalog_table_scan_branches_get (top-level wrapper)
     ScanBranch,  # one entry inside ScanBranchesResult.branches (binary blob)

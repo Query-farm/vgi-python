@@ -88,6 +88,7 @@ DOC_FILES = [
     "docs/generator-api.md",
     "docs/catalog-interface.md",
     "docs/argument-serialization.md",
+    "docs/protocol/shared-catalog-values.md",
     "docs/lifecycle.md",
     "docs/metadata.md",
     "docs/cli.md",

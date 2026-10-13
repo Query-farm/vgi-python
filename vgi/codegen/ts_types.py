@@ -59,6 +59,7 @@ from vgi.codegen import ts_client
 from vgi.codegen._common import (
     EXTRA_RESPONSE_TYPES,
     REQUEST_TYPES,
+    SHARED_CONTRACT_TYPES,
     GeneratorError,
     collect_schemas,
     provenance_comment,
@@ -74,6 +75,7 @@ GENERATOR_VERSION = "1"
 
 #: The records this module emits builders and codecs for. Append to extend.
 TS_RECORD_TYPES: tuple[type, ...] = (
+    *SHARED_CONTRACT_TYPES,
     CatalogAttachResult,
     SchemaContents,
     CatalogContentsResponse,

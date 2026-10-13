@@ -44,7 +44,7 @@ from typing import TYPE_CHECKING, Any
 import pyarrow as pa
 
 from vgi.catalog.catalog_interface import CatalogAttachResult
-from vgi.codegen._common import GeneratorError, provenance_comment
+from vgi.codegen._common import SHARED_CONTRACT_TYPES, GeneratorError, provenance_comment
 from vgi.protocol import CatalogContentsResponse, SchemaContents
 
 if TYPE_CHECKING:
@@ -60,6 +60,7 @@ JAVA_PROTOCOL_DIR = "vgi/src/main/java/farm/query/vgi/protocol"
 
 #: Protocol classes emitted as Java records, one file each.
 JAVA_RECORDS: tuple[type, ...] = (
+    *SHARED_CONTRACT_TYPES,
     CatalogAttachResult,
     SchemaContents,
     CatalogContentsResponse,
@@ -133,6 +134,11 @@ def _element(dtype: pa.DataType, origin: str) -> str:
     for proto, java in _ELEMENTS:
         if dtype.equals(proto):
             return java
+    if pa.types.is_list(dtype):
+        item = dtype.value_field
+        if item.name != "item" or not item.nullable:
+            raise GeneratorError(f"{origin}: vgi-rpc-java derives every list item as a nullable 'item'; got {item}.")
+        return f"List<{_element(item.type, origin + '[]')}>"
     if pa.types.is_struct(dtype):
         # A nested record derives as an inline struct of its components, so a
         # struct element is the generated record whose own schema is this struct.

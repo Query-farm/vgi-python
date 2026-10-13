@@ -76,6 +76,12 @@ _TARGETS: list[tuple[str, str, str]] = [
     ),
 ]
 
+# One codec corpus, checked into each SDK so its conformance tests are standalone.
+_TARGETS += [
+    ("vgi.codegen.catalog_contract_fixtures", "conformance/catalog-contracts.json", repo)
+    for repo in ("vgi-python", "vgi-go", "vgi-rust", "vgi-typescript", "vgi-java", "vgi-csharp")
+]
+
 # Reporting contracts have an index plus one reference page per source module.
 _TARGETS += [
     (f"vgi.codegen.reporting_docs:{record}", relative, "vgi-python")
