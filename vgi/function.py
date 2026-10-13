@@ -147,6 +147,20 @@ class Function(ABC, MetadataMixin):
     # Cache for resolved metadata
     _metadata_cache: ClassVar[ResolvedMetadata | None] = None
 
+    @classmethod
+    def __subclasshook__(cls, subclass: type) -> bool:
+        """Answer ``issubclass`` from the MRO alone.
+
+        Without this, a *failed* ``issubclass(X, SomeFunctionBase)`` makes
+        ``ABCMeta`` call ``issubclass(X, S)`` for every subclass ``S`` of the
+        base, looking for a virtual subclass. A worker that generates one class
+        per function has thousands of them, and the framework asks this about
+        every class, so building a catalog went quadratic in its function count.
+        Function classes are real subclasses, never ``ABC.register``-ed ones,
+        so the MRO is the whole answer.
+        """
+        return cls in getattr(subclass, "__mro__", ())
+
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Extract [`Arg`][] descriptors from Annotated type hints.
 
