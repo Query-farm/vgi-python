@@ -3918,6 +3918,9 @@ class VgiProtocol(Protocol):
         transaction_opaque_data: bytes | None = None,
         aliases: list[str] | None = None,
         security: str = "regular",
+        comment: str | None = None,
+        tags: dict[str, str] | None = None,
+        column_comments: dict[str, str] | None = None,
     ) -> None:
         """Create a new view."""
         ...
@@ -3956,6 +3959,19 @@ class VgiProtocol(Protocol):
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Set or clear the comment on a view."""
+        ...
+
+    def catalog_view_column_comment_set(
+        self,
+        attach_opaque_data: bytes,
+        schema_path: SchemaPath,
+        name: str,
+        column_path: list[str],
+        comment: str | None = None,
+        ignore_not_found: bool = False,
+        transaction_opaque_data: bytes | None = None,
+    ) -> None:
+        """Set or clear a view output comment; column_path has one raw component."""
         ...
 
     # ========== Catalog - Macros ===========

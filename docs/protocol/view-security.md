@@ -77,7 +77,8 @@ paths. Native malformed-wire fixtures bypass Python's own checks and assert
 which discovery route was used. Passing these tests does not establish native
 DuckDB 2 barrier enforcement.
 
-Creation comments/tags/column comments, view-column comment mutation,
-owner-relative query resolution, dependencies, fixed output contracts and the
+Creation comments/tags/column comments and view-column comment mutation are
+covered by the subsequent [view metadata increment](view-metadata.md).
+Owner-relative query resolution, dependencies, fixed output contracts and the
 remaining catalog operations stay in the same coordinated release plan. No
 intermediate public protocol version is being published.

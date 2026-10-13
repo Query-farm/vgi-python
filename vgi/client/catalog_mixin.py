@@ -1695,6 +1695,9 @@ class CatalogClientMixin:
         on_conflict: OnConflict = OnConflict.ERROR,
         aliases: list[str] | None = None,
         security: str = "regular",
+        comment: str | None = None,
+        tags: dict[str, str] | None = None,
+        column_comments: dict[str, str] | None = None,
     ) -> None:
         """Create a new view.
 
@@ -1704,6 +1707,9 @@ class CatalogClientMixin:
             schema_path: The schema to create the view in.
             name: The name for the new view.
             definition: The SQL SELECT statement defining the view.
+            comment: Creation comment; None and an empty string remain distinct.
+            tags: Creation tags; omitted or empty resets tags on REPLACE.
+            column_comments: Comments keyed by raw output names.
             security: Optimization barrier mode; barrier requires negotiated support.
             aliases: Ordered raw output identifiers; omitted uses query names.
             on_conflict: Behavior if view already exists.
@@ -1717,6 +1723,9 @@ class CatalogClientMixin:
                 definition=definition,
                 aliases=aliases,
                 security=security,
+                comment=comment,
+                tags=tags,
+                column_comments=column_comments,
                 on_conflict=on_conflict,
                 transaction_opaque_data=transaction_opaque_data,
             )
@@ -1812,6 +1821,29 @@ class CatalogClientMixin:
                 comment=comment,
                 ignore_not_found=ignore_not_found,
                 transaction_opaque_data=transaction_opaque_data,
+            )
+
+    def view_column_comment_set(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+        schema_path: list[str],
+        name: str,
+        column_path: list[str],
+        comment: str | None = None,
+        ignore_not_found: bool = False,
+    ) -> None:
+        """Set or clear the comment keyed by a raw view output name."""
+        with self._catalog_connect() as proxy:
+            proxy.catalog_view_column_comment_set(
+                attach_opaque_data=attach_opaque_data,
+                transaction_opaque_data=transaction_opaque_data,
+                schema_path=schema_path,
+                name=name,
+                column_path=column_path,
+                comment=comment,
+                ignore_not_found=ignore_not_found,
             )
 
     # ========== Macro Methods ==========

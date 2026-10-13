@@ -12,7 +12,7 @@
       "Overload collections replacing single macro definitions"
     ],
     "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
-    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode",
+    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation",
     "version_requirement": "Retaining the raw-path migration requires a major version and matching routing name. Complete the combined diff and migration guide before freeze."
   },
   "sources": {
@@ -263,7 +263,8 @@
         "catalog_view_create",
         "catalog_view_get",
         "catalog_view_drop",
-        "catalog_view_rename"
+        "catalog_view_rename",
+        "catalog_view_comment_set"
       ],
       "new_methods": [
         "catalog_view_column_comment_set"
@@ -282,7 +283,18 @@
         {
           "status": "partial_protocol_implementation_on_15",
           "implementation": "Ordered raw aliases in ViewInfo and catalog_view_create across all SDKs; native1.5 creation/materialization and cache reload coverage.",
-          "limits": "Security barriers, create metadata, view-column comments, query resolution, dependencies and durable view transactions remain open."
+          "limits": "This alias-only checkpoint left security and creation metadata to subsequent increments. Later evidence records partial security/metadata lifecycle coverage; full capability and native2 qualification remain open."
+        },
+        {
+          "status": "partial_protocol_implementation_on_15",
+          "implementation": "Creation comment/tags/column_comments and dedicated view-column comment mutation across all seven mutable SDK providers; native1.5 preserves empty comments, validates targets, normalizes aliases before the first SELECT and invalidates view cache.",
+          "sources": [
+            "docs/protocol/view-metadata.md",
+            "tests/catalog/test_view_metadata_protocol.py",
+            "tests/catalog/test_view_metadata_cross_sdk.py",
+            "tests/test_generated_cpp_request_builders.py"
+          ],
+          "limits": "Flat CREATE signature remains under combined contract review. Full capability negotiation, owner-relative query resolution, dependencies, fixed output contracts, concurrent production lifecycle semantics and native2 qualification remain open. Metadata-only providers do not bind SQL."
         }
       ]
     },
@@ -4013,5 +4025,201 @@
       "Final Rust/C++ rebuilds passed after limiting formatter changes to the edited code."
     ],
     "native_revision": "31036603c51e085cec3fd000bde2d776d4882c3d"
+  },
+  "view_metadata_validation": {
+    "status": "qualified_increment_on_15_remaining_scope_open",
+    "engine_pin": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "native_engine": "Haybarn/DuckDB 1.5; no native2 build in this increment",
+    "protocol_methods": 78,
+    "reflection_hash": "18fc1d304bafc3ea667bc77e20dbbd0028444ec7587cca7f03a428067942a4f7",
+    "publication": "unpublished coordinated successor; no release gate closed",
+    "remote_root": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+    "edit_build_policy": "Edit isolated worktrees locally, sync byte inventories, build and test on EC2 only.",
+    "contract": {
+      "creation": [
+        "nullable comment distinguishes NULL and empty",
+        "nullable tags and column_comments default to empty maps",
+        "REPLACE resets omitted metadata; IGNORE preserves existing object",
+        "empty/NUL output keys rejected before effects"
+      ],
+      "mutation": [
+        "catalog_view_column_comment_set uses exactly one raw component",
+        "NULL removes a column comment; empty string stores a comment",
+        "missing views obey ignore_not_found; malformed paths still reject",
+        "preserve aliases/security/tags/other comments"
+      ],
+      "native": [
+        "route view-column COMMENT separately from table-column COMMENT",
+        "bind and validate output existence before mutation",
+        "preserve metadata in CreateViewInfo and copy-schema path",
+        "normalize explicit aliases at initial binding",
+        "invalidate view cache"
+      ]
+    },
+    "python": {
+      "catalog_and_contract_checks_passed": 784,
+      "skipped": 1,
+      "skip_reason": "cross-SDK worker argv mapping is supplied only in the separate conformance run",
+      "mypy_sources": 210
+    },
+    "public_rpc": {
+      "sdk_cases": 7,
+      "pytest_passed_including_environment_check": 8,
+      "coverage": [
+        "creation",
+        "get/list",
+        "tags",
+        "NULL/empty comments",
+        "IGNORE/REPLACE",
+        "invalid keys and paths before mutation",
+        "missing views",
+        "drop"
+      ],
+      "durable_reference": "sealed HTTP, reconnect, commit/rollback and regular/barrier metadata",
+      "rejected_request_versions": "Catalog versions remain unchanged for invalid creation keys and column paths, including IGNORE/REPLACE."
+    },
+    "native_targeted": {
+      "sdks": [
+        "python",
+        "go",
+        "rust",
+        "typescript",
+        "java",
+        "csharp",
+        "cpp"
+      ],
+      "cases_per_sdk": 2,
+      "assertions_per_sdk": 56,
+      "reference_cases": 3,
+      "reference_assertions": 218
+    },
+    "repairs": [
+      "Python MetaWorker routing includes the new RPC",
+      "TypeScript decodes opaque map parameters and materializes raw path lists",
+      "Go wire ViewInfo.Comment distinguishes nil and empty",
+      "native runtime request/response registry covers all 78 methods, including five earlier option/layout methods"
+    ],
+    "remaining": [
+      "full SDK capability negotiation",
+      "owner-relative query resolution",
+      "dependencies and fixed output contracts",
+      "production concurrent view lifecycle guarantees",
+      "native DuckDB2 barrier execution",
+      "Flechette stdio transport remains unqualified"
+    ],
+    "sdk_revisions": {
+      "go": "81db68eaa07a30035783767fbafb1b97a038cf9f",
+      "rust": "799dc68d47e8b532d3123ff413b15459a8d462c1",
+      "typescript": "f69e8b9f7b393432dd8105fe4b1d48365d7ae3f2",
+      "java": "81e84af967189a68988aff71109aaff0ef9ebf3a",
+      "csharp": "b01d9a48536001e27eed9727cd2392bf73d3ea93",
+      "cpp": "59fdfb57cb3c5bc98370b0f7ce04d53b36c2bf63"
+    },
+    "sdk_units": {
+      "go": {
+        "tested_packages": 13,
+        "failed": 0
+      },
+      "rust": {
+        "passed": 486,
+        "ignored": 4,
+        "failed": 0
+      },
+      "typescript": {
+        "passed": 602,
+        "skipped": 68,
+        "failed": 0,
+        "bundle_build": "all four entries passed",
+        "flechette_codec_passed": 8
+      },
+      "java": {
+        "passed": 658,
+        "skipped": 2,
+        "failed": 0
+      },
+      "csharp": {
+        "passed": 598,
+        "failed": 0,
+        "solution_build": "passed"
+      },
+      "cpp_ctest": {
+        "passed": 68,
+        "failed": 0
+      }
+    },
+    "native_full_cpp": {
+      "qualified_cases": 326,
+      "assertions": 12098,
+      "skipped": 47,
+      "http_bearer_cases": 2,
+      "http_bearer_assertions": 13,
+      "exit_code": 0
+    },
+    "quality": [
+      "strict all-SDK generation check passed",
+      "Ruff passed on modified Python sources and tests",
+      "mypy passed on 210 sources"
+    ],
+    "logs": [
+      "logs/metadata-qualified-python.log",
+      "logs/metadata-cross-sdk-versions.log",
+      "logs/metadata-qualified-native.log",
+      "logs/metadata-native-reference.log",
+      "logs/metadata-native-languages.log",
+      "logs/metadata-native-ts.log",
+      "logs/metadata-native-cpp.log",
+      "state/metadata-cpp-native/run.log",
+      "logs/metadata-validated-go.log",
+      "logs/metadata-validated-rust.log",
+      "logs/metadata-qualified-ts.log",
+      "logs/metadata-validated-java.log",
+      "logs/metadata-validated-csharp.log",
+      "logs/metadata-validated-cpp.log",
+      "logs/metadata-flechette-codec-qualified.log"
+    ],
+    "native_revision": "5196af88ddb3bdd877f1f89b8b6e31e7327bbea8",
+    "native_language_matrix": {
+      "python": {
+        "passed": 346,
+        "skipped": 33,
+        "failed": 0
+      },
+      "go": {
+        "passed": 338,
+        "skipped": 40,
+        "failed": 0
+      },
+      "rust": {
+        "passed": 325,
+        "skipped": 42,
+        "failed": 0
+      },
+      "typescript": {
+        "passed": 330,
+        "skipped": 46,
+        "failed": 0
+      },
+      "java": {
+        "passed": 326,
+        "skipped": 37,
+        "failed": 0
+      },
+      "csharp": {
+        "passed": 330,
+        "skipped": 37,
+        "failed": 0
+      }
+    },
+    "native_language_matrix_exit_code": 0,
+    "python_java_crash_probes": "Two separate crash cases per language included in their totals.",
+    "native_build": "passed on unchanged 1.5 pin",
+    "source_inventory": "state/sources.json and state/source-verification.json in the unique remote workspace record exact committed heads and source bytes.",
+    "final_contract_manifest_checks": 23,
+    "source_verification": {
+      "repositories": 15,
+      "files": 33014,
+      "errors": 0
+    },
+    "counts_overlap": true
   }
 }

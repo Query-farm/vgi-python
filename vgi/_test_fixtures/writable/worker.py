@@ -714,8 +714,13 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         on_conflict: OnConflict,
         aliases: list[str] | None = None,
         security: str = "regular",
+        comment: str | None = None,
+        tags: dict[str, str] | None = None,
+        column_comments: dict[str, str] | None = None,
     ) -> None:
         """Create a new view in the transactor's DuckDB database."""
+        if comment is not None or tags or column_comments:
+            raise NotImplementedError("The transactor does not preserve view creation metadata")
         if security != "regular":
             raise NotImplementedError("view security mode is unsupported by this provider")
         if aliases:

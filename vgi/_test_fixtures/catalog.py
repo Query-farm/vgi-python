@@ -8,6 +8,7 @@ be used for testing and as a reference implementation.
 
 from __future__ import annotations
 
+import dataclasses
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -653,6 +654,9 @@ class InMemoryCatalog(CatalogInterface):
         on_conflict: OnConflict,
         aliases: list[str] | None = None,
         security: str = "regular",
+        comment: str | None = None,
+        tags: dict[str, str] | None = None,
+        column_comments: dict[str, str] | None = None,
     ) -> None:
         """Create a new view."""
         if security != "regular":
@@ -672,8 +676,9 @@ class InMemoryCatalog(CatalogInterface):
                 schema_path=schema_path,
                 definition=definition,
                 aliases=list(aliases or []),
-                comment=None,
-                tags={},
+                comment=comment,
+                tags=dict(tags or {}),
+                column_comments=dict(column_comments or {}),
             )
         )
         self._increment_version(attach_opaque_data)
@@ -767,6 +772,34 @@ class InMemoryCatalog(CatalogInterface):
                 tags=old_info.tags,
             )
         )
+        self._increment_version(attach_opaque_data)
+
+    def view_column_comment_set(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        schema_path: list[str],
+        name: str,
+        column_path: list[str],
+        comment: str | None,
+        ignore_not_found: bool,
+    ) -> None:
+        """Set or clear the comment keyed by a raw view output name."""
+        if len(column_path) != 1 or not column_path[0] or "\0" in column_path[0]:
+            raise ValueError("view column comments require one raw output identifier")
+        schema_data = self._get_schema(attach_opaque_data, schema_path)
+        view = schema_data.views.get(name)
+        if view is None:
+            if ignore_not_found:
+                return
+            raise ValueError(f"View {name!r} not found in schema {schema_path!r}")
+        comments = dict(view.info.column_comments)
+        if comment is None:
+            comments.pop(column_path[0], None)
+        else:
+            comments[column_path[0]] = comment
+        schema_data.views[name] = ViewData(info=dataclasses.replace(view.info, column_comments=comments))
         self._increment_version(attach_opaque_data)
 
     def macro_create(

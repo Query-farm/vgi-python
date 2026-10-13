@@ -5882,12 +5882,16 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
         aliases: list[str] | None = None,
         security: str = "regular",
+        comment: str | None = None,
+        tags: dict[str, str] | None = None,
+        column_comments: dict[str, str] | None = None,
     ) -> None:
         """Create a new view."""
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_view_name=name)
         aliases = [] if aliases is None else aliases
         ViewInfo.validate_aliases(aliases)
         ViewInfo.validate_security(security)
+        ViewInfo.validate_create_metadata(comment, tags, column_comments)
         if security == "barrier":
             self._require_catalog_capability(
                 attach_opaque_data, VIEW_BARRIER_CREATE, "catalog_view_create", transaction_opaque_data
@@ -5905,6 +5909,9 @@ class Worker:
             definition=definition,
             aliases=list(aliases),
             security=security,
+            comment=comment,
+            tags=dict(tags or {}),
+            column_comments=dict(column_comments or {}),
             on_conflict=on_conflict,
         )
 
@@ -5970,6 +5977,33 @@ class Worker:
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
             name=name,
+            comment=comment,
+            ignore_not_found=ignore_not_found,
+        )
+
+    def catalog_view_column_comment_set(
+        self,
+        attach_opaque_data: bytes,
+        schema_path: list[str],
+        name: str,
+        column_path: list[str],
+        comment: str | None = None,
+        ignore_not_found: bool = False,
+        transaction_opaque_data: bytes | None = None,
+    ) -> None:
+        """Set or clear a view output comment; column_path has one raw component."""
+        if len(column_path_key(column_path)) != 1:
+            raise ValueError("view column comments require one raw output identifier")
+        if comment is not None and not isinstance(comment, str):
+            raise ValueError("view column comment must be a string or None")
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_view_name=name)
+        self._check_existing_view_security(attach_opaque_data, transaction_opaque_data, schema_path, name)
+        self._get_catalog().view_column_comment_set(
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
+            schema_path=schema_path,
+            name=name,
+            column_path=list(column_path),
             comment=comment,
             ignore_not_found=ignore_not_found,
         )

@@ -602,6 +602,25 @@ class ViewInfo(CatalogSchemaObject, ArrowSerializableDataclass):
             raise ValueError("view aliases must be a list of nonempty raw identifiers without NUL")
 
     @staticmethod
+    def validate_create_metadata(
+        comment: str | None,
+        tags: dict[str, str] | None,
+        column_comments: dict[str, str] | None,
+    ) -> None:
+        """Validate creation metadata before a provider can change catalog state."""
+        if comment is not None and not isinstance(comment, str):
+            raise ValueError("view comment must be a string or None")
+        for label, values in (("tags", tags), ("column_comments", column_comments)):
+            if values is None:
+                continue
+            if not isinstance(values, dict) or any(
+                not isinstance(k, str) or not isinstance(v, str) for k, v in values.items()
+            ):
+                raise ValueError(f"view {label} must map strings to strings")
+        if column_comments is not None:
+            ViewInfo.validate_aliases(list(column_comments))
+
+    @staticmethod
     def validate_security(security: str) -> None:
         """Reject unknown security modes; never downgrade a barrier."""
         if security not in ("regular", "barrier"):
@@ -2661,6 +2680,9 @@ class CatalogInterface(ABC):
         on_conflict: OnConflict,
         aliases: list[str] | None = None,
         security: str = "regular",
+        comment: str | None = None,
+        tags: dict[str, str] | None = None,
+        column_comments: dict[str, str] | None = None,
     ) -> None:
         """Create a new view with the given definition."""
         raise NotImplementedError("View create not implemented.")
@@ -2717,6 +2739,20 @@ class CatalogInterface(ABC):
     ) -> None:
         """Set the comment for the view with the given name."""
         raise NotImplementedError("View comment set not implemented.")
+
+    def view_column_comment_set(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        schema_path: SchemaPath,
+        name: str,
+        column_path: list[str],
+        comment: str | None,
+        ignore_not_found: bool,
+    ) -> None:
+        """Set or clear the comment keyed by a raw view output name."""
+        raise NotImplementedError("View column comment set not implemented.")
 
     # ---- Macros ----
 
@@ -3875,6 +3911,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     view_create = _read_only("create view")
     view_drop = _read_only("drop view")
     view_rename = _read_only("rename view")
+    view_column_comment_set = _read_only("set view column comment")
     view_comment_set = _read_only("set view comment")
     macro_create = _read_only("create macro")
     macro_drop = _read_only("drop macro")

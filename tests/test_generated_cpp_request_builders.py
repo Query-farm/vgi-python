@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import io
 import os
+import re
 from pathlib import Path
 
 import pytest
 
+from vgi.codegen._registry import registry_methods
 from vgi.codegen.cpp_request_builders import emit
 
 
@@ -38,6 +40,20 @@ _REGEN_HINT = (
     "truncates the file before the generator runs, so any failure destroys\n"
     "the checked-in artifact. The script renders to memory first."
 )
+
+
+def test_native_runtime_registry_covers_protocol_requests_and_responses() -> None:
+    """A generated builder alone does not register a method with the native dispatcher."""
+    path = _vgi_generated_path().parents[1] / "vgi_schema_registry.cpp"
+    if not path.exists():
+        pytest.skip(f"native runtime registry not found at {path}")
+    source = path.read_text()
+    responses, requests = source.split("const RequestSchemaEntry kRequestSchemas[]", 1)
+    declared = {method.name for method in registry_methods()}
+    response_names = set(re.findall(r'"([a-z_]+)"', responses))
+    request_names = set(re.findall(r'\{"([a-z_]+)",\s*&\w+ParamsSchema\}', requests))
+    assert declared <= response_names, f"Native response contracts missing: {declared - response_names}"
+    assert declared <= request_names, f"Native request contracts missing: {declared - request_names}"
 
 
 def test_generator_is_deterministic() -> None:

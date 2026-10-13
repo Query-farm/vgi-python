@@ -140,6 +140,7 @@ _ATTACH_ID_METHODS = [
     "catalog_view_drop",
     "catalog_view_rename",
     "catalog_view_comment_set",
+    "catalog_view_column_comment_set",
     "catalog_macro_get",
     "catalog_macro_drop",
     "catalog_index_get",

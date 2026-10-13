@@ -100,8 +100,9 @@ class ViewSecurityCatalog(SchemaOptionsCatalog):
                     definition=kwargs["definition"],
                     aliases=list(kwargs.get("aliases") or []),
                     security=kwargs.get("security", "regular"),
-                    comment=None,
-                    tags={},
+                    comment=kwargs.get("comment"),
+                    tags=dict(kwargs.get("tags") or {}),
+                    column_comments=dict(kwargs.get("column_comments") or {}),
                 )
                 if key in data:
                     if kwargs["on_conflict"] == OnConflict.IGNORE:
@@ -120,6 +121,16 @@ class ViewSecurityCatalog(SchemaOptionsCatalog):
                         raise ValueError("view already exists")
                     del data[key]
                     key, info = new_key, replace(info, name=kwargs["new_name"])
+                elif operation == "column_comment":
+                    path = kwargs["column_path"]
+                    if len(path) != 1 or not path[0] or "\0" in path[0]:
+                        raise ValueError("view column comments require one raw output identifier")
+                    comments = dict(info.column_comments)
+                    if kwargs["comment"] is None:
+                        comments.pop(path[0], None)
+                    else:
+                        comments[path[0]] = kwargs["comment"]
+                    info = replace(info, column_comments=comments)
                 elif operation == "comment":
                     info = replace(info, comment=kwargs["comment"])
                 else:
@@ -135,6 +146,9 @@ class ViewSecurityCatalog(SchemaOptionsCatalog):
 
     def view_rename(self, **kwargs: Any) -> None:
         self._change_view("rename", **kwargs)
+
+    def view_column_comment_set(self, **kwargs: Any) -> None:
+        self._change_view("column_comment", **kwargs)
 
     def view_comment_set(self, **kwargs: Any) -> None:
         self._change_view("comment", **kwargs)
