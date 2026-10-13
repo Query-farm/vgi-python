@@ -1213,9 +1213,9 @@ class TestArrowSchemaCorrectness:
         assert schema.field("column_statistics").type == pa.binary()
         assert schema.field("bind_result").type == pa.binary()
         assert schema.field("required_filters").type == pa.list_(pa.list_(pa.string()))
-        # required_filters is the LAST field (positional schema compatibility:
-        # old C++ extensions ignore-by-position trailing fields).
-        assert schema.field(len(schema) - 1).name == "required_filters"
+        assert schema.get_field_index("required_filters") == 20
+        assert schema.field("options").type == pa.binary() and schema.field("options").nullable
+        assert schema.field("layout").type == pa.binary() and schema.field("layout").nullable
 
     def test_view_info_schema(self) -> None:
         """Verify ViewInfo Arrow schema."""

@@ -42,6 +42,7 @@ from vgi.arguments import Arguments, SecretLookupEntry
 from vgi.catalog.capabilities import (
     CatalogCapabilities,
 )
+from vgi.catalog.layout import TableLayout, TableLayoutChange
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
 from vgi.exceptions import CatalogReadOnlyError
 from vgi.metadata import (
@@ -509,6 +510,9 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
             whole-struct filter on ``bbox`` satisfies every ``"bbox.*"`` path).
             The C++ extension throws ``BinderException`` listing any unsatisfied
             groups.
+        options: Negotiated typed option readback, or None when unsupported.
+        layout: Negotiated partition/sort policy, or None when unsupported.
+            This metadata never guarantees scan output order.
     """
 
     columns: SerializedSchema
@@ -542,6 +546,9 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     required_filters: Annotated[list[list[str]], ArrowType(pa.list_(pa.list_(pa.string())))] = field(
         default_factory=list
     )
+
+    options: Annotated[OptionState | None, ArrowType(pa.binary())] = None
+    layout: Annotated[TableLayout | None, ArrowType(pa.binary())] = None
 
 
 @dataclass(frozen=True)
@@ -2214,12 +2221,51 @@ class CatalogInterface(ABC):
         primary_key_constraints: list[list[int]] | None = None,
         # Foreign key constraints as IPC-serialized bytes (same format as TableInfo)
         foreign_key_constraints: list[bytes] | None = None,
+        comment: str | None = None,
+        tags: dict[str, str] | None = None,
+        options: TypedValueBatch | None = None,
+        layout: TableLayout | None = None,
     ) -> None:
         """Create a new table with the given name and schema.
 
-        Comments and tags are not supported on table creation.
+        New metadata, typed options and layout require their selected profiles.
         """
         raise NotImplementedError("Table create not implemented.")
+
+    def table_option_definitions(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        schema_path: SchemaPath,
+        name: str,
+    ) -> OptionDefinitions:
+        """Return typed definitions for a prospective or existing table."""
+        raise NotImplementedError("Table option definitions not implemented")
+
+    def table_alter_options(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        schema_path: SchemaPath,
+        name: str,
+        changes: OptionChanges,
+    ) -> None:
+        """Validate and persist the whole option change atomically."""
+        raise NotImplementedError("Table option alteration not implemented")
+
+    def table_alter_layout(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        schema_path: SchemaPath,
+        name: str,
+        changes: TableLayoutChange,
+    ) -> None:
+        """Apply the requested future-write policy or atomic existing-data rewrite."""
+        raise NotImplementedError("Table layout alteration not implemented")
 
     def table_drop(
         self,

@@ -48,6 +48,7 @@ from vgi.catalog import (
     TransactionOpaqueData,
     ViewInfo,
 )
+from vgi.catalog.layout import TableLayout
 from vgi.protocol import ClientCapabilities
 from vgi.schema_path import sql_qualified_name
 from vgi.typed_values import TypedValueBatch
@@ -292,6 +293,10 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         check_constraints: list[str],
         primary_key_constraints: list[list[int]] | None = None,
         foreign_key_constraints: list[bytes] | None = None,
+        comment: str | None = None,
+        tags: dict[str, str] | None = None,
+        options: TypedValueBatch | None = None,
+        layout: TableLayout | None = None,
     ) -> None:
         """Create a new table in the transactor's DuckDB database.
 
@@ -299,6 +304,9 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         DuckDB's built-in rowid pseudocolumn provides the row identifier
         automatically — no extra column or sequence needed.
         """
+        if any(value is not None for value in (comment, tags, options, layout)):
+            raise NotImplementedError("table creation metadata/options/layout profiles are not supported")
+
         # Deserialize columns schema
         col_schema = pa.ipc.read_schema(pa.BufferReader(columns))  # type: ignore[arg-type]
 

@@ -130,15 +130,19 @@
         "SortKey",
         "SqlExpression",
         "OptionChanges",
-        "OptionState"
+        "OptionState",
+        "TableLayoutChange",
+        "OptionDefinitions",
+        "TypedValueBatch"
       ],
       "existing_methods": [
         "catalog_table_create",
         "catalog_table_get"
       ],
       "new_methods": [
-        "catalog_table_options_set",
-        "catalog_table_layout_set"
+        "catalog_table_option_definitions",
+        "catalog_table_alter_options",
+        "catalog_table_alter_layout"
       ],
       "scope": [
         "Complete create metadata; table options and SET/RESET; partition and sort definitions on create, alter, and discovery",
@@ -159,6 +163,19 @@
             "docs/protocol/shared-catalog-values.md"
           ],
           "limits": "Catalog RPC integration, capability selection, option-definition discovery, durable mutation and rollback remain pending."
+        },
+        {
+          "status": "partial_reference_implementation",
+          "sources": [
+            "vgi/catalog/layout.py",
+            "vgi/worker.py",
+            "vgi/client/catalog_mixin.py",
+            "tests/catalog/table_layout_reference.py",
+            "tests/catalog/test_table_layout_protocol.py",
+            "conformance/catalog-contracts.json",
+            "docs/protocol/shared-catalog-values.md"
+          ],
+          "limits": "Python HTTP reference implements options and layout with actual fixture-row rewrites and durable DDL transactions. Expression semantics, production providers, native SQL enablement, full lifecycle review and coordinated release qualification remain pending."
         }
       ]
     },
@@ -1110,7 +1127,16 @@
       "disposition": "include",
       "target": "TableLayout.partition_by",
       "status": "pending_contract_review",
-      "evidence": []
+      "evidence": [
+        {
+          "status": "partial_reference_implementation",
+          "sources": [
+            "tests/catalog/test_table_layout_protocol.py",
+            "vgi/catalog/layout.py"
+          ],
+          "limits": "Wire fields and reference behavior implemented; field review, native 2.0 adapter and production qualification remain outstanding."
+        }
+      ]
     },
     {
       "id": "audit-130",
@@ -1123,9 +1149,18 @@
       ],
       "area": "tables",
       "disposition": "include",
-      "target": "TableLayout.sort_by",
+      "target": "TableLayout.sorted_by",
       "status": "pending_contract_review",
-      "evidence": []
+      "evidence": [
+        {
+          "status": "partial_reference_implementation",
+          "sources": [
+            "tests/catalog/test_table_layout_protocol.py",
+            "vgi/catalog/layout.py"
+          ],
+          "limits": "Wire fields and reference behavior implemented; field review, native 2.0 adapter and production qualification remain outstanding."
+        }
+      ]
     },
     {
       "id": "audit-131",
@@ -1140,7 +1175,16 @@
       "disposition": "include",
       "target": "TableCreateRequest.options",
       "status": "pending_contract_review",
-      "evidence": []
+      "evidence": [
+        {
+          "status": "partial_reference_implementation",
+          "sources": [
+            "tests/catalog/test_table_layout_protocol.py",
+            "vgi/catalog/layout.py"
+          ],
+          "limits": "Wire fields and reference behavior implemented; field review, native 2.0 adapter and production qualification remain outstanding."
+        }
+      ]
     },
     {
       "id": "audit-132",
@@ -1809,7 +1853,16 @@
       "disposition": "include",
       "target": "TableLayout.partition_by",
       "status": "pending_contract_review",
-      "evidence": []
+      "evidence": [
+        {
+          "status": "partial_reference_implementation",
+          "sources": [
+            "tests/catalog/test_table_layout_protocol.py",
+            "vgi/catalog/layout.py"
+          ],
+          "limits": "Wire fields and reference behavior implemented; field review, native 2.0 adapter and production qualification remain outstanding."
+        }
+      ]
     },
     {
       "id": "audit-225",
@@ -1822,9 +1875,18 @@
       ],
       "area": "tables",
       "disposition": "include",
-      "target": "TableLayout.sort_by",
+      "target": "TableLayout.sorted_by",
       "status": "pending_contract_review",
-      "evidence": []
+      "evidence": [
+        {
+          "status": "partial_reference_implementation",
+          "sources": [
+            "tests/catalog/test_table_layout_protocol.py",
+            "vgi/catalog/layout.py"
+          ],
+          "limits": "Wire fields and reference behavior implemented; field review, native 2.0 adapter and production qualification remain outstanding."
+        }
+      ]
     },
     {
       "id": "audit-226",
@@ -3193,5 +3255,81 @@
       "/tmp/vgi-duckdb2-cancel-fix-tests.log",
       "/tmp/vgi-duckdb2-java-rpc-all21.log"
     ]
+  },
+  "table_layout_validation": {
+    "status": "partial_protocol_implementation_on_15",
+    "rpc_methods": 77,
+    "protocol_hash": "880e67e755301062698475d23ae8922a6b868d8d0b70ddb195edd96f6be385a4",
+    "engine": "Pinned DuckDB 1.5 reference; native 2.0 not qualified",
+    "log_prefix": "/tmp/vgi-duckdb2-table-layout-",
+    "limits": [
+      "All P0-P3 and M0-M4 exit gates remain open; 137 scope/capability/field reviews remain.",
+      "Native Python integration passed; native Go/Rust/TypeScript/Java/C#/HTTP/browser integration lanes have not been rerun for this increment.",
+      "Expression-profile semantic/type qualification and production providers remain incomplete; native 1.5 offers no new profiles.",
+      "Go nullable-map codec requires the isolated RPC-Go fix before publication.",
+      "The full Python suite has not been requalified; the prior schema-options validation records its limits."
+    ],
+    "python": {
+      "focused_passed": 703,
+      "layout_reference_cases": 17,
+      "additional_note": "15 of the 17 layout cases were included in the focused run; the final 17 plus 11 manifest checks passed together. Counts must not be added.",
+      "generation_documentation": "289 passed, 30 skipped; one docstring failure corrected, then both docstring checks passed.",
+      "ruff": "lint and format passed",
+      "mypy_sources": 210,
+      "strict_generation": "--check --require-all passed"
+    },
+    "sdk_units": {
+      "go": "All ./vgi/... packages passed with the isolated RPC-Go dependency",
+      "rust": {
+        "passed": 481,
+        "ignored": 4
+      },
+      "typescript": {
+        "passed": 596,
+        "skipped": 68,
+        "flechette_codec_passed": 5,
+        "bundle_build": "passed"
+      },
+      "java": {
+        "passed": 612,
+        "skipped": 2
+      },
+      "csharp": {
+        "passed": 592
+      },
+      "cpp_ctest": {
+        "passed": 68
+      }
+    },
+    "native_python": {
+      "release_build": "passed",
+      "passed": 344,
+      "skipped": 33,
+      "crash_probes_included": 2
+    },
+    "dependencies": {
+      "go_rpc": {
+        "revision": "1fa10b93d9493a81949ac6ffce8e7359bd260b9a",
+        "regression": "Nullable populated/empty/absent maps panic before fix, pass afterward; focused race checks pass.",
+        "qualification_limit": "Broader RPC-Go suite fails TestNetworkCannotAttachAdvertisedLocalSegment at ShmCreate with macOS file name too long, outside the changed decoder path.",
+        "test_environment": {
+          "GOFLAGS": "-mod=readonly",
+          "GOWORK": "/tmp/vgi-duckdb2-table-layout-go.work"
+        }
+      },
+      "java_rpc": {
+        "revision": "a1676f5c16c6bf27da8e9f579dbb5414de9d15a2",
+        "environment": "VGI_RPC_JAVA_DIR=/Users/rusty/Development/vgi-rpc-java-duckdb2"
+      }
+    },
+    "revisions": {
+      "native": "89a00179bb99edfc2803c66884429764cca6e8b2",
+      "go": "ec0150f383462e4f07473fa7fe9789f37dee8823",
+      "rust": "0561b9d62f4a0a8172b189a4abd9270af1bb1194",
+      "typescript": "d88297c5e1ae659823b89c4d472156d848a38a67",
+      "java": "4e90c0845edad5bef027c9b7f0a7812aaf726634",
+      "csharp": "34bda80895612dada0d2d451f5b1bb77a0d18211",
+      "cpp": "f7f593c71fe3b26b0b360655583bdbcf92110304"
+    }
   }
 }

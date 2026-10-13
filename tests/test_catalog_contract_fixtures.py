@@ -8,9 +8,12 @@ import json
 from pathlib import Path
 
 from vgi.catalog.capabilities import SCHEMA_OPTIONS_CREATE, SCHEMA_OPTIONS_READ, CatalogCapabilities
+from vgi.catalog.catalog_interface import TableInfo
+from vgi.catalog.layout import LayoutChangeMode, SortKey, SqlExpression, TableLayout, TableLayoutChange
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
 from vgi.codegen.catalog_contract_fixtures import render
 from vgi.column_path import RequiredFilterPaths
+from vgi.protocol import TableCreateRequest
 from vgi.typed_values import TypedValueBatch
 
 
@@ -42,3 +45,25 @@ def test_checked_in_corpus_and_contents() -> None:
     paths = RequiredFilterPaths.deserialize_from_bytes(fixtures["paths"])
     assert paths.groups == [[["a.b"], ["a", "b"]], [["record", 'literal."name']]]
     assert RequiredFilterPaths.deserialize_from_bytes(fixtures["empty_paths"]).groups == []
+
+
+def test_layout_corpus_preserves_nested_keys_and_nullable_changes() -> None:
+    fixtures = {name: base64.b64decode(value) for name, value in json.loads(render())["records"].items()}
+    expression = SqlExpression.deserialize_from_bytes(fixtures["expression"])
+    assert expression.schema_path == ["one.two", "nested"]
+    key = SortKey.deserialize_from_bytes(fixtures["sort_key"])
+    assert key.expression == expression and key.direction == "desc" and key.null_order == "first"
+    layout = TableLayout.deserialize_from_bytes(fixtures["layout"])
+    assert layout.partition_expressions() == [expression] and layout.sort_keys() == [key]
+    change = TableLayoutChange.deserialize_from_bytes(fixtures["layout_change"])
+    assert change.mode == LayoutChangeMode.REWRITE and change.partition_by == []
+    clear = TableLayoutChange.deserialize_from_bytes(fixtures["layout_clear"])
+    assert clear.partition_by is None and clear.sorted_by == []
+    request = TableCreateRequest.deserialize_from_bytes(fixtures["table_create"])
+    assert request.layout == layout and request.options is not None
+    assert request.options.serialize_to_bytes() == fixtures["values"]
+    old = TableCreateRequest.deserialize_from_bytes(fixtures["table_create_legacy"])
+    assert old.options is None and old.layout is None and old.comment is None and old.tags is None
+    info = TableInfo.deserialize_from_bytes(fixtures["table_info"])
+    assert info.layout == layout and info.options is not None
+    assert info.options.serialize_to_bytes() == fixtures["state"]

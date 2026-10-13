@@ -233,3 +233,105 @@ version remains undecided until the remaining contract changes are reviewed;
 this development wire snapshot must not be published as a stable 2.1 release.
 Schema comment/tag alterations, object requirements, broader transaction
 semantics, and the other catalog object families remain in the combined plan.
+
+## Table options, creation metadata, and layout
+
+The unpublished table increment adds nullable `comment`, `tags`, `options`, and
+`layout` fields at the end of `TableCreateRequest`. NULL means no new request;
+an empty map, empty typed batch, or empty layout is still an explicit request
+and requires its selected capability. Existing conflict and constraint fields
+retain their meanings. A provider must validate all supplied metadata before
+creating or replacing a table.
+
+`TableInfo` appends nullable `options` (`OptionState` IPC) and `layout`
+(`TableLayout` IPC). Get, schema listing, and bulk catalog contents project these
+fields according to the sealed attachment agreement. Layout metadata is omitted
+when any expression profile it requires is unavailable. Projection contributes
+to the response etag, so clients with different profiles cannot share an
+incompatible cached representation. Layout describes storage policy; it never
+promises the order returned by a scan.
+
+| Operation | Required selected profile |
+| --- | --- |
+| Option definitions and option readback | `vgi.table.options.read.v1` |
+| Explicit creation options | `vgi.table.options.create.v1` |
+| Table option SET/RESET | `vgi.table.options.alter.v1` |
+| Layout readback | `vgi.table.layout.read.v1` |
+| Explicit creation layout | `vgi.table.layout.create.v1` |
+| Change layout for subsequent writes | `vgi.table.layout.alter_future.v1` |
+| Rewrite existing data to a replacement layout | `vgi.table.layout.alter_rewrite.v1` |
+| Explicit creation comment or tags | `vgi.table.metadata.create.v1` |
+
+Option and layout mutation profiles require their respective read profiles.
+New operations inside a transaction additionally require the selected DDL
+transaction profile. Current provider support is checked again before effects.
+Absent capability means rejection, including when the request is empty.
+
+The new flat RPCs are `catalog_table_option_definitions`,
+`catalog_table_alter_options`, and `catalog_table_alter_layout`. All target an
+attachment, raw `schema_path`, table `name`, and optional transaction handle.
+Definitions may describe an existing or proposed table. Option alteration takes
+`OptionChanges` IPC; layout alteration takes `TableLayoutChange` IPC. Creation
+options are a `TypedValueBatch`, using the same validation and RESET rules as
+schema options. The Python client accepts typed objects and serializes these
+flat binary parameters explicitly.
+
+### Expression and layout records
+
+`SqlExpression` carries nonempty `sql`, a versioned semantic `profile`, and a raw,
+attachment-relative owner `schema_path`. The receiving provider binds the SQL
+against the target table. No bound expression, private AST, caller catalog alias,
+or session search path crosses the wire. The owner must resolve to the target's
+schema. Profiles must define grammar, functions, types, NULLs, determinism, and
+errors before publication; accepting arbitrary SQL is not implied.
+
+`SortKey` contains `expression` (a `SqlExpression` IPC stream), explicit
+`direction`, and explicit `null_order`. Session defaults must be resolved by the
+caller. On the Arrow wire, enum dictionaries carry member **names**:
+`ASC`/`DESC` and `FIRST`/`LAST`, not Python's lowercase enum values.
+
+`TableLayout` contains ordered, non-null `partition_by` and `sorted_by` lists of
+binary IPC records (`SqlExpression` and `SortKey` respectively), plus `coverage`.
+Empty lists mean no corresponding policy. `coverage` is `ALL_ROWS` or
+`FUTURE_WRITES`; new empty tables require `ALL_ROWS`.
+
+`TableLayoutChange` has a mandatory `mode` (`FUTURE_WRITES` or `REWRITE`) and
+nullable replacement lists `partition_by` and `sorted_by`. NULL leaves that
+component unchanged; an empty list clears it. Both NULL is invalid. The complete
+candidate includes retained keys: their profiles must remain selected and
+currently supported too. Providers revalidate the entire candidate under the
+mutation's snapshot to handle concurrent changes.
+
+`FUTURE_WRITES` leaves existing data untouched and sets coverage accordingly.
+`REWRITE` succeeds only after existing data conforms to the complete replacement
+layout and sets coverage to `ALL_ROWS`. Validation, expression evaluation, or
+rewrite failure must leave metadata, data, and the visible catalog version
+unchanged. A provider unable to perform the requested mode rejects it; neither
+client nor server may silently change modes or retry a mutation automatically.
+This contract does not provide mixed DDL/DML or cross-catalog atomicity.
+
+### Reference behavior and qualification limits
+
+`tests/catalog/table_layout_reference.py` persists schema/table metadata and
+physical partition groups in SQLite transaction snapshots. Its pinned DuckDB
+1.5 evaluator binds expressions and actually partitions and sorts fixture rows.
+Tests exercise durable readback, nested owner identity, option RESET and typed
+NULL, future-write preservation, rewrite commit/rollback, capability withdrawal,
+and atomic rejection of a failing rewrite. Fixture row seeding is not a public
+VGI data-write capability.
+
+The candidate `vgi.expression.duckdb.scalar.v1` reference currently accepts only
+column references, constants, `+`, `-`, `*`, `%`, `abs`, `lower`, `upper`, and
+`coalesce`, subject to DuckDB binding and type checks. It rejects subqueries,
+extra statements, qualified/custom functions, and other expression classes.
+The parser is used locally for validation only. Existing tests establish selected
+integer/NULL cases, not the complete logical-type or DuckDB 2.0 semantic matrix;
+that profile remains subject to the combined P1 review.
+
+All SDKs receive the records and shared Python-written IPC corpus, including
+NULL versus empty lists, explicit ordering, nested binary values, and creation
+metadata. SDK workers without these profiles reject new creation payloads before
+mutation and register unsupported RPCs with structured UNIMPLEMENTED errors.
+The native 1.5 adapter sends NULL for the four new creation fields and continues
+to advertise no new catalog profiles. SQL enablement, production provider
+implementations, and the native 2.0 adapter remain separate unfinished work.

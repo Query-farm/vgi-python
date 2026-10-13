@@ -94,6 +94,14 @@ from vgi.catalog.capabilities import (
     SCHEMA_OPTIONS_ALTER,
     SCHEMA_OPTIONS_CREATE,
     SCHEMA_OPTIONS_READ,
+    TABLE_LAYOUT_ALTER_FUTURE,
+    TABLE_LAYOUT_ALTER_REWRITE,
+    TABLE_LAYOUT_CREATE,
+    TABLE_LAYOUT_READ,
+    TABLE_METADATA_CREATE,
+    TABLE_OPTIONS_ALTER,
+    TABLE_OPTIONS_CREATE,
+    TABLE_OPTIONS_READ,
     TRANSACTION_DDL,
     CatalogCapabilities,
 )
@@ -105,10 +113,12 @@ from vgi.catalog.catalog_interface import (
     SchemaObjectType,
     SerializedSchema,
     SqlExpression,
+    TableInfo,
     TransactionOpaqueData,
     _validate_at_params,
     serialize_column_statistics,
 )
+from vgi.catalog.layout import LayoutChangeMode, LayoutCoverage, TableLayout, TableLayoutChange
 from vgi.catalog.options import OptionChanges, OptionDefinitions
 from vgi.catalog.secret_type import SecretTypeSpec
 from vgi.catalog.setting import SettingSpec, extract_setting_specs
@@ -2740,7 +2750,7 @@ class Worker:
         available = self._get_catalog().catalog_capabilities(attach_opaque_data=self._unwrap_attach(envelope))
         selected = self._catalog_agreement(envelope)
         selected.require(profile, available=available, operation=operation)
-        if transaction is not None and profile in (SCHEMA_OPTIONS_CREATE, SCHEMA_OPTIONS_ALTER):
+        if transaction is not None and profile in CatalogCapabilities._known["ddl"]:
             selected.require(TRANSACTION_DDL, available=available, operation=operation)
 
     def _effective_catalog_capabilities(self, envelope: bytes) -> CatalogCapabilities:
@@ -2753,6 +2763,25 @@ class Worker:
         if SCHEMA_OPTIONS_READ not in selected.read and info.options is not None:
             return _dataclass_replace(info, options=None)
         return info
+
+    @staticmethod
+    def _table_for_capabilities(info: TableInfo, selected: CatalogCapabilities) -> TableInfo:
+        return _dataclass_replace(
+            info,
+            options=info.options if TABLE_OPTIONS_READ in selected.read else None,
+            layout=info.layout
+            if (
+                TABLE_LAYOUT_READ in selected.read
+                and info.layout is not None
+                and all(
+                    expr.profile in selected.read
+                    for expr in (
+                        info.layout.partition_expressions() + [key.expression for key in info.layout.sort_keys()]
+                    )
+                )
+            )
+            else None,
+        )
 
     def _attach_catalog_name(self, envelope: bytes | None) -> str | None:
         """Read the catalog name MetaWorker sealed into an attach envelope.
@@ -5022,7 +5051,8 @@ class Worker:
             path=path,
             type=SchemaObjectType.TABLE,
         )
-        return TablesResponse.from_infos(list(infos))
+        selected = self._effective_catalog_capabilities(attach_opaque_data)
+        return TablesResponse.from_infos([self._table_for_capabilities(info, selected) for info in infos])
 
     def catalog_schema_contents_views(
         self,
@@ -5159,7 +5189,7 @@ class Worker:
                         c.schema, selected if selected is not None else CatalogCapabilities()
                     )
                 ),
-                tables=items(c.tables),
+                tables=items([Worker._table_for_capabilities(t, selected or CatalogCapabilities()) for t in c.tables]),
                 views=items(c.views),
                 scalar_functions=items(c.scalar_functions),
                 aggregate_functions=items(c.aggregate_functions),
@@ -5215,12 +5245,37 @@ class Worker:
             at_unit=at_unit,
             at_value=at_value,
         )
-        return TablesResponse.from_optional(info)
+        return TablesResponse.from_optional(
+            self._table_for_capabilities(info, self._effective_catalog_capabilities(attach_opaque_data))
+            if info is not None
+            else None
+        )
 
     def catalog_table_create(self, request: TableCreateRequest) -> None:
         """Create a new table."""
         self._enrich_catalog_span(vgi_schema_path=request.schema_path, vgi_table_name=request.name)
         cat = self._get_catalog()
+        extra: dict[str, Any] = {}
+        for key, profile in (
+            ("options", TABLE_OPTIONS_CREATE),
+            ("layout", TABLE_LAYOUT_CREATE),
+            ("comment", TABLE_METADATA_CREATE),
+            ("tags", TABLE_METADATA_CREATE),
+        ):
+            value = getattr(request, key)
+            if value is not None:
+                self._require_catalog_capability(
+                    request.attach_opaque_data, profile, "catalog_table_create", request.transaction_opaque_data
+                )
+                extra[key] = value
+        if request.layout is not None:
+            request.layout.__post_init__()
+            for expression in request.layout.partition_expressions() + [
+                key.expression for key in request.layout.sort_keys()
+            ]:
+                self._require_catalog_capability(request.attach_opaque_data, expression.profile, "catalog_table_create")
+            if request.layout.coverage != LayoutCoverage.ALL_ROWS:
+                raise ValueError("new table layout must cover all rows")
         cat.table_create(
             attach_opaque_data=self._unwrap_attach(request.attach_opaque_data),
             transaction_opaque_data=self._unwrap_transaction(
@@ -5241,7 +5296,75 @@ class Worker:
             foreign_key_constraints=(
                 list(request.foreign_key_constraints) if request.foreign_key_constraints else None
             ),
+            **extra,
         )
+
+    def catalog_table_option_definitions(
+        self,
+        attach_opaque_data: bytes,
+        schema_path: list[str],
+        name: str,
+        transaction_opaque_data: bytes | None = None,
+    ) -> OptionDefinitions:
+        """Return current provider definitions under the table-option read profile."""
+        self._require_catalog_capability(attach_opaque_data, TABLE_OPTIONS_READ, "catalog_table_option_definitions")
+        return self._get_catalog().table_option_definitions(
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
+            schema_path=schema_path,
+            name=name,
+        )
+
+    def catalog_table_alter_options(
+        self,
+        attach_opaque_data: bytes,
+        schema_path: list[str],
+        name: str,
+        changes: bytes,
+        transaction_opaque_data: bytes | None = None,
+    ) -> None:
+        """Check capabilities before applying the complete table-option change."""
+        self._require_catalog_capability(
+            attach_opaque_data, TABLE_OPTIONS_ALTER, "catalog_table_alter_options", transaction_opaque_data
+        )
+        self._get_catalog().table_alter_options(
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
+            schema_path=schema_path,
+            name=name,
+            changes=OptionChanges.deserialize_from_bytes(changes),
+        )
+
+    def catalog_table_alter_layout(
+        self,
+        attach_opaque_data: bytes,
+        schema_path: list[str],
+        name: str,
+        changes: bytes,
+        transaction_opaque_data: bytes | None = None,
+    ) -> None:
+        """Require the selected mode before asking a provider to alter its layout."""
+        value = TableLayoutChange.deserialize_from_bytes(changes)
+        profile = TABLE_LAYOUT_ALTER_REWRITE if value.mode == LayoutChangeMode.REWRITE else TABLE_LAYOUT_ALTER_FUTURE
+        self._require_catalog_capability(
+            attach_opaque_data, profile, "catalog_table_alter_layout", transaction_opaque_data
+        )
+        catalog = self._get_catalog()
+        args: dict[str, Any] = dict(
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
+            schema_path=schema_path,
+            name=name,
+        )
+        current = catalog.table_get(**args)
+        candidate = value.apply_to(
+            current.layout if current is not None and current.layout is not None else TableLayout()
+        )
+        for expression in candidate.partition_expressions() + [key.expression for key in candidate.sort_keys()]:
+            self._require_catalog_capability(attach_opaque_data, expression.profile, "catalog_table_alter_layout")
+        # The provider revalidates the candidate in its mutation snapshot, since
+        # another request may change the table after this capability check.
+        catalog.table_alter_layout(**args, changes=value)
 
     def catalog_table_drop(
         self,

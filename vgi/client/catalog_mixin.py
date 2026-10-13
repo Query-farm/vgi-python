@@ -74,6 +74,7 @@ from vgi.catalog import (
     ViewInfo,
 )
 from vgi.catalog.catalog_interface import deserialize_column_statistics
+from vgi.catalog.layout import TableLayout, TableLayoutChange
 from vgi.catalog.options import OptionChanges, OptionDefinitions
 from vgi.protocol import (
     CatalogAttachRequest,
@@ -1032,6 +1033,12 @@ class CatalogClientMixin:
         not_null_constraints: list[int] | None = None,
         unique_constraints: list[list[int]] | None = None,
         check_constraints: list[str] | None = None,
+        primary_key_constraints: list[list[int]] | None = None,
+        foreign_key_constraints: list[bytes] | None = None,
+        comment: str | None = None,
+        tags: dict[str, str] | None = None,
+        options: TypedValueBatch | None = None,
+        layout: TableLayout | None = None,
     ) -> None:
         """Create a new table.
 
@@ -1045,6 +1052,13 @@ class CatalogClientMixin:
             not_null_constraints: Column indices that must not be null.
             unique_constraints: Lists of column indices for unique constraints.
             check_constraints: SQL expressions for check constraints.
+            primary_key_constraints: Column-index groups forming the primary key.
+            foreign_key_constraints: IPC-encoded foreign-key definitions.
+            comment: Initial table comment under the metadata creation profile.
+            tags: Initial table tags under the metadata creation profile.
+            options: Typed option overrides under the table-option creation profile.
+            layout: Partition/sort policy under the layout creation profile.
+
 
         """
         with self._catalog_connect() as proxy:
@@ -1059,7 +1073,68 @@ class CatalogClientMixin:
                     unique_constraints=unique_constraints or [],
                     check_constraints=check_constraints or [],
                     transaction_opaque_data=transaction_opaque_data,
+                    primary_key_constraints=primary_key_constraints or [],
+                    foreign_key_constraints=foreign_key_constraints or [],
+                    comment=comment,
+                    tags=tags,
+                    options=options,
+                    layout=layout,
                 )
+            )
+
+    def table_option_definitions(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        schema_path: list[str],
+        name: str,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+    ) -> OptionDefinitions:
+        """Discover typed table-option definitions in the current snapshot."""
+        with self._catalog_connect() as proxy:
+            return proxy.catalog_table_option_definitions(
+                attach_opaque_data=attach_opaque_data,
+                schema_path=schema_path,
+                name=name,
+                transaction_opaque_data=transaction_opaque_data,
+            )
+
+    def table_alter_options(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        schema_path: list[str],
+        name: str,
+        changes: OptionChanges,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+    ) -> None:
+        """Apply one atomic SET/RESET operation to table options."""
+        with self._catalog_connect() as proxy:
+            proxy.catalog_table_alter_options(
+                attach_opaque_data=attach_opaque_data,
+                schema_path=schema_path,
+                name=name,
+                changes=changes.serialize_to_bytes(),
+                transaction_opaque_data=transaction_opaque_data,
+            )
+
+    def table_alter_layout(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        schema_path: list[str],
+        name: str,
+        changes: TableLayoutChange,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+    ) -> None:
+        """Replace layout components with an explicit existing-data policy."""
+        with self._catalog_connect() as proxy:
+            proxy.catalog_table_alter_layout(
+                attach_opaque_data=attach_opaque_data,
+                schema_path=schema_path,
+                name=name,
+                changes=changes.serialize_to_bytes(),
+                transaction_opaque_data=transaction_opaque_data,
             )
 
     def table_drop(

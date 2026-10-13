@@ -12,14 +12,25 @@ from __future__ import annotations
 
 import base64
 import json
-from typing import TextIO
+from typing import Any, TextIO
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
 
 from vgi.catalog.capabilities import SCHEMA_OPTIONS_CREATE, SCHEMA_OPTIONS_READ, CatalogCapabilities
+from vgi.catalog.catalog_interface import OnConflict, TableInfo
+from vgi.catalog.layout import (
+    LayoutChangeMode,
+    NullOrder,
+    SortDirection,
+    SortKey,
+    SqlExpression,
+    TableLayout,
+    TableLayoutChange,
+)
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
 from vgi.column_path import RequiredFilterPaths
+from vgi.protocol import TableCreateRequest
 from vgi.typed_values import TypedValueBatch
 
 
@@ -40,6 +51,14 @@ def render() -> str:
         pa.RecordBatch.from_pylist([{"optional": None, "record": {"a.b": 'literal."name'}}], schema=schema)
     )
     empty = TypedValueBatch.empty(metadata={b"provider": b"no-options"})
+    expression = SqlExpression(
+        sql='"a.b" + 1', profile="vgi.expression.duckdb.scalar.v1", schema_path=["one.two", "nested"]
+    )
+    sort_key = SortKey(expression=expression, direction=SortDirection.DESC, null_order=NullOrder.FIRST)
+    layout = TableLayout.from_expressions(partition_by=[expression], sorted_by=[sort_key])
+    table_args: dict[str, Any] = dict(
+        name="table.with.dot", schema_path=expression.schema_path, columns=schema.serialize().to_pybytes()
+    )
     records: dict[str, TypedValueBatch | ArrowSerializableDataclass] = {
         "capabilities": CatalogCapabilities(read=[SCHEMA_OPTIONS_READ], ddl=[SCHEMA_OPTIONS_CREATE]),
         "empty_capabilities": CatalogCapabilities(),
@@ -54,6 +73,34 @@ def render() -> str:
         "empty_state": OptionState(values=empty),
         "paths": RequiredFilterPaths(groups=[[["a.b"], ["a", "b"]], [["record", 'literal."name']]]),
         "empty_paths": RequiredFilterPaths(),
+        "expression": expression,
+        "sort_key": sort_key,
+        "layout": layout,
+        "empty_layout": TableLayout(),
+        "layout_change": TableLayoutChange(mode=LayoutChangeMode.REWRITE, partition_by=[], sorted_by=layout.sorted_by),
+        "layout_clear": TableLayoutChange(mode=LayoutChangeMode.FUTURE_WRITES, sorted_by=[]),
+        "table_create": TableCreateRequest(
+            **table_args,
+            attach_opaque_data=b"attach",
+            on_conflict=OnConflict.ERROR,
+            comment="kept",
+            tags={"team": "one"},
+            options=values,
+            layout=layout,
+        ),
+        "table_create_legacy": TableCreateRequest(
+            **table_args, attach_opaque_data=b"attach", on_conflict=OnConflict.ERROR
+        ),
+        "table_info": TableInfo(
+            **table_args,
+            comment="kept",
+            tags={"team": "one"},
+            not_null_constraints=[],
+            unique_constraints=[],
+            check_constraints=[],
+            options=OptionState(values=values, explicit_names=["optional"]),
+            layout=layout,
+        ),
     }
     return (
         json.dumps(

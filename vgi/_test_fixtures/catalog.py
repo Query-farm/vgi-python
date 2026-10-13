@@ -35,6 +35,7 @@ from vgi.catalog import (
     TransactionOpaqueData,
     ViewInfo,
 )
+from vgi.catalog.layout import TableLayout
 from vgi.protocol import ClientCapabilities
 from vgi.schema_path import SchemaKey, schema_path_key
 from vgi.typed_values import TypedValueBatch
@@ -518,8 +519,15 @@ class InMemoryCatalog(CatalogInterface):
         check_constraints: list[str],
         primary_key_constraints: list[list[int]] | None = None,
         foreign_key_constraints: list[bytes] | None = None,
+        comment: str | None = None,
+        tags: dict[str, str] | None = None,
+        options: TypedValueBatch | None = None,
+        layout: TableLayout | None = None,
     ) -> None:
         """Create a new table."""
+        if any(value is not None for value in (comment, tags, options, layout)):
+            raise NotImplementedError("table creation metadata/options/layout profiles are not supported")
+
         schema_data = self._get_schema(attach_opaque_data, schema_path)
         if name in schema_data.tables:
             if on_conflict == OnConflict.ERROR:

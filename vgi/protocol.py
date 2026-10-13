@@ -66,6 +66,7 @@ from vgi.catalog.catalog_interface import (
     TableInfo,
     ViewInfo,
 )
+from vgi.catalog.layout import TableLayout
 from vgi.catalog.options import OptionDefinitions
 from vgi.filter_v2 import delta_revisions, replaying_accepted_state
 from vgi.function import StreamStateCodec, _is_state_codec
@@ -88,6 +89,7 @@ from vgi.table_function import (
     project_schema,
 )
 from vgi.table_in_out_function import TableInOutGenerator
+from vgi.typed_values import TypedValueBatch
 
 __all__ = [
     "BindRequest",
@@ -797,6 +799,10 @@ class TableCreateRequest(ArrowSerializableDataclass):
         foreign_key_constraints: Serialized foreign-key constraint specs.
         transaction_opaque_data: Opaque DuckDB transaction handle (bytes); ``None``
             when not inside a transaction.
+        comment: Optional creation comment; requires the table metadata profile.
+        tags: Optional creation tags; an empty map is an explicit request.
+        options: Optional typed literal options; requires the table options profile.
+        layout: Optional partition/sort policy; requires layout and expression profiles.
     """
 
     attach_opaque_data: bytes
@@ -814,6 +820,11 @@ class TableCreateRequest(ArrowSerializableDataclass):
     )
     foreign_key_constraints: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))] = field(default_factory=list)
     transaction_opaque_data: bytes | None = None
+
+    comment: str | None = None
+    tags: dict[str, str] | None = None
+    options: Annotated[TypedValueBatch | None, ArrowType(pa.binary())] = None
+    layout: Annotated[TableLayout | None, ArrowType(pa.binary())] = None
 
 
 # ---------------------------------------------------------------------------
@@ -3608,6 +3619,38 @@ class VgiProtocol(Protocol):
 
     def catalog_table_create(self, request: TableCreateRequest) -> None:
         """Create a new table."""
+        ...
+
+    def catalog_table_option_definitions(
+        self,
+        attach_opaque_data: bytes,
+        schema_path: list[str],
+        name: str,
+        transaction_opaque_data: bytes | None = None,
+    ) -> OptionDefinitions:
+        """Discover provider table-option definitions under the read profile."""
+        ...
+
+    def catalog_table_alter_options(
+        self,
+        attach_opaque_data: bytes,
+        schema_path: list[str],
+        name: str,
+        changes: bytes,
+        transaction_opaque_data: bytes | None = None,
+    ) -> None:
+        """Apply an IPC OptionChanges record atomically."""
+        ...
+
+    def catalog_table_alter_layout(
+        self,
+        attach_opaque_data: bytes,
+        schema_path: list[str],
+        name: str,
+        changes: bytes,
+        transaction_opaque_data: bytes | None = None,
+    ) -> None:
+        """Apply an IPC TableLayoutChange under its explicit existing-data mode."""
         ...
 
     def catalog_table_drop(

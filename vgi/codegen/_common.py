@@ -39,6 +39,7 @@ from vgi.catalog.catalog_interface import (
     TableInfo,
     ViewInfo,
 )
+from vgi.catalog.layout import SortKey, SqlExpression, TableLayout, TableLayoutChange
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
 from vgi.column_path import RequiredFilterPaths
 from vgi.invocation import GlobalInitResponse
@@ -97,6 +98,10 @@ INFO_TYPES: tuple[type, ...] = (
 SHARED_CONTRACT_TYPES: tuple[type, ...] = (
     CatalogCapabilities,
     OptionDefinitions,
+    SqlExpression,
+    SortKey,
+    TableLayout,
+    TableLayoutChange,
     OptionChanges,
     OptionState,
     RequiredFilterPaths,

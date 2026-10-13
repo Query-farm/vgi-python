@@ -141,6 +141,9 @@ _RPC_ALLOWLIST: dict[str, tuple[str, ...] | NotExposed] = {
         )
     ),
     # ---------- Catalog tables ----------
+    "catalog_table_option_definitions": ("table_option_definitions",),
+    "catalog_table_alter_options": ("table_alter_options",),
+    "catalog_table_alter_layout": ("table_alter_layout",),
     "catalog_table_get": ("table_get",),
     "catalog_table_create": ("table_create",),
     "catalog_table_drop": ("table_drop",),

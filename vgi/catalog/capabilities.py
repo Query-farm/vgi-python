@@ -21,6 +21,15 @@ from vgi.exceptions import CatalogCapabilityError
 SCHEMA_OPTIONS_READ = "vgi.schema.options.read.v1"
 SCHEMA_OPTIONS_CREATE = "vgi.schema.options.create.v1"
 SCHEMA_OPTIONS_ALTER = "vgi.schema.options.alter.v1"
+ROW_SCALAR_EXPRESSION = "vgi.expression.duckdb.scalar.v1"
+TABLE_OPTIONS_READ = "vgi.table.options.read.v1"
+TABLE_OPTIONS_CREATE = "vgi.table.options.create.v1"
+TABLE_OPTIONS_ALTER = "vgi.table.options.alter.v1"
+TABLE_LAYOUT_READ = "vgi.table.layout.read.v1"
+TABLE_LAYOUT_CREATE = "vgi.table.layout.create.v1"
+TABLE_LAYOUT_ALTER_FUTURE = "vgi.table.layout.alter_future.v1"
+TABLE_LAYOUT_ALTER_REWRITE = "vgi.table.layout.alter_rewrite.v1"
+TABLE_METADATA_CREATE = "vgi.table.metadata.create.v1"
 TRANSACTION_DDL = "vgi.transaction.ddl.v1"
 
 _PROFILE = re.compile(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*\.v[1-9][0-9]*\Z")
@@ -42,12 +51,28 @@ class CatalogCapabilities(ArrowSerializableDataclass):
     transaction: list[str] = field(default_factory=list)
 
     _known: ClassVar[dict[str, frozenset[str]]] = {
-        "read": frozenset({SCHEMA_OPTIONS_READ}),
-        "ddl": frozenset({SCHEMA_OPTIONS_CREATE, SCHEMA_OPTIONS_ALTER}),
+        "read": frozenset({SCHEMA_OPTIONS_READ, TABLE_OPTIONS_READ, TABLE_LAYOUT_READ, ROW_SCALAR_EXPRESSION}),
+        "ddl": frozenset(
+            {
+                SCHEMA_OPTIONS_CREATE,
+                SCHEMA_OPTIONS_ALTER,
+                TABLE_OPTIONS_CREATE,
+                TABLE_OPTIONS_ALTER,
+                TABLE_LAYOUT_CREATE,
+                TABLE_LAYOUT_ALTER_FUTURE,
+                TABLE_LAYOUT_ALTER_REWRITE,
+                TABLE_METADATA_CREATE,
+            }
+        ),
         "write": frozenset(),
         "transaction": frozenset({TRANSACTION_DDL}),
     }
     _requires: ClassVar[dict[str, frozenset[str]]] = {
+        TABLE_OPTIONS_CREATE: frozenset({TABLE_OPTIONS_READ}),
+        TABLE_OPTIONS_ALTER: frozenset({TABLE_OPTIONS_READ}),
+        TABLE_LAYOUT_CREATE: frozenset({TABLE_LAYOUT_READ}),
+        TABLE_LAYOUT_ALTER_FUTURE: frozenset({TABLE_LAYOUT_READ}),
+        TABLE_LAYOUT_ALTER_REWRITE: frozenset({TABLE_LAYOUT_READ}),
         SCHEMA_OPTIONS_CREATE: frozenset({SCHEMA_OPTIONS_READ}),
         SCHEMA_OPTIONS_ALTER: frozenset({SCHEMA_OPTIONS_READ}),
     }
