@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Collection
 from dataclasses import dataclass, field
-from typing import Annotated
+from typing import Annotated, Any
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass, ArrowType
@@ -26,6 +26,94 @@ def _validate_names(names: list[str], label: str) -> None:
         raise ValueError(f"{label} names must be nonempty and contain no NUL")
     if len(set(names)) != len(names):
         raise ValueError(f"{label} names must be unique")
+
+
+@dataclass(frozen=True, kw_only=True)
+class OptionDefinitions(ArrowSerializableDataclass):
+    """Provider option schema, transaction-snapshot defaults and mutability.
+
+    Every declared option has a value. An option without a default is required
+    at creation, even if nullable, and cannot be RESET. ``create_names`` and
+    ``alter_names`` are independent allowlists; omission never grants mutation.
+    Expressions are outside this literal-value contract.
+    """
+
+    schema: Annotated[pa.Schema, ArrowType(pa.binary())]
+    defaults: Annotated[TypedValueBatch, ArrowType(pa.binary())]
+    create_names: list[str] = field(default_factory=list)
+    alter_names: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        """Validate complete definitions, including required creation values."""
+        _validate_names(self.schema.names, "declared option")
+        names = set(self.schema.names)
+        for label, allowed in (("creation", self.create_names), ("alteration", self.alter_names)):
+            _validate_names(allowed, label)
+            if set(allowed) - names:
+                raise ValueError(f"{label} option names are not declared")
+        self._validate_subset(self.defaults)
+        if names - set(self.defaults.schema.names) - set(self.create_names):
+            raise ValueError("options without defaults must be settable at creation")
+
+    def _validate_subset(self, values: TypedValueBatch) -> None:
+        unknown = set(values.schema.names) - set(self.schema.names)
+        if unknown:
+            raise ValueError(f"unknown option names: {sorted(unknown)}")
+        values.validate_schema(
+            pa.schema([self.schema.field(name) for name in values.schema.names]).with_metadata(self.schema.metadata)
+        )
+
+    def create(self, values: TypedValueBatch | None = None) -> OptionState:
+        """Resolve all required values and defaults before a provider creates an object."""
+        self.__post_init__()
+        sets = set(values.schema.names) if values is not None else set()
+        if values is not None:
+            self._validate_subset(values)
+        forbidden = sets - set(self.create_names)
+        if forbidden:
+            raise ValueError(f"options cannot be set at creation: {sorted(forbidden)}")
+        missing = set(self.schema.names) - sets - set(self.defaults.schema.names)
+        if missing:
+            raise ValueError(f"required options were not supplied: {sorted(missing)}")
+        arrays = [
+            values.batch.column(name) if values is not None and name in sets else self.defaults.batch.column(name)
+            for name in self.schema.names
+        ]
+        return self._state(arrays, sets)
+
+    def apply(self, current: OptionState, changes: OptionChanges) -> OptionState:
+        """Validate SET/RESET together and return an effective candidate state."""
+        self.__post_init__()
+        current.__post_init__()
+        changes.__post_init__()
+        current.values.validate_schema(self.schema)
+        values = changes.set_values
+        sets = set(values.schema.names) if values is not None else set()
+        if values is not None:
+            self._validate_subset(values)
+        resets = set(changes.reset_names)
+        forbidden = (sets | resets) - set(self.alter_names)
+        if forbidden:
+            raise ValueError(f"options are not mutable: {sorted(forbidden)}")
+        if resets - set(self.defaults.schema.names):
+            raise ValueError("options without defaults cannot be RESET")
+        arrays = [
+            values.batch.column(name)
+            if values is not None and name in sets
+            else self.defaults.batch.column(name)
+            if name in resets
+            else current.values.batch.column(name)
+            for name in self.schema.names
+        ]
+        return self._state(arrays, (set(current.explicit_names) | sets) - resets)
+
+    def _state(self, arrays: list[pa.Array[Any]], explicit: set[str]) -> OptionState:
+        values = (
+            TypedValueBatch(pa.RecordBatch.from_arrays(arrays, schema=self.schema))
+            if arrays
+            else TypedValueBatch.empty(metadata=self.schema.metadata)
+        )
+        return OptionState(values=values, explicit_names=[name for name in self.schema.names if name in explicit])
 
 
 @dataclass(frozen=True, kw_only=True)

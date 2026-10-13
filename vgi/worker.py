@@ -83,17 +83,25 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast, final, overload
 import pyarrow as pa
 from vgi_rpc.rpc import AuthContext, CallContext, Stream, current_auth, serve_stdio
 
-from vgi import attach_header
+from vgi import attach_capabilities, attach_header
 from vgi._redact import short_hash
 from vgi.aggregate_function import AggregateBindParams, AggregateFunction
 from vgi.argument_spec import ArgumentSpec, extract_argument_specs
 from vgi.arguments import Arguments
 from vgi.catalog import CatalogInterface
 from vgi.catalog.attach_option import AttachOptionSpec, extract_attach_option_specs
+from vgi.catalog.capabilities import (
+    SCHEMA_OPTIONS_ALTER,
+    SCHEMA_OPTIONS_CREATE,
+    SCHEMA_OPTIONS_READ,
+    TRANSACTION_DDL,
+    CatalogCapabilities,
+)
 from vgi.catalog.catalog_interface import (
     AttachOpaqueData,
     CatalogAttachResult,
     OnConflict,
+    SchemaInfo,
     SchemaObjectType,
     SerializedSchema,
     SqlExpression,
@@ -101,6 +109,7 @@ from vgi.catalog.catalog_interface import (
     _validate_at_params,
     serialize_column_statistics,
 )
+from vgi.catalog.options import OptionChanges, OptionDefinitions
 from vgi.catalog.secret_type import SecretTypeSpec
 from vgi.catalog.setting import SettingSpec, extract_setting_specs
 from vgi.exceptions import OpaqueDataNotRecognizedError
@@ -173,6 +182,7 @@ from vgi.table_function import (
 from vgi.table_in_out_function import (
     TableInOutGenerator,
 )
+from vgi.typed_values import TypedValueBatch
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -2648,10 +2658,10 @@ class Worker:
             crypto.seal_bytes(plaintext, key, aad=_attach_aad(current_auth()), version=_ATTACH_ENVELOPE_VERSION)
         )
 
-    def _unwrap_attach_full_with_auth(self, envelope: bytes | None, auth: AuthContext | None) -> bytes | None:
-        """Open an attach envelope under an explicit ``auth``, returning the full plaintext.
+    def _open_attach_context(self, envelope: bytes | None, auth: AuthContext | None) -> bytes | None:
+        """Authenticate and open an attachment, retaining its capability context.
 
-        The full framework plaintext is ``uuid(16) || catalog_bytes``. Pass-through
+        Strips only MetaWorker routing; the inner context stays cached. Pass-through
         when there is no signing key. Raises the uniform
         :meth:`_opaque_data_rejected` error on any open failure.
 
@@ -2700,6 +2710,50 @@ class Worker:
             self._attach_unwrap_cache.put(cache_key, plaintext)
         return plaintext
 
+    def _unwrap_attach_full_with_auth(self, envelope: bytes | None, auth: AuthContext | None) -> bytes | None:
+        """Return UUID/provider bytes without routing or capability context."""
+        plaintext = self._open_attach_context(envelope, auth)
+        if plaintext is None:
+            return None
+        try:
+            return attach_capabilities.split(plaintext)[1]
+        except ValueError as exc:
+            raise self._opaque_data_rejected("attach_opaque_data") from exc
+
+    def _catalog_agreement(self, envelope: bytes) -> CatalogCapabilities:
+        """Read the immutable selected profiles from an authenticated attach."""
+        plaintext = self._open_attach_context(envelope, current_auth())
+        assert plaintext is not None
+        try:
+            return attach_capabilities.agreement(plaintext)
+        except (ValueError, TypeError, KeyError) as exc:
+            raise self._opaque_data_rejected("attach_opaque_data") from exc
+
+    def _require_catalog_capability(
+        self,
+        envelope: bytes,
+        profile: str,
+        operation: str,
+        transaction: bytes | None = None,
+    ) -> None:
+        """Reject unsupported/stale operations before invoking provider effects."""
+        available = self._get_catalog().catalog_capabilities(attach_opaque_data=self._unwrap_attach(envelope))
+        selected = self._catalog_agreement(envelope)
+        selected.require(profile, available=available, operation=operation)
+        if transaction is not None and profile in (SCHEMA_OPTIONS_CREATE, SCHEMA_OPTIONS_ALTER):
+            selected.require(TRANSACTION_DDL, available=available, operation=operation)
+
+    def _effective_catalog_capabilities(self, envelope: bytes) -> CatalogCapabilities:
+        selected = self._catalog_agreement(envelope)
+        available = self._get_catalog().catalog_capabilities(attach_opaque_data=self._unwrap_attach(envelope))
+        return available.select(selected)
+
+    @staticmethod
+    def _schema_for_capabilities(info: SchemaInfo, selected: CatalogCapabilities) -> SchemaInfo:
+        if SCHEMA_OPTIONS_READ not in selected.read and info.options is not None:
+            return _dataclass_replace(info, options=None)
+        return info
+
     def _attach_catalog_name(self, envelope: bytes | None) -> str | None:
         """Read the catalog name MetaWorker sealed into an attach envelope.
 
@@ -2726,7 +2780,7 @@ class Worker:
         seals again. Used by [`MetaWorker`][] at ``catalog_attach`` — the one
         place that knows both the catalog name and the freshly minted attach.
         """
-        plaintext = self._unwrap_attach_full_with_auth(envelope, current_auth())
+        plaintext = self._open_attach_context(envelope, current_auth())
         assert plaintext is not None  # a non-None envelope always yields plaintext
         return self._seal_attach(attach_header.encode(catalog_name, plaintext))
 
@@ -4692,6 +4746,17 @@ class Worker:
             client_capabilities=request.client_capabilities,
             ctx=ctx,
         )
+        available = cat.catalog_capabilities(attach_opaque_data=result.attach_opaque_data)
+        offered = request.client_capabilities.catalog if request.client_capabilities is not None else None
+        selected = available.select(offered)
+        if TRANSACTION_DDL in selected.transaction and not result.supports_transactions:
+            raise ValueError("DDL transaction profile requires supports_transactions")
+        result = _dataclass_replace(
+            result,
+            catalog_capabilities=available,
+            selected_capabilities=selected,
+            attach_opaque_data_required=result.attach_opaque_data_required or bool(selected.names()),
+        )
         # Mint the shard identity: prepend a fresh framework UUID to the
         # catalog's plaintext (``uuid(16) || catalog_bytes``), then seal. Storage
         # shards on this UUID — stable across re-seals and globally unique, unlike
@@ -4700,7 +4765,9 @@ class Worker:
         # sees its own bytes. See ``_AttachUnwrapper``.
         if result.attach_opaque_data is not None:
             minted = uuid.uuid4().bytes + bytes(result.attach_opaque_data)
-            result = _dataclass_replace(result, attach_opaque_data=self._seal_attach(minted))
+            result = _dataclass_replace(
+                result, attach_opaque_data=self._seal_attach(attach_capabilities.encode(minted, selected))
+            )
         loggable = dict(cat.loggable_attach_options(options))
         self._log_catalog_lifecycle(
             "catalog.attach",
@@ -4842,8 +4909,9 @@ class Worker:
         for path_key in path_keys:
             if len(path_key) > 1 and path_key[:-1] not in path_key_set:
                 raise ValueError(f"Catalog returned schema path {list(path_key)!r} without its parent")
+        selected = self._effective_catalog_capabilities(attach_opaque_data)
         ordered = sorted(info_list, key=lambda info: len(info.path))
-        return SchemasResponse.from_infos(ordered)
+        return SchemasResponse.from_infos([self._schema_for_capabilities(info, selected) for info in ordered])
 
     def catalog_schema_get(
         self, attach_opaque_data: bytes, path: list[str], transaction_opaque_data: bytes | None = None
@@ -4856,7 +4924,10 @@ class Worker:
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             path=path,
         )
-        return SchemasResponse.from_optional(info)
+        selected = self._effective_catalog_capabilities(attach_opaque_data)
+        return SchemasResponse.from_optional(
+            self._schema_for_capabilities(info, selected) if info is not None else None
+        )
 
     def catalog_schema_create(
         self,
@@ -4866,10 +4937,15 @@ class Worker:
         comment: str | None = None,
         tags: dict[str, str] | None = None,
         transaction_opaque_data: bytes | None = None,
+        options: bytes | None = None,
     ) -> None:
         """Create a new schema."""
         self._enrich_catalog_span(vgi_schema_path=path)
         cat = self._get_catalog()
+        if options is not None:
+            self._require_catalog_capability(
+                attach_opaque_data, SCHEMA_OPTIONS_CREATE, "catalog_schema_create", transaction_opaque_data
+            )
         cat.schema_create(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
@@ -4877,6 +4953,39 @@ class Worker:
             on_conflict=on_conflict,
             comment=comment,
             tags=tags or {},
+            options=TypedValueBatch.deserialize_from_bytes(options) if options is not None else None,
+        )
+
+    def catalog_schema_option_definitions(
+        self,
+        attach_opaque_data: bytes,
+        path: list[str],
+        transaction_opaque_data: bytes | None = None,
+    ) -> OptionDefinitions:
+        """Return definitions only under a current, selected read profile."""
+        self._require_catalog_capability(attach_opaque_data, SCHEMA_OPTIONS_READ, "catalog_schema_option_definitions")
+        return self._get_catalog().schema_option_definitions(
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            path=path,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
+        )
+
+    def catalog_schema_alter_options(
+        self,
+        attach_opaque_data: bytes,
+        path: list[str],
+        changes: bytes,
+        transaction_opaque_data: bytes | None = None,
+    ) -> None:
+        """Apply the complete change under selected DDL/transaction profiles."""
+        self._require_catalog_capability(
+            attach_opaque_data, SCHEMA_OPTIONS_ALTER, "catalog_schema_alter_options", transaction_opaque_data
+        )
+        self._get_catalog().schema_alter_options(
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            path=path,
+            changes=OptionChanges.deserialize_from_bytes(changes),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
         )
 
     def catalog_schema_drop(
@@ -4968,6 +5077,20 @@ class Worker:
         # Open the envelope first even on a cache hit: it is the auth check.
         attach = self._unwrap_attach(attach_opaque_data)
         version = cat.catalog_version(attach_opaque_data=attach, transaction_opaque_data=None)
+        selected = self._catalog_agreement(attach_opaque_data)
+        available = cat.catalog_capabilities(attach_opaque_data=attach)
+        if selected.names() or available.names():
+            # Do not reuse attachment-independent snapshots or provider etags
+            # across capability projections. Hash the projected response and
+            # agreement; a token from another projection cannot produce 304.
+            effective = available.select(selected)
+            response = self._catalog_contents_response(cat, attach, version, None, effective)
+            etag = hashlib.sha256(
+                effective.serialize_to_bytes() + catalog_contents_digest(response.schemas).encode()
+            ).hexdigest()
+            if etag == if_none_match:
+                return CatalogContentsResponse(catalog_version=version, etag=etag, not_modified=True)
+            return _dataclass_replace(response, etag=etag)
         if type(cat).catalog_contents_attach_independent and getattr(type(cat), "catalog_version_frozen", False):
             snapshot = self._contents_cache
             if snapshot is None or snapshot.catalog is not cat or snapshot.catalog_version != version:
@@ -4995,6 +5118,7 @@ class Worker:
         attach: AttachOpaqueData,
         version: int,
         if_none_match: str | None,
+        selected: CatalogCapabilities | None = None,
     ) -> CatalogContentsResponse:
         """Ask the catalog for its contents and shape the typed wire response.
 
@@ -5030,7 +5154,11 @@ class Worker:
         schemas = [
             SchemaContents(
                 path=list(c.schema.path),
-                schema=_item_ipc_bytes(c.schema),
+                schema=_item_ipc_bytes(
+                    Worker._schema_for_capabilities(
+                        c.schema, selected if selected is not None else CatalogCapabilities()
+                    )
+                ),
                 tables=items(c.tables),
                 views=items(c.views),
                 scalar_functions=items(c.scalar_functions),

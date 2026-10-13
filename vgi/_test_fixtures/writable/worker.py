@@ -50,6 +50,7 @@ from vgi.catalog import (
 )
 from vgi.protocol import ClientCapabilities
 from vgi.schema_path import sql_qualified_name
+from vgi.typed_values import TypedValueBatch
 from vgi.worker import Worker
 
 logger = logging.getLogger("vgi.writable_worker")
@@ -645,8 +646,11 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         on_conflict: OnConflict = OnConflict.ERROR,
         comment: str | None,
         tags: dict[str, str] | None,
+        options: TypedValueBatch | None = None,
     ) -> None:
         """Create a new schema in the transactor's DuckDB database."""
+        if options is not None:
+            raise NotImplementedError("Schema options are not supported by this fixture")
         if_not_exists = " IF NOT EXISTS" if on_conflict == OnConflict.IGNORE else ""
         qualified_path = ".".join(_qi(component) for component in path)
         self._execute_ddl(

@@ -79,7 +79,7 @@ _TARGETS: list[tuple[str, str, str]] = [
 # One codec corpus, checked into each SDK so its conformance tests are standalone.
 _TARGETS += [
     ("vgi.codegen.catalog_contract_fixtures", "conformance/catalog-contracts.json", repo)
-    for repo in ("vgi-python", "vgi-go", "vgi-rust", "vgi-typescript", "vgi-java", "vgi-csharp")
+    for repo in ("vgi-python", "vgi-go", "vgi-rust", "vgi-typescript", "vgi-java", "vgi-csharp", "vgi-c++")
 ]
 
 # Reporting contracts have an index plus one reference page per source module.
@@ -103,8 +103,20 @@ _TARGETS += [
 _REGISTRY_BACKENDS = importlib.import_module("vgi.codegen._registry_backend").registry_backends()
 _TARGETS += [(b.module, b.target, b.repo) for b in _REGISTRY_BACKENDS]
 
+# The C++ worker's public headers use a different namespace from the native
+# extension. They belong in the same required inventory as its method registry.
+_TARGETS += [
+    (f"vgi.codegen.cpp_sdk:{record}", f"include/vgi/generated/vgi_protocol_{suffix}.hpp", "vgi-c++")
+    for record, suffix in (
+        ("schemas", "schemas"),
+        ("constants", "constants"),
+        ("version", "version"),
+        ("names", "names"),
+    )
+]
+
 #: Environment overrides for a checkout's location (``VGI_TYPESCRIPT_ROOT=...``).
-_ROOT_ENV: dict[str, str] = {b.repo: b.root_env for b in _REGISTRY_BACKENDS}
+_ROOT_ENV: dict[str, str] = {"vgi": "VGI_NATIVE_ROOT", **{b.repo: b.root_env for b in _REGISTRY_BACKENDS}}
 
 
 def _repo_root(name: str) -> Path | None:

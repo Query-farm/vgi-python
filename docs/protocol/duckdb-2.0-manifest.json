@@ -38,7 +38,6 @@
       "status": "pending_contract_review",
       "records": [
         "CatalogCapabilities",
-        "CapabilityAgreement",
         "ObjectRequirements"
       ],
       "existing_methods": [
@@ -55,7 +54,18 @@
         "P2",
         "P3"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "status": "partial_reference_implementation",
+          "sources": [
+            "vgi/catalog/capabilities.py",
+            "vgi/attach_capabilities.py",
+            "vgi/worker.py",
+            "tests/catalog/test_schema_options_protocol.py"
+          ],
+          "limits": "Attachment negotiation, current-profile checks and metadata projection implemented for schema options. Object-level secure-view/trigger restrictions and their execution checks remain pending."
+        }
+      ]
     },
     "schemas": {
       "title": "Schema lifecycle and options",
@@ -63,7 +73,8 @@
       "status": "pending_contract_review",
       "records": [
         "SchemaInfo",
-        "SchemaCreateRequest",
+        "CatalogSchemaCreateParams",
+        "OptionDefinitions",
         "OptionChanges",
         "OptionState"
       ],
@@ -73,7 +84,8 @@
         "catalog_schema_drop"
       ],
       "new_methods": [
-        "catalog_schema_options_set"
+        "catalog_schema_option_definitions",
+        "catalog_schema_alter_options"
       ],
       "scope": [
         "Creation options, SET/RESET operations, option readback in `SchemaInfo`, and complete schema comment/tag mutations",
@@ -93,7 +105,17 @@
             "tests/catalog/test_options.py",
             "docs/protocol/shared-catalog-values.md"
           ],
-          "limits": "Catalog RPC integration, capability selection, option-definition discovery, durable mutation and rollback remain pending."
+          "limits": "Common representation proof; subsequent RPC and lifecycle evidence is recorded separately below."
+        },
+        {
+          "status": "schema_options_reference_implemented",
+          "sources": [
+            "vgi/catalog/options.py",
+            "vgi/protocol.py",
+            "tests/catalog/schema_options_reference.py",
+            "tests/catalog/test_schema_options_protocol.py"
+          ],
+          "limits": "Python reference proves durable option creation/readback/alteration and transactional isolation/rollback/reconnect. Schema comment/tag alteration, dependency semantics and native adapter support remain pending."
         }
       ]
     },
@@ -2882,7 +2904,10 @@
       "vgi/codegen/_common.py",
       "vgi/catalog/options.py",
       "vgi/column_path.py",
-      "vgi/codegen/catalog_contract_fixtures.py"
+      "vgi/codegen/catalog_contract_fixtures.py",
+      "vgi/catalog/capabilities.py",
+      "vgi/attach_capabilities.py",
+      "vgi/codegen/cpp_sdk.py"
     ],
     "required_targets": [
       "vgi-python",
@@ -2901,7 +2926,7 @@
       "make test_languages",
       "cross-SDK vectors for every included record and lifecycle"
     ],
-    "limits": "The separate C++ SDK registry is also a strict generation target. No new RPC registry entries are emitted for currently unreferenced shared records.",
+    "limits": "The strict driver now covers native headers, all six worker SDKs including the C++ public headers and registry, the browser client, and shared corpus. Generated representation and unsupported guards do not imply implementation of the new capabilities in every SDK.",
     "preparation_revisions": {
       "python": "7e61efa",
       "go": "983e34b",
@@ -2949,6 +2974,14 @@
             "conformance/catalog-contracts.json"
           ],
           "limits": "Shared records and reference semantics only; broader catalog operations and lifecycle contracts remain pending."
+        },
+        {
+          "status": "partial_operation_lifecycle_proof",
+          "sources": [
+            "tests/catalog/test_schema_options_protocol.py",
+            "docs/protocol/shared-catalog-values.md"
+          ],
+          "limits": "Schema-option reference only. Broader catalog/query operations and complete capabilities remain pending."
         }
       ]
     },
@@ -3058,6 +3091,107 @@
       "Expected environment/transport skips are recorded separately, not counted as passes.",
       "Native tests used the existing 1.5 release binary; only generated C++ schemas changed and received a separate compile check.",
       "Shared-record codec proof is not full logical-type semantic support or operation/transaction support."
+    ]
+  },
+  "schema_options_validation": {
+    "status": "partial_protocol_implementation_on_15",
+    "engine": "Haybarn 1.5.5-rc1 / DuckDB v1.5.6-dev149, source 105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "local_protocol": "Unpublished changing development snapshot; vgi.v2/2.1.0 labels are not a new stable publication.",
+    "protocol_hash": "98309fc84d6bdb9c01c70986a3ddc53596a9dfaba4325297be22f601e3a4e6a2",
+    "rpc_methods": 74,
+    "coverage": [
+      "Sealed attachment capability agreement, auth/routing binding, current-provider checks and capability-specific metadata etags",
+      "Schema option definitions/create/SET/RESET/readback through real Python HTTP and MetaWorker routes",
+      "Persistent SQLite reference: reconnect, transaction visibility, rollback, idempotent commit and conflict rejection",
+      "Coordinated generated fields/common records, cross-SDK IPC corpus and rejection before unsupported mutations"
+    ],
+    "limits": [
+      "Remaining catalog/query/type/optimizer contracts and per-object execution requirements are not implemented",
+      "Native 1.5 adapter sends no new catalog profile and does not expose schema-option SQL",
+      "The SQLite schema reference is not a mixed DDL/DML or distributed atomicity proof",
+      "No complete P0-P3 or M0-M4 exit gate; no native DuckDB 2.0 build qualification or public release"
+    ],
+    "revisions": {
+      "native": "ae56db3fb4a1a0a89073e30d2ea80bdbb8fe4b6a",
+      "go": "518de17db624f16d0aa19224b2fe57ed7180559c",
+      "rust": "ef4ce824422ab0d5efa6d26a1cad00586f461ad6",
+      "typescript": "4aa4551c135238a51c345f0825820efcbc94e30e",
+      "java": "9563827e35c320bea30185d21097b58e8158e3ea",
+      "csharp": "4a21516f27f7830e94bf3edaf0f9a75e30655172",
+      "cpp": "191ae71945ec9339a358190dceff8b065a42c5eb",
+      "java_rpc": "a1676f5c16c6bf27da8e9f579dbb5414de9d15a2"
+    },
+    "python": {
+      "focused_passed": 675,
+      "ruff": "passed, including format check",
+      "mypy_sources": 209,
+      "strict_generation": "--check --require-all passed",
+      "full_suite_limit": "Earlier full run: 3437 passed, 119 skipped, 5 failures. Four suite/generator/doc issues corrected and rechecked; the fifth reads a pre-existing global /tmp/vgi-http-test-server.log with obsolete request_data records. That unrelated artifact was not erased; no claim of a fully green Python suite."
+    },
+    "final_sdk_lanes": {
+      "python": {
+        "passed": 344,
+        "skipped": 33,
+        "failed": 0
+      },
+      "go": {
+        "passed": 336,
+        "skipped": 40,
+        "failed": 0
+      },
+      "rust": {
+        "passed": 323,
+        "skipped": 42,
+        "failed": 0
+      },
+      "typescript": {
+        "passed": 328,
+        "skipped": 46,
+        "failed": 0
+      },
+      "java": {
+        "passed": 324,
+        "skipped": 37,
+        "failed": 0
+      },
+      "csharp": {
+        "passed": 328,
+        "skipped": 37,
+        "failed": 0
+      }
+    },
+    "matrix_run_note": "Initial make test_languages failed on the outdated development-hash oracle, a native cancellation shutdown abort, and a Java21 carrier starvation stall. All affected lanes were rerun successfully after fixes; C# completed successfully with the fixed native binary. Counts include two separate process-crash probes in Python and Java. Skips do not count as passes.",
+    "typescript_http": {
+      "passed": 311,
+      "skipped": 53,
+      "failed": 0
+    },
+    "cpp_sdk": {
+      "passed": 68,
+      "failed": 0,
+      "coverage": "All CTest targets including schema corpus, routing, stdio and HTTP"
+    },
+    "native_dispatcher": {
+      "cases": 9,
+      "assertions": 37,
+      "coverage": "Explicit/first-use start, concurrent queues, last-connection database release, reopen and active cancellation interruption"
+    },
+    "java_rpc_21": {
+      "tests": 608,
+      "skipped": 3,
+      "failures": 0,
+      "regression": "Carrier-starvation regression fails before the stream adapter fix and passes afterwards on Java21"
+    },
+    "logs": [
+      "/tmp/vgi-duckdb2-schema-options-final-python.log",
+      "/tmp/vgi-duckdb2-schema-options-languages.log",
+      "/tmp/vgi-duckdb2-cancel-fixed-sdk-lanes.log",
+      "/tmp/vgi-typescript-test.log",
+      "/tmp/vgi-duckdb2-typescript-http-results.log",
+      "/tmp/vgi-duckdb2-java-fixed-integration.log",
+      "/tmp/vgi-duckdb2-cpp-sdk-tests.log",
+      "/tmp/vgi-duckdb2-cancel-fix-tests.log",
+      "/tmp/vgi-duckdb2-java-rpc-all21.log"
     ]
   }
 }

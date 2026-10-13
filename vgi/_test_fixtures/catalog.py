@@ -37,6 +37,7 @@ from vgi.catalog import (
 )
 from vgi.protocol import ClientCapabilities
 from vgi.schema_path import SchemaKey, schema_path_key
+from vgi.typed_values import TypedValueBatch
 from vgi.worker import Worker
 
 
@@ -356,8 +357,11 @@ class InMemoryCatalog(CatalogInterface):
         on_conflict: OnConflict = OnConflict.ERROR,
         comment: str | None,
         tags: dict[str, str],
+        options: TypedValueBatch | None = None,
     ) -> None:
         """Create a new schema."""
+        if options is not None:
+            raise NotImplementedError("Schema options are not supported by this fixture")
         catalog = self._get_catalog(attach_opaque_data)
         path_key = schema_path_key(path)
         if path_key in catalog.schemas:

@@ -105,6 +105,8 @@ _ATTACH_ID_METHODS = [
     "catalog_contents",
     "catalog_schema_get",
     "catalog_schema_create",
+    "catalog_schema_option_definitions",
+    "catalog_schema_alter_options",
     "catalog_schema_drop",
     "catalog_schema_contents_tables",
     "catalog_schema_contents_views",

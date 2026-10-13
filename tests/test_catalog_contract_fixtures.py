@@ -7,7 +7,8 @@ import base64
 import json
 from pathlib import Path
 
-from vgi.catalog.options import OptionChanges, OptionState
+from vgi.catalog.capabilities import SCHEMA_OPTIONS_CREATE, SCHEMA_OPTIONS_READ, CatalogCapabilities
+from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
 from vgi.codegen.catalog_contract_fixtures import render
 from vgi.column_path import RequiredFilterPaths
 from vgi.typed_values import TypedValueBatch
@@ -17,7 +18,15 @@ def test_checked_in_corpus_and_contents() -> None:
     path = Path(__file__).resolve().parents[1] / "conformance/catalog-contracts.json"
     assert path.read_text() == render()
     fixtures = {name: base64.b64decode(value) for name, value in json.loads(path.read_text())["records"].items()}
+    capabilities = CatalogCapabilities.deserialize_from_bytes(fixtures["capabilities"])
+    assert capabilities.read == [SCHEMA_OPTIONS_READ]
+    assert capabilities.ddl == [SCHEMA_OPTIONS_CREATE]
+    definitions = OptionDefinitions.deserialize_from_bytes(fixtures["definitions"])
+    assert definitions.create_names == ["optional", "record"]
+    assert definitions.alter_names == ["optional"]
     values = TypedValueBatch.deserialize_from_bytes(fixtures["values"])
+    assert definitions.schema.equals(values.schema, check_metadata=True)
+    assert definitions.defaults.batch.equals(values.batch, check_metadata=True)
     assert values.schema.metadata == {b"provider": b"catalog-contracts/v1"}
     assert values.schema.field("record").type[0].metadata == {b"nested": b"retained"}
     assert not values.batch.column("optional")[0].is_valid

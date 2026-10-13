@@ -74,6 +74,7 @@ from vgi.catalog import (
     ViewInfo,
 )
 from vgi.catalog.catalog_interface import deserialize_column_statistics
+from vgi.catalog.options import OptionChanges, OptionDefinitions
 from vgi.protocol import (
     CatalogAttachRequest,
     CatalogCreateRequest,
@@ -83,6 +84,7 @@ from vgi.protocol import (
     TableCreateRequest,
     VgiProtocol,
 )
+from vgi.typed_values import TypedValueBatch
 
 # Module-level worker pool shared across all CatalogClientMixin instances.
 # Workers are cached by command and reused across catalog calls, avoiding
@@ -699,6 +701,7 @@ class CatalogClientMixin:
         path: list[str],
         comment: str | None = None,
         tags: dict[str, str] | None = None,
+        options: TypedValueBatch | None = None,
     ) -> None:
         """Create a new schema.
 
@@ -708,6 +711,7 @@ class CatalogClientMixin:
             path: Raw schema identifier components for the new schema.
             comment: Optional description of the schema.
             tags: Optional key-value tags for the schema.
+            options: Typed literal overrides; requires negotiated schema-option creation.
 
         """
         with self._catalog_connect() as proxy:
@@ -716,6 +720,39 @@ class CatalogClientMixin:
                 path=path,
                 comment=comment,
                 tags=tags,
+                transaction_opaque_data=transaction_opaque_data,
+                options=options.serialize_to_bytes() if options is not None else None,
+            )
+
+    def schema_option_definitions(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        path: list[str],
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+    ) -> OptionDefinitions:
+        """Discover typed options and defaults for an existing or proposed schema."""
+        with self._catalog_connect() as proxy:
+            return proxy.catalog_schema_option_definitions(
+                attach_opaque_data=attach_opaque_data,
+                path=path,
+                transaction_opaque_data=transaction_opaque_data,
+            )
+
+    def schema_alter_options(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        path: list[str],
+        changes: OptionChanges,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+    ) -> None:
+        """Atomically SET/RESET schema options; read effective values with schema_get."""
+        with self._catalog_connect() as proxy:
+            proxy.catalog_schema_alter_options(
+                attach_opaque_data=attach_opaque_data,
+                path=path,
+                changes=changes.serialize_to_bytes(),
                 transaction_opaque_data=transaction_opaque_data,
             )
 

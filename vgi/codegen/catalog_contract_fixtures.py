@@ -17,7 +17,8 @@ from typing import TextIO
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
 
-from vgi.catalog.options import OptionChanges, OptionState
+from vgi.catalog.capabilities import SCHEMA_OPTIONS_CREATE, SCHEMA_OPTIONS_READ, CatalogCapabilities
+from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
 from vgi.column_path import RequiredFilterPaths
 from vgi.typed_values import TypedValueBatch
 
@@ -40,6 +41,11 @@ def render() -> str:
     )
     empty = TypedValueBatch.empty(metadata={b"provider": b"no-options"})
     records: dict[str, TypedValueBatch | ArrowSerializableDataclass] = {
+        "capabilities": CatalogCapabilities(read=[SCHEMA_OPTIONS_READ], ddl=[SCHEMA_OPTIONS_CREATE]),
+        "empty_capabilities": CatalogCapabilities(),
+        "definitions": OptionDefinitions(
+            schema=schema, defaults=values, create_names=schema.names, alter_names=["optional"]
+        ),
         "values": values,
         "empty_values": empty,
         "changes": OptionChanges(set_values=values, reset_names=["reset.me"]),

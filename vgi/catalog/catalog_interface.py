@@ -39,6 +39,10 @@ from vgi_rpc import ArrowSerializableDataclass, ArrowType
 from vgi_rpc.utils import deserialize_record_batch, serialize_record_batch_bytes
 
 from vgi.arguments import Arguments, SecretLookupEntry
+from vgi.catalog.capabilities import (
+    CatalogCapabilities,
+)
+from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
 from vgi.exceptions import CatalogReadOnlyError
 from vgi.metadata import (
     ArgumentMonotonicity,
@@ -53,6 +57,7 @@ from vgi.metadata import (
     RuntimeFilterAlgorithmCapability,
 )
 from vgi.schema_path import SchemaKey, SchemaPath, schema_path_display, schema_path_key
+from vgi.typed_values import TypedValueBatch
 
 _FILTER_IDENTITY_LIST_TYPE = pa.list_(
     pa.struct(
@@ -309,6 +314,8 @@ class CatalogAttachResult(ArrowSerializableDataclass):
             catalog with one ``catalog_contents`` call instead of
             ``catalog_schemas`` plus a ``catalog_schema_contents_*`` call per
             schema and kind. Older workers omit it and read as ``False``.
+        catalog_capabilities: Current provider profile advertisement, not authorization.
+        selected_capabilities: Profiles selected for this attachment; absent means none.
     """
 
     attach_opaque_data: AttachOpaqueData
@@ -329,6 +336,12 @@ class CatalogAttachResult(ArrowSerializableDataclass):
     resolved_data_version: str | None = field(kw_only=True)
     resolved_implementation_version: str | None = field(kw_only=True)
     supports_catalog_contents: bool = field(default=False, kw_only=True)
+    catalog_capabilities: Annotated[CatalogCapabilities | None, ArrowType(pa.binary())] = field(
+        default=None, kw_only=True
+    )
+    selected_capabilities: Annotated[CatalogCapabilities | None, ArrowType(pa.binary())] = field(
+        default=None, kw_only=True
+    )
 
 
 @dataclass(frozen=True)
@@ -387,11 +400,13 @@ class SchemaInfo(CatalogObject, ArrowSerializableDataclass):
             AT-clause queries do not honor the bypass — they always issue the
             per-name RPC because a historical version may have had entries the
             current view does not.
+        options: Effective typed options and explicit overrides when negotiated.
     """
 
     attach_opaque_data: AttachOpaqueData
     path: SchemaPath
     estimated_object_count: dict[str, int] | None = None
+    options: Annotated[OptionState | None, ArrowType(pa.binary())] = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1851,6 +1866,14 @@ class CatalogInterface(ABC):
         """
         raise NotImplementedError("Catalog transactions not implemented.")
 
+    def catalog_capabilities(self, *, attach_opaque_data: AttachOpaqueData) -> CatalogCapabilities:
+        """Return currently implemented profiles for this attachment, not authorization.
+
+        Re-evaluated before new operations. Do not infer support merely from
+        a method existing or a codec understanding its records.
+        """
+        return CatalogCapabilities()
+
     @abstractmethod
     def catalog_attach(
         self,
@@ -1945,9 +1968,35 @@ class CatalogInterface(ABC):
         on_conflict: OnConflict = OnConflict.ERROR,
         comment: str | None,
         tags: dict[str, str],
+        options: TypedValueBatch | None = None,
     ) -> None:
         """Create a new schema with the given path, comment, and tags."""
         raise NotImplementedError("Schema create not implemented.")
+
+    def schema_option_definitions(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: SchemaPath,
+    ) -> OptionDefinitions:
+        """Describe literal options for an existing or proposed schema path.
+
+        Defaults come from this transaction snapshot. Implementations validate
+        again within each mutation; discovery does not reserve defaults.
+        """
+        raise NotImplementedError("Schema option discovery not implemented.")
+
+    def schema_alter_options(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: SchemaPath,
+        changes: OptionChanges,
+    ) -> None:
+        """Validate and apply the entire SET/RESET operation atomically."""
+        raise NotImplementedError("Schema option alteration not implemented.")
 
     def schema_drop(
         self,

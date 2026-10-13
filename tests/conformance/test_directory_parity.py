@@ -25,6 +25,11 @@ _CONFORMANCE_DIR = pathlib.Path(__file__).parent
 # Areas the Python conformance suite intentionally does not mirror. Each entry
 # must cite a reason — leaving an empty reason defeats the purpose of the test.
 _EXEMPTIONS: dict[str, str] = {
+    "attach_ticket": (
+        "Authenticated ticket minting/redemption, identity and expiry are exercised by "
+        "tests/test_attach_ticket.py and tests/catalog/test_client_capabilities.py; "
+        "these require explicit keys/identities rather than the generic fixture client."
+    ),
     "catalog": (
         "Multi-branch scan planning (multi_branch_*) is DuckDB-only — the C++ "
         "extension drives catalog_table_scan_branches_get to route scans across "

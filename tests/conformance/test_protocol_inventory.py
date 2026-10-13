@@ -125,6 +125,8 @@ _RPC_ALLOWLIST: dict[str, tuple[str, ...] | NotExposed] = {
     "catalog_contents": ("contents",),
     "catalog_schema_get": ("schema_get",),
     "catalog_schema_create": ("schema_create",),
+    "catalog_schema_option_definitions": ("schema_option_definitions",),
+    "catalog_schema_alter_options": ("schema_alter_options",),
     "catalog_schema_drop": ("schema_drop",),
     "catalog_schema_contents_tables": ("schema_contents",),
     "catalog_schema_contents_views": ("schema_contents",),

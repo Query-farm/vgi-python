@@ -47,6 +47,9 @@ from vgi_rpc.rpc import (
 
 from vgi.arguments import Arguments
 from vgi.cache_control import CACHE_SCOPE_CATALOG, CacheControl
+from vgi.catalog.capabilities import (
+    CatalogCapabilities,
+)
 from vgi.catalog.catalog_interface import (
     CatalogAttachResult,
     CatalogInfo,
@@ -63,6 +66,7 @@ from vgi.catalog.catalog_interface import (
     TableInfo,
     ViewInfo,
 )
+from vgi.catalog.options import OptionDefinitions
 from vgi.filter_v2 import delta_revisions, replaying_accepted_state
 from vgi.function import StreamStateCodec, _is_state_codec
 from vgi.function_storage import BoundStorage, FrameworkNS, attach_catalog_bytes
@@ -712,6 +716,7 @@ class ClientCapabilities(ArrowSerializableDataclass):
         catalogs: Companion catalog types the client can attach.
         can_stream: Whether the client can consume an unbounded streaming scan.
         filter_encodings: Filter representations understood by the client.
+        catalog: Optional offer of versioned catalog profiles. Absence selects none.
     """
 
     engine: str
@@ -719,6 +724,7 @@ class ClientCapabilities(ArrowSerializableDataclass):
     catalogs: list[str]
     can_stream: bool
     filter_encodings: list[str]
+    catalog: Annotated[CatalogCapabilities | None, ArrowType(pa.binary())] = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -3494,8 +3500,28 @@ class VgiProtocol(Protocol):
         comment: str | None = None,
         tags: dict[str, str] | None = None,
         transaction_opaque_data: bytes | None = None,
+        options: bytes | None = None,
     ) -> None:
         """Create a new schema."""
+        ...
+
+    def catalog_schema_option_definitions(
+        self,
+        attach_opaque_data: bytes,
+        path: SchemaPath,
+        transaction_opaque_data: bytes | None = None,
+    ) -> OptionDefinitions:
+        """Discover literal option definitions for an existing or proposed schema."""
+        ...
+
+    def catalog_schema_alter_options(
+        self,
+        attach_opaque_data: bytes,
+        path: SchemaPath,
+        changes: bytes,
+        transaction_opaque_data: bytes | None = None,
+    ) -> None:
+        """Atomically SET/RESET schema options under the selected capability."""
         ...
 
     def catalog_schema_drop(

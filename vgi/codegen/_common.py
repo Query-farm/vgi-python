@@ -22,6 +22,7 @@ from dataclasses import dataclass
 import pyarrow as pa
 from vgi_rpc.rpc._types import MethodType, rpc_methods  # type: ignore[attr-defined]
 
+from vgi.catalog.capabilities import CatalogCapabilities
 from vgi.catalog.catalog_interface import (
     AttachCatalogInfo,
     CatalogInfo,
@@ -38,7 +39,7 @@ from vgi.catalog.catalog_interface import (
     TableInfo,
     ViewInfo,
 )
-from vgi.catalog.options import OptionChanges, OptionState
+from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
 from vgi.column_path import RequiredFilterPaths
 from vgi.invocation import GlobalInitResponse
 from vgi.protocol import (
@@ -93,7 +94,13 @@ INFO_TYPES: tuple[type, ...] = (
 # Shared successor-contract records are emitted in every SDK during protocol
 # preparation, before the catalog methods using them are frozen. Keep a single
 # inventory for schemas and typed models, including otherwise opaque IPC bodies.
-SHARED_CONTRACT_TYPES: tuple[type, ...] = (OptionChanges, OptionState, RequiredFilterPaths)
+SHARED_CONTRACT_TYPES: tuple[type, ...] = (
+    CatalogCapabilities,
+    OptionDefinitions,
+    OptionChanges,
+    OptionState,
+    RequiredFilterPaths,
+)
 
 # Extra dataclasses whose ARROW_SCHEMA is referenced by methods whose return
 # type is `bytes` (raw IPC). Not inferable from method signatures alone.

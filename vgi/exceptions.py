@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 __all__ = [
     "BindStateNotFoundError",
     "CatalogReadOnlyError",
+    "CatalogCapabilityError",
     "ExecutionIdentifierError",
     "OpaqueDataNotRecognizedError",
     "SchemaValidationError",
@@ -56,6 +57,17 @@ class CatalogReadOnlyError(Exception):
     - table_scan_function_get() - get scan function for tables
 
     """
+
+
+class CatalogCapabilityError(NotImplementedError):
+    """An operation requires a profile not selected or no longer supported."""
+
+    error_code: ClassVar[str] = "UNIMPLEMENTED"
+    error_kind: ClassVar[str] = "catalog_capability_required"
+
+    def __init__(self, operation: str, profile: str) -> None:
+        """Identify the unsupported operation without exposing provider state."""
+        super().__init__(f"{operation} requires negotiated capability {profile}")
 
 
 class OpaqueDataNotRecognizedError(ValueError):
