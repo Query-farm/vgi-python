@@ -652,8 +652,11 @@ class InMemoryCatalog(CatalogInterface):
         definition: str,
         on_conflict: OnConflict,
         aliases: list[str] | None = None,
+        security: str = "regular",
     ) -> None:
         """Create a new view."""
+        if security != "regular":
+            raise NotImplementedError("view security mode is unsupported by this provider")
         schema_data = self._get_schema(attach_opaque_data, schema_path)
         if name in schema_data.views:
             if on_conflict == OnConflict.ERROR:
@@ -724,6 +727,7 @@ class InMemoryCatalog(CatalogInterface):
                 schema_path=old_info.schema_path,
                 definition=old_info.definition,
                 aliases=list(old_info.aliases),
+                security=old_info.security,
                 column_comments=dict(old_info.column_comments),
                 comment=old_info.comment,
                 tags=old_info.tags,
@@ -757,6 +761,7 @@ class InMemoryCatalog(CatalogInterface):
                 schema_path=old_info.schema_path,
                 definition=old_info.definition,
                 aliases=list(old_info.aliases),
+                security=old_info.security,
                 column_comments=dict(old_info.column_comments),
                 comment=comment,
                 tags=old_info.tags,

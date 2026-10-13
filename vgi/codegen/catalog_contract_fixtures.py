@@ -114,6 +114,14 @@ def render() -> str:
             comment="view comment",
             tags={"team": "one"},
         ),
+        "view_info_barrier": ViewInfo(
+            name="barrier",
+            schema_path=["main"],
+            definition="SELECT 1 AS original",
+            comment=None,
+            tags={},
+            security="barrier",
+        ),
         "view_info_implicit": ViewInfo(
             name="implicit", schema_path=["main"], definition="SELECT 1 AS original", comment=None, tags={}
         ),

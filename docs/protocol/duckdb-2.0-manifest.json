@@ -12,7 +12,7 @@
       "Overload collections replacing single macro definitions"
     ],
     "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
-    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups",
+    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode",
     "version_requirement": "Retaining the raw-path migration requires a major version and matching routing name. Complete the combined diff and migration guide before freeze."
   },
   "sources": {
@@ -2297,7 +2297,8 @@
       "disposition": "include",
       "target": "ViewInfo.security",
       "status": "pending_contract_review",
-      "evidence": []
+      "evidence": [],
+      "implementation_evidence": "Explicit regular/barrier metadata and CREATE parameter across all SDKs; Python negotiation and durable metadata reference; native1.5 rejects barrier/malformed metadata on get/list/bulk paths. Native2 enforcement and final contract review remain pending; see view_security_validation."
     },
     {
       "id": "audit-266",
@@ -3854,5 +3855,163 @@
       "cpp": "1823d765343dc8a4f456652bf379da3682e55e5c"
     },
     "native_revision": "84536eda52f648f719db6f1ffc218f332a126aa4"
+  },
+  "view_security_validation": {
+    "status": "partial_protocol_implementation_on_15",
+    "protocol_name": "vgi.v2",
+    "protocol_version": "2.1.0",
+    "method_count": 77,
+    "protocol_hash": "b1db9b01e3c78a746e627fe18a4e0e0c191389dce42f15368427067f071cdecc",
+    "publication": "Unpublished combined successor snapshot; no intermediate release.",
+    "contract": "docs/protocol/view-security.md",
+    "native_engine": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "profiles": [
+      "vgi.view.barrier.read.v1",
+      "vgi.view.barrier.create.v1"
+    ],
+    "implemented": [
+      "Required explicit regular/barrier mode in ViewInfo and CREATE wire parameter across seven SDKs.",
+      "Python selected/current capability enforcement for get, listing, snapshots and ETag revalidation.",
+      "Python mutation preflights, create/read dependency and transactional DDL guarantees.",
+      "Durable SQLite metadata reference: public HTTP client, reconnect, rollback/commit, replacement, rename and comment preservation.",
+      "Native1.5 rejects barrier, absent, NULL, wrongly typed and unknown security modes through independently asserted get/list/bulk routes.",
+      "Shared regular/barrier codec vectors; bundled ordinary providers reject unsupported CREATE modes before effects, including IGNORE/REPLACE."
+    ],
+    "python": {
+      "passed": 758,
+      "scope": "Catalog tests, shared corpus, generated registry/client and request inventory; not the full Python suite.",
+      "mypy_sources": 210,
+      "ruff": "passed for the 15 changed Python files",
+      "strict_generation": "--check --require-all passed",
+      "final_contract_manifest_generation_checks": 74,
+      "counts_overlap": true
+    },
+    "native": {
+      "build": "passed",
+      "reference_cases": 3,
+      "reference_assertions": 218,
+      "language_matrix": {
+        "python": {
+          "passed": 345,
+          "skipped": 33,
+          "remaining_failures": 0
+        },
+        "go": {
+          "passed": 337,
+          "skipped": 40,
+          "remaining_failures": 0
+        },
+        "rust": {
+          "passed": 324,
+          "skipped": 42,
+          "remaining_failures": 0
+        },
+        "typescript": {
+          "passed": 329,
+          "skipped": 46,
+          "remaining_failures": 0
+        },
+        "java": {
+          "passed": 325,
+          "skipped": 37,
+          "remaining_failures": 0
+        },
+        "csharp": {
+          "passed": 329,
+          "skipped": 37,
+          "remaining_failures": 0
+        }
+      },
+      "logs": [
+        "logs/security-native.log",
+        "logs/security-final-reference.log",
+        "logs/security-native-languages.log",
+        "logs/security-native-ts.log",
+        "logs/security-native-cpp.log",
+        "logs/security-python-reflection-crash.log",
+        "logs/security-cpp-reflection.log"
+      ],
+      "python_java_crash_probes": "Two separate crash cases per language included in their totals.",
+      "cpp": {
+        "qualified_cases": 325,
+        "assertions": 12065,
+        "skipped": 47,
+        "http_bearer_passed": 2,
+        "http_bearer_assertions": 13,
+        "initial_full_run_passed": 324,
+        "initial_full_run_failed": 1,
+        "initial_exit_code": 1,
+        "reflection_recheck_passed": 1,
+        "reflection_recheck_exit_code": 0
+      },
+      "qualification_runs": {
+        "initial_make_test_languages_exit_code": 2,
+        "initial_failure": "Python and C++ had loaded the old expected SQL reflection hash. Other native language lanes used the corrected expectation and passed.",
+        "repair": "Updated the shared SQL expected hash to the computed successor hash; reran the reflection test separately on Python and C++, then ran the two Python crash probes skipped after its initial lane failure.",
+        "remaining_failures": 0,
+        "logs": [
+          "logs/security-native-languages.log",
+          "logs/security-native-ts.log",
+          "logs/security-native-cpp.log",
+          "logs/security-native-cpp-full.log",
+          "logs/security-python-reflection-crash.log",
+          "logs/security-cpp-reflection.log"
+        ]
+      }
+    },
+    "open": [
+      "All P0-P3 and M0-M4 gates remain open; 137 scope/capability/field reviews remain.",
+      "Native2 build, security_type mapping and optimizer barrier execution, refresh/rebind and dependent-query qualification.",
+      "Barrier capability selection/enforcement and capable mutable providers in the six non-Python SDKs.",
+      "Atomic concurrent replacement, authorization and dependency semantics; worker preflights are not a concurrency primitive.",
+      "Creation comments/tags/column comments, view-column comment mutation and owner-relative query resolution.",
+      "Previously recorded Flechette stdio ATTACH and old Python transactor qualification gaps remain open."
+    ],
+    "sdk_units": {
+      "go": {
+        "tested_packages": 13,
+        "failed": 0
+      },
+      "rust": {
+        "passed": 486,
+        "ignored": 4,
+        "failed": 0
+      },
+      "typescript": {
+        "passed": 602,
+        "skipped": 68,
+        "flechette_codec_passed": 8,
+        "bundle_build": "all four entries passed"
+      },
+      "java": {
+        "passed": 658,
+        "skipped": 2,
+        "failed": 0
+      },
+      "csharp": {
+        "passed": 596,
+        "failed": 0,
+        "solution_build": "passed"
+      },
+      "cpp_ctest": {
+        "passed": 68,
+        "failed": 0
+      }
+    },
+    "sdk_revisions": {
+      "go": "ae7bd2acfbc3ab2aa0050636bb3ed23432bd388b",
+      "rust": "f1015f9acbd0f52756fc3b76efd4eeb24508161d",
+      "typescript": "28f981fc96cdf27ff3723c0df9aa92e3460245fb",
+      "java": "3f866bd303b89ed5f2a6fd3787b1a969f0ff3cac",
+      "csharp": "f7a47f5c3bd29975400c6846c675d61f8c81e10d",
+      "cpp": "47a6fc4f0a28d640defb0a2b037d3754b81560fa"
+    },
+    "validation_repairs": [
+      "C# registry generator now renders literal string defaults, needed for security=regular.",
+      "Native discovery is lazy: bulk metadata is checked when first decoded, not necessarily during ATTACH. Tests force get/list/bulk paths and fail on unexpected fallback.",
+      "Updated handwritten SDK test requests/initializers and expected reflection hashes for the new wire field.",
+      "Final Rust/C++ rebuilds passed after limiting formatter changes to the edited code."
+    ],
+    "native_revision": "31036603c51e085cec3fd000bde2d776d4882c3d"
   }
 }

@@ -41,6 +41,7 @@ rendered interface back by vgi-rpc-csharp's ``SchemaDerivation`` rules.
 from __future__ import annotations
 
 import enum
+import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -122,6 +123,8 @@ def _default(p: RegistryParam, clr: str) -> str | None:
         return "true" if value else "false"
     if isinstance(value, enum.Enum):
         return f"{clr}.{csharp_types._pascal(value.name)}"
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=True)
     raise GeneratorError(f"{p.name}: cannot render the default {value!r} in C#")
 
 

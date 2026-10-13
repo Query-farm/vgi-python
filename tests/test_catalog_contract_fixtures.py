@@ -97,3 +97,11 @@ def test_views_preserve_ordered_raw_aliases() -> None:
         assert info.aliases == aliases
         restored = ViewInfo.deserialize_from_bytes(info.serialize_to_bytes())
         assert restored == info
+
+
+def test_views_preserve_security_modes() -> None:
+    fixtures = json.loads(render())["records"]
+    for name, security in (("view_info", "regular"), ("view_info_barrier", "barrier")):
+        info = ViewInfo.deserialize_from_bytes(base64.b64decode(fixtures[name]))
+        assert info.security == security
+        assert ViewInfo.deserialize_from_bytes(info.serialize_to_bytes()) == info

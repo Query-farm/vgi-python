@@ -701,6 +701,8 @@ class View:
     Attributes:
         name: View name.
         definition: SQL definition of the view.
+        security: ``regular`` or ``barrier``; an executing reader must enforce
+            the optimization barrier or reject the view.
         aliases: Ordered raw output identifiers, including any literal dots or quotes.
         comment: Optional view comment.
         column_comments: Optional mapping of view output column name to comment.
@@ -717,6 +719,7 @@ class View:
     column_comments: dict[str, str] = field(default_factory=dict)
     tags: dict[str, str] = field(default_factory=dict)
     aliases: list[str] = field(default_factory=list)
+    security: str = "regular"
 
     def to_view_info(self, schema_path: SchemaPath) -> ViewInfo:
         """Convert to [`ViewInfo`][] for catalog response."""
@@ -725,6 +728,7 @@ class View:
             schema_path=schema_path,
             definition=self.definition,
             aliases=list(self.aliases),
+            security=self.security,
             comment=self.comment,
             column_comments=dict(self.column_comments),
             tags=dict(self.tags),

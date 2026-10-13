@@ -110,6 +110,8 @@ from vgi.catalog.capabilities import (
     TABLE_OPTIONS_CREATE,
     TABLE_OPTIONS_READ,
     TRANSACTION_DDL,
+    VIEW_BARRIER_CREATE,
+    VIEW_BARRIER_READ,
     CatalogCapabilities,
 )
 from vgi.catalog.catalog_interface import (
@@ -2774,6 +2776,37 @@ class Worker:
             return _dataclass_replace(info, options=None)
         return info
 
+    def _check_existing_view_security(
+        self,
+        attach: bytes,
+        transaction: bytes | None,
+        path: list[str],
+        name: str,
+        *,
+        replace: bool = False,
+    ) -> None:
+        """An unaware caller cannot replace a barrier with an ordinary view."""
+        info = self._get_catalog().view_get(
+            attach_opaque_data=self._unwrap_attach(attach),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction, attach),
+            schema_path=path,
+            name=name,
+        )
+        if info is not None:
+            self._view_for_capabilities(info, self._effective_catalog_capabilities(attach))
+            if transaction is not None and info.security == "barrier":
+                self._require_catalog_capability(attach, TRANSACTION_DDL, "mutate barrier view")
+            if replace and info.security == "barrier":
+                self._require_catalog_capability(attach, VIEW_BARRIER_CREATE, "replace barrier view", transaction)
+
+    @staticmethod
+    def _view_for_capabilities(info: ViewInfo, selected: CatalogCapabilities) -> ViewInfo:
+        """Require barrier support even for discovery; never strip security metadata."""
+        ViewInfo.validate_security(info.security)
+        if info.security == "barrier":
+            selected.require(VIEW_BARRIER_READ, available=selected, operation="read barrier view")
+        return info
+
     @staticmethod
     def _table_for_capabilities(info: TableInfo, selected: CatalogCapabilities) -> TableInfo:
         return _dataclass_replace(
@@ -5079,7 +5112,8 @@ class Worker:
             path=path,
             type=SchemaObjectType.VIEW,
         )
-        return ViewsResponse.from_infos(list(infos))
+        selected = self._effective_catalog_capabilities(attach_opaque_data)
+        return ViewsResponse.from_infos([self._view_for_capabilities(info, selected) for info in infos])
 
     def catalog_schema_contents_functions(
         self,
@@ -5200,7 +5234,7 @@ class Worker:
                     )
                 ),
                 tables=items([Worker._table_for_capabilities(t, selected or CatalogCapabilities()) for t in c.tables]),
-                views=items(c.views),
+                views=items([Worker._view_for_capabilities(v, selected or CatalogCapabilities()) for v in c.views]),
                 scalar_functions=items(c.scalar_functions),
                 aggregate_functions=items(c.aggregate_functions),
                 table_functions=items(c.table_functions),
@@ -5834,6 +5868,8 @@ class Worker:
             schema_path=schema_path,
             name=name,
         )
+        if info is not None:
+            info = self._view_for_capabilities(info, self._effective_catalog_capabilities(attach_opaque_data))
         return ViewsResponse.from_optional(info)
 
     def catalog_view_create(
@@ -5845,11 +5881,21 @@ class Worker:
         on_conflict: OnConflict,
         transaction_opaque_data: bytes | None = None,
         aliases: list[str] | None = None,
+        security: str = "regular",
     ) -> None:
         """Create a new view."""
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_view_name=name)
         aliases = [] if aliases is None else aliases
         ViewInfo.validate_aliases(aliases)
+        ViewInfo.validate_security(security)
+        if security == "barrier":
+            self._require_catalog_capability(
+                attach_opaque_data, VIEW_BARRIER_CREATE, "catalog_view_create", transaction_opaque_data
+            )
+        if on_conflict == OnConflict.REPLACE:
+            self._check_existing_view_security(
+                attach_opaque_data, transaction_opaque_data, schema_path, name, replace=True
+            )
         cat = self._get_catalog()
         cat.view_create(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
@@ -5858,6 +5904,7 @@ class Worker:
             name=name,
             definition=definition,
             aliases=list(aliases),
+            security=security,
             on_conflict=on_conflict,
         )
 
@@ -5872,6 +5919,7 @@ class Worker:
     ) -> None:
         """Drop a view."""
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_view_name=name)
+        self._check_existing_view_security(attach_opaque_data, transaction_opaque_data, schema_path, name)
         cat = self._get_catalog()
         cat.view_drop(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
@@ -5893,6 +5941,7 @@ class Worker:
     ) -> None:
         """Rename a view."""
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_view_name=name)
+        self._check_existing_view_security(attach_opaque_data, transaction_opaque_data, schema_path, name)
         cat = self._get_catalog()
         cat.view_rename(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
@@ -5914,6 +5963,7 @@ class Worker:
     ) -> None:
         """Set or clear the comment on a view."""
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_view_name=name)
+        self._check_existing_view_security(attach_opaque_data, transaction_opaque_data, schema_path, name)
         cat = self._get_catalog()
         cat.view_comment_set(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),

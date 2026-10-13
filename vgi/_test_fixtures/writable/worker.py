@@ -713,8 +713,11 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         definition: str,
         on_conflict: OnConflict,
         aliases: list[str] | None = None,
+        security: str = "regular",
     ) -> None:
         """Create a new view in the transactor's DuckDB database."""
+        if security != "regular":
+            raise NotImplementedError("view security mode is unsupported by this provider")
         if aliases:
             raise NotImplementedError("The transactor view reader does not preserve explicit aliases")
         if_replace = " OR REPLACE" if on_conflict == OnConflict.REPLACE else ""

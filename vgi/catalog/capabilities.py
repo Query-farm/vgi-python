@@ -37,6 +37,8 @@ COLUMN_NESTED_TYPE = "vgi.column.nested.type.v1"
 COLUMN_NESTED_DEFAULT = "vgi.column.nested.default.v1"
 COLUMN_NESTED_NULLABILITY = "vgi.column.nested.nullability.v1"
 COLUMN_NESTED_COMMENT = "vgi.column.nested.comment.v1"
+VIEW_BARRIER_READ = "vgi.view.barrier.read.v1"
+VIEW_BARRIER_CREATE = "vgi.view.barrier.create.v1"
 TRANSACTION_DDL = "vgi.transaction.ddl.v1"
 
 _PROFILE = re.compile(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*\.v[1-9][0-9]*\Z")
@@ -58,7 +60,9 @@ class CatalogCapabilities(ArrowSerializableDataclass):
     transaction: list[str] = field(default_factory=list)
 
     _known: ClassVar[dict[str, frozenset[str]]] = {
-        "read": frozenset({SCHEMA_OPTIONS_READ, TABLE_OPTIONS_READ, TABLE_LAYOUT_READ, ROW_SCALAR_EXPRESSION}),
+        "read": frozenset(
+            {SCHEMA_OPTIONS_READ, TABLE_OPTIONS_READ, TABLE_LAYOUT_READ, ROW_SCALAR_EXPRESSION, VIEW_BARRIER_READ}
+        ),
         "ddl": frozenset(
             {
                 COLUMN_NESTED_ADD,
@@ -76,12 +80,14 @@ class CatalogCapabilities(ArrowSerializableDataclass):
                 TABLE_LAYOUT_ALTER_FUTURE,
                 TABLE_LAYOUT_ALTER_REWRITE,
                 TABLE_METADATA_CREATE,
+                VIEW_BARRIER_CREATE,
             }
         ),
         "write": frozenset(),
         "transaction": frozenset({TRANSACTION_DDL}),
     }
     _requires: ClassVar[dict[str, frozenset[str]]] = {
+        VIEW_BARRIER_CREATE: frozenset({VIEW_BARRIER_READ}),
         TABLE_OPTIONS_CREATE: frozenset({TABLE_OPTIONS_READ}),
         TABLE_OPTIONS_ALTER: frozenset({TABLE_OPTIONS_READ}),
         TABLE_LAYOUT_CREATE: frozenset({TABLE_LAYOUT_READ}),

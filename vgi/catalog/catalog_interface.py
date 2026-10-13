@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass, ArrowType
-from vgi_rpc.utils import deserialize_record_batch, serialize_record_batch_bytes
+from vgi_rpc.utils import IpcValidation, deserialize_record_batch, serialize_record_batch_bytes
 
 from vgi.arguments import Arguments, SecretLookupEntry
 from vgi.catalog.capabilities import (
@@ -550,6 +550,9 @@ class ViewInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     """Information about a view in a schema.
 
     Attributes:
+        security: ``regular`` or ``barrier``. A barrier prevents unsafe query
+            optimization across the view; it does not grant privileges. Readers
+            must enforce the barrier when materializing or reject the view.
         definition: The definition of the view which is a SQL query string.
         aliases: Ordered raw output identifiers. A partial list renames the leading
             outputs; an empty list retains names from the SELECT. Literal dots and
@@ -569,6 +572,26 @@ class ViewInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     # Ordered raw output identifiers, never SQL fragments or dotted paths.
     # A partial list renames only the leading outputs; [] uses query names.
     aliases: list[str] = field(default_factory=list)
+    security: str = "regular"
+
+    @classmethod
+    def deserialize_from_batch(
+        cls,
+        batch: pa.RecordBatch,
+        custom_metadata: pa.KeyValueMetadata | None = None,
+        *,
+        ipc_validation: IpcValidation = IpcValidation.FULL,
+    ) -> Self:
+        """Wire metadata must explicitly carry security, even for ordinary views."""
+        index = batch.schema.get_field_index("security")
+        if (
+            index < 0
+            or batch.num_rows != 1
+            or batch.column(index).type != pa.string()
+            or batch.column(index).null_count
+        ):
+            raise ValueError("ViewInfo.security must be an explicit non-null string")
+        return super().deserialize_from_batch(batch, custom_metadata, ipc_validation=ipc_validation)
 
     @staticmethod
     def validate_aliases(aliases: list[str]) -> None:
@@ -578,9 +601,16 @@ class ViewInfo(CatalogSchemaObject, ArrowSerializableDataclass):
         ):
             raise ValueError("view aliases must be a list of nonempty raw identifiers without NUL")
 
+    @staticmethod
+    def validate_security(security: str) -> None:
+        """Reject unknown security modes; never downgrade a barrier."""
+        if security not in ("regular", "barrier"):
+            raise ValueError("view security must be regular or barrier")
+
     def __post_init__(self) -> None:
         """Validate aliases at the metadata boundary."""
         self.validate_aliases(self.aliases)
+        self.validate_security(self.security)
 
 
 @dataclass(frozen=True)
@@ -2630,6 +2660,7 @@ class CatalogInterface(ABC):
         definition: str,
         on_conflict: OnConflict,
         aliases: list[str] | None = None,
+        security: str = "regular",
     ) -> None:
         """Create a new view with the given definition."""
         raise NotImplementedError("View create not implemented.")
