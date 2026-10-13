@@ -10,7 +10,7 @@ from pathlib import Path
 import pyarrow as pa
 
 from vgi.catalog.capabilities import SCHEMA_OPTIONS_CREATE, SCHEMA_OPTIONS_READ, CatalogCapabilities
-from vgi.catalog.catalog_interface import TableInfo
+from vgi.catalog.catalog_interface import TableInfo, ViewInfo
 from vgi.catalog.layout import LayoutChangeMode, SortKey, SqlExpression, TableLayout, TableLayoutChange
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
 from vgi.codegen.catalog_contract_fixtures import render
@@ -88,3 +88,12 @@ def test_layout_corpus_preserves_nested_keys_and_nullable_changes() -> None:
     info = TableInfo.deserialize_from_bytes(fixtures["table_info"])
     assert info.layout == layout and info.options is not None
     assert info.options.serialize_to_bytes() == fixtures["state"]
+
+
+def test_views_preserve_ordered_raw_aliases() -> None:
+    fixtures = json.loads(render())["records"]
+    for name, aliases in (("view_info", ["a.b", 'with"quote']), ("view_info_implicit", [])):
+        info = ViewInfo.deserialize_from_bytes(base64.b64decode(fixtures[name]))
+        assert info.aliases == aliases
+        restored = ViewInfo.deserialize_from_bytes(info.serialize_to_bytes())
+        assert restored == info

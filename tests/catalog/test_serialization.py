@@ -3,6 +3,7 @@
 """Tests for catalog dataclass serialization/deserialization."""
 
 from decimal import Decimal
+from typing import Any
 
 import pyarrow as pa
 import pytest
@@ -474,6 +475,7 @@ class TestViewInfoSerialization:
             name="user_summary",
             schema_path=["main"],
             definition="SELECT id, name FROM users",
+            aliases=["a.b", 'with"quote'],
             comment="Summary view",
             tags={"type": "summary"},
         )
@@ -484,8 +486,15 @@ class TestViewInfoSerialization:
         assert restored.name == original.name
         assert restored.schema_path == original.schema_path
         assert restored.definition == original.definition
+        assert restored.aliases == original.aliases
         assert restored.comment == original.comment
         assert restored.tags == original.tags
+
+    @pytest.mark.parametrize("aliases", [[None], [""], ["bad\0name"], "a.b"])
+    def test_invalid_aliases(self, aliases: Any) -> None:
+        """Malformed aliases must not disappear or change output positions."""
+        with pytest.raises(ValueError, match="view aliases"):
+            ViewInfo(name="v", schema_path=["main"], definition="SELECT 1", comment=None, tags={}, aliases=aliases)
 
     def test_complex_definition(self) -> None:
         """Test with complex SQL definition."""
@@ -508,6 +517,7 @@ class TestViewInfoSerialization:
         restored = ViewInfo.deserialize_from_batch(batch)
 
         assert restored.definition == original.definition
+        assert restored.aliases == original.aliases
 
 
 class TestMacroInfoSerialization:

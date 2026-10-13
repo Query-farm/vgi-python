@@ -312,6 +312,7 @@ class TestCatalogViews:
             schema_path=["main"],
             name="user_view",
             definition="SELECT * FROM users",
+            aliases=["a.b", 'with"quote'],
             on_conflict=OnConflict.ERROR,
         )
 
@@ -322,8 +323,20 @@ class TestCatalogViews:
         )
 
         assert view is not None
+        assert view.aliases == ["a.b", 'with"quote']
         assert view.name == "user_view"
         assert view.definition == "SELECT * FROM users"
+
+    def test_aliases_survive_rename_and_comment_update(self) -> None:
+        """Metadata-only mutations retain output identifiers."""
+        client = Client(CATALOG_WORKER)
+        attached = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
+        target = dict(attach_opaque_data=attached.attach_opaque_data, schema_path=["main"])
+        client.view_create(**target, name="old", definition="SELECT 1 AS x", aliases=["a.b"])
+        client.view_rename(**target, name="old", new_name="renamed")
+        client.view_comment_set(**target, name="renamed", comment="kept")
+        info = client.view_get(**target, name="renamed")
+        assert info is not None and info.aliases == ["a.b"] and info.comment == "kept"
 
     def test_view_drop(self) -> None:
         """Can create and drop a view."""

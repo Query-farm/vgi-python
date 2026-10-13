@@ -261,6 +261,8 @@ def _build_array_call(field: pa.Field[Any], param: str, *, method_name: str) -> 
     if _is_simple_list(t):
         inner = t.value_type
         if inner.equals(pa.string()):
+            if nullable:
+                return f"arrays.push_back(BuildOptionalStringListScalar({param}));"
             return f"arrays.push_back(BuildStringListScalar({param}));"
         if inner.equals(pa.binary()):
             return f"arrays.push_back(BuildBinaryListScalar({param}));"

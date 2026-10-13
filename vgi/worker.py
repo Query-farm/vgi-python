@@ -122,6 +122,7 @@ from vgi.catalog.catalog_interface import (
     SqlExpression,
     TableInfo,
     TransactionOpaqueData,
+    ViewInfo,
     _validate_at_params,
     serialize_column_statistics,
 )
@@ -5843,9 +5844,12 @@ class Worker:
         definition: str,
         on_conflict: OnConflict,
         transaction_opaque_data: bytes | None = None,
+        aliases: list[str] | None = None,
     ) -> None:
         """Create a new view."""
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_view_name=name)
+        aliases = [] if aliases is None else aliases
+        ViewInfo.validate_aliases(aliases)
         cat = self._get_catalog()
         cat.view_create(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
@@ -5853,6 +5857,7 @@ class Worker:
             schema_path=schema_path,
             name=name,
             definition=definition,
+            aliases=list(aliases),
             on_conflict=on_conflict,
         )
 

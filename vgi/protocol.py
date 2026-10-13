@@ -3916,6 +3916,7 @@ class VgiProtocol(Protocol):
         definition: str,
         on_conflict: OnConflict,
         transaction_opaque_data: bytes | None = None,
+        aliases: list[str] | None = None,
     ) -> None:
         """Create a new view."""
         ...

@@ -712,8 +712,11 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         name: str,
         definition: str,
         on_conflict: OnConflict,
+        aliases: list[str] | None = None,
     ) -> None:
         """Create a new view in the transactor's DuckDB database."""
+        if aliases:
+            raise NotImplementedError("The transactor view reader does not preserve explicit aliases")
         if_replace = " OR REPLACE" if on_conflict == OnConflict.REPLACE else ""
         if_not_exists = " IF NOT EXISTS" if on_conflict == OnConflict.IGNORE else ""
         sql = f"CREATE{if_replace} VIEW{if_not_exists} {_qn(schema_path, name)} AS {definition};"

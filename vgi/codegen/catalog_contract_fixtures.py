@@ -19,7 +19,7 @@ from vgi_rpc import ArrowSerializableDataclass
 from vgi_rpc.rpc._types import rpc_methods
 
 from vgi.catalog.capabilities import SCHEMA_OPTIONS_CREATE, SCHEMA_OPTIONS_READ, CatalogCapabilities
-from vgi.catalog.catalog_interface import OnConflict, TableInfo
+from vgi.catalog.catalog_interface import OnConflict, TableInfo, ViewInfo
 from vgi.catalog.layout import (
     LayoutChangeMode,
     NullOrder,
@@ -105,6 +105,18 @@ def render() -> str:
         name="table.with.dot", schema_path=expression.schema_path, columns=schema.serialize().to_pybytes()
     )
     records: dict[str, TypedValueBatch | ArrowSerializableDataclass] = {
+        "view_info": ViewInfo(
+            name="view.with.dot",
+            schema_path=["one.two", "nested"],
+            definition="SELECT 1 AS original, 2 AS second",
+            aliases=["a.b", 'with"quote'],
+            column_comments={"a.b": "kept"},
+            comment="view comment",
+            tags={"team": "one"},
+        ),
+        "view_info_implicit": ViewInfo(
+            name="implicit", schema_path=["main"], definition="SELECT 1 AS original", comment=None, tags={}
+        ),
         "capabilities": CatalogCapabilities(read=[SCHEMA_OPTIONS_READ], ddl=[SCHEMA_OPTIONS_CREATE]),
         "empty_capabilities": CatalogCapabilities(),
         "definitions": OptionDefinitions(

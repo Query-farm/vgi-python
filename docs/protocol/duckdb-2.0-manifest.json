@@ -278,7 +278,13 @@
         "P2",
         "P3"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "status": "partial_protocol_implementation_on_15",
+          "implementation": "Ordered raw aliases in ViewInfo and catalog_view_create across all SDKs; native1.5 creation/materialization and cache reload coverage.",
+          "limits": "Security barriers, create metadata, view-column comments, query resolution, dependencies and durable view transactions remain open."
+        }
+      ]
     },
     "constraints": {
       "title": "Constraints and indexes",
@@ -2215,7 +2221,8 @@
       "disposition": "include",
       "target": "ViewCreateRequest.aliases",
       "status": "pending_contract_review",
-      "evidence": []
+      "evidence": [],
+      "implementation_evidence": "Ordered raw aliases implemented across SDKs and native1.5; see view_aliases_validation. Full field/contract review remains pending."
     },
     {
       "id": "audit-261",
@@ -3717,5 +3724,135 @@
         "failed": 0
       }
     }
+  },
+  "view_aliases_validation": {
+    "status": "partial_protocol_implementation_on_15",
+    "engine": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "remote_workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+    "source_manifest": "state/sources.json",
+    "rpc_methods": 77,
+    "protocol_hash": "9e1ed05cdcc6e812f9a6cfda36ecaa699005e30680e511489109180251ee6872",
+    "contract": {
+      "ViewInfo.aliases": "Required ordered list of raw output identifiers; [] retains SELECT-derived output names. Partial aliases rename the leading outputs.",
+      "catalog_view_create.aliases": "Optional list; NULL/[] both mean no explicit aliases. Definition remains SELECT text.",
+      "native_validation": "Reject absent/NULL aliases lists and NULL/empty/NUL identifiers before materializing a view."
+    },
+    "native": {
+      "release_build": "passed",
+      "reference_assertions": 172,
+      "reference_cases": 3,
+      "malformed_view_modes": 5,
+      "language_matrix": {
+        "python": {
+          "passed": 345,
+          "skipped": 33,
+          "failed": 0
+        },
+        "go": {
+          "passed": 337,
+          "skipped": 40,
+          "failed": 0
+        },
+        "rust": {
+          "passed": 324,
+          "skipped": 42,
+          "failed": 0
+        },
+        "typescript": {
+          "passed": 329,
+          "skipped": 46,
+          "failed": 0
+        },
+        "java": {
+          "passed": 325,
+          "skipped": 37,
+          "failed": 0
+        },
+        "csharp": {
+          "passed": 329,
+          "skipped": 37,
+          "failed": 0
+        }
+      },
+      "python_java_crash_probes": "Two separate crash probes per language included in their totals.",
+      "cpp": {
+        "passed": 325,
+        "skipped": 47,
+        "assertions": 12065,
+        "http_bearer_passed": 2,
+        "http_bearer_assertions": 13,
+        "exit_code": 0,
+        "log": "logs/views-native-cpp.log"
+      },
+      "qualification_runs": {
+        "initial_make_test_languages_exit_code": 2,
+        "initial_failure": "TypeScript view handler passed opaque Arrow dictionary data instead of decoding on_conflict; the new IF NOT EXISTS assertion caught this.",
+        "final_full_typescript_lane_exit_code": 0,
+        "logs": [
+          "logs/views-native-languages.log",
+          "logs/views-native-typescript-qualified.log",
+          "logs/views-native-reference.log"
+        ]
+      },
+      "additional_transport_probe": {
+        "typescript_flechette_stdio": "unqualified: ATTACH fails in the RPC request validator comparing the backend Binary types, before alias operations.",
+        "log": "logs/views-native-ts-flechette.log",
+        "codec_scope": "The seven Flechette shared-corpus codec tests pass; this does not qualify its stdio transport."
+      }
+    },
+    "limits": [
+      "Secure views, metadata creation, view-column comments, name resolution, dependencies, and durable view transactions remain pending.",
+      "The older Python transactor fixture rejects explicit aliases because its view reader cannot preserve them.",
+      "No P0-P3 or M0-M4 gate is complete."
+    ],
+    "python": {
+      "passed": 732,
+      "scope": "Catalog tests, shared corpus, generated registry/client and request inventory; not the full Python suite.",
+      "mypy_sources": 210,
+      "ruff": "check and format passed for 14 changed files",
+      "strict_generation": "--check --require-all passed",
+      "final_generation_manifest_corpus_checks": 27,
+      "counts_overlap": true
+    },
+    "sdk_units": {
+      "go": "13 tested packages passed",
+      "rust": {
+        "passed": 484,
+        "ignored": 4
+      },
+      "typescript": {
+        "passed": 600,
+        "skipped": 68,
+        "flechette_codec_passed": 7,
+        "bundle_build": "all four entries passed"
+      },
+      "java": {
+        "passed": 656,
+        "skipped": 2
+      },
+      "csharp": {
+        "passed": 594,
+        "solution_build": "passed"
+      },
+      "cpp_ctest": {
+        "passed": 68,
+        "failed": 0
+      }
+    },
+    "validation_repairs": [
+      "Native request generator now chooses the existing optional-string-list builder for nullable list fields.",
+      "Rust event replay defaults missing aliases in older persisted events to the previous query-derived names; new aliases survive replay.",
+      "Rust continuation-size regression accounts for one 64-byte IPC padding boundary while retaining the bounded-growth assertion.",
+      "Remote sync uses checksums and fresh changed-file timestamps. C++ objects were rebuilt after finding stale header consumers."
+    ],
+    "sdk_revisions": {
+      "go": "01f99bc5e5ff1e8ddf934733acfd8750fb53f56b",
+      "rust": "34245b2921d84a2fbd4fb3db9bae4f49b35500f5",
+      "typescript": "e7348d193dc001da1294d3c40e490e62a90d5ac9",
+      "java": "c7c4be091e26c79ab083af88097d69d690404686",
+      "csharp": "a6e960b2ff2adc314f775c15d1dc6c7462884dc1",
+      "cpp": "1823d765343dc8a4f456652bf379da3682e55e5c"
+    },
+    "native_revision": "84536eda52f648f719db6f1ffc218f332a126aa4"
   }
 }

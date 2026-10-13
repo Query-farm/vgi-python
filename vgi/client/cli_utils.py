@@ -323,6 +323,8 @@ def view_info_to_dict(view_info: ViewInfo) -> dict[str, Any]:
         "name": view_info.name,
         "schema_path": view_info.schema_path,
         "definition": view_info.definition,
+        "aliases": list(view_info.aliases),
+        "column_comments": dict(view_info.column_comments),
         "comment": view_info.comment,
         "tags": dict(view_info.tags),
     }

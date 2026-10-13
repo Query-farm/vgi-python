@@ -701,6 +701,7 @@ class View:
     Attributes:
         name: View name.
         definition: SQL definition of the view.
+        aliases: Ordered raw output identifiers, including any literal dots or quotes.
         comment: Optional view comment.
         column_comments: Optional mapping of view output column name to comment.
             The extension aligns these by name against the columns DuckDB binds
@@ -715,6 +716,7 @@ class View:
     comment: str | None = None
     column_comments: dict[str, str] = field(default_factory=dict)
     tags: dict[str, str] = field(default_factory=dict)
+    aliases: list[str] = field(default_factory=list)
 
     def to_view_info(self, schema_path: SchemaPath) -> ViewInfo:
         """Convert to [`ViewInfo`][] for catalog response."""
@@ -722,6 +724,7 @@ class View:
             name=self.name,
             schema_path=schema_path,
             definition=self.definition,
+            aliases=list(self.aliases),
             comment=self.comment,
             column_comments=dict(self.column_comments),
             tags=dict(self.tags),

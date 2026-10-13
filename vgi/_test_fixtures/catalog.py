@@ -651,6 +651,7 @@ class InMemoryCatalog(CatalogInterface):
         name: str,
         definition: str,
         on_conflict: OnConflict,
+        aliases: list[str] | None = None,
     ) -> None:
         """Create a new view."""
         schema_data = self._get_schema(attach_opaque_data, schema_path)
@@ -667,6 +668,7 @@ class InMemoryCatalog(CatalogInterface):
                 name=name,
                 schema_path=schema_path,
                 definition=definition,
+                aliases=list(aliases or []),
                 comment=None,
                 tags={},
             )
@@ -721,6 +723,8 @@ class InMemoryCatalog(CatalogInterface):
                 name=new_name,
                 schema_path=old_info.schema_path,
                 definition=old_info.definition,
+                aliases=list(old_info.aliases),
+                column_comments=dict(old_info.column_comments),
                 comment=old_info.comment,
                 tags=old_info.tags,
             )
@@ -752,6 +756,8 @@ class InMemoryCatalog(CatalogInterface):
                 name=old_info.name,
                 schema_path=old_info.schema_path,
                 definition=old_info.definition,
+                aliases=list(old_info.aliases),
+                column_comments=dict(old_info.column_comments),
                 comment=comment,
                 tags=old_info.tags,
             )

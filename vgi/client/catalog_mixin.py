@@ -1693,6 +1693,7 @@ class CatalogClientMixin:
         name: str,
         definition: str,
         on_conflict: OnConflict = OnConflict.ERROR,
+        aliases: list[str] | None = None,
     ) -> None:
         """Create a new view.
 
@@ -1702,6 +1703,7 @@ class CatalogClientMixin:
             schema_path: The schema to create the view in.
             name: The name for the new view.
             definition: The SQL SELECT statement defining the view.
+            aliases: Ordered raw output identifiers; omitted uses query names.
             on_conflict: Behavior if view already exists.
 
         """
@@ -1711,6 +1713,7 @@ class CatalogClientMixin:
                 schema_path=schema_path,
                 name=name,
                 definition=definition,
+                aliases=aliases,
                 on_conflict=on_conflict,
                 transaction_opaque_data=transaction_opaque_data,
             )

@@ -551,6 +551,9 @@ class ViewInfo(CatalogSchemaObject, ArrowSerializableDataclass):
 
     Attributes:
         definition: The definition of the view which is a SQL query string.
+        aliases: Ordered raw output identifiers. A partial list renames the leading
+            outputs; an empty list retains names from the SELECT. Literal dots and
+            quotes are part of the identifier, never SQL syntax.
         column_comments: Per-column comments, keyed by the view's output column
             name. Unlike tables (whose column comments ride along as Arrow field
             metadata on the serialized ``columns`` schema), a view ships only its
@@ -563,6 +566,21 @@ class ViewInfo(CatalogSchemaObject, ArrowSerializableDataclass):
 
     definition: str
     column_comments: dict[str, str] = field(default_factory=dict)
+    # Ordered raw output identifiers, never SQL fragments or dotted paths.
+    # A partial list renames only the leading outputs; [] uses query names.
+    aliases: list[str] = field(default_factory=list)
+
+    @staticmethod
+    def validate_aliases(aliases: list[str]) -> None:
+        """Reject malformed identifiers without changing order or spelling."""
+        if not isinstance(aliases, list) or any(
+            not isinstance(alias, str) or not alias or "\0" in alias for alias in aliases
+        ):
+            raise ValueError("view aliases must be a list of nonempty raw identifiers without NUL")
+
+    def __post_init__(self) -> None:
+        """Validate aliases at the metadata boundary."""
+        self.validate_aliases(self.aliases)
 
 
 @dataclass(frozen=True)
@@ -2611,6 +2629,7 @@ class CatalogInterface(ABC):
         name: str,
         definition: str,
         on_conflict: OnConflict,
+        aliases: list[str] | None = None,
     ) -> None:
         """Create a new view with the given definition."""
         raise NotImplementedError("View create not implemented.")
