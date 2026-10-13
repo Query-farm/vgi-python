@@ -3,6 +3,56 @@
 This document describes how VGI function argument specifications are serialized
 to Apache Arrow schemas for IPC transmission and DuckDB function registration.
 
+## Bound argument values and metadata
+
+The specification below describes a function's signature. A call's bound values
+use `Arguments`: one Arrow IPC record batch with one row and one `args` struct
+column. Its children are named `positional_0`, `positional_1`, and so on, or
+`named_<name>`. This existing wire layout is unchanged.
+
+Use `Arguments.from_batch()` when values already have an Arrow schema. It accepts
+a flat, one-row batch with those child names and retains field order, nullability,
+recursive field metadata, and schema metadata. `to_batch()` returns that same
+flat representation. Serialization wraps the fields in `args` and carries the
+schema metadata on the IPC stream schema. Bind and init requests preserve it.
+
+```python
+import pyarrow as pa
+from vgi.arguments import Arguments
+
+schema = pa.schema([
+    pa.field("positional_0", pa.int64(), metadata={b"example.unit": b"milliseconds"}),
+    pa.field("named_label", pa.string()),
+], metadata={b"example.context": b"request"})
+batch = pa.RecordBatch.from_pylist([
+    {"positional_0": 250, "named_label": None},
+], schema=schema)
+arguments = Arguments.from_batch(batch)
+restored = Arguments.deserialize_from_bytes(arguments.serialize_to_bytes())
+assert restored.schema().equals(schema, check_metadata=True)
+assert restored.get("label", default="fallback") is None
+```
+
+Scalar callers can supply `argument_schema=` explicitly; otherwise the SDK
+infers fields from the scalars as before. Supplied names and types must match
+that schema. A typed NULL remains a present argument and does not select a
+default. Missing arguments remain absent. `decode(StructScalar)` preserves
+field metadata; a scalar cannot carry metadata from an enclosing stream schema.
+
+`vgi.typed_values.TypedValueBatch` provides the shared flat one-row carrier for
+other typed-value contracts. It preserves the complete schema, checks declared
+nullability recursively, and rejects duplicate names, wrong row counts, extra
+record batches, and trailing bytes. `validate_schema()` checks exact schema
+agreement, including metadata; it never casts values implicitly. A zero-column
+batch still contains one row. `Arguments` additionally accepts DuckDB 1.5's
+existing null empty `args` struct as an empty argument set.
+
+Metadata preservation does not establish support for the logical type it
+describes. Consumers must validate required type annotations against their
+capabilities. Remote-query parameter mapping, preparation/execution binding,
+and DuckDB 2.0 logical-type semantics remain part of the combined protocol work;
+this carrier does not advertise those features.
+
 ## Quick Reference
 
 | Metadata Key | Value | Meaning |
