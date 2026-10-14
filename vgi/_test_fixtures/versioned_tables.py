@@ -460,9 +460,7 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
             name=name,
             schema_path=["main"],
             columns=SerializedSchema(table.columns.serialize().to_pybytes()),
-            not_null_constraints=[],
-            unique_constraints=[],
-            check_constraints=[],
+            constraints=[],
         )
 
     # ------------------------------------------------------------------ schemas / tables

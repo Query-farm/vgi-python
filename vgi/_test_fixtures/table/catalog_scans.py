@@ -18,6 +18,8 @@ from vgi.table_function import (
     init_single_worker,
 )
 
+STATIC_CATALOG_ROWS: dict[str, pa.Table] = {}
+
 
 def _static_scan_function(
     func_name: str,
@@ -31,6 +33,7 @@ def _static_scan_function(
     return a fixed dataset. Each generated class is decorated with
     ``@init_single_worker`` and has a unique ``Meta.name``.
     """
+    STATIC_CATALOG_ROWS[func_name] = pa.Table.from_pydict(data, schema=output_schema)
 
     @init_single_worker
     class StaticScanFunction(TableFunctionGenerator[_EmptyArgs, _OneShotState]):

@@ -99,6 +99,10 @@ from vgi.catalog.capabilities import (
     COLUMN_NESTED_NULLABILITY,
     COLUMN_NESTED_RENAME,
     COLUMN_NESTED_TYPE,
+    CONSTRAINT_CREATE,
+    CONSTRAINT_ENFORCE,
+    CONSTRAINT_MUTATE,
+    CONSTRAINT_RECORDS_READ,
     MACRO_OVERLOADS_CREATE,
     MACRO_OVERLOADS_READ,
     SCHEMA_LIFECYCLE,
@@ -134,7 +138,17 @@ from vgi.catalog.catalog_interface import (
     _validate_at_params,
     serialize_column_statistics,
 )
-from vgi.catalog.dependencies import DependencySnapshot
+from vgi.catalog.constraints import (
+    ConstraintDefinition,
+    ConstraintEnforcement,
+    ConstraintsApplyRequest,
+    ConstraintSnapshot,
+    ForeignKeyMatch,
+    ReferentialAction,
+    constraint_definitions,
+    validate_constraint_schema,
+)
+from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot
 from vgi.catalog.layout import LayoutChangeMode, LayoutCoverage, TableLayout, TableLayoutChange
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions
@@ -2863,9 +2877,30 @@ class Worker:
 
     @staticmethod
     def _table_for_capabilities(info: TableInfo, selected: CatalogCapabilities) -> TableInfo:
-        require_logical_profiles(pa.ipc.read_schema(pa.py_buffer(info.columns)), selected_profiles=selected.read)
+        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
+        require_logical_profiles(schema, selected_profiles=selected.read)
+        infos = info.constraint_infos()
+        validate_constraint_schema(
+            schema, [item.definition for item in infos], trusted=[item.definition for item in infos if item.trusted]
+        )
+        if infos:
+            selected.require(CONSTRAINT_RECORDS_READ, available=selected, operation="read canonical constraints")
+            for item in infos:
+                if item.definition.check_expression is not None:
+                    selected.require(
+                        item.definition.check_expression.profile, available=selected, operation="read CHECK constraint"
+                    )
+        if CONSTRAINT_MUTATE in selected.ddl and not info.definition_revision:
+            raise ValueError("canonical mutation requires a nonempty table definition revision")
+        write_allowed = CONSTRAINT_ENFORCE in selected.write or not any(
+            item.enforcement == ConstraintEnforcement.ENFORCED for item in infos
+        )
         return _dataclass_replace(
             info,
+            write_result_modes=info.write_result_modes if write_allowed else {},
+            insert_function=info.insert_function if write_allowed else None,
+            update_function=info.update_function if write_allowed else None,
+            delete_function=info.delete_function if write_allowed else None,
             options=info.options if TABLE_OPTIONS_READ in selected.read else None,
             layout=info.layout
             if (
@@ -2880,6 +2915,50 @@ class Worker:
             )
             else None,
         )
+
+    def _require_constraint_definition_profiles(
+        self, attach: bytes, definitions: list[ConstraintDefinition], operation: str
+    ) -> None:
+        """Reject unqualified expression and propagating FK semantics before effects."""
+        for definition in definitions:
+            if definition.check_expression is not None:
+                self._require_catalog_capability(attach, definition.check_expression.profile, operation)
+            foreign_key = definition.foreign_key
+            if foreign_key is not None and (
+                foreign_key.match != ForeignKeyMatch.SIMPLE
+                or foreign_key.on_update not in {ReferentialAction.NO_ACTION, ReferentialAction.RESTRICT}
+                or foreign_key.on_delete not in {ReferentialAction.NO_ACTION, ReferentialAction.RESTRICT}
+            ):
+                raise NotImplementedError("additional foreign-key match/action profiles are not implemented")
+
+    def _check_table_constraint_write(
+        self, attach: bytes, transaction: bytes | None, path: list[str], name: str
+    ) -> None:
+        """Require canonical discovery and enforcement before exposing write endpoints."""
+        info = self._get_catalog().table_get(
+            attach_opaque_data=self._unwrap_attach(attach),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction, attach),
+            schema_path=path,
+            name=name,
+        )
+        if info is not None:
+            self._table_for_capabilities(info, self._effective_catalog_capabilities(attach))
+            if any(item.enforcement == ConstraintEnforcement.ENFORCED for item in info.constraint_infos()):
+                self._require_catalog_capability(attach, CONSTRAINT_ENFORCE, "write constrained table")
+
+    def _check_table_constraint_mutation(
+        self, attach: bytes, transaction: bytes | None, path: list[str], name: str
+    ) -> None:
+        """Legacy structural DDL must preserve canonical identities and revisions."""
+        info = self._get_catalog().table_get(
+            attach_opaque_data=self._unwrap_attach(attach),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction, attach),
+            schema_path=path,
+            name=name,
+        )
+        if info is not None and info.constraints:
+            self._table_for_capabilities(info, self._effective_catalog_capabilities(attach))
+            self._require_catalog_capability(attach, CONSTRAINT_MUTATE, "mutate constrained table", transaction)
 
     def _attach_catalog_name(self, envelope: bytes | None) -> str | None:
         """Read the catalog name MetaWorker sealed into an attach envelope.
@@ -5440,10 +5519,29 @@ class Worker:
 
     def catalog_table_create(self, request: TableCreateRequest) -> None:
         """Create a new table."""
+        request.__post_init__()
         self._enrich_catalog_span(vgi_schema_path=request.schema_path, vgi_table_name=request.name)
         cat = self._get_catalog()
+        if request.on_conflict == OnConflict.REPLACE:
+            self._check_table_constraint_mutation(
+                request.attach_opaque_data, request.transaction_opaque_data, request.schema_path, request.name
+            )
+        schema = pa.ipc.read_schema(pa.py_buffer(request.columns))
+        definitions = constraint_definitions(
+            request.constraint_definitions,
+            CatalogObjectRef(kind="table", schema_path=request.schema_path, name=request.name),
+        )
+        validate_constraint_schema(schema, definitions)
+        if definitions:
+            self._require_catalog_capability(
+                request.attach_opaque_data, CONSTRAINT_CREATE, "catalog_table_create", request.transaction_opaque_data
+            )
+            self._require_catalog_capability(request.attach_opaque_data, CONSTRAINT_ENFORCE, "catalog_table_create")
+            self._require_constraint_definition_profiles(
+                request.attach_opaque_data, definitions, "catalog_table_create"
+            )
         require_logical_profiles(
-            pa.ipc.read_schema(pa.py_buffer(request.columns)),
+            schema,
             selected_profiles=self._effective_catalog_capabilities(request.attach_opaque_data).read,
         )
         extra: dict[str, Any] = {}
@@ -5478,17 +5576,41 @@ class Worker:
             name=request.name,
             columns=SerializedSchema(request.columns),
             on_conflict=request.on_conflict,
-            not_null_constraints=list(request.not_null_constraints),
-            unique_constraints=[list(c) for c in request.unique_constraints],
-            check_constraints=list(request.check_constraints),
-            primary_key_constraints=(
-                [list(c) for c in request.primary_key_constraints] if request.primary_key_constraints else None
-            ),
-            foreign_key_constraints=(
-                list(request.foreign_key_constraints) if request.foreign_key_constraints else None
-            ),
+            constraint_definitions=list(request.constraint_definitions),
             **extra,
         )
+
+    def catalog_table_constraints_apply(self, request: ConstraintsApplyRequest) -> ConstraintSnapshot:
+        """Validate the complete atomic request before invoking the provider once."""
+        request.__post_init__()
+        self._require_catalog_capability(
+            request.attach_opaque_data,
+            CONSTRAINT_MUTATE,
+            "catalog_table_constraints_apply",
+            request.transaction_opaque_data,
+        )
+        changes = request.constraint_changes()
+        definitions = [change.definition for change in changes if change.definition is not None]
+        self._require_constraint_definition_profiles(
+            request.attach_opaque_data, definitions, "catalog_table_constraints_apply"
+        )
+        if any(change.enforcement == ConstraintEnforcement.ENFORCED for change in changes):
+            self._require_catalog_capability(
+                request.attach_opaque_data, CONSTRAINT_ENFORCE, "catalog_table_constraints_apply"
+            )
+        result = self._get_catalog().table_constraints_apply(
+            _dataclass_replace(
+                request,
+                attach_opaque_data=self._unwrap_attach(request.attach_opaque_data),
+                transaction_opaque_data=self._unwrap_tx_opt(
+                    request.transaction_opaque_data, request.attach_opaque_data
+                ),
+            )
+        )
+        result.__post_init__()
+        if result.table != request.table:
+            raise ValueError("constraint mutation returned a different table")
+        return result
 
     def catalog_table_option_definitions(
         self,
@@ -5567,6 +5689,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a table."""
+        self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_drop(
@@ -5660,6 +5783,7 @@ class Worker:
         writable_branch_function_name: str | None = None,
     ) -> bytes:
         """Get the insert function for a table. Returns `WriteFunctionResult` as IPC bytes."""
+        self._check_table_constraint_write(attach_opaque_data, transaction_opaque_data, schema_path, name)
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         result = cat.table_insert_function_get(
@@ -5679,6 +5803,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> bytes:
         """Get the update function for a table. Returns `WriteFunctionResult` as IPC bytes."""
+        self._check_table_constraint_write(attach_opaque_data, transaction_opaque_data, schema_path, name)
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         result = cat.table_update_function_get(
@@ -5697,6 +5822,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> bytes:
         """Get the delete function for a table. Returns `WriteFunctionResult` as IPC bytes."""
+        self._check_table_constraint_write(attach_opaque_data, transaction_opaque_data, schema_path, name)
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         result = cat.table_delete_function_get(
@@ -5765,6 +5891,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Rename a table."""
+        self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_rename(
@@ -5788,6 +5915,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Add a new column to a table."""
+        self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
         if len(column_path_key(column_path)) > 1:
             self._require_catalog_capability(
                 attach_opaque_data, COLUMN_NESTED_ADD, "catalog_table_column_add", transaction_opaque_data
@@ -5818,6 +5946,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a column from a table."""
+        self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
         if len(column_path_key(column_path)) > 1:
             self._require_catalog_capability(
                 attach_opaque_data, COLUMN_NESTED_DROP, "catalog_table_column_drop", transaction_opaque_data
@@ -5846,6 +5975,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Rename a column."""
+        self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
         if len(column_path_key(column_path)) > 1:
             self._require_catalog_capability(
                 attach_opaque_data, COLUMN_NESTED_RENAME, "catalog_table_column_rename", transaction_opaque_data
@@ -5874,6 +6004,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Set the default value expression for a column."""
+        self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
         if len(column_path_key(column_path)) > 1:
             self._require_catalog_capability(
                 attach_opaque_data, COLUMN_NESTED_DEFAULT, "catalog_table_column_default_set", transaction_opaque_data
@@ -5900,6 +6031,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Remove the default value from a column."""
+        self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
         if len(column_path_key(column_path)) > 1:
             self._require_catalog_capability(
                 attach_opaque_data, COLUMN_NESTED_DEFAULT, "catalog_table_column_default_drop", transaction_opaque_data
@@ -5927,6 +6059,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Change the type of a column."""
+        self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
         if len(column_path_key(column_path)) > 1:
             self._require_catalog_capability(
                 attach_opaque_data, COLUMN_NESTED_TYPE, "catalog_table_column_type_change", transaction_opaque_data
@@ -5955,6 +6088,9 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Remove NOT NULL constraint from a column."""
+        self._require_catalog_capability(
+            attach_opaque_data, CONSTRAINT_MUTATE, "catalog_table_not_null_drop", transaction_opaque_data
+        )
         if len(column_path_key(column_path)) > 1:
             self._require_catalog_capability(
                 attach_opaque_data, COLUMN_NESTED_NULLABILITY, "catalog_table_not_null_drop", transaction_opaque_data
@@ -5980,6 +6116,10 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Add NOT NULL constraint to a column."""
+        self._require_catalog_capability(
+            attach_opaque_data, CONSTRAINT_MUTATE, "catalog_table_not_null_set", transaction_opaque_data
+        )
+        self._require_catalog_capability(attach_opaque_data, CONSTRAINT_ENFORCE, "catalog_table_not_null_set")
         if len(column_path_key(column_path)) > 1:
             self._require_catalog_capability(
                 attach_opaque_data, COLUMN_NESTED_NULLABILITY, "catalog_table_not_null_set", transaction_opaque_data

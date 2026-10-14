@@ -103,7 +103,7 @@ class TestCLISchemaContents:
         assert contents_result.exit_code == 0
 
         # Parse all output lines as JSON
-        lines = contents_result.output.strip().split("\n")
+        lines = contents_result.stdout.strip().split("\n")
         items = [json.loads(line) for line in lines if line.strip()]
 
         # Should have items
@@ -164,7 +164,7 @@ class TestCLISchemaContents:
         assert contents_result.exit_code == 0
 
         # Parse all output lines as JSON
-        lines = contents_result.output.strip().split("\n")
+        lines = contents_result.stdout.strip().split("\n")
         items = [json.loads(line) for line in lines if line.strip()]
 
         # Should have items
@@ -287,7 +287,7 @@ class TestCLISchemaContents:
         assert contents_result.exit_code == 0
 
         # Parse first function
-        lines = contents_result.output.strip().split("\n")
+        lines = contents_result.stdout.strip().split("\n")
         first_func = json.loads(lines[0])
 
         # Check expected fields
@@ -327,7 +327,7 @@ class TestCLISchemaContents:
         assert contents_result.exit_code == 0
 
         # Parse scalar functions
-        lines = contents_result.output.strip().split("\n")
+        lines = contents_result.stdout.strip().split("\n")
         items = [json.loads(line) for line in lines if line.strip()]
         by_name = {item["name"]: item for item in items}
 
@@ -365,7 +365,7 @@ class TestCLISchemaContents:
         assert contents_result.exit_code == 0
 
         # Parse table functions
-        lines = contents_result.output.strip().split("\n")
+        lines = contents_result.stdout.strip().split("\n")
         items = [json.loads(line) for line in lines if line.strip()]
         by_name = {item["name"]: item for item in items}
 
@@ -405,7 +405,7 @@ class TestCLISchemaContents:
         assert contents_result.exit_code == 0
 
         # Parse and find sum_values function
-        lines = contents_result.output.strip().split("\n")
+        lines = contents_result.stdout.strip().split("\n")
         items = [json.loads(line) for line in lines if line.strip()]
         by_name = {item["name"]: item for item in items}
 
@@ -455,7 +455,7 @@ class TestCLISchemaList:
 
         # Parse schema info (NDJSON - one JSON object per line)
         # Get the first schema which should be "main"
-        lines = list_result.output.strip().split("\n")
+        lines = list_result.stdout.strip().split("\n")
         schema_info = json.loads(lines[0])
         assert schema_info["path"] == ["main"]
 
@@ -480,7 +480,7 @@ class TestCLISchemaList:
 
         # Parse schema info (NDJSON - one JSON object per line)
         # Get the first schema which should be "main"
-        lines = list_result.output.strip().split("\n")
+        lines = list_result.stdout.strip().split("\n")
         schema_info = json.loads(lines[0])
         assert schema_info["path"] == ["main"]
 

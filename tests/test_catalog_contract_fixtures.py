@@ -118,6 +118,9 @@ def test_layout_corpus_preserves_nested_keys_and_nullable_changes() -> None:
     info = TableInfo.deserialize_from_bytes(fixtures["table_info"])
     assert info.layout == layout and info.options is not None
     assert info.options.serialize_to_bytes() == fixtures["state"]
+    assert info.definition_revision == b"revision\0\xff"
+    assert info.constraint_infos()[0].definition.serialize_to_bytes() == request.constraint_definitions[0]
+    assert info.constraint_infos()[0].ref.name == "fixture-stable-key"
 
 
 def test_views_preserve_ordered_raw_aliases() -> None:

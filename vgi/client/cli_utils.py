@@ -12,6 +12,7 @@ This module provides common utilities used across CLI command groups:
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
 import click
@@ -301,9 +302,8 @@ def table_info_to_dict(table_info: TableInfo) -> dict[str, Any]:
         "name": table_info.name,
         "schema_path": table_info.schema_path,
         "columns": arrow_schema_to_json(table_info.columns),
-        "not_null_constraints": table_info.not_null_constraints,
-        "unique_constraints": table_info.unique_constraints,
-        "check_constraints": table_info.check_constraints,
+        "constraints": [asdict(info) for info in table_info.constraint_infos()],
+        "definition_revision": None if table_info.definition_revision is None else table_info.definition_revision.hex(),
         "comment": table_info.comment,
         "tags": dict(table_info.tags),
     }
@@ -523,7 +523,33 @@ def get_attach_opaque_data_from_options(
     # Auto-attach via --catalog
     assert catalog is not None
     options = attach_options or {}
-    result = client.catalog_attach(name=catalog, options=options, data_version_spec=None, implementation_version=None)
+    from vgi.catalog.capabilities import (
+        CONSTRAINT_CREATE,
+        CONSTRAINT_ENFORCE,
+        CONSTRAINT_MUTATE,
+        CONSTRAINT_RECORDS_READ,
+        ROW_SCALAR_EXPRESSION,
+        TRANSACTION_DDL,
+        CatalogCapabilities,
+    )
+    from vgi.protocol import ClientCapabilities
+
+    offer = ClientCapabilities(
+        engine="vgi-cli",
+        native_formats=[],
+        catalogs=[],
+        can_stream=False,
+        filter_encodings=[],
+        catalog=CatalogCapabilities(
+            read=sorted([CONSTRAINT_RECORDS_READ, ROW_SCALAR_EXPRESSION]),
+            ddl=sorted([CONSTRAINT_CREATE, CONSTRAINT_MUTATE]),
+            write=[CONSTRAINT_ENFORCE],
+            transaction=[TRANSACTION_DDL],
+        ),
+    )
+    result = client.catalog_attach(
+        name=catalog, options=options, data_version_spec=None, implementation_version=None, client_capabilities=offer
+    )
 
     # Return the attach_opaque_data and whether this is a stateful catalog
     # (is_stateful=True means caller should warn about using --catalog

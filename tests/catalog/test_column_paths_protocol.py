@@ -11,7 +11,17 @@ import pyarrow as pa
 import pytest
 from vgi_rpc.http._testing import _SyncTestClient
 
-from vgi.catalog.capabilities import COLUMN_NESTED_ADD, COLUMN_NESTED_RENAME, ROW_SCALAR_EXPRESSION, TRANSACTION_DDL
+from vgi.catalog.capabilities import (
+    COLUMN_NESTED_ADD,
+    COLUMN_NESTED_RENAME,
+    CONSTRAINT_ENFORCE,
+    CONSTRAINT_MUTATE,
+    CONSTRAINT_RECORDS_READ,
+    ROW_SCALAR_EXPRESSION,
+    TRANSACTION_DDL,
+    CatalogCapabilities,
+)
+from vgi.catalog.constraints import ConstraintDefinition, ConstraintKind
 from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.layout import LayoutChangeMode, NullOrder, SortDirection, SortKey, SqlExpression, TableLayoutChange
 from vgi.client import Client
@@ -92,7 +102,13 @@ def rows(worker: ColumnPathsWorker, token: bytes, tx: bytes | None = None) -> li
 
 def setup(c: Client, backend: ColumnPathsWorker) -> bytes:
     token = attach(c)
-    c.table_create(**args(token), columns=SCHEMA.serialize().to_pybytes())
+    c.table_create(
+        **args(token),
+        columns=SCHEMA.serialize().to_pybytes(),
+        constraint_definitions=[
+            ConstraintDefinition(kind=ConstraintKind.NOT_NULL, column_paths=[["id"]]).serialize_to_bytes()
+        ],
+    )
     seed(backend, token, ROWS)
     return token
 
@@ -132,6 +148,20 @@ def test_nested_add_default_comment_and_nullability(backend: ColumnPathsWorker) 
         assert definition.nullable and definition.metadata == {b"tags": b'{"team":"one"}'}
     with client() as c:
         assert info(c, token).field("a").type.field("x.y") == definition
+
+
+def test_constraint_identity_and_revision_survive_rename_and_noop(backend: ColumnPathsWorker) -> None:
+    with client() as c:
+        token = setup(c, backend)
+        original = c.table_get(**args(token))
+        c.table_not_null_set(**args(token), column_path=["id"])
+        unchanged = c.table_get(**args(token))
+        assert unchanged.definition_revision == original.definition_revision
+        c.table_column_rename(**args(token), column_path=["id"], new_column_name="renamed.id")
+        renamed = c.table_get(**args(token))
+        assert renamed.definition_revision != original.definition_revision
+        assert renamed.constraint_infos()[0].ref == original.constraint_infos()[0].ref
+        assert renamed.constraint_infos()[0].definition.column_paths == [["renamed.id"]]
 
 
 def test_type_using_rename_and_drop_keep_literal_dotted_column_distinct(backend: ColumnPathsWorker) -> None:
@@ -231,10 +261,21 @@ def test_capability_absence_downgrade_and_transaction_guarantee(
 ) -> None:
     with client() as c:
         token = setup(c, backend)
-        old = attach(c, None)
+        unaware = attach(c, None)
+        with pytest.raises(CatalogCapabilityError, match=CONSTRAINT_RECORDS_READ):
+            backend.catalog_table_column_rename(**args(unaware), column_path=["id"], new_column_name="hidden")
+        old = attach(
+            c,
+            replace(
+                OFFER,
+                catalog=CatalogCapabilities(
+                    read=[CONSTRAINT_RECORDS_READ], ddl=[CONSTRAINT_MUTATE], write=[CONSTRAINT_ENFORCE]
+                ),
+            ),
+        )
         with pytest.raises(CatalogCapabilityError, match=COLUMN_NESTED_ADD):
             backend.catalog_table_column_add(**args(old), column_path=["a", "new"], column_definition=field("new"))
-        # One literal component is baseline flat behavior and requires no nested profile.
+        # Flat edits need no nested profile but must preserve canonical constraints.
         c.table_column_rename(**args(old), column_path=["a.b"], new_column_name="literal")
         limited = attach(c, replace(OFFER, catalog=replace(COLUMN_PROFILES, transaction=[])))
         tx = c.catalog_transaction_begin(attach_opaque_data=limited)

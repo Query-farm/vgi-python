@@ -290,11 +290,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         name: str,
         columns: SerializedSchema,
         on_conflict: OnConflict,
-        not_null_constraints: list[int],
-        unique_constraints: list[list[int]],
-        check_constraints: list[str],
-        primary_key_constraints: list[list[int]] | None = None,
-        foreign_key_constraints: list[bytes] | None = None,
+        constraint_definitions: list[bytes],
         comment: str | None = None,
         tags: dict[str, str] | None = None,
         options: TypedValueBatch | None = None,
@@ -306,6 +302,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         DuckDB's built-in rowid pseudocolumn provides the row identifier
         automatically — no extra column or sequence needed.
         """
+        if constraint_definitions:
+            raise NotImplementedError("writable fixture has not implemented canonical constraint identities")
         if any(value is not None for value in (comment, tags, options, layout)):
             raise NotImplementedError("table creation metadata/options/layout profiles are not supported")
 
@@ -316,46 +314,17 @@ class WritableCatalog(ReadOnlyCatalogInterface):
 
         # Build column definitions (including defaults from Arrow field metadata)
         col_defs: list[str] = []
-        for i, field in enumerate(col_schema):
+        for field in col_schema:
+            if not field.nullable:
+                raise NotImplementedError("writable fixture requires canonical NOT_NULL support")
             col_def = f"{_qi(field.name)} {_arrow_type_to_sql(field.type)}"
-            if i in not_null_constraints:
-                col_def += " NOT NULL"
             # Default values are passed as Arrow field metadata with key "default"
             if field.metadata and b"default" in field.metadata:
                 default_expr = field.metadata[b"default"].decode("utf-8")
                 col_def += f" DEFAULT {default_expr}"
             col_defs.append(col_def)
 
-        # Table-level constraints
-        constraints: list[str] = []
-
-        # Primary key
-        if primary_key_constraints:
-            for pk_group in primary_key_constraints:
-                pk_cols = ", ".join(_qi(col_schema.field(i).name) for i in pk_group)
-                constraints.append(f"PRIMARY KEY ({pk_cols})")
-
-        # Unique constraints
-        for unique_group in unique_constraints:
-            uq_cols = ", ".join(_qi(col_schema.field(i).name) for i in unique_group)
-            constraints.append(f"UNIQUE ({uq_cols})")
-
-        # Check constraints
-        for check_expr in check_constraints:
-            constraints.append(f"CHECK ({check_expr})")
-
-        # Foreign key constraints
-        if foreign_key_constraints:
-            for fk_bytes in foreign_key_constraints:
-                fk = _deserialize_fk(fk_bytes)
-                fk_cols = ", ".join(_qi(c) for c in fk["fk_columns"])
-                pk_cols = ", ".join(_qi(c) for c in fk["pk_columns"])
-                ref_table = _qi(fk["referenced_table"])
-                constraints.append(f"FOREIGN KEY ({fk_cols}) REFERENCES {ref_table}({pk_cols})")
-
-        # Combine into CREATE TABLE
-        all_parts = col_defs + constraints
-        columns_sql = ",\n  ".join(all_parts)
+        columns_sql = ",\n  ".join(col_defs)
         ddl = f"CREATE TABLE{if_not_exists} {_qn(schema_path, name)} (\n  {columns_sql}\n);"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
         logger.info("table_create: %s (on_conflict=%s)", name, on_conflict.value)
@@ -557,9 +526,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Set NOT NULL constraint on a column."""
-        column_name = single_column_name(column_path)
-        ddl = f"ALTER TABLE {_qn(schema_path, name)} ALTER COLUMN {_qi(column_name)} SET NOT NULL;"
-        self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
+        raise NotImplementedError("writable fixture has not implemented canonical constraint mutation")
 
     def table_not_null_drop(
         self,
@@ -572,9 +539,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ignore_not_found: bool,
     ) -> None:
         """Drop NOT NULL constraint from a column."""
-        column_name = single_column_name(column_path)
-        ddl = f"ALTER TABLE {_qn(schema_path, name)} ALTER COLUMN {_qi(column_name)} DROP NOT NULL;"
-        self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
+        raise NotImplementedError("writable fixture has not implemented canonical constraint mutation")
 
     # ========== Schema discovery (merge static + dynamic) ==========
 
@@ -878,63 +843,14 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         # Constraints are embedded in schema-level metadata as JSON.
         serialized = SerializedSchema(table_schema.serialize().to_pybytes())
 
-        # Parse constraints from schema-level metadata
-        not_null_constraints: list[int] = []
-        unique_constraints: list[list[int]] = []
-        check_constraints: list[str] = []
-        primary_key_constraints: list[list[int]] = []
-        foreign_key_constraints: list[bytes] = []
-
+        # The transactor has no persisted canonical identities yet. Never
+        # silently turn its existing constraints into an empty readback list.
         schema_meta = table_schema.metadata or {}
         if b"vgi.constraints" in schema_meta:
             import json
 
-            from vgi_rpc.utils import serialize_record_batch_bytes
-
-            constraints = json.loads(schema_meta[b"vgi.constraints"].decode("utf-8"))
-            # Build column name → index map in Arrow schema space (including rowid at index 0).
-            # Constraint indices must be in Arrow space so the C++ adjust_col lambda
-            # can correctly shift them to physical space (excluding rowid).
-            col_index = {f.name: i for i, f in enumerate(table_schema) if f.name != "rowid"}
-            for c in constraints:
-                ctype = c["type"]
-                cols = c.get("columns") or []
-                text = c.get("text") or ""
-                col_indices = [col_index[cn] for cn in cols if cn in col_index]
-                if ctype == "NOT NULL":
-                    not_null_constraints.extend(col_indices)
-                elif ctype == "UNIQUE":
-                    unique_constraints.append(col_indices)
-                elif ctype == "PRIMARY KEY":
-                    primary_key_constraints.append(col_indices)
-                elif ctype == "CHECK":
-                    # Extract the check expression from constraint_text
-                    # Format: "CHECK(expr)"
-                    if text.startswith("CHECK(") and text.endswith(")"):
-                        check_constraints.append(text[6:-1])
-                    elif text:
-                        check_constraints.append(text)
-                elif ctype == "FOREIGN KEY":
-                    ref_table = c.get("referenced_table") or ""
-                    ref_cols = c.get("referenced_columns") or []
-                    if ref_table and cols and ref_cols:
-                        fk_batch = pa.RecordBatch.from_pydict(
-                            {
-                                "fk_columns": [list(cols)],
-                                "pk_columns": [list(ref_cols)],
-                                "referenced_table": [ref_table],
-                                "referenced_schema_path": [schema_path],
-                            },
-                            schema=pa.schema(
-                                [
-                                    ("fk_columns", pa.list_(pa.utf8())),
-                                    ("pk_columns", pa.list_(pa.utf8())),
-                                    ("referenced_table", pa.utf8()),
-                                    ("referenced_schema_path", pa.list_(pa.utf8())),
-                                ]
-                            ),
-                        )
-                        foreign_key_constraints.append(serialize_record_batch_bytes(fk_batch))
+            if json.loads(schema_meta[b"vgi.constraints"].decode("utf-8")):
+                raise NotImplementedError("writable fixture has not implemented canonical constraint discovery")
 
         # Also fetch the table comment
         try:
@@ -948,11 +864,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
             name=name,
             schema_path=schema_path,
             columns=serialized,
-            not_null_constraints=not_null_constraints,
-            unique_constraints=unique_constraints,
-            check_constraints=check_constraints,
-            primary_key_constraints=primary_key_constraints,
-            foreign_key_constraints=foreign_key_constraints,
+            constraints=[],
             write_result_modes={"insert": "changes", "update": "changes", "delete": "changes"},
             comment=table_comment,
             tags={},

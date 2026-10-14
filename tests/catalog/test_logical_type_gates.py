@@ -73,9 +73,7 @@ def test_table_discovery_rejects_unnegotiated_logical_schema():
         name="t",
         schema_path=["main"],
         columns=schema().serialize().to_pybytes(),
-        not_null_constraints=[],
-        unique_constraints=[],
-        check_constraints=[],
+        constraints=[],
     )
     with pytest.raises(ValueError, match="not negotiated"):
         Worker._table_for_capabilities(info, CatalogCapabilities())
@@ -84,6 +82,7 @@ def test_table_discovery_rejects_unnegotiated_logical_schema():
 def test_table_creation_rejects_unnegotiated_logical_schema_before_provider():
     worker = worker_without_logical_profiles()
     create = TableCreateRequest(
+        constraint_definitions=[],
         attach_opaque_data=b"attach",
         schema_path=["main"],
         name="t",

@@ -66,7 +66,8 @@ from vgi.catalog.catalog_interface import (
     TableInfo,
     ViewInfo,
 )
-from vgi.catalog.dependencies import DependencySnapshot
+from vgi.catalog.constraints import ConstraintsApplyRequest, ConstraintSnapshot, constraint_definitions
+from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot
 from vgi.catalog.layout import TableLayout
 from vgi.catalog.macros import MAX_MACRO_BYTES, MacroOverload, validate_macro_overloads
 from vgi.catalog.options import OptionDefinitions
@@ -797,11 +798,8 @@ class TableCreateRequest(ArrowSerializableDataclass):
         columns: The columns of the table as a PyArrow schema serialized as bytes.
         on_conflict: Behavior when the object already exists ([`OnConflict`][]:
             ERROR/IGNORE/REPLACE).
-        not_null_constraints: Column indices with a NOT NULL constraint.
-        unique_constraints: Column-index groups with a UNIQUE constraint.
-        check_constraints: SQL CHECK constraint expressions.
-        primary_key_constraints: Column-index groups forming the primary key.
-        foreign_key_constraints: Serialized foreign-key constraint specs.
+        constraint_definitions: Required canonical ConstraintDefinition IPC list.
+            Empty means no constraints; nonempty requests ENFORCED + ALL_ROWS.
         transaction_opaque_data: Opaque DuckDB transaction handle (bytes); ``None``
             when not inside a transaction.
         comment: Optional creation comment; requires the table metadata profile.
@@ -815,21 +813,20 @@ class TableCreateRequest(ArrowSerializableDataclass):
     name: str
     columns: bytes  # SerializedSchema
     on_conflict: OnConflict
-    not_null_constraints: Annotated[list[int], ArrowType(pa.list_(pa.int32()))] = field(default_factory=list)
-    unique_constraints: Annotated[list[list[int]], ArrowType(pa.list_(pa.list_(pa.int32())))] = field(
-        default_factory=list
-    )
-    check_constraints: list[str] = field(default_factory=list)
-    primary_key_constraints: Annotated[list[list[int]], ArrowType(pa.list_(pa.list_(pa.int32())))] = field(
-        default_factory=list
-    )
-    foreign_key_constraints: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))] = field(default_factory=list)
+    constraint_definitions: list[bytes]
     transaction_opaque_data: bytes | None = None
 
     comment: str | None = None
     tags: dict[str, str] | None = None
     options: Annotated[TypedValueBatch | None, ArrowType(pa.binary())] = None
     layout: Annotated[TableLayout | None, ArrowType(pa.binary())] = None
+
+    def __post_init__(self) -> None:
+        """Reject missing, malformed or conflicting canonical definitions."""
+        constraint_definitions(
+            self.constraint_definitions,
+            CatalogObjectRef(kind="table", schema_path=self.schema_path, name=self.name),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -3675,6 +3672,10 @@ class VgiProtocol(Protocol):
 
     def catalog_table_create(self, request: TableCreateRequest) -> None:
         """Create a new table."""
+        ...
+
+    def catalog_table_constraints_apply(self, request: ConstraintsApplyRequest) -> ConstraintSnapshot:
+        """Atomically apply canonical changes at the expected table revision."""
         ...
 
     def catalog_table_option_definitions(

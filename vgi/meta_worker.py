@@ -38,6 +38,7 @@ from vgi_rpc.rpc import CallContext, Stream
 
 from vgi._redact import short_hash
 from vgi.catalog.catalog_interface import CatalogAttachResult
+from vgi.catalog.constraints import ConstraintsApplyRequest, ConstraintSnapshot
 from vgi.catalog.query import CatalogQueryPrepareRequest, CatalogQueryPrepareResult
 from vgi.invocation import GlobalInitResponse
 from vgi.protocol import (
@@ -448,6 +449,12 @@ class MetaWorker:
         self._worker_for_attach(request.attach_opaque_data, method_name="catalog_table_create").catalog_table_create(
             request
         )
+
+    def catalog_table_constraints_apply(self, request: ConstraintsApplyRequest) -> ConstraintSnapshot:
+        """Route by the sealed attachment; the selected child owns unwrapping."""
+        return self._worker_for_attach(
+            request.attach_opaque_data, method_name="catalog_table_constraints_apply"
+        ).catalog_table_constraints_apply(request)
 
     def catalog_macro_create(self, request: Any) -> None:
         """Create a macro — dispatch via attach_opaque_data in request."""

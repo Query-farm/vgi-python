@@ -232,7 +232,11 @@ def test_missing_profiles_and_mode_downgrade_never_call_provider(
         with pytest.raises(CatalogCapabilityError):
             backend.catalog_table_create(
                 TableCreateRequest(
-                    **args(token), columns=COLUMNS.serialize().to_pybytes(), on_conflict=OnConflict.ERROR, **extra
+                    constraint_definitions=[],
+                    **args(token),
+                    columns=COLUMNS.serialize().to_pybytes(),
+                    on_conflict=OnConflict.ERROR,
+                    **extra,
                 )
             )
     assert not calls
@@ -265,6 +269,7 @@ def test_new_table_ddl_requires_transaction_guarantee(backend: TableLayoutWorker
     with pytest.raises(CatalogCapabilityError, match=TRANSACTION_DDL):
         backend.catalog_table_create(
             TableCreateRequest(
+                constraint_definitions=[],
                 **args(token),
                 transaction_opaque_data=tx,
                 columns=COLUMNS.serialize().to_pybytes(),
@@ -349,6 +354,7 @@ def test_nested_owner_paths_do_not_collapse_dotted_names(backend: TableLayoutWor
         with pytest.raises(ValueError, match="owner schema"):
             backend.catalog_table_create(
                 TableCreateRequest(
+                    constraint_definitions=[],
                     attach_opaque_data=token,
                     schema_path=["one.two"],
                     name="bad",
@@ -369,7 +375,11 @@ def test_meta_worker_routes_all_table_option_and_layout_operations(backend: Tabl
     ).attach_opaque_data
     worker.catalog_table_create(
         TableCreateRequest(
-            **args(token), columns=COLUMNS.serialize().to_pybytes(), on_conflict=OnConflict.ERROR, layout=layout()
+            constraint_definitions=[],
+            **args(token),
+            columns=COLUMNS.serialize().to_pybytes(),
+            on_conflict=OnConflict.ERROR,
+            layout=layout(),
         )
     )
     assert worker.catalog_table_option_definitions(**args(token)).alter_names == ["label", "limit"]

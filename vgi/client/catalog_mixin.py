@@ -75,6 +75,7 @@ from vgi.catalog import (
     ViewInfo,
 )
 from vgi.catalog.catalog_interface import deserialize_column_statistics
+from vgi.catalog.constraints import ConstraintsApplyRequest, ConstraintSnapshot
 from vgi.catalog.dependencies import DependencySnapshot
 from vgi.catalog.layout import TableLayout, TableLayoutChange
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
@@ -1085,11 +1086,7 @@ class CatalogClientMixin:
         name: str,
         columns: SerializedSchema,
         on_conflict: OnConflict = OnConflict.ERROR,
-        not_null_constraints: list[int] | None = None,
-        unique_constraints: list[list[int]] | None = None,
-        check_constraints: list[str] | None = None,
-        primary_key_constraints: list[list[int]] | None = None,
-        foreign_key_constraints: list[bytes] | None = None,
+        constraint_definitions: list[bytes] | None = None,
         comment: str | None = None,
         tags: dict[str, str] | None = None,
         options: TypedValueBatch | None = None,
@@ -1104,11 +1101,8 @@ class CatalogClientMixin:
             name: The name for the new table.
             columns: Serialized PyArrow schema for the table columns.
             on_conflict: Behavior if table already exists.
-            not_null_constraints: Column indices that must not be null.
-            unique_constraints: Lists of column indices for unique constraints.
-            check_constraints: SQL expressions for check constraints.
-            primary_key_constraints: Column-index groups forming the primary key.
-            foreign_key_constraints: IPC-encoded foreign-key definitions.
+            constraint_definitions: Canonical ConstraintDefinition IPC records.
+                Nonempty requests require enforced validation of all rows.
             comment: Initial table comment under the metadata creation profile.
             tags: Initial table tags under the metadata creation profile.
             options: Typed option overrides under the table-option creation profile.
@@ -1124,18 +1118,24 @@ class CatalogClientMixin:
                     name=name,
                     columns=columns,
                     on_conflict=on_conflict,
-                    not_null_constraints=not_null_constraints or [],
-                    unique_constraints=unique_constraints or [],
-                    check_constraints=check_constraints or [],
+                    constraint_definitions=[] if constraint_definitions is None else constraint_definitions,
                     transaction_opaque_data=transaction_opaque_data,
-                    primary_key_constraints=primary_key_constraints or [],
-                    foreign_key_constraints=foreign_key_constraints or [],
                     comment=comment,
                     tags=tags,
                     options=options,
                     layout=layout,
                 )
             )
+
+    def table_constraints_apply(self, request: ConstraintsApplyRequest) -> ConstraintSnapshot:
+        """Apply one atomic constraint change set without retrying ambiguous replies."""
+        request.__post_init__()
+        with self._catalog_connect() as proxy:
+            result = proxy.catalog_table_constraints_apply(request=request)
+        result.__post_init__()
+        if result.table != request.table:
+            raise ValueError("constraint mutation returned a different table")
+        return result
 
     def table_option_definitions(
         self,

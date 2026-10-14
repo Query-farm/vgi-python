@@ -15,6 +15,7 @@ import base64
 import copy
 import json
 import sqlite3
+import uuid
 from contextlib import closing
 from dataclasses import replace
 from typing import Any
@@ -32,9 +33,23 @@ from vgi.catalog.capabilities import (
     COLUMN_NESTED_NULLABILITY,
     COLUMN_NESTED_RENAME,
     COLUMN_NESTED_TYPE,
+    CONSTRAINT_CREATE,
+    CONSTRAINT_ENFORCE,
+    CONSTRAINT_MUTATE,
+    CONSTRAINT_RECORDS_READ,
     ROW_SCALAR_EXPRESSION,
     CatalogCapabilities,
 )
+from vgi.catalog.constraints import (
+    ConstraintDefinition,
+    ConstraintEnforcement,
+    ConstraintInfo,
+    ConstraintKind,
+    ConstraintValidation,
+    constraint_definitions,
+    validate_constraint_schema,
+)
+from vgi.catalog.dependencies import CatalogObjectRef
 from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.layout import SqlExpression
 from vgi.column_path import column_definition, column_path_key, replace_column_field, resolve_column_path
@@ -43,7 +58,7 @@ from vgi.worker import Worker
 from .table_layout_reference import TABLE_PROFILES, TableLayoutCatalog, _table_key, _validate_expression
 
 COLUMN_PROFILES = CatalogCapabilities(
-    read=TABLE_PROFILES.read,
+    read=sorted([*TABLE_PROFILES.read, CONSTRAINT_RECORDS_READ]),
     ddl=sorted(
         [
             *TABLE_PROFILES.ddl,
@@ -54,8 +69,11 @@ COLUMN_PROFILES = CatalogCapabilities(
             COLUMN_NESTED_DEFAULT,
             COLUMN_NESTED_NULLABILITY,
             COLUMN_NESTED_COMMENT,
+            CONSTRAINT_CREATE,
+            CONSTRAINT_MUTATE,
         ]
     ),
+    write=[CONSTRAINT_ENFORCE],
     transaction=TABLE_PROFILES.transaction,
 )
 
@@ -145,6 +163,60 @@ class ColumnPathsCatalog(TableLayoutCatalog):
     def table_create(self, **kwargs: Any) -> None:
         _fields(pa.ipc.read_schema(pa.BufferReader(kwargs["columns"])), kwargs["schema_path"])
         super().table_create(**kwargs)
+
+    def _create_constraints(self, args: dict[str, Any]) -> tuple[list[bytes], bytes | None]:
+        table = CatalogObjectRef(kind="table", schema_path=args["schema_path"], name=args["name"])
+        definitions = constraint_definitions(args["constraint_definitions"], table)
+        if any(definition.kind != ConstraintKind.NOT_NULL for definition in definitions):
+            raise NotImplementedError("column reference only enforces NOT_NULL constraints")
+        validate_constraint_schema(pa.ipc.read_schema(pa.BufferReader(args["columns"])), definitions)
+        return [
+            self._not_null_info(table, definition).serialize_to_bytes() for definition in definitions
+        ], uuid.uuid4().bytes
+
+    @staticmethod
+    def _not_null_info(table: CatalogObjectRef, definition: ConstraintDefinition) -> ConstraintInfo:
+        return ConstraintInfo(
+            ref=CatalogObjectRef(
+                kind="constraint", schema_path=table.schema_path, owner_table=table.name, name=uuid.uuid4().hex
+            ),
+            definition=definition,
+            enforcement=ConstraintEnforcement.ENFORCED,
+            validation=ConstraintValidation.ALL_ROWS,
+        )
+
+    def _changed_constraints(
+        self, info: TableInfo, schema: pa.Schema, operation: str, path: list[str], replacement: pa.Field | None
+    ) -> list[bytes]:
+        existing = {}
+        for constraint in info.constraint_infos():
+            key = constraint.definition.column_paths[0]
+            if key[: len(path)] == path:
+                if operation == "drop":
+                    continue
+                if operation == "rename":
+                    assert replacement is not None
+                    key = [*path[:-1], replacement.name, *key[len(path) :]]
+                    constraint = replace(constraint, definition=replace(constraint.definition, column_paths=[key]))
+            existing[tuple(key)] = constraint
+        table = CatalogObjectRef(kind="table", schema_path=info.schema_path, name=info.name)
+        result = []
+
+        def collect(fields: Any, prefix: list[str]) -> None:
+            for field in fields:
+                key = [*prefix, field.name]
+                if not field.nullable:
+                    constraint = existing.get(tuple(key))
+                    if constraint is None:
+                        constraint = self._not_null_info(
+                            table, ConstraintDefinition(kind=ConstraintKind.NOT_NULL, column_paths=[key])
+                        )
+                    result.append(constraint.serialize_to_bytes())
+                if pa.types.is_struct(field.type):
+                    collect(field.type, key)
+
+        collect(schema, [])
+        return result
 
     def _arrange(self, rows: list[dict[str, Any]], info: TableInfo) -> list[dict[str, Any]]:
         schema = pa.ipc.read_schema(pa.BufferReader(info.columns))
@@ -259,10 +331,15 @@ class ColumnPathsCatalog(TableLayoutCatalog):
                 assert replacement is not None
                 replacement = replacement.with_metadata(metadata or None)
             updated = replace_column_field(schema, path, replacement, add=operation == "add")
+            constraints = self._changed_constraints(info, updated, operation, path, replacement)
+            changed = not updated.equals(schema, check_metadata=True) or constraints != info.constraints
             info = replace(
                 info,
                 columns=updated.serialize().to_pybytes(),
-                not_null_constraints=[i for i, field in enumerate(updated) if not field.nullable],
+                constraints=constraints,
+                definition_revision=uuid.uuid4().bytes
+                if changed and operation != "comment"
+                else info.definition_revision,
             )
             # Metadata-only edits must preserve physical layout, especially
             # when a future-write layout differs from existing partitions.

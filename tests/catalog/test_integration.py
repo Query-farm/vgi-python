@@ -18,6 +18,7 @@ from vgi_rpc import WorkerPool
 
 from vgi import schema
 from vgi.catalog import MacroType, OnConflict, SchemaObjectType, SerializedSchema
+from vgi.catalog.constraints import ConstraintDefinition, ConstraintKind
 from vgi.client import Client
 from vgi.client import catalog_mixin as _cm
 from vgi.client.catalog_mixin import CatalogClientError
@@ -166,7 +167,7 @@ class TestCatalogTables:
     """Test table operations via client→worker round-trip."""
 
     def test_table_create_and_get(self) -> None:
-        """Can create and retrieve a table with constraints."""
+        """Metadata-only catalogs return the explicit empty canonical list."""
         client = Client(CATALOG_WORKER)
         result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
@@ -179,9 +180,7 @@ class TestCatalogTables:
             name="users",
             columns=columns,
             on_conflict=OnConflict.ERROR,
-            not_null_constraints=[0],
-            unique_constraints=[[0]],
-            check_constraints=[],
+            constraint_definitions=[],
         )
 
         table = client.table_get(
@@ -194,8 +193,31 @@ class TestCatalogTables:
         assert table.name == "users"
         assert table.schema_path == ["main"]
         assert table.columns == columns
-        assert table.not_null_constraints == [0]
-        assert table.unique_constraints == [[0]]
+        assert table.constraints == []
+        assert table.definition_revision is None
+
+    def test_metadata_only_catalog_rejects_constraint_creation_and_mutation(self) -> None:
+        """An unqualified catalog cannot claim or silently ignore enforcement."""
+        client = Client(CATALOG_WORKER)
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
+        args = dict(attach_opaque_data=result.attach_opaque_data, schema_path=["main"], name="constrained")
+        version = client.catalog_version(attach_opaque_data=result.attach_opaque_data)
+        columns = pa.schema([pa.field("id", pa.int64(), nullable=False)])
+        with pytest.raises(CatalogClientError, match="vgi.constraint.create.v1"):
+            client.table_create(
+                **args,
+                columns=SerializedSchema(columns.serialize().to_pybytes()),
+                constraint_definitions=[
+                    ConstraintDefinition(kind=ConstraintKind.NOT_NULL, column_paths=[["id"]]).serialize_to_bytes()
+                ],
+            )
+        assert client.table_get(**args) is None
+        assert client.catalog_version(attach_opaque_data=result.attach_opaque_data) == version
+        client.table_create(**args, columns=SerializedSchema(schema(id=pa.int64()).serialize().to_pybytes()))
+        for operation in (client.table_not_null_set, client.table_not_null_drop):
+            with pytest.raises(CatalogClientError, match="vgi.constraint.mutate.v1"):
+                operation(**args, column_path=["id"])
+        assert client.table_get(**args).constraints == []
 
     def test_table_get_nonexistent(self) -> None:
         """Getting nonexistent table returns None."""

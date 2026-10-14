@@ -43,7 +43,8 @@ from vgi.arguments import Arguments, SecretLookupEntry
 from vgi.catalog.capabilities import (
     CatalogCapabilities,
 )
-from vgi.catalog.dependencies import DependencySnapshot
+from vgi.catalog.constraints import ConstraintInfo, ConstraintsApplyRequest, ConstraintSnapshot, constraint_infos
+from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot
 from vgi.catalog.layout import TableLayout, TableLayoutChange
 from vgi.catalog.macros import MAX_MACRO_BYTES, MacroOverload, validate_macro_overloads
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
@@ -419,11 +420,10 @@ class SchemaInfo(CatalogObject, ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ForeignKeyInfo(ArrowSerializableDataclass):
-    """Serialized foreign-key constraint carried inside `TableInfo`.
+    """Legacy foreign-key convenience record retained for source migration.
 
-    `TableInfo.foreign_key_constraints` contains IPC-serialized instances of
-    this record. It is distinct from the author-facing `ForeignKeyDef`, whose
-    column-name fields are resolved into this wire representation.
+    Canonical table carriers use `ForeignKeyDefinition` inside `ConstraintInfo`
+    or `ConstraintDefinition`. This older record is no longer table wire state.
 
     Attributes:
         fk_columns: Referencing column names on the table carrying the constraint.
@@ -445,12 +445,9 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     Attributes:
         columns: The columns of the table as a PyArrow schema that is serialized
             as bytes.
-        not_null_constraints: Column indices with a NOT NULL constraint. Uses
-            ArrowType to specify int32 instead of the default int64.
-        unique_constraints: Column-index groups with a UNIQUE constraint.
-        check_constraints: SQL CHECK constraint expressions.
-        primary_key_constraints: Column-index groups forming the primary key.
-        foreign_key_constraints: Serialized foreign-key constraint specs.
+        constraints: Required canonical ConstraintInfo IPC list; empty means none.
+        definition_revision: Opaque semantic revision, required when canonical
+            mutation support is selected and never reused after recreation.
         write_result_modes: Maximum result mode supported for each writable
             operation. Keys are ``insert``, ``update``, and ``delete``; a missing
             key means the operation is unsupported. Values are ordered
@@ -518,13 +515,8 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
 
     columns: SerializedSchema
 
-    not_null_constraints: Annotated[list[int], ArrowType(pa.list_(pa.int32()))]
-    unique_constraints: Annotated[list[list[int]], ArrowType(pa.list_(pa.list_(pa.int32())))]
-    check_constraints: list[str]
-    primary_key_constraints: Annotated[list[list[int]], ArrowType(pa.list_(pa.list_(pa.int32())))] = field(
-        default_factory=list
-    )
-    foreign_key_constraints: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))] = field(default_factory=list)
+    constraints: list[bytes]
+    definition_revision: bytes | None = None
 
     write_result_modes: Annotated[dict[str, str], ArrowType(pa.map_(pa.string(), pa.string()))] = field(
         default_factory=dict
@@ -550,6 +542,18 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
 
     options: Annotated[OptionState | None, ArrowType(pa.binary())] = None
     layout: Annotated[TableLayout | None, ArrowType(pa.binary())] = None
+
+    def __post_init__(self) -> None:
+        """Validate canonical identities and revision without inferring enforcement."""
+        self.constraint_infos()
+
+    def constraint_infos(self) -> list[ConstraintInfo]:
+        """Decode the complete canonical constraint readback for this table."""
+        return constraint_infos(
+            self.constraints,
+            CatalogObjectRef(kind="table", schema_path=self.schema_path, name=self.name),
+            self.definition_revision,
+        )
 
 
 @dataclass(frozen=True)
@@ -2334,20 +2338,10 @@ class CatalogInterface(ABC):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: SchemaPath,
         name: str,
-        # The contents of the table is a serialized PyArrow schema
-        # the nullability for each field is ignored.
-        # schema.serialize().to_pybytes()
+        # Nullability must agree with the canonical enforced constraints.
         columns: SerializedSchema,
         on_conflict: OnConflict,
-        # These are constraints listed by field index
-        not_null_constraints: list[int],  # [] = no not null constraints
-        unique_constraints: list[list[int]],  # [] = no unique constraints
-        # These are general check constraints specified as SQL expressions.
-        check_constraints: list[str],  # [] = no check constraints
-        # Primary key constraints as column index groups
-        primary_key_constraints: list[list[int]] | None = None,
-        # Foreign key constraints as IPC-serialized bytes (same format as TableInfo)
-        foreign_key_constraints: list[bytes] | None = None,
+        constraint_definitions: list[bytes],
         comment: str | None = None,
         tags: dict[str, str] | None = None,
         options: TypedValueBatch | None = None,
@@ -2358,6 +2352,10 @@ class CatalogInterface(ABC):
         New metadata, typed options and layout require their selected profiles.
         """
         raise NotImplementedError("Table create not implemented.")
+
+    def table_constraints_apply(self, request: ConstraintsApplyRequest) -> ConstraintSnapshot:
+        """Apply all canonical changes atomically; opaque attachment/tx are unwrapped."""
+        raise NotImplementedError("Canonical constraint mutation is not implemented")
 
     def table_option_definitions(
         self,
@@ -3982,6 +3980,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     schema_alter_metadata = _read_only("alter schema metadata")
     schema_drop = _read_only("drop schema")
     table_create = _read_only("create table")
+    table_constraints_apply = _read_only("mutate constraints")
     table_drop = _read_only("drop table")
     table_comment_set = _read_only("set table comment")
     table_column_comment_set = _read_only("set column comment")

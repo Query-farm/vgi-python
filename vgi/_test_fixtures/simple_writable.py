@@ -655,11 +655,7 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
             name=name,
             schema_path=schema_path,
             columns=SerializedSchema(full.serialize().to_pybytes()),
-            not_null_constraints=[],
-            unique_constraints=[],
-            check_constraints=[],
-            primary_key_constraints=[],
-            foreign_key_constraints=[],
+            constraints=[],
             write_result_modes={
                 operation: _table_result_mode(name)
                 for operation, supported in (("insert", True), ("update", ud), ("delete", ud))

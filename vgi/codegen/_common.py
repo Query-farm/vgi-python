@@ -155,7 +155,7 @@ EXTRA_RESPONSE_TYPES: tuple[type, ...] = (
     ScanBranch,  # one entry inside ScanBranchesResult.branches (binary blob)
     ScanSplit,  # one entry inside PlanResponse.splits (binary blob)
     AttachCatalogInfo,  # one entry inside CatalogAttachResult.attach_catalogs (binary blob)
-    ForeignKeyInfo,  # one entry inside TableInfo.foreign_key_constraints (binary blob)
+    ForeignKeyInfo,  # legacy convenience record; no longer carried by TableInfo
     # The struct row type of CatalogContentsResponse.schemas. It is inline (a
     # struct column, not a blob), so the catalog_contents result schema already
     # spells it out; it is also emitted standalone so each language's generated
@@ -176,6 +176,7 @@ EXTRA_RESPONSE_TYPES: tuple[type, ...] = (
 # Emitted for the languages that need to CHECK these shapes: Java (its records
 # mirror them) and C++ (it hand-builds them, and had no way to verify that).
 REQUEST_TYPES: tuple[type, ...] = (
+    ConstraintsApplyRequest,
     CatalogQueryPrepareRequest,
     AggregateBindRequest,
     AggregateCombineRequest,

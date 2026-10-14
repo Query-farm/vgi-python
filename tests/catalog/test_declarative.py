@@ -727,74 +727,58 @@ class TestTableForeignKeyConstraints:
 
 
 class TestTableToTableInfoConstraints:
-    """Tests for Table.to_table_info() with PK and FK constraints."""
+    """Canonical records preserve provider identity and trust without inference."""
 
-    def test_to_table_info_with_primary_key(self) -> None:
-        """to_table_info converts PK column names to indices."""
+    @pytest.mark.parametrize(
+        "legacy",
+        [
+            {"not_null": ("id",)},
+            {"unique": (("id",),)},
+            {"primary_key": (("id",),)},
+            {"check": ("id > 0",)},
+            {"foreign_key": (ForeignKeyDef(columns=("id",), referenced_table="other", referenced_columns=("id",)),)},
+        ],
+    )
+    def test_legacy_discovery_requires_explicit_migration(self, legacy) -> None:
+        """Old declarations cannot invent provider identity or enforcement."""
+        table = Table(name="users", columns=pa.schema([("id", pa.int64())]), **legacy)
+        with pytest.raises(ValueError, match="explicit canonical"):
+            table.to_table_info(["main"])
+
+    def test_canonical_records_preserve_identity_and_state(self) -> None:
+        """Readback carries the original provider facts unchanged."""
+        from vgi.catalog.constraints import (
+            ConstraintDefinition,
+            ConstraintEnforcement,
+            ConstraintInfo,
+            ConstraintKind,
+            ConstraintValidation,
+        )
+        from vgi.catalog.dependencies import CatalogObjectRef
+
+        record = ConstraintInfo(
+            ref=CatalogObjectRef(kind="constraint", schema_path=["main"], owner_table="users", name="provider-key"),
+            definition=ConstraintDefinition(
+                kind=ConstraintKind.UNIQUE, column_paths=[["id"]], declared_name="declared"
+            ),
+            enforcement=ConstraintEnforcement.METADATA_ONLY,
+            validation=ConstraintValidation.UNVALIDATED,
+        )
         table = Table(
             name="users",
-            columns=pa.schema(
-                [("id", pa.int64()), ("email", pa.string())]  # type: ignore[arg-type]
-            ),
-            primary_key=(("id",),),
-        )
-        info = table.to_table_info(["main"])
-        assert info.primary_key_constraints == [[0]]
-
-    def test_to_table_info_with_composite_pk(self) -> None:
-        """to_table_info converts composite PK column names to indices."""
-        table = Table(
-            name="projects",
-            columns=pa.schema(
-                [("dept_id", pa.int64()), ("code", pa.string()), ("title", pa.string())]  # type: ignore[arg-type]
-            ),
-            primary_key=(("dept_id", "code"),),
-        )
-        info = table.to_table_info(["main"])
-        assert info.primary_key_constraints == [[0, 1]]
-
-    def test_to_table_info_with_foreign_key(self) -> None:
-        """to_table_info serializes FK constraints as IPC bytes."""
-        table = Table(
-            name="employees",
-            columns=pa.schema([("id", pa.int64()), ("dept_id", pa.int64())]),
-            foreign_key=(
-                ForeignKeyDef(columns=("dept_id",), referenced_table="departments", referenced_columns=("id",)),
-            ),
-        )
-        info = table.to_table_info(["data"])
-        assert len(info.foreign_key_constraints) == 1
-        assert isinstance(info.foreign_key_constraints[0], bytes)
-
-    def test_to_table_info_no_pk_fk_defaults_empty(self) -> None:
-        """to_table_info returns empty PK/FK when not specified."""
-        table = Table(
-            name="simple",
             columns=pa.schema([("id", pa.int64())]),
+            constraints=(record,),
+            definition_revision=b"revision",
         )
         info = table.to_table_info(["main"])
-        assert info.primary_key_constraints == []
-        assert info.foreign_key_constraints == []
+        assert info.constraints == [record.serialize_to_bytes()]
+        assert info.constraint_infos() == [record]
+        assert info.definition_revision == b"revision"
 
-    def test_to_table_info_all_constraints(self) -> None:
-        """to_table_info converts all constraint types."""
-        table = Table(
-            name="full",
-            columns=pa.schema(
-                [("id", pa.int64()), ("name", pa.string()), ("ref_id", pa.int64())]  # type: ignore[arg-type]
-            ),
-            not_null=("id", "name"),
-            unique=(("name",),),
-            check=("id > 0",),
-            primary_key=(("id",),),
-            foreign_key=(ForeignKeyDef(columns=("ref_id",), referenced_table="other", referenced_columns=("id",)),),
-        )
-        info = table.to_table_info(["main"])
-        assert info.not_null_constraints == [0, 1]
-        assert info.unique_constraints == [[1]]
-        assert info.check_constraints == ["id > 0"]
-        assert info.primary_key_constraints == [[0]]
-        assert len(info.foreign_key_constraints) == 1
+    def test_no_constraints_is_explicit(self) -> None:
+        """Empty declarations serialize as an authoritative empty list."""
+        table = Table(name="simple", columns=pa.schema([("id", pa.int64())]))
+        assert table.to_table_info(["main"]).constraints == []
 
 
 class TestTableToTableInfo:
@@ -816,23 +800,6 @@ class TestTableToTableInfo:
         assert info.schema_path == ["main"]
         assert info.comment == "User table"
         assert info.tags == {"type": "core"}
-
-    def test_to_table_info_with_constraints(self) -> None:
-        """Table converts constraints to indices."""
-        table = Table(
-            name="users",
-            columns=pa.schema(
-                [("id", pa.int64()), ("email", pa.string())]  # type: ignore[arg-type]
-            ),
-            not_null=("id", "email"),
-            unique=(("id",), ("email",)),
-            check=("id > 0",),
-        )
-        info = table.to_table_info(["main"])
-        # Column indices: id=0, email=1
-        assert info.not_null_constraints == [0, 1]
-        assert info.unique_constraints == [[0], [1]]
-        assert info.check_constraints == ["id > 0"]
 
 
 # =============================================================================
@@ -1558,11 +1525,29 @@ class TestReadOnlyCatalogWithCatalog:
 
     @pytest.fixture
     def users_table(self) -> Table:
-        """Create a users table for testing."""
+        """Create a users table with an explicit untrusted provider declaration."""
+        from vgi.catalog.constraints import (
+            ConstraintDefinition,
+            ConstraintEnforcement,
+            ConstraintInfo,
+            ConstraintKind,
+            ConstraintValidation,
+        )
+        from vgi.catalog.dependencies import CatalogObjectRef
+
         return Table(
             name="users",
             function=UsersFunction,
-            not_null=("id",),
+            constraints=(
+                ConstraintInfo(
+                    ref=CatalogObjectRef(
+                        kind="constraint", schema_path=["main"], owner_table="users", name="fixture-user-id"
+                    ),
+                    definition=ConstraintDefinition(kind=ConstraintKind.NOT_NULL, column_paths=[["id"]]),
+                    enforcement=ConstraintEnforcement.METADATA_ONLY,
+                    validation=ConstraintValidation.UNVALIDATED,
+                ),
+            ),
             comment="User accounts",
         )
 

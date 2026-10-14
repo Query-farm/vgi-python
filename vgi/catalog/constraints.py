@@ -390,3 +390,68 @@ class ConstraintsApplyRequest(_ConstraintRecord):
         """Decode all ordered changes before an authority attempts effects."""
         _records(self.changes, nonempty=True)
         return [ConstraintChange.deserialize_from_bytes(value) for value in self.changes]
+
+
+def constraint_definitions(values: list[bytes], table: CatalogObjectRef) -> list[ConstraintDefinition]:
+    """Decode the authoritative CREATE list, without inventing names or trust."""
+    _reference(table, "table")
+    _records(values)
+    definitions = [ConstraintDefinition.deserialize_from_bytes(value) for value in values]
+    labels = [definition.declared_name for definition in definitions if definition.declared_name is not None]
+    if len(labels) != len(set(labels)):
+        raise ValueError("duplicate declared constraint label")
+    if sum(definition.kind == ConstraintKind.PRIMARY_KEY for definition in definitions) > 1:
+        raise ValueError("a table cannot have multiple primary keys")
+    for definition in definitions:
+        _definition_owner(definition, table)
+    return definitions
+
+
+def constraint_infos(values: list[bytes], table: CatalogObjectRef, revision: bytes | None) -> list[ConstraintInfo]:
+    """Validate canonical discovery without requiring mutation support."""
+    if revision is not None:
+        _token(revision, "table definition revision")
+    # Snapshot validation is identical except that read-only discovery may
+    # legitimately lack a revision. The placeholder is local validation only.
+    snapshot = ConstraintSnapshot(table=table, definition_revision=revision or b"read-only", constraints=values)
+    return snapshot.constraint_infos()
+
+
+def validate_constraint_schema(
+    schema: pa.Schema,
+    definitions: list[ConstraintDefinition],
+    *,
+    trusted: list[ConstraintDefinition] | None = None,
+) -> None:
+    """Require exact raw paths and agreement between trust and Arrow nullability."""
+    for definition in definitions:
+        definition.validate_schema(schema)
+    required = {
+        tuple(path)
+        for definition in (definitions if trusted is None else trusted)
+        if definition.kind in {ConstraintKind.NOT_NULL, ConstraintKind.PRIMARY_KEY}
+        for path in definition.column_paths
+    }
+    visible_paths: set[tuple[str, ...]] = set()
+
+    def visit(fields: pa.Schema | pa.StructType, prefix: tuple[str, ...]) -> None:
+        for column_field in fields:
+            if not prefix and b"is_row_id" in (column_field.metadata or {}):
+                # Storage identity is not a user-visible SQL constraint target.
+                continue
+            path = (*prefix, column_field.name)
+            visible_paths.add(path)
+            if column_field.nullable == (path in required):
+                raise ValueError("Arrow nullability must agree with enforced ALL_ROWS NOT_NULL/PRIMARY constraints")
+            metadata = column_field.metadata or {}
+            # A logical type's storage members are not table column paths.
+            # In particular Parquet Variant requires a nonnullable metadata
+            # child without declaring a SQL NOT NULL constraint on that child.
+            if pa.types.is_struct(column_field.type) and not any(
+                key == b"ARROW:extension:name" or key.startswith(b"vgi.logical_type.") for key in metadata
+            ):
+                visit(column_field.type, path)
+
+    visit(schema, ())
+    if any(tuple(path) not in visible_paths for definition in definitions for path in definition.column_paths):
+        raise ValueError("constraint paths cannot address storage identities or logical-type storage members")

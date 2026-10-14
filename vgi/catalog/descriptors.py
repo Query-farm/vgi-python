@@ -38,6 +38,7 @@ from vgi.catalog.catalog_interface import (
     scan_arguments_from,
     serialize_column_statistics,
 )
+from vgi.catalog.constraints import ConstraintInfo
 from vgi.column_path import RequiredFilterPaths, column_path_key
 from vgi.invocation import BindResponse, FunctionType
 from vgi.metadata import CatalogFunctionType
@@ -273,7 +274,10 @@ class Table:
         write_result_modes: Maximum result mode for each configured write
             function. Omitted operations default to ``count``. Modes are ordered
             ``count < rows < changes``.
-        not_null: Tuple of column names with NOT NULL constraints.
+        constraints: Provider-issued canonical constraint records, including explicit
+            identity, enforcement and validation state.
+        definition_revision: Opaque table-definition revision for mutation.
+        not_null: Legacy declarations; nonempty values require explicit migration.
         unique: Tuple of column name tuples for UNIQUE constraints.
         check: Tuple of SQL expressions for CHECK constraints.
         primary_key: Tuple of column-name tuples forming the primary key. At
@@ -330,6 +334,8 @@ class Table:
     update_function: type[TableInOutGenerator[Any, Any]] | None = None
     delete_function: type[TableInOutGenerator[Any, Any]] | None = None
     write_result_modes: dict[str, str] = field(default_factory=dict)
+    constraints: tuple[ConstraintInfo, ...] = ()
+    definition_revision: bytes | None = None
     not_null: tuple[str, ...] = ()
     unique: tuple[tuple[str, ...], ...] = ()
     check: tuple[str, ...] = ()
@@ -623,6 +629,8 @@ class Table:
 
     def to_table_info(self, schema_path: SchemaPath) -> TableInfo:
         """Convert to [`TableInfo`][] for catalog response."""
+        if any((self.not_null, self.unique, self.check, self.primary_key, self.foreign_key)):
+            raise ValueError("legacy constraint declarations require explicit canonical ConstraintInfo records")
         cols = self._apply_defaults_to_schema(self.resolved_columns)
         cols = self._apply_generated_columns_to_schema(cols)
         cols = self._apply_column_comments_to_schema(cols)
@@ -645,11 +653,8 @@ class Table:
             name=self.name,
             schema_path=schema_path,
             columns=SerializedSchema(cols.serialize().to_pybytes()),
-            not_null_constraints=self._resolve_not_null_indices(),
-            unique_constraints=self._resolve_unique_indices(),
-            check_constraints=list(self.check),
-            primary_key_constraints=self._resolve_primary_key_indices(),
-            foreign_key_constraints=self._serialize_foreign_keys(schema_path),
+            constraints=[info.serialize_to_bytes() for info in self.constraints],
+            definition_revision=self.definition_revision,
             write_result_modes={
                 operation: self.write_result_modes.get(operation, "count")
                 for operation, function in (

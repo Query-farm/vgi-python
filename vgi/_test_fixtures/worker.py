@@ -65,6 +65,7 @@ from vgi._test_fixtures.cancellable import (
     SlowCancellableFunction,
     SlowCancellableInOutFunction,
 )
+from vgi._test_fixtures.constraint_facts import fixed_fact
 from vgi._test_fixtures.copy_from import ExampleLinesCopyFromFunction, SecretLinesCopyFromFunction
 from vgi._test_fixtures.copy_to import (
     ExampleLinesCopyToFunction,
@@ -137,6 +138,7 @@ from vgi._test_fixtures.secret_cache import (
     SecretCacheNonceFunction,
 )
 from vgi._test_fixtures.table import (
+    _VERSIONED_CONSTRAINTS_DATA,
     _VERSIONED_CONSTRAINTS_SCHEMAS,
     _VERSIONED_SCHEMAS,
     RFF_MULTI_COLUMNS,
@@ -259,6 +261,7 @@ from vgi._test_fixtures.table import (
     resolve_version,
     resolve_versioned_constraints_version,
 )
+from vgi._test_fixtures.table.catalog_scans import STATIC_CATALOG_ROWS
 from vgi._test_fixtures.table.same_name_cached import (
     SameNameDataCached,
     SameNameMainCached,
@@ -322,7 +325,6 @@ from vgi.arguments import Arguments
 from vgi.catalog import (
     AttachOpaqueData,
     Catalog,
-    ForeignKeyDef,
     Index,
     IndexConstraintType,
     Macro,
@@ -340,9 +342,14 @@ from vgi.catalog import (
     TransactionOpaqueData,
     View,
 )
+from vgi.catalog.capabilities import CONSTRAINT_RECORDS_READ, ROW_SCALAR_EXPRESSION, CatalogCapabilities
 from vgi.catalog.catalog_interface import _validate_at_params
+from vgi.catalog.constraints import ConstraintDefinition, ConstraintInfo, ConstraintKind, ForeignKeyDefinition
+from vgi.catalog.dependencies import CatalogObjectRef
 from vgi.catalog.descriptors import ColumnStatisticsInput
 from vgi.catalog.duckdb_statistics import statistics_from_duckdb
+from vgi.catalog.evaluation_context import QueryEvaluationContext
+from vgi.catalog.sql import SqlExpression as CanonicalSqlExpression
 from vgi.schema_utils import schema
 from vgi.worker import Worker
 
@@ -410,6 +417,109 @@ def _build_fixture_stats() -> tuple[
 
 
 _NUMBERS_STATS, _GEO_SCHEMA, _GEO_STATS, _ENUM_STATS = _build_fixture_stats()
+
+
+def _fixture_constraints(name: str, version: int = 3) -> tuple[ConstraintInfo, ...]:
+    """Qualify explicit constraints against the fixture's entire immutable dataset."""
+    not_null = {
+        "departments": ("id", "name"),
+        "products": ("id",),
+        "employees": ("id", "name", "email"),
+        "projects": ("department_id", "project_code", "title"),
+        "versioned_constraints": ("id",) if version == 1 else ("id", "name"),
+    }[name]
+    values = (
+        pa.Table.from_pydict(_VERSIONED_CONSTRAINTS_DATA[version]).to_pylist()
+        if name == "versioned_constraints"
+        else STATIC_CATALOG_ROWS[f"{name}_scan"].to_pylist()
+    )
+    definitions = [
+        (f"not-null-{column}", ConstraintDefinition(kind=ConstraintKind.NOT_NULL, column_paths=[[column]]))
+        for column in not_null
+    ]
+    if name != "versioned_constraints" or version >= 2:
+        primary = ["department_id", "project_code"] if name == "projects" else ["id"]
+        definitions.append(
+            ("primary-key", ConstraintDefinition(kind=ConstraintKind.PRIMARY_KEY, column_paths=[[c] for c in primary]))
+        )
+    unique = (
+        "name"
+        if name == "departments"
+        else "email"
+        if name in {"employees", "versioned_constraints"} and version >= 2
+        else None
+    )
+    if unique is not None:
+        definitions.append(("unique-value", ConstraintDefinition(kind=ConstraintKind.UNIQUE, column_paths=[[unique]])))
+    if name == "departments":
+        definitions.append(
+            (
+                "nonnegative-budget",
+                ConstraintDefinition(
+                    kind=ConstraintKind.CHECK,
+                    check_expression=CanonicalSqlExpression(
+                        sql="budget >= 0",
+                        profile=ROW_SCALAR_EXPRESSION,
+                        schema_path=["data"],
+                        evaluation_context=QueryEvaluationContext(),
+                    ),
+                ),
+            )
+        )
+    has_foreign = name in {"employees", "projects"} or name == "versioned_constraints" and version >= 3
+    if has_foreign:
+        definitions.append(
+            (
+                "department-reference",
+                ConstraintDefinition(
+                    kind=ConstraintKind.FOREIGN_KEY,
+                    column_paths=[["department_id"]],
+                    foreign_key=ForeignKeyDefinition(
+                        referenced_table=CatalogObjectRef(kind="table", schema_path=["data"], name="departments"),
+                        referenced_column_paths=[["id"]],
+                    ),
+                ),
+            )
+        )
+    result = []
+    for key, definition in definitions:
+        columns = [path[0] for path in definition.column_paths]
+        keys = [tuple(row[column] for column in columns) for row in values]
+        if definition.kind in {ConstraintKind.NOT_NULL, ConstraintKind.PRIMARY_KEY} and any(
+            None in key for key in keys
+        ):
+            raise ValueError("static fixture violates its explicit NOT_NULL definition")
+        if definition.kind in {ConstraintKind.UNIQUE, ConstraintKind.PRIMARY_KEY}:
+            present = [key for key in keys if None not in key]
+            if len(present) != len(set(present)):
+                raise ValueError("static fixture violates its explicit unique definition")
+        if definition.kind == ConstraintKind.CHECK and any(row["budget"] < 0 for row in values):
+            raise ValueError("static fixture violates its fixed budget CHECK")
+        referenced = None
+        if definition.kind == ConstraintKind.FOREIGN_KEY:
+            parents = set(STATIC_CATALOG_ROWS["departments_scan"]["id"].to_pylist())
+            if any(row["department_id"] is not None and row["department_id"] not in parents for row in values):
+                raise ValueError("static fixture violates its department reference")
+            referenced = CatalogObjectRef(
+                kind="constraint", schema_path=["data"], owner_table="departments", name="primary-key"
+            )
+        result.append(fixed_fact(name, ["data"], key, definition, referenced_constraint=referenced))
+    return tuple(result)
+
+
+def _fixture_columns(name: str, columns: pa.Schema, version: int = 3) -> pa.Schema:
+    """Publish nullability justified by the already-validated explicit facts."""
+    required = {
+        path[0]
+        for info in _fixture_constraints(name, version)
+        if info.definition.kind in {ConstraintKind.NOT_NULL, ConstraintKind.PRIMARY_KEY}
+        for path in info.definition.column_paths
+    }
+    metadata: dict[bytes | str, bytes | str] | None = None
+    if columns.metadata is not None:
+        metadata = {key: value for key, value in columns.metadata.items()}
+    return pa.schema([column.with_nullable(column.name not in required) for column in columns], metadata=metadata)
+
 
 _EXAMPLE_CATALOG = Catalog(
     name="example",
@@ -1202,11 +1312,10 @@ _EXAMPLE_CATALOG = Catalog(
                 # ----- Constraint example tables -----
                 Table(
                     name="departments",
-                    columns=schema(id=pa.int64(), name=pa.string(), budget=pa.float64()),
-                    primary_key=(("id",),),
-                    not_null=("id", "name"),
-                    unique=(("name",),),
-                    check=("budget >= 0",),
+                    columns=_fixture_columns(
+                        "departments", schema(id=pa.int64(), name=pa.string(), budget=pa.float64())
+                    ),
+                    constraints=_fixture_constraints("departments"),
                     defaults={"budget": 0},
                     statistics={
                         "id": ColumnStatisticsInput(min=1, max=10, has_null=False, distinct_count=10),
@@ -1225,14 +1334,16 @@ _EXAMPLE_CATALOG = Catalog(
                 ),
                 Table(
                     name="products",
-                    columns=schema(
-                        id=pa.int64(),
-                        name=pa.string(),
-                        quantity=pa.int64(),
-                        price=pa.float64(),
+                    columns=_fixture_columns(
+                        "products",
+                        schema(
+                            id=pa.int64(),
+                            name=pa.string(),
+                            quantity=pa.int64(),
+                            price=pa.float64(),
+                        ),
                     ),
-                    not_null=("id",),
-                    primary_key=(("id",),),
+                    constraints=_fixture_constraints("products"),
                     defaults={
                         "quantity": 0,
                         "name": "unknown",
@@ -1261,40 +1372,29 @@ _EXAMPLE_CATALOG = Catalog(
                 ),
                 Table(
                     name="employees",
-                    columns=schema(
-                        id=pa.int64(),
-                        name=pa.string(),
-                        email=pa.string(),
-                        department_id=pa.int64(),
-                    ),
-                    primary_key=(("id",),),
-                    not_null=("id", "name", "email"),
-                    unique=(("email",),),
-                    foreign_key=(
-                        ForeignKeyDef(
-                            columns=("department_id",),
-                            referenced_table="departments",
-                            referenced_columns=("id",),
+                    columns=_fixture_columns(
+                        "employees",
+                        schema(
+                            id=pa.int64(),
+                            name=pa.string(),
+                            email=pa.string(),
+                            department_id=pa.int64(),
                         ),
                     ),
+                    constraints=_fixture_constraints("employees"),
                     comment="Employee table with FK to departments",
                 ),
                 Table(
                     name="projects",
-                    columns=schema(
-                        department_id=pa.int64(),
-                        project_code=pa.string(),
-                        title=pa.string(),
-                    ),
-                    primary_key=(("department_id", "project_code"),),
-                    not_null=("department_id", "project_code", "title"),
-                    foreign_key=(
-                        ForeignKeyDef(
-                            columns=("department_id",),
-                            referenced_table="departments",
-                            referenced_columns=("id",),
+                    columns=_fixture_columns(
+                        "projects",
+                        schema(
+                            department_id=pa.int64(),
+                            project_code=pa.string(),
+                            title=pa.string(),
                         ),
                     ),
+                    constraints=_fixture_constraints("projects"),
                     comment="Projects with composite PK and FK to departments",
                 ),
                 # filter_echo_table — catalog table that echoes the pushed-down
@@ -1459,23 +1559,17 @@ _EXAMPLE_CATALOG = Catalog(
                 # Time-travel constraint evolution table
                 Table(
                     name="versioned_constraints",
-                    columns=schema(
-                        id=pa.int64(),
-                        name=pa.string(),
-                        email=pa.string(),
-                        department_id=pa.int64(),
-                    ),
-                    supports_time_travel=True,
-                    not_null=("id", "name"),
-                    primary_key=(("id",),),
-                    unique=(("email",),),
-                    foreign_key=(
-                        ForeignKeyDef(
-                            columns=("department_id",),
-                            referenced_table="departments",
-                            referenced_columns=("id",),
+                    columns=_fixture_columns(
+                        "versioned_constraints",
+                        schema(
+                            id=pa.int64(),
+                            name=pa.string(),
+                            email=pa.string(),
+                            department_id=pa.int64(),
                         ),
                     ),
+                    supports_time_travel=True,
+                    constraints=_fixture_constraints("versioned_constraints"),
                     comment="Table with constraints that evolve across versions",
                 ),
             ],
@@ -1517,6 +1611,10 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
 
     catalog = _EXAMPLE_CATALOG
 
+    def catalog_capabilities(self, *, attach_opaque_data: AttachOpaqueData) -> CatalogCapabilities:
+        """Expose validated immutable facts; this catalog has no mutation path."""
+        return CatalogCapabilities(read=sorted([CONSTRAINT_RECORDS_READ, ROW_SCALAR_EXPRESSION]))
+
     def table_get(
         self,
         *,
@@ -1540,9 +1638,7 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
                 name=name,
                 schema_path=schema_path,
                 columns=SerializedSchema(cols.serialize().to_pybytes()),
-                not_null_constraints=[],
-                unique_constraints=[],
-                check_constraints=[],
+                constraints=[],
                 comment="Versioned data table demonstrating time travel with schema evolution",
                 tags={},
             )
@@ -1553,50 +1649,13 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         ):
             version = resolve_versioned_constraints_version(at_unit, at_value)
             cols = _VERSIONED_CONSTRAINTS_SCHEMAS[version]
-            # Constraints evolve with version:
-            # V1: NOT NULL on id only
-            # V2: NOT NULL on id+name, PK on id, UNIQUE on email
-            # V3: NOT NULL on id+name, PK on id, UNIQUE on email, FK department_id→departments.id
-            not_null: list[int] = []
-            pk: list[list[int]] = []
-            unique: list[list[int]] = []
-            fk: list[bytes] = []
-            col_names = [f.name for f in cols]
-            if version >= 1:
-                not_null.append(col_names.index("id"))
-            if version >= 2:
-                not_null.append(col_names.index("name"))
-                pk.append([col_names.index("id")])
-                unique.append([col_names.index("email")])
-            if version >= 3:
-                from vgi_rpc.utils import serialize_record_batch_bytes
-
-                fk_batch = pa.RecordBatch.from_pydict(
-                    {
-                        "fk_columns": [["department_id"]],
-                        "pk_columns": [["id"]],
-                        "referenced_table": ["departments"],
-                        "referenced_schema_path": [schema_path],
-                    },
-                    schema=pa.schema(
-                        [
-                            ("fk_columns", pa.list_(pa.utf8())),
-                            ("pk_columns", pa.list_(pa.utf8())),
-                            ("referenced_table", pa.utf8()),
-                            ("referenced_schema_path", pa.list_(pa.utf8())),
-                        ]
-                    ),
-                )
-                fk.append(serialize_record_batch_bytes(fk_batch))
+            constraints = _fixture_constraints("versioned_constraints", version)
+            cols = _fixture_columns("versioned_constraints", cols, version)
             return TableInfo(
                 name=name,
                 schema_path=schema_path,
                 columns=SerializedSchema(cols.serialize().to_pybytes()),
-                not_null_constraints=not_null,
-                unique_constraints=unique,
-                check_constraints=[],
-                primary_key_constraints=pk,
-                foreign_key_constraints=fk,
+                constraints=[fact.serialize_to_bytes() for fact in constraints],
                 comment="Table with constraints that evolve across versions",
                 tags={},
             )

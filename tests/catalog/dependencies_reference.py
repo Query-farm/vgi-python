@@ -299,11 +299,7 @@ class DependencyCatalog(SchemaOptionsCatalog):
                 if any(
                     kwargs.get(k)
                     for k in [
-                        "not_null_constraints",
-                        "unique_constraints",
-                        "check_constraints",
-                        "primary_key_constraints",
-                        "foreign_key_constraints",
+                        "constraint_definitions",
                         "options",
                         "layout",
                     ]
@@ -316,9 +312,7 @@ class DependencyCatalog(SchemaOptionsCatalog):
                     columns=kwargs["columns"],
                     comment=kwargs.get("comment"),
                     tags=kwargs.get("tags") or {},
-                    not_null_constraints=[],
-                    unique_constraints=[],
-                    check_constraints=[],
+                    constraints=[],
                 )
             else:
                 subject, bound = self._bind_view(kwargs["definition"], ref.schema_path, data)

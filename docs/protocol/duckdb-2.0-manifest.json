@@ -12,9 +12,9 @@
       "Overload collections replacing single macro definitions"
     ],
     "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
-    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the embedded successor schema inventory (legacy parent arrays and apply RPC migration remain pending)",
+    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the successor schema inventory; required canonical table constraint lists replace the legacy parent arrays and revision-checked catalog_table_constraints_apply joins the public method surface",
     "version_requirement": "Retaining the raw-path migration requires a major version and matching routing name. Complete the combined diff and migration guide before freeze.",
-    "planned_diff": "Remaining combined design: replace legacy constraint parent arrays and implement constraints apply; typed index definitions/options; ALTER/column dependency edges; write requirement/statement lifecycle records; trigger CRUD and durable mutation replay/status. SQL/context and canonical constraint records are now generated with bounded reference proof; pending methods are not counted in the current protocol hash."
+    "planned_diff": "Remaining combined design: typed index definitions/options; ALTER/column dependency edges; write requirement/statement lifecycle records; trigger CRUD and durable mutation replay/status. SQL/context and public canonical constraints are implemented with bounded reference/native1.5 proof; broader provider qualification and pending methods remain outside the current protocol hash."
   },
   "sources": {
     "native_revision": "1a0a059",
@@ -372,7 +372,7 @@
     "constraints": {
       "title": "Constraints and indexes",
       "disposition": "include",
-      "status": "records_generated_bounded_reference_proven_public_migration_pending",
+      "status": "canonical_public_constraints_verified_on_15_bounded_adapters",
       "records": [
         "ConstraintDefinition",
         "ConstraintInfo",
@@ -391,17 +391,17 @@
         "catalog_index_create",
         "catalog_index_get",
         "catalog_index_drop",
-        "catalog_schema_contents_indexes"
+        "catalog_schema_contents_indexes",
+        "catalog_table_constraints_apply"
       ],
       "new_methods": [
-        "catalog_table_constraints_apply",
         "catalog_index_option_definitions"
       ],
       "scope": [
         "Constraint addition and supported mutation/discovery; full native integration of existing index RPCs; typed index options if string values are insufficient",
         "Worker enforcement versus metadata-only declaration, existing-data validation, logical column identity, FK target paths, dependent objects, and atomic changes. Do not promise SQL constraint forms the selected engine itself rejects."
       ],
-      "capability_contract": "Proposed read: vgi.constraint.records.read.v1, vgi.index.definition.read.v1; DDL: vgi.constraint.create.v1, vgi.constraint.mutate.v1, vgi.index.definition.create.v1, vgi.index.drop.v1; write: vgi.constraint.enforce.v1 plus explicit FK match/action profiles. No new profiles are implemented or advertised.",
+      "capability_contract": "Implemented read: vgi.constraint.records.read.v1; DDL: vgi.constraint.create.v1, vgi.constraint.mutate.v1; write: vgi.constraint.enforce.v1. Create requires read and enforcement; mutate requires read and a nonempty definition revision. Additional FK match/action and typed index profiles remain unimplemented.",
       "gates": [
         "P1",
         "P2",
@@ -6099,5 +6099,136 @@
     ],
     "remote_workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
     "logs_directory": "logs/"
+  },
+  "constraint_public_checkpoint": {
+    "date": "2026-10-14",
+    "status": "verified_on_pinned_15_bounded_adapters",
+    "engine_15": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "public_method_count": 83,
+    "public_methods_added": [
+      "catalog_table_constraints_apply"
+    ],
+    "public_shapes": {
+      "TableCreateRequest": "Required constraint_definitions:list<binary>; replaces five legacy arrays.",
+      "TableInfo": "Required constraints:list<binary>; optional definition_revision:binary, required nonempty with selected mutation support."
+    },
+    "scope": "Public Python/provider dispatch, generated seven-SDK contracts and fail-closed unported adapters; durable reference and native1.5 subset.",
+    "remaining": [
+      "Native CHECK and nested constraints; persistent column-expression translation.",
+      "Qualified enforcement/mutation in other SDK providers; generic bind/write race authorization is not established.",
+      "Typed indexes, semantic ALTER dependencies, statement/write lifecycle, triggers and durable replay."
+    ],
+    "test_evidence": [
+      {
+        "check": "Python catalog, client/CLI/reflection, corpus and generated inventory suite",
+        "result": "1599 passed; 5 pre-existing opt-in live-worker metadata cases skipped because VGI_METADATA_WORKERS was unset.",
+        "log": "constraints-public-python-verified.log"
+      },
+      {
+        "check": "ruff and mypy",
+        "result": "passed; 222 production source files type checked",
+        "log": "constraints-public-quality-final.log"
+      },
+      {
+        "check": "Native 1.5 shell, loadable extension and codec/guard tests",
+        "result": "passed: 21 cases, 218 assertions",
+        "log": "constraints-public-native-verified.log"
+      },
+      {
+        "check": "Native SQL canonical constraints",
+        "result": "5 scenarios passed: PK/UNIQUE/FK discovery, raw names, stable keys and revisions, SET/DROP NOT NULL, transaction read-your-writes/rollback/commit, PK-implied NOT NULL and unsupported CHECK rejection.",
+        "log": "constraints-public-native-verified.log"
+      },
+      {
+        "check": "Native prepared query lifecycle regression",
+        "result": "18 scenarios passed, no retained query resources",
+        "log": "constraints-public-native-verified.log"
+      },
+      {
+        "check": "Generated schema/registry drift and manifest coverage",
+        "result": "passed across all SDKs; 151 audit rows, 20 areas, 84 reviews remain",
+        "log": "constraints-public-python-verified.log"
+      },
+      {
+        "check": "Browser client rebuild and public exports",
+        "result": "Rebuilt from the updated TypeScript client; all 8 established landing-page exports retained.",
+        "log": "constraints-public-bundle-verified.log"
+      },
+      {
+        "check": "Python served browser client and HTTP endpoints",
+        "result": "75 passed, including execution of the shipped browser bundle against the Python server.",
+        "log": "constraints-public-python-smoke-checkpoint.log"
+      },
+      {
+        "check": "Go SDK full suite",
+        "result": "go test ./... passed, including example-worker canonical discovery and rejection before replacement effects.",
+        "log": "constraints-public-go-complete.log"
+      },
+      {
+        "check": "TypeScript SDK and package bundles",
+        "result": "183 passed and 62 opt-in integration cases skipped on each Arrow backend; types, all four package bundles and browser client build passed. Browser digest unchanged after final guard edits.",
+        "log": "constraints-public-ts-checkpoint.log"
+      },
+      {
+        "check": "Java SDK full suite",
+        "result": "648 core SDK tests and 42 example-worker tests passed; 2 live Cloudflare Durable Object storage cases skipped.",
+        "log": "constraints-public-java-dictionary-verified.log"
+      },
+      {
+        "check": "C# SDK full suite",
+        "result": "643 passed, no skips; includes example constraint discovery.",
+        "log": "constraints-public-csharp-complete.log"
+      },
+      {
+        "check": "C++ SDK full build and suite",
+        "result": "69 passed, including example discovery, explicit historical constraint snapshots and rejection before replacement effects.",
+        "log": "constraints-public-cpp-complete-verified.log"
+      },
+      {
+        "check": "Rust SDK full suite and built example worker",
+        "result": "492 passed, 4 documentation examples ignored. Rebuilt example worker before client integration tests; current/latest canonical facts work and unsupported historical claims reject.",
+        "log": "constraints-public-rust-complete.log"
+      },
+      {
+        "check": "Java RPC scalar dictionary serialization",
+        "result": "610 passed; real int16 dictionary IPC, nullable values and strict VGI record schemas verified.",
+        "log": "constraints-public-java-dictionary-verified.log"
+      },
+      {
+        "check": "Cross-SDK canonical discovery through built workers",
+        "result": "7 passed: shared discovery over Go, Rust, TypeScript, Java, C# and C++ workers, plus protocol conformance setup. Stable identities, explicit untrusted state and schema nullability checked.",
+        "log": "constraints-public-java-dictionary-verified.log"
+      }
+    ],
+    "protocol_hash": "a81e4c5fb450665c3e4991333ba8a404b6482a345269bc3df5b1c02680d71bea",
+    "browser_client": {
+      "sha256": "b913fe227d5a32b7146dfd4d34dc3911f5f6ed966742aa14e50afbd756276c63",
+      "source": "vgi-typescript/scripts/landing-client-entry.ts, mirroring vgi-web-frontend/src/landing/vgi-client-entry.ts",
+      "build": "bun run build:landing-client",
+      "vendored_into": [
+        "Python",
+        "Go",
+        "TypeScript",
+        "C#",
+        "C++"
+      ]
+    },
+    "implementation_limits": [
+      "Native CHECK and nested constraint paths reject; no native default/generated-column translation.",
+      "Durable reference advertises catalog/DDL operations only, not scan/DML. Row enforcement proofs use its shared provider authority.",
+      "Non-Python mutable providers reject constrained creation/apply rather than advertising enforcement.",
+      "SDK example records are explicitly METADATA_ONLY/UNVALIDATED; this does not qualify native trusted-constraint materialization or complete provider profile negotiation.",
+      "Legacy mutation/write prechecks are not atomic provider authorization; generic bind/write lifecycle remains future work.",
+      "No broad DuckDB 2.0 runtime qualification or protocol publication."
+    ],
+    "review": "Independent bounded review of six SDK CREATE guards confirmed validation before replacement effects; fixed the identified C++ schema lifetime issue before the final rerun.",
+    "remote_workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+    "logs_directory": "logs/",
+    "supporting_rpc_fix": {
+      "repository": "vgi-rpc-java",
+      "branch": "codex/duckdb-2.0-qualification",
+      "change": "Honor scalar DICT_INT16_UTF8 record annotations so canonical enum fields retain actual Arrow dictionary encoding; uses the existing dictionary-aware RecordCodec writer.",
+      "regression": "RecordDictionaryEncodingTest checks emitted IPC indices, dictionary values, nullable fields and ordinary strings; VGI tests require exact canonical-record IPC schemas."
+    }
   }
 }

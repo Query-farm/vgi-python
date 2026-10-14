@@ -520,17 +520,15 @@ class InMemoryCatalog(CatalogInterface):
         name: str,
         columns: SerializedSchema,
         on_conflict: OnConflict,
-        not_null_constraints: list[int],
-        unique_constraints: list[list[int]],
-        check_constraints: list[str],
-        primary_key_constraints: list[list[int]] | None = None,
-        foreign_key_constraints: list[bytes] | None = None,
+        constraint_definitions: list[bytes],
         comment: str | None = None,
         tags: dict[str, str] | None = None,
         options: TypedValueBatch | None = None,
         layout: TableLayout | None = None,
     ) -> None:
         """Create a new table."""
+        if constraint_definitions:
+            raise NotImplementedError("this metadata-only catalog does not enforce canonical constraints")
         if any(value is not None for value in (comment, tags, options, layout)):
             raise NotImplementedError("table creation metadata/options/layout profiles are not supported")
 
@@ -548,9 +546,7 @@ class InMemoryCatalog(CatalogInterface):
                 name=name,
                 schema_path=schema_path,
                 columns=columns,
-                not_null_constraints=not_null_constraints,
-                unique_constraints=unique_constraints,
-                check_constraints=check_constraints,
+                constraints=[],
                 comment=None,
                 tags={},
             )
@@ -602,9 +598,8 @@ class InMemoryCatalog(CatalogInterface):
                 name=old_info.name,
                 schema_path=old_info.schema_path,
                 columns=old_info.columns,
-                not_null_constraints=old_info.not_null_constraints,
-                unique_constraints=old_info.unique_constraints,
-                check_constraints=old_info.check_constraints,
+                constraints=old_info.constraints,
+                definition_revision=old_info.definition_revision,
                 comment=comment,
                 tags=old_info.tags,
             )
@@ -639,9 +634,8 @@ class InMemoryCatalog(CatalogInterface):
                 name=new_name,
                 schema_path=old_info.schema_path,
                 columns=old_info.columns,
-                not_null_constraints=old_info.not_null_constraints,
-                unique_constraints=old_info.unique_constraints,
-                check_constraints=old_info.check_constraints,
+                constraints=old_info.constraints,
+                definition_revision=old_info.definition_revision,
                 comment=old_info.comment,
                 tags=old_info.tags,
             )

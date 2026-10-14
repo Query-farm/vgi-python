@@ -149,6 +149,12 @@ class TableLayoutCatalog(SchemaOptionsCatalog):
                 raise ValueError("expression profile is no longer supported")
         return arrange_rows(rows, info)
 
+    def _create_constraints(self, args: dict[str, Any]) -> tuple[list[bytes], bytes | None]:
+        """Keep this layout-only reference explicit about unsupported enforcement."""
+        if args["constraint_definitions"]:
+            raise ValueError("constraint enforcement is outside this reference")
+        return [], None
+
     def _change(self, args: dict[str, Any], action: str) -> None:
         attach, tx = args["attach_opaque_data"], args["transaction_opaque_data"]
         path, name = args["schema_path"], args["name"]
@@ -159,26 +165,15 @@ class TableLayoutCatalog(SchemaOptionsCatalog):
             if action == "create":
                 if json.dumps(schema_path_key(path)) not in data:
                     raise ValueError("schema does not exist")
-                if any(
-                    args.get(c)
-                    for c in (
-                        "not_null_constraints",
-                        "unique_constraints",
-                        "check_constraints",
-                        "primary_key_constraints",
-                        "foreign_key_constraints",
-                    )
-                ):
-                    raise ValueError("constraint enforcement is outside this reference")
+                constraints, revision = self._create_constraints(args)
                 info = TableInfo(
                     name=name,
                     schema_path=path,
                     columns=args["columns"],
                     comment=args.get("comment"),
                     tags=args.get("tags") or {},
-                    not_null_constraints=[],
-                    unique_constraints=[],
-                    check_constraints=[],
+                    constraints=constraints,
+                    definition_revision=revision,
                     options=DEFINITIONS.create(args.get("options")),
                     layout=args.get("layout") or TableLayout(),
                 )

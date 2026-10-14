@@ -156,9 +156,7 @@ class NarrowBindCatalog(ReadOnlyCatalogInterface):
             name=table_name,
             schema_path=["main"],
             columns=SerializedSchema(_serialize_schema(_TABLE_SCHEMA)),
-            not_null_constraints=[],
-            unique_constraints=[],
-            check_constraints=[],
+            constraints=[],
         )
 
     def schemas(

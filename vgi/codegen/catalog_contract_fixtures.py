@@ -330,6 +330,18 @@ def render() -> str:
     table_args: dict[str, Any] = dict(
         name="table.with.dot", schema_path=expression.schema_path, columns=schema.serialize().to_pybytes()
     )
+    table_definition = ConstraintDefinition(kind=ConstraintKind.NOT_NULL, column_paths=[["record", "a.b"]])
+    table_constraint = ConstraintInfo(
+        ref=CatalogObjectRef(
+            kind="constraint",
+            schema_path=expression.schema_path,
+            owner_table=table_args["name"],
+            name="fixture-stable-key",
+        ),
+        definition=table_definition,
+        enforcement=ConstraintEnforcement.ENFORCED,
+        validation=ConstraintValidation.ALL_ROWS,
+    )
     records: dict[str, TypedValueBatch | ArrowSerializableDataclass] = {
         "view_info": ViewInfo(
             name="view.with.dot",
@@ -382,6 +394,7 @@ def render() -> str:
         "layout_change": TableLayoutChange(mode=LayoutChangeMode.REWRITE, partition_by=[], sorted_by=layout.sorted_by),
         "layout_clear": TableLayoutChange(mode=LayoutChangeMode.FUTURE_WRITES, sorted_by=[]),
         "table_create": TableCreateRequest(
+            constraint_definitions=[table_definition.serialize_to_bytes()],
             **table_args,
             attach_opaque_data=b"attach",
             on_conflict=OnConflict.ERROR,
@@ -391,15 +404,14 @@ def render() -> str:
             layout=layout,
         ),
         "table_create_legacy": TableCreateRequest(
-            **table_args, attach_opaque_data=b"attach", on_conflict=OnConflict.ERROR
+            constraint_definitions=[], **table_args, attach_opaque_data=b"attach", on_conflict=OnConflict.ERROR
         ),
         "table_info": TableInfo(
             **table_args,
             comment="kept",
             tags={"team": "one"},
-            not_null_constraints=[],
-            unique_constraints=[],
-            check_constraints=[],
+            constraints=[table_constraint.serialize_to_bytes()],
+            definition_revision=b"revision\0\xff",
             required_filters=[[["optional"], ["record", "a.b"]]],
             options=OptionState(values=values, explicit_names=["optional"]),
             layout=layout,

@@ -18,6 +18,10 @@ from __future__ import annotations
 import click
 
 from vgi.catalog import OnConflict, SerializedSchema, SqlExpression
+from vgi.catalog.capabilities import ROW_SCALAR_EXPRESSION
+from vgi.catalog.constraints import ConstraintDefinition, ConstraintKind
+from vgi.catalog.evaluation_context import QueryEvaluationContext
+from vgi.catalog.sql import SqlExpression as RowExpression
 from vgi.client.cli_utils import (
     SCHEMA_PATH,
     json_to_arrow_schema,
@@ -127,11 +131,32 @@ def table_create(
     columns_json = parse_json_option(columns, "--columns")
     arrow_schema = json_to_arrow_schema(columns_json)
 
-    # Parse unique constraints: each is a comma-separated list of column indices
-    unique_constraints = []
-    for u in unique:
-        indices = [int(i.strip()) for i in u.split(",")]
-        unique_constraints.append(indices)
+    def path(index: int) -> list[str]:
+        if index < 0 or index >= len(arrow_schema):
+            raise click.ClickException(f"Constraint column index {index} is out of range")
+        return [arrow_schema.field(index).name]
+
+    definitions = [ConstraintDefinition(kind=ConstraintKind.NOT_NULL, column_paths=[path(i)]) for i in not_null]
+    for group in unique:
+        try:
+            indices = [int(value.strip()) for value in group.split(",")]
+        except ValueError as error:
+            raise click.ClickException("--unique requires comma-separated column indices") from error
+        definitions.append(ConstraintDefinition(kind=ConstraintKind.UNIQUE, column_paths=[path(i) for i in indices]))
+    for sql in check:
+        definitions.append(
+            ConstraintDefinition(
+                kind=ConstraintKind.CHECK,
+                check_expression=RowExpression(
+                    sql=sql,
+                    profile=ROW_SCALAR_EXPRESSION,
+                    schema_path=schema_path,
+                    evaluation_context=QueryEvaluationContext(),
+                ),
+            )
+        )
+    for i in not_null:
+        arrow_schema = arrow_schema.set(i, arrow_schema.field(i).with_nullable(False))
 
     client.table_create(
         attach_opaque_data=resolved_attach_opaque_data,
@@ -140,9 +165,7 @@ def table_create(
         name=name,
         columns=SerializedSchema(arrow_schema.serialize().to_pybytes()),
         on_conflict=OnConflict(on_conflict),
-        not_null_constraints=list(not_null),
-        unique_constraints=unique_constraints,
-        check_constraints=list(check),
+        constraint_definitions=[definition.serialize_to_bytes() for definition in definitions],
     )
     output_json({"status": "created", "schema": schema_path, "name": name})
 

@@ -26,6 +26,28 @@ from vgi.catalog import (
 )
 
 
+def canonical_unique(owner: str, *paths: list[str]) -> list[bytes]:
+    """Explicit provider records for transport tests; no trust inferred from indices."""
+    from vgi.catalog.constraints import (
+        ConstraintDefinition,
+        ConstraintEnforcement,
+        ConstraintInfo,
+        ConstraintKind,
+        ConstraintValidation,
+    )
+    from vgi.catalog.dependencies import CatalogObjectRef
+
+    return [
+        ConstraintInfo(
+            ref=CatalogObjectRef(kind="constraint", schema_path=["main"], owner_table=owner, name=f"provider-key-{i}"),
+            definition=ConstraintDefinition(kind=ConstraintKind.UNIQUE, column_paths=[[p] for p in path]),
+            enforcement=ConstraintEnforcement.METADATA_ONLY,
+            validation=ConstraintValidation.UNVALIDATED,
+        ).serialize_to_bytes()
+        for i, path in enumerate(paths)
+    ]
+
+
 class TestCatalogAttachResultSerialization:
     """Test CatalogAttachResult serialization round-trip."""
 
@@ -204,9 +226,8 @@ class TestTableInfoSerialization:
             name="users",
             schema_path=["main"],
             columns=columns_bytes,
-            not_null_constraints=[0],
-            unique_constraints=[[0]],
-            check_constraints=["id > 0"],
+            constraints=canonical_unique("users", ["id"]),
+            definition_revision=b"opaque-revision",
             comment="Users table",
             tags={"category": "core"},
         )
@@ -217,9 +238,8 @@ class TestTableInfoSerialization:
         assert restored.name == original.name
         assert restored.schema_path == original.schema_path
         assert restored.columns == original.columns
-        assert restored.not_null_constraints == original.not_null_constraints
-        assert restored.unique_constraints == original.unique_constraints
-        assert restored.check_constraints == original.check_constraints
+        assert restored.constraints == original.constraints
+        assert restored.definition_revision == original.definition_revision
         assert restored.comment == original.comment
         assert restored.tags == original.tags
 
@@ -232,9 +252,7 @@ class TestTableInfoSerialization:
             name="simple",
             schema_path=["main"],
             columns=columns_bytes,
-            not_null_constraints=[],
-            unique_constraints=[],
-            check_constraints=[],
+            constraints=[],
             comment=None,
             tags={},
         )
@@ -242,9 +260,7 @@ class TestTableInfoSerialization:
         batch, _ = deserialize_record_batch(serialized)
         restored = TableInfo.deserialize_from_batch(batch)
 
-        assert restored.not_null_constraints == []
-        assert restored.unique_constraints == []
-        assert restored.check_constraints == []
+        assert restored.constraints == []
 
     def test_multiple_unique_constraints(self) -> None:
         """Test with multiple unique constraints on multiple columns."""
@@ -255,9 +271,7 @@ class TestTableInfoSerialization:
             name="multi",
             schema_path=["main"],
             columns=columns_bytes,
-            not_null_constraints=[0, 1],
-            unique_constraints=[[0], [1, 2]],
-            check_constraints=["a > 0", "b < 100"],
+            constraints=canonical_unique("multi", ["a"], ["b", "c"]),
             comment=None,
             tags={},
         )
@@ -265,7 +279,7 @@ class TestTableInfoSerialization:
         batch, _ = deserialize_record_batch(serialized)
         restored = TableInfo.deserialize_from_batch(batch)
 
-        assert restored.unique_constraints == [[0], [1, 2]]
+        assert [info.definition.column_paths for info in restored.constraint_infos()] == [[["a"]], [["b"], ["c"]]]
 
     def test_inlined_scan_function_round_trip(self) -> None:
         """``scan_function`` IPC bytes round-trip through TableInfo serialize/deserialize.
@@ -285,9 +299,7 @@ class TestTableInfoSerialization:
             name="t",
             schema_path=["s"],
             columns=columns_bytes,
-            not_null_constraints=[],
-            unique_constraints=[],
-            check_constraints=[],
+            constraints=[],
             comment=None,
             tags={},
             scan_function=sfr.serialize(),
@@ -320,9 +332,7 @@ class TestTableInfoSerialization:
             name="t",
             schema_path=["s"],
             columns=columns_bytes,
-            not_null_constraints=[],
-            unique_constraints=[],
-            check_constraints=[],
+            constraints=[],
             comment=None,
             tags={},
             cardinality_estimate=12345,
@@ -343,9 +353,7 @@ class TestTableInfoSerialization:
                 name="t",
                 schema_path=["s"],
                 columns=columns_bytes,
-                not_null_constraints=[],
-                unique_constraints=[],
-                check_constraints=[],
+                constraints=[],
                 comment=None,
                 tags={},
                 cardinality_estimate=estimate,
@@ -368,9 +376,7 @@ class TestTableInfoSerialization:
             name="t",
             schema_path=["s"],
             columns=SerializedSchema(columns_schema.serialize().to_pybytes()),
-            not_null_constraints=[],
-            unique_constraints=[],
-            check_constraints=[],
+            constraints=[],
             comment=None,
             tags={},
         )
@@ -404,9 +410,7 @@ class TestTableInfoSerialization:
             name="t",
             schema_path=["s"],
             columns=columns_bytes,
-            not_null_constraints=[],
-            unique_constraints=[],
-            check_constraints=[],
+            constraints=[],
             comment=None,
             tags={},
             bind_result=bind_blob,
@@ -448,9 +452,7 @@ class TestTableInfoSerialization:
             name="t",
             schema_path=["s"],
             columns=columns_bytes,
-            not_null_constraints=[],
-            unique_constraints=[],
-            check_constraints=[],
+            constraints=[],
             comment=None,
             tags={},
             supports_column_statistics=True,
@@ -1214,16 +1216,17 @@ class TestArrowSchemaCorrectness:
         assert schema.field("name").type == pa.string()
         assert schema.field("schema_path").type == pa.list_(pa.string())
         assert schema.field("columns").type == pa.binary()
-        assert schema.field("not_null_constraints").type == pa.list_(pa.int32())
-        assert schema.field("unique_constraints").type == pa.list_(pa.list_(pa.int32()))
-        assert schema.field("check_constraints").type == pa.list_(pa.string())
+        assert schema.field("constraints").type == pa.list_(pa.binary())
+        assert not schema.field("constraints").nullable
+        assert schema.field("definition_revision").type == pa.binary()
+        assert schema.field("definition_revision").nullable
         # Inlined optional fields — populated to skip per-bind RPCs.
         assert schema.field("scan_function").type == pa.binary()
         assert schema.field("cardinality_estimate").type == pa.int64()
         assert schema.field("column_statistics").type == pa.binary()
         assert schema.field("bind_result").type == pa.binary()
         assert schema.field("required_filters").type == pa.list_(pa.list_(pa.list_(pa.string())))
-        assert schema.get_field_index("required_filters") == 20
+        assert schema.get_field_index("required_filters") == 17
         assert schema.field("options").type == pa.binary() and schema.field("options").nullable
         assert schema.field("layout").type == pa.binary() and schema.field("layout").nullable
 

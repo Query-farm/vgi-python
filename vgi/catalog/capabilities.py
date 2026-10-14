@@ -19,6 +19,10 @@ from vgi_rpc import ArrowSerializableDataclass
 from vgi.exceptions import CatalogCapabilityError
 
 CATALOG_DEPENDENCIES_READ = "vgi.catalog.dependencies.read.v1"
+CONSTRAINT_RECORDS_READ = "vgi.constraint.records.read.v1"
+CONSTRAINT_CREATE = "vgi.constraint.create.v1"
+CONSTRAINT_MUTATE = "vgi.constraint.mutate.v1"
+CONSTRAINT_ENFORCE = "vgi.constraint.enforce.v1"
 SCHEMA_LIFECYCLE = "vgi.schema.lifecycle.v1"
 SCHEMA_METADATA_ALTER = "vgi.schema.metadata.alter.v1"
 SCHEMA_OPTIONS_READ = "vgi.schema.options.read.v1"
@@ -70,6 +74,7 @@ class CatalogCapabilities(ArrowSerializableDataclass):
         "read": frozenset(
             {
                 CATALOG_DEPENDENCIES_READ,
+                CONSTRAINT_RECORDS_READ,
                 SCHEMA_OPTIONS_READ,
                 TABLE_OPTIONS_READ,
                 TABLE_LAYOUT_READ,
@@ -89,6 +94,8 @@ class CatalogCapabilities(ArrowSerializableDataclass):
                 COLUMN_NESTED_DEFAULT,
                 COLUMN_NESTED_NULLABILITY,
                 COLUMN_NESTED_COMMENT,
+                CONSTRAINT_CREATE,
+                CONSTRAINT_MUTATE,
                 SCHEMA_METADATA_ALTER,
                 SCHEMA_LIFECYCLE,
                 SCHEMA_OPTIONS_CREATE,
@@ -103,10 +110,13 @@ class CatalogCapabilities(ArrowSerializableDataclass):
                 MACRO_OVERLOADS_CREATE,
             }
         ),
-        "write": frozenset(),
+        "write": frozenset({CONSTRAINT_ENFORCE}),
         "transaction": frozenset({TRANSACTION_DDL}),
     }
     _requires: ClassVar[dict[str, frozenset[str]]] = {
+        CONSTRAINT_CREATE: frozenset({CONSTRAINT_RECORDS_READ, CONSTRAINT_ENFORCE}),
+        CONSTRAINT_MUTATE: frozenset({CONSTRAINT_RECORDS_READ}),
+        CONSTRAINT_ENFORCE: frozenset({CONSTRAINT_RECORDS_READ}),
         MACRO_OVERLOADS_CREATE: frozenset({MACRO_OVERLOADS_READ}),
         VIEW_BARRIER_CREATE: frozenset({VIEW_BARRIER_READ}),
         TABLE_OPTIONS_CREATE: frozenset({TABLE_OPTIONS_READ}),

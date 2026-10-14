@@ -746,11 +746,11 @@ native explicit/automatic adapters and performance qualification remain open.
 ## Combined expression, constraint, transaction and trigger design
 
 **Checkpoint: 2026-10-14. Status: SQL/context and canonical constraint records
-generated; bounded reference behavior proven; remaining APIs and profiles
-specified, not frozen or advertised.** The definitions in this
+generated; bounded public constraint migration verified on pinned 1.5; remaining APIs
+specified and not frozen.** The definitions in this
 section supersede placeholder records in the manifest and the older trigger
 proposal. They belong to the same major transition as the existing development
-changes. Engine pins and the 82-method implemented inventory remain unchanged.
+changes. Engine pins remain unchanged; the public inventory now has 83 methods.
 A specified shape does not close P1. The implementation evidence below applies
 only to its stated scope; the remaining acceptance cases still require proof.
 
@@ -792,12 +792,39 @@ the metadata encoding below uses canonical base64. Record fields typed `binary`
 continue carrying raw IPC. The native 1.5 adapter rejects these new column
 metadata namespaces recursively until their semantics are implemented.
 
-**Still pending:** replace the legacy parent constraint arrays, implement the
-public apply RPC and capability negotiation, translate new DEFAULT/USING payloads,
-implement native/provider enforcement, and qualify indexes, semantic ALTER
-dependencies, statement lifecycle, triggers and durable mutation replay. This
-checkpoint changes embedded record schemas but adds no public method and does
-not publish a version or close a release gate.
+### Public constraint migration checkpoint
+
+The parent table records now use the canonical fields below, and
+`catalog_table_constraints_apply` is a public RPC. Python gates creation,
+discovery and mutation on selected profiles and current provider support.
+Mutation takes the discovered semantic revision; it does not retry an ambiguous
+result. Unported SDK providers reject constrained creation and unsupported
+mutation before changing state. Read-only providers must explicitly supply
+canonical identities and trust states; legacy arrays cannot manufacture those
+facts. Generated schemas and registries cover all seven SDKs.
+
+The durable reference exposes public creation, discovery, apply and DDL
+transactions. It advertises no public scan/write functions. Its provider-side
+row replacement authority continues validating the same persisted constraints.
+The native 1.5 subset translates top-level NOT_NULL, UNIQUE, PRIMARY_KEY and
+same-schema MATCH SIMPLE NO_ACTION/RESTRICT foreign keys. SET/DROP NOT NULL uses
+canonical apply with the discovered revision. CHECK, nested paths, unsupported
+trust states and broader FK actions reject explicitly. Native default/generated
+metadata translation remains pending.
+
+EC2 validation passed for the Python public lifecycle, all SDK contract/adapter
+suites, the bounded native 1.5 adapter and six built-worker discovery lanes.
+Java's shared RPC serializer now preserves declared Arrow dictionary encodings
+for these embedded records; strict IPC and cross-language tests cover the fix.
+SDK fixture declarations are METADATA_ONLY/UNVALIDATED, without an enforcement
+or native trusted-materialization claim. Exact counts, skips and logs are in
+the manifest's `constraint_public_checkpoint`.
+
+This checkpoint adds one method and changes parent schemas; no version is
+published or release gate closed. Generic legacy
+write/bind authorization remains provider-owned: preliminary table reads are
+not atomic with later operations. Typed indexes, semantic ALTER dependencies,
+statement lifecycle, triggers and durable replay remain pending.
 
 ### Shared SQL definitions and evaluation phases
 
