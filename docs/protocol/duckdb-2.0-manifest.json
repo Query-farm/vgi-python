@@ -12,9 +12,9 @@
       "Overload collections replacing single macro definitions"
     ],
     "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
-    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition",
+    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the embedded successor schema inventory (legacy parent arrays and apply RPC migration remain pending)",
     "version_requirement": "Retaining the raw-path migration requires a major version and matching routing name. Complete the combined diff and migration guide before freeze.",
-    "planned_diff": "This design adds required SQL context, canonical constraints replacing five parallel arrays, typed index definitions/options, ALTER/column dependency edges, write requirement/statement lifecycle records, trigger CRUD and durable mutation replay/status. These are specified but not implemented; do not count them in the current protocol hash."
+    "planned_diff": "Remaining combined design: replace legacy constraint parent arrays and implement constraints apply; typed index definitions/options; ALTER/column dependency edges; write requirement/statement lifecycle records; trigger CRUD and durable mutation replay/status. SQL/context and canonical constraint records are now generated with bounded reference proof; pending methods are not counted in the current protocol hash."
   },
   "sources": {
     "native_revision": "1a0a059",
@@ -28,7 +28,7 @@
   "shared_representations": {
     "identity": "Raw components and attachment-relative CatalogObjectRef; no local aliases, pointers or OIDs. Full identity in all caches.",
     "values": "TypedValueBatch preserving original Arrow metadata and typed NULLs. Option RESET differs from NULL and omission.",
-    "expressions": "Specified successor: SqlExpression + required QueryEvaluationContext; SqlStatement for one query/DML body; containing operation defines evaluation phase. Existing narrow scalar reference remains the only qualified expression subset.",
+    "expressions": "Implemented: SqlExpression and SqlStatement with required QueryEvaluationContext, required matching macro context, canonical bounded base64-IPC column metadata. Finite scalar and durable CHECK proof on 1.5; general statement execution and new persistent DEFAULT/generated semantics remain unqualified.",
     "capabilities": "Agreement scoped to sealed attachment state; validate per-object requirements and current write eligibility at execution.",
     "mutation": "Specified successor: explicit statement tickets/commit fence and per-table requirements; baseline no ambiguous retry. Optional catalog_mutation_execute + status use exact request bytes and durable bounded identity/outcome retention, pending proof.",
     "rollout": "Use versioned endpoints/processes with draining; prove transaction/reconnect and downgrade behavior. The existing dispatcher cannot host two versions under one protocol name.",
@@ -47,7 +47,7 @@
         "schema_ddl": "vgi.schema.lifecycle.v1"
       },
       "status": "reference_implemented_full_provider_coverage_pending",
-      "proposed_extension": "Constraint refs, semantic blocks_alter, subject_column_paths and dependent_column_path. Shared edge/cycle identity must include column scope; existing reference does not validate this extension."
+      "proposed_extension": "Constraint object references with required owner_table are implemented. Semantic blocks_alter, subject_column_paths and dependent_column_path remain proposed; column-scoped edge/cycle proof is pending."
     }
   },
   "areas": {
@@ -372,12 +372,13 @@
     "constraints": {
       "title": "Constraints and indexes",
       "disposition": "include",
-      "status": "specified_reference_pending",
+      "status": "records_generated_bounded_reference_proven_public_migration_pending",
       "records": [
         "ConstraintDefinition",
         "ConstraintInfo",
         "ConstraintSnapshot",
         "ConstraintChange",
+        "ConstraintsApplyRequest",
         "ForeignKeyDefinition",
         "IndexDefinition",
         "IndexInfo",
@@ -415,11 +416,25 @@
             "docs/protocol/shared-catalog-values.md#shared-sql-definitions-and-evaluation-phases"
           ],
           "limits": "Normative design/source review only. No canonical constraint/index record or provider enforcement implementation in this checkpoint."
+        },
+        {
+          "status": "canonical_constraint_records_and_durable_reference_on_15",
+          "sources": [
+            "vgi/catalog/constraints.py",
+            "vgi/catalog/dependencies.py",
+            "tests/catalog/constraints_reference.py",
+            "tests/catalog/test_constraints_reference.py",
+            "tests/catalog/test_constraint_contract.py",
+            "vgi/codegen/catalog_contract_fixtures.py",
+            "conformance/catalog-contracts.json"
+          ],
+          "limits": "Direct reference API only: top-level primitive columns, ENFORCED ALL_ROWS, immediate SIMPLE foreign keys with NO_ACTION/RESTRICT. No parent constraint-array replacement, public apply RPC, capability advertisement, index migration or native enforcement. Existing FK retargeting rejects. Seven-SDK codec and metadata evidence recorded in expression_constraint_checkpoint."
         }
       ],
       "implementation_work": [
         "Replace five parallel constraint arrays with canonical create/read records across all SDKs.",
-        "Implement durable logical keys, revision checks, atomic mutation and real enforcement/reference behavior.",
+        "Implement public apply RPC, attachment capabilities, production provider and native enforcement using the proven records.",
+        "Extend beyond qualified top-level primitive immediate constraints only with new conformance evidence.",
         "Port native index integration; keep unsupported SQL forms rejected at the inspected engine pin."
       ]
     },
@@ -468,6 +483,16 @@
             "docs/protocol/shared-catalog-values.md#shared-sql-definitions-and-evaluation-phases"
           ],
           "limits": "Required context and consistent scalar/statement roles are designed. Existing bounded layout/macro/column fixtures do not qualify these additional expression roles."
+        },
+        {
+          "status": "required_evaluation_context_implemented",
+          "sources": [
+            "vgi/catalog/evaluation_context.py",
+            "vgi/catalog/macros.py",
+            "vgi/catalog/sql.py",
+            "tests/catalog/test_expression_contract.py"
+          ],
+          "limits": "Required explicit context is generated across SDKs and default contexts must match their owner. Native macro-family integration and broader provider contexts remain pending."
         }
       ]
     },
@@ -5983,5 +6008,96 @@
       "log": "logs/combined-protocol-design-checkpoint.log",
       "limits": "Inventory/consistency checks only. No new runtime or wire implementation was introduced or qualified."
     }
+  },
+  "expression_constraint_checkpoint": {
+    "date": "2026-10-14",
+    "status": "records_generated_bounded_reference_verified_on_15",
+    "engine_15": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "implemented_records": [
+      "SqlExpression",
+      "SqlStatement",
+      "QueryEvaluationContext",
+      "MacroOverload",
+      "ForeignKeyDefinition",
+      "ConstraintDefinition",
+      "ConstraintInfo",
+      "ConstraintChange",
+      "ConstraintSnapshot",
+      "ConstraintsApplyRequest"
+    ],
+    "public_method_count": 82,
+    "public_methods_added": [],
+    "column_metadata_encoding": "Canonical RFC4648 standard padded base64 ASCII of exact single-record SqlExpression IPC; generation is virtual/stored ASCII. Raw IPC metadata rejected after Rust Arrow Utf8Error. Binary record fields retain raw IPC.",
+    "test_evidence": [
+      {
+        "check": "Python catalog, corpus, codegen, manifest and generation regression suite",
+        "result": "1350 passed; 5 pre-existing opt-in live-worker metadata cases skipped because VGI_METADATA_WORKERS was not set. SDK codec suites ran independently.",
+        "log": "constraints-python-verified.log"
+      },
+      {
+        "check": "ruff and mypy",
+        "result": "passed; 221 source files type checked",
+        "log": "constraints-quality-verified.log"
+      },
+      {
+        "check": "strict all-SDK generation, manifest inventory, native settings generation",
+        "result": "passed; 151 audit rows, 20 areas, 84 reviews remain",
+        "log": "constraints-python-verified.log"
+      },
+      {
+        "check": "All generated-file checks",
+        "result": "244 passed, no skips; focused native header checks also pass",
+        "log": "constraints-generation-coverage.log"
+      },
+      {
+        "check": "Go public/generated record suites",
+        "result": "passed, including complete schema inventory and new expression metadata",
+        "log": "constraints-go-final.log"
+      },
+      {
+        "check": "Rust vgi-protocol suite",
+        "result": "53 checks passed, including 16 catalog corpus tests",
+        "log": "constraints-rust-final.log"
+      },
+      {
+        "check": "TypeScript corpus on apache-arrow and flechette plus type build",
+        "result": "16 tests and 245 assertions passed per backend; type build passed",
+        "log": "constraints-ts-final.log"
+      },
+      {
+        "check": "Java CatalogContractsTest",
+        "result": "passed",
+        "log": "constraints-java-final.log"
+      },
+      {
+        "check": "C# CatalogContractsTests",
+        "result": "21 passed",
+        "log": "constraints-csharp-final.log"
+      },
+      {
+        "check": "C++ catalog codec target and corpus",
+        "result": "build and test passed",
+        "log": "constraints-cpp-final.log"
+      },
+      {
+        "check": "Native pinned-1.5 shell, loadable extension, guard/query tests and lifecycle scenarios",
+        "result": "build passed; 13 cases/98 assertions; 18 scenarios with no retained query resources",
+        "log": "constraints-native-final.log"
+      },
+      {
+        "check": "Raw IPC in Arrow metadata interoperability probe",
+        "result": "rejected by Rust Arrow UTF-8 validation; replaced with canonical base64 and all-SDK exact-IPC recovery proof",
+        "log": "constraints-metadata-proof.log"
+      }
+    ],
+    "limits": [
+      "Legacy TableCreateRequest/TableInfo constraint arrays and public apply RPC are unchanged.",
+      "Finite direct durable constraint reference; no new capability advertisement or production/native enforcement.",
+      "Scalar evaluation proof does not establish persisted DEFAULT/generated columns or SqlStatement execution.",
+      "Indexes, ALTER dependency scope, statement lifecycle, triggers and durable retry/status remain pending.",
+      "No P0-P3 or M0-M4 gate closed; no version freeze/publication."
+    ],
+    "remote_workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+    "logs_directory": "logs/"
   }
 }

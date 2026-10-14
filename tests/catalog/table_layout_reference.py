@@ -34,10 +34,11 @@ from vgi.catalog.capabilities import (
     CatalogCapabilities,
 )
 from vgi.catalog.catalog_interface import CatalogContentsResult, OnConflict, SchemaContentsInfo, SchemaObjectType
-from vgi.catalog.layout import LayoutChangeMode, SqlExpression, TableLayout, TableLayoutChange
+from vgi.catalog.layout import LayoutChangeMode, TableLayout, TableLayoutChange
 from vgi.schema_path import schema_path_key
 from vgi.worker import Worker
 
+from .expression_reference import validate_expression as _validate_expression
 from .schema_options_reference import DEFINITIONS, PROFILES, SchemaOptionsCatalog
 
 TABLE_PROFILES = CatalogCapabilities(
@@ -61,55 +62,6 @@ def _table_key(path: list[str], name: str) -> str:
     if not name or "\x00" in name:
         raise ValueError("invalid table name")
     return json.dumps({"schema": schema_path_key(path), "table": name.lower()})
-
-
-def _validate_expression(connection: Any, expr: SqlExpression, path: list[str]) -> None:
-    if expr.profile != ROW_SCALAR_EXPRESSION or schema_path_key(expr.schema_path) != schema_path_key(path):
-        raise ValueError("unsupported expression profile or owner schema")
-    sql = f"SELECT ({expr.sql}) AS v FROM input_data"
-    parsed = json.loads(connection.execute("SELECT json_serialize_sql(?)", [sql]).fetchone()[0])
-    if parsed.get("error") or len(parsed.get("statements", [])) != 1:
-        raise ValueError("expected one scalar expression")
-    node = parsed["statements"][0]["node"]
-    source = node.get("from_table", {})
-    if (
-        node.get("type") != "SELECT_NODE"
-        or source.get("type") != "BASE_TABLE"
-        or source.get("table_name") != "input_data"
-        or source.get("schema_name")
-        or source.get("catalog_name")
-        or len(node.get("select_list", [])) != 1
-        or node.get("modifiers")
-        or node.get("cte_map", {}).get("map")
-        or any(
-            node.get(key) for key in ("where_clause", "group_expressions", "group_sets", "having", "qualify", "sample")
-        )
-    ):
-        raise ValueError("expected one row-local scalar expression")
-
-    def check(expression: dict[str, Any]) -> None:
-        kind = expression.get("class")
-        if kind in ("COLUMN_REF", "CONSTANT"):
-            return
-        if kind == "FUNCTION" and expression.get("function_name") in ("+", "-", "*", "%", "abs", "lower", "upper"):
-            if (
-                expression.get("schema")
-                or expression.get("catalog")
-                or expression.get("distinct")
-                or expression.get("filter")
-                or expression.get("order_bys", {}).get("orders")
-            ):
-                raise ValueError("unsupported scalar function modifiers")
-            for child in expression["children"]:
-                check(child)
-            return
-        if kind == "OPERATOR" and expression.get("type") == "OPERATOR_COALESCE":
-            for child in expression["children"]:
-                check(child)
-            return
-        raise ValueError("expression is outside the deterministic row-scalar profile")
-
-    check(node["select_list"][0])
 
 
 def arrange_rows(rows: list[dict[str, Any]], info: TableInfo) -> list[dict[str, Any]]:

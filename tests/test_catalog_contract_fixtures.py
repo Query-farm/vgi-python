@@ -14,12 +14,20 @@ from vgi.catalog.catalog_interface import MacroInfo, TableInfo, ViewInfo
 from vgi.catalog.layout import LayoutChangeMode, SortKey, SqlExpression, TableLayout, TableLayoutChange
 from vgi.catalog.macros import MacroOverload, MacroParameter
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
-from vgi.codegen.catalog_contract_fixtures import render
+from vgi.codegen.catalog_contract_fixtures import constraint_records, render
 from vgi.column_path import RequiredFilterPaths
 from vgi.logical_types import LOGICAL_TYPE_PROFILES, validate_logical_values
 from vgi.protocol import MacroCreateRequest, TableCreateRequest
 from vgi.query_parameters import QueryParameters
 from vgi.typed_values import TypedValueBatch
+
+
+def test_canonical_constraint_vectors_preserve_every_field() -> None:
+    fixtures = {name: base64.b64decode(value) for name, value in json.loads(render())["records"].items()}
+    for name, source in constraint_records().items():
+        decoded = type(source).deserialize_from_bytes(fixtures[name])
+        assert decoded == source
+        assert decoded.serialize_to_bytes() == fixtures[name]
 
 
 def test_query_parameter_corpus_preserves_mapping_types_metadata_and_empty_row() -> None:
@@ -39,7 +47,11 @@ def test_query_parameter_corpus_preserves_mapping_types_metadata_and_empty_row()
 
 def test_column_requests_preserve_raw_paths_and_definitions() -> None:
     fixtures = json.loads(render())["records"]
-    names = [name for name in fixtures if name.startswith(("column_", "not_null_"))]
+    names = [
+        name
+        for name in fixtures
+        if name.startswith(("column_", "not_null_")) and name.endswith(("_literal", "_nested"))
+    ]
     assert len(names) == 18
     for name in names:
         with pa.ipc.open_stream(base64.b64decode(fixtures[name])) as reader:

@@ -21,6 +21,18 @@ from vgi_rpc.rpc._types import rpc_methods
 
 from vgi.catalog.capabilities import SCHEMA_OPTIONS_CREATE, SCHEMA_OPTIONS_READ, CatalogCapabilities
 from vgi.catalog.catalog_interface import MacroInfo, MacroType, OnConflict, TableInfo, ViewInfo
+from vgi.catalog.constraints import (
+    ConstraintChange,
+    ConstraintDefinition,
+    ConstraintEnforcement,
+    ConstraintInfo,
+    ConstraintKind,
+    ConstraintOperation,
+    ConstraintsApplyRequest,
+    ConstraintSnapshot,
+    ConstraintValidation,
+    ForeignKeyDefinition,
+)
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot, ObjectDependency
 from vgi.catalog.layout import (
     LayoutChangeMode,
@@ -45,6 +57,7 @@ from vgi.catalog.query import (
     QueryEvaluationContext,
     QueryObjectReference,
 )
+from vgi.catalog.sql import ColumnExpressions, SqlStatement, with_column_expressions
 from vgi.column_path import RequiredFilterPaths
 from vgi.logical_types import tuple_field, variant_field
 from vgi.protocol import MacroCreateRequest, TableCreateRequest, VgiProtocol
@@ -123,9 +136,12 @@ def logical_and_macro_records() -> dict[str, TypedValueBatch | ArrowSerializable
     expression_parameter = MacroParameter(
         name="scale",
         declared_type=pa.schema([pa.field("scale", pa.int32())]),
-        default_expression=SqlExpression(sql="2 + 3", profile=MACRO_DEFAULT_PROFILE, schema_path=scope),
+        default_expression=SqlExpression(
+            evaluation_context=QueryEvaluationContext(), sql="2 + 3", profile=MACRO_DEFAULT_PROFILE, schema_path=scope
+        ),
     )
     overload = MacroOverload(
+        evaluation_context=QueryEvaluationContext(),
         parameters=[MacroParameter(name="x"), parameter, expression_parameter],
         definition="coalesce(x, fallback) * scale",
         profile=MACRO_PROFILE,
@@ -133,6 +149,7 @@ def logical_and_macro_records() -> dict[str, TypedValueBatch | ArrowSerializable
         macro_type="scalar",
     )
     second = MacroOverload(
+        evaluation_context=QueryEvaluationContext(),
         parameters=[MacroParameter(name="x", declared_type=pa.schema([pa.field("x", pa.string())]))],
         definition="upper(x)",
         profile=MACRO_PROFILE,
@@ -178,6 +195,99 @@ def logical_and_macro_records() -> dict[str, TypedValueBatch | ArrowSerializable
     }
 
 
+def constraint_records() -> dict[str, ArrowSerializableDataclass]:
+    """Exercise every canonical variant, opaque identity and binary revision."""
+    table = CatalogObjectRef(kind="table", schema_path=["one.two", "nested"], name='child."table')
+    parent = replace(table, name="parent.with.dot")
+    ref = CatalogObjectRef(kind="constraint", schema_path=table.schema_path, owner_table=table.name, name="key.01")
+    referenced = replace(ref, owner_table=parent.name, name="parent.key.01")
+    context = QueryEvaluationContext(
+        default_order="desc", default_null_order="nulls_first", preserve_insertion_order=False
+    )
+    expression = SqlExpression(
+        sql='"a.b" > 0',
+        profile="vgi.expression.duckdb.scalar.v1",
+        schema_path=table.schema_path,
+        evaluation_context=context,
+    )
+    foreign = ForeignKeyDefinition(referenced_table=parent, referenced_column_paths=[["parent.id"], ["record", "id"]])
+    definitions = {
+        "not_null": ConstraintDefinition(kind=ConstraintKind.NOT_NULL, column_paths=[["a.b"]]),
+        "unique": ConstraintDefinition(kind=ConstraintKind.UNIQUE, column_paths=[["a.b"], ["record", "id"]]),
+        "primary": ConstraintDefinition(
+            kind=ConstraintKind.PRIMARY_KEY, column_paths=[["id"]], declared_name="primary.label"
+        ),
+        "check": ConstraintDefinition(
+            kind=ConstraintKind.CHECK, check_expression=expression, declared_name="check.label"
+        ),
+        "foreign": ConstraintDefinition(
+            kind=ConstraintKind.FOREIGN_KEY, column_paths=[["a.b"], ["record", "id"]], foreign_key=foreign
+        ),
+    }
+    info = ConstraintInfo(
+        ref=ref,
+        definition=definitions["foreign"],
+        enforcement=ConstraintEnforcement.ENFORCED,
+        validation=ConstraintValidation.ALL_ROWS,
+        referenced_constraint=referenced,
+    )
+    changes = {
+        "add": ConstraintChange(
+            operation=ConstraintOperation.ADD,
+            definition=definitions["check"],
+            enforcement=ConstraintEnforcement.ENFORCED,
+            validation=ConstraintValidation.ALL_ROWS,
+        ),
+        "drop": ConstraintChange(operation=ConstraintOperation.DROP, ref=ref, cascade=False),
+        "rename": ConstraintChange(operation=ConstraintOperation.RENAME, ref=ref, declared_name='label."new'),
+        "unname": ConstraintChange(operation=ConstraintOperation.RENAME, ref=ref, declared_name=None),
+        "replace": ConstraintChange(
+            operation=ConstraintOperation.REPLACE,
+            ref=ref,
+            definition=definitions["unique"],
+            enforcement=ConstraintEnforcement.METADATA_ONLY,
+            validation=ConstraintValidation.UNVALIDATED,
+        ),
+    }
+    revision = b"\x00revision\xff\x80"
+    return {
+        "sql_statement": SqlStatement(
+            sql='SELECT "a.b" FROM "child.""table"',
+            profile="vgi.statement.duckdb.query.v1",
+            schema_path=table.schema_path,
+            evaluation_context=context,
+        ),
+        "constraint_ref": ref,
+        "foreign_key_definition": foreign,
+        **{f"constraint_definition_{name}": value for name, value in definitions.items()},
+        "constraint_info": info,
+        "constraint_info_untrusted": ConstraintInfo(
+            ref=replace(ref, name="key.02"),
+            definition=definitions["unique"],
+            enforcement=ConstraintEnforcement.METADATA_ONLY,
+            validation=ConstraintValidation.FUTURE_WRITES,
+        ),
+        **{f"constraint_change_{name}": value for name, value in changes.items()},
+        "constraint_snapshot": ConstraintSnapshot(
+            table=table, definition_revision=revision, constraints=[info.serialize_to_bytes()]
+        ),
+        "constraint_snapshot_empty": ConstraintSnapshot(table=table, definition_revision=revision, constraints=[]),
+        "constraints_apply": ConstraintsApplyRequest(
+            attach_opaque_data=b"attachment",
+            transaction_opaque_data=b"transaction",
+            table=table,
+            expected_revision=revision,
+            changes=[changes["add"].serialize_to_bytes(), changes["rename"].serialize_to_bytes()],
+        ),
+        "constraints_apply_autocommit": ConstraintsApplyRequest(
+            attach_opaque_data=b"attachment",
+            table=table,
+            expected_revision=revision,
+            changes=[changes["unname"].serialize_to_bytes()],
+        ),
+    }
+
+
 def render() -> str:
     """Return deterministic JSON with populated and empty record encodings."""
     schema = pa.schema(
@@ -196,7 +306,24 @@ def render() -> str:
     )
     empty = TypedValueBatch.empty(metadata={b"provider": b"no-options"})
     expression = SqlExpression(
-        sql='"a.b" + 1', profile="vgi.expression.duckdb.scalar.v1", schema_path=["one.two", "nested"]
+        evaluation_context=QueryEvaluationContext(),
+        sql='"a.b" + 1',
+        profile="vgi.expression.duckdb.scalar.v1",
+        schema_path=["one.two", "nested"],
+    )
+    default_expression = replace(expression, sql="42")
+    expression_metadata = TypedValueBatch(
+        pa.RecordBatch.from_arrays(
+            [pa.array([None], type=pa.int64()), pa.array([None], type=pa.int64())],
+            schema=pa.schema(
+                [
+                    with_column_expressions(pa.field("a.b", pa.int64()), ColumnExpressions(default=default_expression)),
+                    with_column_expressions(
+                        pa.field("computed", pa.int64()), ColumnExpressions(generated=expression, generation="virtual")
+                    ),
+                ]
+            ),
+        )
     )
     sort_key = SortKey(expression=expression, direction=SortDirection.DESC, null_order=NullOrder.FIRST)
     layout = TableLayout.from_expressions(partition_by=[expression], sorted_by=[sort_key])
@@ -246,6 +373,9 @@ def render() -> str:
         "paths": RequiredFilterPaths(groups=[[["a.b"], ["a", "b"]], [["record", 'literal."name']]]),
         "empty_paths": RequiredFilterPaths(),
         "expression": expression,
+        "column_default_expression": default_expression,
+        "column_generated_expression": expression,
+        "column_expression_metadata": expression_metadata,
         "sort_key": sort_key,
         "layout": layout,
         "empty_layout": TableLayout(),
@@ -297,6 +427,7 @@ def render() -> str:
         empty_dependency_snapshot=DependencySnapshot(catalog_version=0),
     )
     records.update(logical_and_macro_records())
+    records.update(constraint_records())
     encoded = {name: record.serialize_to_bytes() for name, record in records.items()}
     parameters = QueryParameters.from_batch(values.batch, mode="named")
     context = QueryEvaluationContext()

@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Annotated
@@ -12,30 +11,7 @@ from typing import Annotated
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass, ArrowType
 
-from vgi.schema_path import SchemaPath, schema_path_key
-
-
-@dataclass(frozen=True, kw_only=True)
-class SqlExpression(ArrowSerializableDataclass):
-    """Unbound scalar SQL with an explicit semantic profile and owner schema.
-
-    The receiving provider binds and evaluates the expression. A profile must
-    define its supported grammar, functions and type/NULL behavior; unknown
-    profiles are rejected before effects. No engine AST or bound plan is sent.
-    ``schema_path`` is attachment-relative, never a caller's catalog alias.
-    """
-
-    sql: str
-    profile: str
-    schema_path: SchemaPath
-
-    def __post_init__(self) -> None:
-        """Reject empty SQL, malformed profiles and invalid owner paths."""
-        if not isinstance(self.sql, str) or not self.sql.strip() or "\x00" in self.sql:
-            raise ValueError("SQL expression must be nonempty and contain no NUL")
-        if not re.fullmatch(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*\.v[1-9][0-9]*", self.profile):
-            raise ValueError("expression profile must be a versioned semantic name")
-        schema_path_key(self.schema_path)
+from vgi.catalog.sql import SqlExpression as SqlExpression
 
 
 class SortDirection(StrEnum):

@@ -15,6 +15,7 @@ from vgi_rpc.http._testing import _SyncTestClient
 
 from vgi.catalog import MacroInfo, MacroOverload, MacroParameter, MacroType, OnConflict, SchemaObjectType
 from vgi.catalog.capabilities import MACRO_OVERLOADS_CREATE, MACRO_OVERLOADS_READ, CatalogCapabilities
+from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.layout import SqlExpression
 from vgi.catalog.macros import MACRO_DEFAULT_PROFILE, MACRO_PROFILE, canonicalize_macro_defaults
 from vgi.client import Client
@@ -135,6 +136,7 @@ def family(*, expression=False):
         parameter = replace(
             parameter,
             default_expression=SqlExpression(
+                evaluation_context=QueryEvaluationContext(),
                 sql="40 + 2",
                 profile=MACRO_DEFAULT_PROFILE,
                 schema_path=["main"],
@@ -142,7 +144,12 @@ def family(*, expression=False):
         )
     return [
         MacroOverload(
-            parameters=[parameter], definition="x + 1", profile=MACRO_PROFILE, schema_path=["main"], macro_type="scalar"
+            evaluation_context=QueryEvaluationContext(),
+            parameters=[parameter],
+            definition="x + 1",
+            profile=MACRO_PROFILE,
+            schema_path=["main"],
+            macro_type="scalar",
         )
     ]
 

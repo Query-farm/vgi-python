@@ -10,6 +10,7 @@ import pyarrow as pa
 import pytest
 
 from vgi.argument_spec import macro_arguments_schema
+from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.layout import SqlExpression
 from vgi.catalog.macros import (
     MACRO_DEFAULT_PROFILE,
@@ -32,6 +33,7 @@ def literal(name="x", value=None, dtype=None, *, metadata=None):
 
 def overload(parameters=None, **changes):
     return MacroOverload(
+        evaluation_context=changes.pop("evaluation_context", QueryEvaluationContext()),
         parameters=parameters if parameters is not None else [MacroParameter(name="x")],
         definition=changes.pop("definition", "x + 1"),
         profile=MACRO_PROFILE,
@@ -61,7 +63,12 @@ def test_parameter_preserves_declared_type_and_recursive_metadata_without_infere
 
 
 def test_expression_default_and_body_keep_raw_nested_owner_and_order():
-    expression = SqlExpression(sql="40 + 2", profile=MACRO_DEFAULT_PROFILE, schema_path=["a.b", "nested"])
+    expression = SqlExpression(
+        evaluation_context=QueryEvaluationContext(),
+        sql="40 + 2",
+        profile=MACRO_DEFAULT_PROFILE,
+        schema_path=["a.b", "nested"],
+    )
     original = overload([MacroParameter(name="required"), MacroParameter(name="x", default_expression=expression)])
     copied = MacroOverload.deserialize_from_bytes(original.serialize_to_bytes())
     assert [parameter.name for parameter in copied.parameters] == ["required", "x"]
@@ -89,7 +96,9 @@ def test_invalid_parameter_contracts_reject(changes):
 
 
 def test_default_value_and_expression_cannot_coexist():
-    expression = SqlExpression(sql="NULL", profile=MACRO_DEFAULT_PROFILE, schema_path=["main"])
+    expression = SqlExpression(
+        evaluation_context=QueryEvaluationContext(), sql="NULL", profile=MACRO_DEFAULT_PROFILE, schema_path=["main"]
+    )
     with pytest.raises(ValueError, match="mutually exclusive"):
         MacroParameter(name="x", default_value=literal(), default_expression=expression)
 
@@ -98,7 +107,12 @@ def test_unknown_default_profile_rejects_before_provider_evaluation():
     with pytest.raises(ValueError, match="unsupported"):
         MacroParameter(
             name="x",
-            default_expression=SqlExpression(sql="2 + 2", profile="unknown.default.v1", schema_path=["main"]),
+            default_expression=SqlExpression(
+                evaluation_context=QueryEvaluationContext(),
+                sql="2 + 2",
+                profile="unknown.default.v1",
+                schema_path=["main"],
+            ),
         )
 
 
@@ -126,7 +140,12 @@ def test_default_expression_cannot_rebind_to_another_owner():
             [
                 MacroParameter(
                     name="x",
-                    default_expression=SqlExpression(sql="1", profile=MACRO_DEFAULT_PROFILE, schema_path=["main"]),
+                    default_expression=SqlExpression(
+                        evaluation_context=QueryEvaluationContext(),
+                        sql="1",
+                        profile=MACRO_DEFAULT_PROFILE,
+                        schema_path=["main"],
+                    ),
                 )
             ]
         )
@@ -170,10 +189,10 @@ def test_legacy_upgrade_preserves_typed_null_defaults_without_declaring_their_ty
         parameter_default_values=defaults,
         arguments_schema=macro_arguments_schema(["required", "optional"], defaults, {"optional": "optional doc"}),
     )
-    upgraded = normalize_macro_overloads(**args)
+    upgraded = normalize_macro_overloads(**args, evaluation_context=QueryEvaluationContext())
     assert all(parameter.declared_type is None for parameter in upgraded[0].parameters)
     assert upgraded[0].parameters[1].documentation == "optional doc"
-    restored = legacy_macro_fields(upgraded)
+    restored = legacy_macro_fields(upgraded, evaluation_context=QueryEvaluationContext())
     assert restored["parameter_default_values"].equals(defaults, check_metadata=True)
     assert restored["arguments_schema"].equals(args["arguments_schema"], check_metadata=True)
     assert restored["parameters"] == args["parameters"]
@@ -186,7 +205,7 @@ def test_legacy_documentation_schema_cannot_sneak_in_a_declared_type_or_drop_met
         pa.schema([pa.field("x", pa.null())], metadata={b"unknown": b"preserve"}),
     ]:
         with pytest.raises(ValueError, match="unsupported or inconsistent"):
-            normalize_macro_overloads(**args, arguments_schema=schema)
+            normalize_macro_overloads(**args, arguments_schema=schema, evaluation_context=QueryEvaluationContext())
 
 
 @pytest.mark.parametrize("kind", ["family", "declared", "expression", "empty_doc"])
@@ -203,7 +222,10 @@ def test_legacy_downgrade_fails_closed_instead_of_losing_information(kind):
                     MacroParameter(
                         name="x",
                         default_expression=SqlExpression(
-                            sql="42", profile=MACRO_DEFAULT_PROFILE, schema_path=["a.b", "nested"]
+                            evaluation_context=QueryEvaluationContext(),
+                            sql="42",
+                            profile=MACRO_DEFAULT_PROFILE,
+                            schema_path=["a.b", "nested"],
                         ),
                     )
                 ]
@@ -266,7 +288,9 @@ def test_parent_serialization_revalidates_mutated_nested_family(kind):
 def test_create_discovery_copy_resolves_default_once_with_duckdb_15():
     """A finite reference binds a known constant and stores its resolved value."""
     owner = ["main"]
-    expression = SqlExpression(sql="40 + 2", profile=MACRO_DEFAULT_PROFILE, schema_path=owner)
+    expression = SqlExpression(
+        evaluation_context=QueryEvaluationContext(), sql="40 + 2", profile=MACRO_DEFAULT_PROFILE, schema_path=owner
+    )
     family = [
         overload(
             [MacroParameter(name="x", default_expression=expression)],

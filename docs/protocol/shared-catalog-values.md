@@ -2,8 +2,8 @@
 
 The operation sections through prepared read queries describe implemented
 records and bounded reference behavior on the DuckDB 2.0 preparation branch.
-The combined-design section at the end specifies the next changes; those
-records, profiles and methods are not implemented or advertised yet. Both are
+The combined-design section distinguishes implemented SQL/constraint records
+and reference proofs from the remaining public API and execution work. Both are
 part of one combined successor contract. The published protocol is still `vgi.v2` / `2.1.0`; the
 unpublished development snapshot now carries typed schema/table options,
 layouts, raw column mutation paths, and capability negotiation. See the
@@ -340,7 +340,8 @@ flat binary parameters explicitly.
 ### Expression and layout records
 
 `SqlExpression` carries nonempty `sql`, a versioned semantic `profile`, and a raw,
-attachment-relative owner `schema_path`. The receiving provider binds the SQL
+attachment-relative owner `schema_path`, and required `evaluation_context:
+QueryEvaluationContext`. The receiving provider binds the SQL
 against the target table. No bound expression, private AST, caller catalog alias,
 or session search path crosses the wire. The owner must resolve to the target's
 schema. Profiles must define grammar, functions, types, NULLs, determinism, and
@@ -744,13 +745,59 @@ native explicit/automatic adapters and performance qualification remain open.
 
 ## Combined expression, constraint, transaction and trigger design
 
-**Design checkpoint: 2026-10-14. Status: specified for implementation and review;
-not frozen, generated, executable or advertised.** The definitions in this
+**Checkpoint: 2026-10-14. Status: SQL/context and canonical constraint records
+generated; bounded reference behavior proven; remaining APIs and profiles
+specified, not frozen or advertised.** The definitions in this
 section supersede placeholder records in the manifest and the older trigger
 proposal. They belong to the same major transition as the existing development
 changes. Engine pins and the 82-method implemented inventory remain unchanged.
-A specified shape does not close P1: the acceptance cases below still require
-reference behavior and cross-SDK qualification.
+A specified shape does not close P1. The implementation evidence below applies
+only to its stated scope; the remaining acceptance cases still require proof.
+
+### SQL and constraint implementation checkpoint
+
+`SqlExpression`, `SqlStatement`, `MacroOverload`'s required context and all six
+canonical constraint records are implemented and generated across seven SDKs.
+`CatalogObjectRef(kind="constraint")` requires an owning table and preserves
+the provider-issued key exactly. Codecs reject malformed or conflicting records;
+they do not authorize execution or prove enforcement by a provider.
+
+The durable SQLite-backed constraint reference stores Arrow rows and canonical
+records together. It proves create/read/atomic apply, immediate NOT_NULL,
+UNIQUE, PRIMARY_KEY, BOOLEAN CHECK and MATCH SIMPLE foreign keys, existing-row
+validation, exact referenced-key dependencies, schema nullability, stable keys,
+effect-sensitive revisions, rename/recreate, transaction isolation, rollback,
+reconnect and failed-publication recovery. DuckDB binds and evaluates SQL rather
+than using text matching to simulate checks. Its finite scope is top-level
+boolean, signed integer and string columns; only ENFORCED + ALL_ROWS and
+NO_ACTION/RESTRICT foreign-key actions execute. Retargeting an existing foreign
+key, nested constraints, alternate enforcement modes and broader actions reject.
+
+The shared scalar reference accepts constants, primitive casts, row columns,
+arithmetic `+ - * %`, comparisons, AND/OR/NOT, NULL tests and
+`abs/lower/upper/coalesce`, under the explicit default evaluation context.
+CHECK requires BOOLEAN; TRUE and typed NULL pass. DEFAULT rejects row references.
+Generated-column evaluation orders a finite dependency graph and rejects cycles.
+Only the existing USING adapter additionally permits its already qualified nested
+old-row references and numeric literals. Other contexts, functions and logical
+types reject. DEFAULT/generated/USING helpers prove evaluation rules; they do not
+establish a new persistent default/generated-column implementation. `SqlStatement`
+is a validated carrier only, with no new statement execution permission.
+
+The shared corpus covers all constraint kinds and mutation variants, binary
+revisions, nullable fields, raw identities, required contexts and exact expression
+IPC preserved inside column metadata across all seven SDKs (both TypeScript
+Arrow backends). Arrow metadata is UTF-8: raw IPC there failed Rust decoding, so
+the metadata encoding below uses canonical base64. Record fields typed `binary`
+continue carrying raw IPC. The native 1.5 adapter rejects these new column
+metadata namespaces recursively until their semantics are implemented.
+
+**Still pending:** replace the legacy parent constraint arrays, implement the
+public apply RPC and capability negotiation, translate new DEFAULT/USING payloads,
+implement native/provider enforcement, and qualify indexes, semantic ALTER
+dependencies, statement lifecycle, triggers and durable mutation replay. This
+checkpoint changes embedded record schemas but adds no public method and does
+not publish a version or close a release gate.
 
 ### Shared SQL definitions and evaluation phases
 
@@ -795,22 +842,24 @@ without changing meaning, or reject; cache invalidation alone is insufficient.
 | Trigger action | One profiled DML statement with explicit transition-relation scope and execution owner. It is not a scalar expression or a general remote SQL execution capability. |
 
 In the combined breaking transition, versioned Arrow field metadata keys
-`vgi.column.default.v1` and `vgi.column.generated.v1` carry single-record IPC
-`SqlExpression` values; `vgi.column.generation.v1` carries `virtual` or `stored`.
+`vgi.column.default.v1` and `vgi.column.generated.v1` carry canonical RFC 4648
+standard padded base64 ASCII of single-record IPC `SqlExpression` values;
+`vgi.column.generation.v1` carries `virtual` or `stored`. Reject raw binary,
+whitespace, noncanonical padding, invalid alphabet and oversized metadata before
+decoding; never interpret an alternative encoding by guesswork.
 The containing Arrow field remains authoritative for the logical type. Absent
 default metadata means no declared default; a SQL expression `NULL` is a
 declared default. Removal uses the existing explicit mutation, not an empty
 payload. Generated category and expression must occur together. Reject legacy
 `default`/generated metadata alongside these authoritative keys rather than
-choosing one silently. Before freeze, prove arbitrary metadata-byte preservation
-through every SDK and define the native translation of existing UTF-8 metadata.
-Existing default/USING mutation payloads change to `SqlExpression` IPC; no second
+choosing one silently. Exact decoded IPC preservation is covered by the shared
+SDK corpus; native translation of existing UTF-8 metadata remains pending.
+Existing default/USING mutation payloads will change to `SqlExpression` IPC; no second
 column-RPC family is added. CHECK and index definitions use the same record.
 
-The existing `vgi.expression.duckdb.scalar.v1` reference proves only its narrow
-arithmetic/string/NULL subset. It remains unqualified for these additional roles.
-The implementation checkpoint must publish a finite grammar/function/type matrix
-and role-specific eligibility rules before selecting broader expression profiles.
+The `vgi.expression.duckdb.scalar.v1` reference proves only the finite subset and
+roles listed in the implementation checkpoint. It does not qualify broader SQL,
+volatile defaults, stored generation, general statements or native translation.
 
 ### Canonical constraints and index definitions
 

@@ -12,6 +12,7 @@ import pytest
 from vgi_rpc.http._testing import _SyncTestClient
 
 from vgi.catalog.capabilities import COLUMN_NESTED_ADD, COLUMN_NESTED_RENAME, ROW_SCALAR_EXPRESSION, TRANSACTION_DDL
+from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.layout import LayoutChangeMode, NullOrder, SortDirection, SortKey, SqlExpression, TableLayoutChange
 from vgi.client import Client
 from vgi.column_path import column_definition, replace_column_field
@@ -177,7 +178,12 @@ def test_metadata_edits_preserve_existing_future_write_partitions(backend: Colum
                 mode=LayoutChangeMode.FUTURE_WRITES,
                 sorted_by=[
                     SortKey(
-                        expression=SqlExpression(sql="id", profile=ROW_SCALAR_EXPRESSION, schema_path=["main"]),
+                        expression=SqlExpression(
+                            evaluation_context=QueryEvaluationContext(),
+                            sql="id",
+                            profile=ROW_SCALAR_EXPRESSION,
+                            schema_path=["main"],
+                        ),
                         direction=SortDirection.DESC,
                         null_order=NullOrder.LAST,
                     ).serialize_to_bytes()

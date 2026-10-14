@@ -35,6 +35,7 @@ from vgi.catalog.capabilities import (
     ROW_SCALAR_EXPRESSION,
     CatalogCapabilities,
 )
+from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.layout import SqlExpression
 from vgi.column_path import column_definition, column_path_key, replace_column_field, resolve_column_path
 from vgi.worker import Worker
@@ -65,7 +66,14 @@ def _eval(
     with duckdb.connect(config={"enable_external_access": False}) as connection:
         if schema is not None:
             connection.register("input_data", pa.Table.from_pylist(rows or [], schema=schema))
-        _validate_expression(connection, SqlExpression(sql=sql, profile=ROW_SCALAR_EXPRESSION, schema_path=path), path)
+        _validate_expression(
+            connection,
+            SqlExpression(
+                evaluation_context=QueryEvaluationContext(), sql=sql, profile=ROW_SCALAR_EXPRESSION, schema_path=path
+            ),
+            path,
+            role="using" if schema is not None else "default",
+        )
         query = f"SELECT ({sql}) AS v" + (" FROM input_data" if schema is not None else "")
         return connection.execute(query).to_arrow_table().column(0).combine_chunks()
 

@@ -46,10 +46,13 @@ class CatalogObjectRef(_DependencyRecord):
     """A resolved object in this attachment, without a client catalog alias.
 
     For a schema, schema_path names its parents and name is its final component.
-    Other objects use their owning schema path. Only table-owned triggers have
-    owner_table. Names are raw components; a provider returns canonical spelling
-    and resolves request identifiers according to its declared name policy.
+    Other objects use their owning schema path. Table-owned triggers and
+    constraints require owner_table. Names are raw components; a provider
+    returns canonical spelling and resolves request identifiers according to
+    its declared name policy.
     Function and macro references identify the complete overload family.
+    For constraints, name is a persisted provider-issued logical key compared
+    exactly, never a SQL label or engine OID; declared-name changes retain it.
     """
 
     kind: str
@@ -73,6 +76,7 @@ class CatalogObjectRef(_DependencyRecord):
             "table_function",
             "window_function",
             "trigger",
+            "constraint",
         }:
             raise ValueError("unknown catalog object kind")
         if not isinstance(self.schema_path, list):
@@ -81,10 +85,10 @@ class CatalogObjectRef(_DependencyRecord):
             raise ValueError("non-schema objects require an owning schema")
         for component in [*self.schema_path, self.name]:
             _identifier(component)
-        if self.kind == "trigger":
+        if self.kind in {"trigger", "constraint"}:
             _identifier(self.owner_table)
         elif self.owner_table is not None:
-            raise ValueError("only triggers have a table-owned namespace")
+            raise ValueError("only triggers and constraints have a table-owned namespace")
 
     def key(self) -> tuple[str, tuple[str, ...], str, str]:
         """Return the full resolved identity, retaining component boundaries."""

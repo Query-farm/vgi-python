@@ -18,6 +18,7 @@ from vgi_rpc import ArrowSerializableDataclass, ArrowType
 from vgi_rpc.utils import IpcValidation
 
 from vgi.argument_spec import macro_arguments_schema, macro_parameter_docs_from_schema
+from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.layout import SqlExpression
 from vgi.schema_path import SchemaPath, schema_path_key
 from vgi.typed_values import TypedValueBatch
@@ -138,6 +139,7 @@ class MacroOverload(_MacroRecord):
     profile: str
     schema_path: SchemaPath
     macro_type: str
+    evaluation_context: QueryEvaluationContext
 
     def __post_init__(self) -> None:
         """Validate declaration ordering and the selected semantic profile."""
@@ -145,6 +147,9 @@ class MacroOverload(_MacroRecord):
             raise ValueError("macro_type must be scalar or table")
         if self.profile != MACRO_PROFILE:
             raise ValueError("unsupported macro definition profile")
+        if not isinstance(self.evaluation_context, QueryEvaluationContext):
+            raise TypeError("macro overload requires an explicit evaluation context")
+        self.evaluation_context.__post_init__()
         schema_path_key(self.schema_path)
         if len(self.schema_path) > 32:
             raise ValueError("macro owner schema is too deep")
@@ -174,6 +179,11 @@ class MacroOverload(_MacroRecord):
                 and parameter.default_expression.schema_path != self.schema_path
             ):
                 raise ValueError("macro default expression must use its overload owner schema")
+            if (
+                parameter.default_expression is not None
+                and parameter.default_expression.evaluation_context != self.evaluation_context
+            ):
+                raise ValueError("macro default expression must use its overload evaluation context")
 
 
 def validate_macro_overloads(
@@ -214,6 +224,7 @@ def normalize_macro_overloads(
     parameter_default_values: pa.RecordBatch | None = None,
     arguments_schema: pa.Schema | None = None,
     overloads: list[MacroOverload] | None = None,
+    evaluation_context: QueryEvaluationContext | None = None,
 ) -> list[MacroOverload]:
     """Upgrade a legacy definition without inventing declared parameter types.
 
@@ -232,6 +243,8 @@ def normalize_macro_overloads(
     )
     if overloads is not None:
         return [MacroOverload.deserialize_from_bytes(item.serialize_to_bytes()) for item in overloads]
+    if not isinstance(evaluation_context, QueryEvaluationContext):
+        raise ValueError("legacy macro upgrade requires the owner's evaluation context")
     if parameter_default_values is not None:
         TypedValueBatch(parameter_default_values)
         if any(name not in parameters for name in parameter_default_values.schema.names):
@@ -242,6 +255,7 @@ def normalize_macro_overloads(
     ):
         raise ValueError("legacy arguments_schema has unsupported or inconsistent documentation metadata")
     result = MacroOverload(
+        evaluation_context=evaluation_context,
         macro_type=macro_type,
         schema_path=list(schema_path),
         profile=MACRO_PROFILE,
@@ -260,7 +274,9 @@ def normalize_macro_overloads(
     return [result]
 
 
-def legacy_macro_fields(overloads: list[MacroOverload]) -> dict[str, Any]:
+def legacy_macro_fields(
+    overloads: list[MacroOverload], *, evaluation_context: QueryEvaluationContext | None = None
+) -> dict[str, Any]:
     """Return a lossless legacy definition, or reject unsupported information.
 
     This compatibility helper never chooses the first overload, evaluates an
@@ -270,6 +286,8 @@ def legacy_macro_fields(overloads: list[MacroOverload]) -> dict[str, Any]:
         raise ValueError("legacy macros cannot represent multiple overloads")
     overload = overloads[0]
     overload.__post_init__()
+    if evaluation_context != overload.evaluation_context:
+        raise ValueError("legacy macros require a matching explicit destination evaluation context")
     if any(parameter.declared_type is not None for parameter in overload.parameters):
         raise ValueError("legacy macros cannot represent declared parameter types")
     if any(parameter.default_expression is not None for parameter in overload.parameters):

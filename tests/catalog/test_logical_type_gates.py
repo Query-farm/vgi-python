@@ -10,6 +10,7 @@ import pytest
 
 from vgi.catalog.capabilities import MACRO_OVERLOADS_READ, CatalogCapabilities
 from vgi.catalog.catalog_interface import MacroInfo, MacroType, OnConflict, TableInfo
+from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.macros import MACRO_PROFILE, MacroOverload, MacroParameter
 from vgi.exceptions import CatalogCapabilityError
 from vgi.logical_types import tuple_field, variant_field
@@ -48,6 +49,7 @@ def macro(parameter=None, *, legacy=False):
         if legacy
         else [
             MacroOverload(
+                evaluation_context=QueryEvaluationContext(),
                 parameters=[parameter],
                 definition="x",
                 profile=MACRO_PROFILE,

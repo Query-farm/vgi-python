@@ -17,6 +17,7 @@ from vgi.catalog.capabilities import (
     TRANSACTION_DDL,
 )
 from vgi.catalog.catalog_interface import OnConflict, SchemaObjectType
+from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.layout import (
     LayoutChangeMode,
     LayoutCoverage,
@@ -66,7 +67,12 @@ def attach(c: Client, offer: ClientCapabilities | None = OFFER) -> Any:
 
 
 def expr(sql: str, path: list[str] | None = None) -> SqlExpression:
-    return SqlExpression(sql=sql, profile=ROW_SCALAR_EXPRESSION, schema_path=path or ["main"])
+    return SqlExpression(
+        evaluation_context=QueryEvaluationContext(),
+        sql=sql,
+        profile=ROW_SCALAR_EXPRESSION,
+        schema_path=path or ["main"],
+    )
 
 
 def sort(sql: str, direction: SortDirection = SortDirection.DESC, nulls: NullOrder = NullOrder.LAST) -> bytes:

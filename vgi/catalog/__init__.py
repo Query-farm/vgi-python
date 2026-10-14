@@ -42,6 +42,20 @@ from vgi.catalog.catalog_interface import (
     deserialize_column_statistics,
     serialize_column_statistics,
 )
+from vgi.catalog.constraints import (
+    ConstraintChange,
+    ConstraintDefinition,
+    ConstraintEnforcement,
+    ConstraintInfo,
+    ConstraintKind,
+    ConstraintOperation,
+    ConstraintsApplyRequest,
+    ConstraintSnapshot,
+    ConstraintValidation,
+    ForeignKeyDefinition,
+    ForeignKeyMatch,
+    ReferentialAction,
+)
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot, ObjectDependency
 from vgi.catalog.descriptors import Catalog, ForeignKeyDef, Index, Macro, Schema, Sql, Table, View
 from vgi.catalog.macros import MacroOverload, MacroParameter
@@ -56,10 +70,27 @@ from vgi.catalog.query import (
 )
 from vgi.catalog.secret_type import SecretTypeSpec
 from vgi.catalog.setting import Setting, SettingSpec
+from vgi.catalog.sql import ColumnExpressions, SqlStatement, column_expressions, with_column_expressions
 from vgi.catalog.storage import CatalogStorage, CatalogStorageSqlite
 from vgi.write_results import WriteOperation, WriteResultMode, write_changes_batch, write_result_schema
 
 __all__ = [
+    "ConstraintChange",
+    "ConstraintDefinition",
+    "ConstraintEnforcement",
+    "ConstraintInfo",
+    "ConstraintKind",
+    "ConstraintOperation",
+    "ConstraintsApplyRequest",
+    "ConstraintSnapshot",
+    "ConstraintValidation",
+    "ForeignKeyDefinition",
+    "ForeignKeyMatch",
+    "ReferentialAction",
+    "ColumnExpressions",
+    "SqlStatement",
+    "column_expressions",
+    "with_column_expressions",
     "CatalogQueryPrepareRequest",
     "CatalogQueryPrepareResult",
     "ClientQueryCapabilities",

@@ -9,7 +9,6 @@ authentication, malformed data and backend failures remain errors.
 
 from __future__ import annotations
 
-import hashlib
 import re
 from dataclasses import dataclass, field, replace
 from typing import Any, Self, cast
@@ -19,6 +18,7 @@ from vgi_rpc import ArrowSerializableDataclass
 from vgi_rpc.utils import IpcValidation
 
 from vgi.catalog.dependencies import CatalogObjectRef
+from vgi.catalog.evaluation_context import QueryEvaluationContext as QueryEvaluationContext
 from vgi.query_parameters import read_parameter_schema
 from vgi.typed_values import TypedValueBatch
 
@@ -99,53 +99,6 @@ class _QueryRecord(ArrowSerializableDataclass):
         if len(result) > MAX_QUERY_REQUEST_BYTES:
             raise ValueError("query record is too large")
         return result
-
-
-@dataclass(frozen=True, kw_only=True)
-class QueryEvaluationContext(_QueryRecord):
-    """The complete versioned set of query-evaluation settings on the wire."""
-
-    timezone: str = "UTC"
-    collation: str = "binary"
-    default_order: str = "asc"
-    default_null_order: str = "nulls_last"
-    preserve_insertion_order: bool = True
-
-    def __post_init__(self) -> None:
-        """Reject unknown enum values; providers certify supported contexts."""
-        _text(self.timezone, "query timezone", maximum=256)
-        _text(self.collation, "query collation", maximum=256)
-        if self.default_order not in {"asc", "desc"}:
-            raise ValueError("unknown default query order")
-        if self.default_null_order not in {
-            "nulls_first",
-            "nulls_last",
-            "nulls_first_on_asc_last_on_desc",
-            "nulls_last_on_asc_first_on_desc",
-        }:
-            raise ValueError("unknown default NULL order")
-        if type(self.preserve_insertion_order) is not bool:
-            raise ValueError("preserve_insertion_order must be a boolean")
-
-    def digest(self, encoding: str, semantic_profile: str) -> bytes:
-        """Hash the documented length-prefixed UTF-8 fields, independently of IPC."""
-        self.__post_init__()
-        _text(encoding, "query encoding", maximum=256)
-        _text(semantic_profile, "query profile", maximum=256)
-        payload = bytearray(b"vgi.query.context.v1\0")
-        for value in [
-            encoding,
-            semantic_profile,
-            self.timezone,
-            self.collation,
-            self.default_order,
-            self.default_null_order,
-        ]:
-            encoded = value.encode("utf-8")
-            payload.extend(len(encoded).to_bytes(4, "big"))
-            payload.extend(encoded)
-        payload.append(int(self.preserve_insertion_order))
-        return hashlib.sha256(payload).digest()
 
 
 @dataclass(frozen=True, kw_only=True)

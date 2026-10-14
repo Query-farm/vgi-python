@@ -39,6 +39,14 @@ from vgi.catalog.catalog_interface import (
     TableInfo,
     ViewInfo,
 )
+from vgi.catalog.constraints import (
+    ConstraintChange,
+    ConstraintDefinition,
+    ConstraintInfo,
+    ConstraintsApplyRequest,
+    ConstraintSnapshot,
+    ForeignKeyDefinition,
+)
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot, ObjectDependency
 from vgi.catalog.layout import SortKey, SqlExpression, TableLayout, TableLayoutChange
 from vgi.catalog.macros import MacroOverload, MacroParameter
@@ -52,6 +60,7 @@ from vgi.catalog.query import (
     QueryEvaluationContext,
     QueryObjectReference,
 )
+from vgi.catalog.sql import SqlStatement
 from vgi.column_path import RequiredFilterPaths
 from vgi.invocation import GlobalInitResponse
 from vgi.protocol import (
@@ -122,6 +131,13 @@ SHARED_CONTRACT_TYPES: tuple[type, ...] = (
     DependencySnapshot,
     OptionDefinitions,
     SqlExpression,
+    SqlStatement,
+    ForeignKeyDefinition,
+    ConstraintDefinition,
+    ConstraintInfo,
+    ConstraintChange,
+    ConstraintSnapshot,
+    ConstraintsApplyRequest,
     SortKey,
     TableLayout,
     TableLayoutChange,

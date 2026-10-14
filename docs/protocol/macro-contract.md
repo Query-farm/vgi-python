@@ -37,9 +37,9 @@ remain those of the macro create RPC.
 ## Field definitions
 
 The [combined expression design](shared-catalog-values.md#shared-sql-definitions-and-evaluation-phases)
-proposes required evaluation context on `SqlExpression` and `MacroOverload` for
-this same successor release. That change is not yet implemented in the records
-below. CREATE-time default folding and literal-default discovery remain unchanged;
+requires evaluation context on `SqlExpression` and `MacroOverload` for
+this same successor release. Both records and all generated SDKs now carry it.
+CREATE-time default folding and literal-default discovery remain unchanged;
 the new context must not turn defaults into invocation-time expressions.
 
 `MacroOverload` contains:
@@ -51,6 +51,7 @@ the new context must not turn defaults into invocation-time expressions.
 | `profile` | `duckdb.macro.v1`; unknown profiles fail before catalog mutation. |
 | `schema_path` | Raw attachment-relative identifier components of the owning schema. A name containing a dot remains one component. No client catalog alias or implicit search-path substitution. |
 | `macro_type` | Exactly `scalar` or `table`. |
+| `evaluation_context` | Required inline `QueryEvaluationContext`; each supplied default expression must have the same context and raw owner schema as its body. |
 
 `MacroParameter` contains:
 
@@ -124,7 +125,8 @@ exclusive legacy/new representations. It leaves `overloads = NULL` on the
 existing legacy path.
 
 `normalize_macro_overloads` upgrades a legacy definition without inferring
-declared parameter types from `arguments_schema`. That schema's existing types
+declared parameter types from `arguments_schema`; callers must supply the
+explicit owner evaluation context. That schema's existing types
 describe literal defaults; its `vgi_doc` metadata carries documentation. Unknown
 or inconsistent legacy metadata is rejected rather than discarded. New
 collections are copied through the actual wire codec to isolate stored state
@@ -132,6 +134,7 @@ from later caller list mutation.
 
 `legacy_macro_fields` permits conversion back only when there is one untyped
 overload with literal defaults and fully representable documentation/metadata.
+The destination evaluation context must match the overload's context.
 It rejects multiple overloads, declared parameter types, expression defaults,
 and other loss of information. It never evaluates a default or renders an
 Arrow value as a SQL string.
