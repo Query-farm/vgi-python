@@ -74,6 +74,7 @@ from vgi.catalog import (
     ViewInfo,
 )
 from vgi.catalog.catalog_interface import deserialize_column_statistics
+from vgi.catalog.dependencies import DependencySnapshot
 from vgi.catalog.layout import TableLayout, TableLayoutChange
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions
@@ -465,6 +466,15 @@ class CatalogClientMixin:
                 attach_opaque_data=attach_opaque_data,
                 transaction_opaque_data=transaction_opaque_data,
             ).version
+
+    def catalog_dependencies(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None = None
+    ) -> DependencySnapshot:
+        """Read a complete transaction-visible graph under its selected read profile."""
+        with self._catalog_connect() as proxy:
+            return proxy.catalog_dependencies(
+                attach_opaque_data=attach_opaque_data, transaction_opaque_data=transaction_opaque_data
+            )
 
     # ========== Transaction Methods ==========
 

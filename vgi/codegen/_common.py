@@ -39,6 +39,7 @@ from vgi.catalog.catalog_interface import (
     TableInfo,
     ViewInfo,
 )
+from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot, ObjectDependency
 from vgi.catalog.layout import SortKey, SqlExpression, TableLayout, TableLayoutChange
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
@@ -99,6 +100,9 @@ INFO_TYPES: tuple[type, ...] = (
 SHARED_CONTRACT_TYPES: tuple[type, ...] = (
     CatalogCapabilities,
     CatalogMetadataChanges,
+    CatalogObjectRef,
+    ObjectDependency,
+    DependencySnapshot,
     OptionDefinitions,
     SqlExpression,
     SortKey,

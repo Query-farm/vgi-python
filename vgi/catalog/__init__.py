@@ -42,6 +42,7 @@ from vgi.catalog.catalog_interface import (
     deserialize_column_statistics,
     serialize_column_statistics,
 )
+from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot, ObjectDependency
 from vgi.catalog.descriptors import Catalog, ForeignKeyDef, Index, Macro, Schema, Sql, Table, View
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.secret_type import SecretTypeSpec
@@ -50,6 +51,9 @@ from vgi.catalog.storage import CatalogStorage, CatalogStorageSqlite
 from vgi.write_results import WriteOperation, WriteResultMode, write_changes_batch, write_result_schema
 
 __all__ = [
+    "CatalogObjectRef",
+    "DependencySnapshot",
+    "ObjectDependency",
     "CatalogMetadataChanges",
     # Type aliases
     "AttachOpaqueData",

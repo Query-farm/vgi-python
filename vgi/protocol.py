@@ -66,6 +66,7 @@ from vgi.catalog.catalog_interface import (
     TableInfo,
     ViewInfo,
 )
+from vgi.catalog.dependencies import DependencySnapshot
 from vgi.catalog.layout import TableLayout
 from vgi.catalog.options import OptionDefinitions
 from vgi.filter_v2 import delta_revisions, replaying_accepted_state
@@ -3544,6 +3545,12 @@ class VgiProtocol(Protocol):
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Atomically SET/RESET schema options under the selected capability."""
+        ...
+
+    def catalog_dependencies(
+        self, attach_opaque_data: bytes, transaction_opaque_data: bytes | None = None
+    ) -> DependencySnapshot:
+        """Read a complete dependency graph under vgi.catalog.dependencies.read.v1."""
         ...
 
     def catalog_schema_drop(

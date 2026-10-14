@@ -42,6 +42,7 @@ from vgi.arguments import Arguments, SecretLookupEntry
 from vgi.catalog.capabilities import (
     CatalogCapabilities,
 )
+from vgi.catalog.dependencies import DependencySnapshot
 from vgi.catalog.layout import TableLayout, TableLayoutChange
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
@@ -2085,6 +2086,17 @@ class CatalogInterface(ABC):
     ) -> None:
         """Validate and apply the entire SET/RESET operation atomically."""
         raise NotImplementedError("Schema option alteration not implemented.")
+
+    def catalog_dependencies(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None
+    ) -> DependencySnapshot:
+        """Return a complete authoritative graph from one transaction snapshot.
+
+        Do not omit inaccessible dependencies to make the graph appear complete.
+        Reject this read when policy prevents disclosure; mutations still enforce
+        all dependencies. Discovery does not reserve or authorize later changes.
+        """
+        raise NotImplementedError("Catalog dependency discovery not implemented.")
 
     def schema_drop(
         self,

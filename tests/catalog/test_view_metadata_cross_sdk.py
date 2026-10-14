@@ -13,7 +13,7 @@ from dataclasses import replace
 import pytest
 
 from vgi.catalog import CatalogMetadataChanges, OnConflict, SchemaObjectType
-from vgi.catalog.capabilities import SCHEMA_METADATA_ALTER, CatalogCapabilities
+from vgi.catalog.capabilities import CATALOG_DEPENDENCIES_READ, SCHEMA_METADATA_ALTER, CatalogCapabilities
 from vgi.client import Client
 from vgi.protocol import ClientCapabilities
 
@@ -148,4 +148,32 @@ def test_unqualified_provider_rejects_schema_metadata_mutation(sdk: str) -> None
                 **target, changes=CatalogMetadataChanges(set_comment=True, comment="bad", set_tags={"a": "bad"})
             )
         assert client.schema_get(**target) == before
+        assert client.catalog_version(attach_opaque_data=token) == version
+
+
+@pytest.mark.parametrize("sdk", sorted(WORKERS))
+def test_unqualified_provider_rejects_dependency_discovery(sdk: str) -> None:
+    offer = ClientCapabilities(
+        engine="reference-client",
+        native_formats=[],
+        catalogs=[],
+        can_stream=False,
+        filter_encodings=[],
+        catalog=CatalogCapabilities(read=[CATALOG_DEPENDENCIES_READ]),
+    )
+    with Client(server_path=WORKERS[sdk], worker_limit=1) as client:
+        attached = client.catalog_attach(
+            name="contents_reval", data_version_spec=None, implementation_version=None, client_capabilities=offer
+        )
+        assert (
+            attached.selected_capabilities is None
+            or CATALOG_DEPENDENCIES_READ not in attached.selected_capabilities.names()
+        )
+        token = attached.attach_opaque_data
+        version = client.catalog_version(attach_opaque_data=token)
+        with pytest.raises(
+            Exception,
+            match="(?i)not implemented|unimplemented|not supported|does not support|requires.*vgi.catalog.dependencies",
+        ):
+            client.catalog_dependencies(attach_opaque_data=token)
         assert client.catalog_version(attach_opaque_data=token) == version

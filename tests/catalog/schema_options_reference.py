@@ -330,7 +330,7 @@ class SchemaOptionsCatalog(ReadOnlyCatalogInterface):
                 return
             if previous != "open":
                 raise ValueError("transaction is no longer open")
-            if status == "committed":
+            if status == "committed" and version != base:
                 current = db.execute("SELECT version FROM catalog WHERE id=1").fetchone()[0]
                 if current != base:
                     raise ValueError("transaction conflict")

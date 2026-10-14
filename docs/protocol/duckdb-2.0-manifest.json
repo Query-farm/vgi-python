@@ -12,7 +12,7 @@
       "Overload collections replacing single macro definitions"
     ],
     "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
-    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation",
+    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery",
     "version_requirement": "Retaining the raw-path migration requires a major version and matching routing name. Complete the combined diff and migration guide before freeze."
   },
   "sources": {
@@ -32,7 +32,21 @@
     "mutation": "Whole-operation validation, worker authority, coherent transactions and metadata/dependency updates. Durable operation identity is required for replay.",
     "rollout": "Use versioned endpoints/processes with draining; prove transaction/reconnect and downgrade behavior. The existing dispatcher cannot host two versions under one protocol name.",
     "column_paths": "Nine existing column RPCs use raw component paths, with per-operation nested DDL profiles and one-component 1.5 adapter targets. TableInfo.required_filters now uses AND-of-OR raw component paths across SDKs and the native 1.5 optimizer; native 2.0 integration remains open.",
-    "metadata_changes": "CatalogMetadataChanges: explicit comment presence plus literal string tag SET/REMOVE, atomic whole-patch validation, effect-sensitive versions/etags. Shared record; first negotiated operation is catalog_schema_alter_metadata."
+    "metadata_changes": "CatalogMetadataChanges: explicit comment presence plus literal string tag SET/REMOVE, atomic whole-patch validation, effect-sensitive versions/etags. Shared record; first negotiated operation is catalog_schema_alter_metadata.",
+    "dependencies": {
+      "records": [
+        "CatalogObjectRef",
+        "ObjectDependency",
+        "DependencySnapshot"
+      ],
+      "method": "catalog_dependencies",
+      "authority": "Provider-resolved complete graph in one transaction snapshot; mutations revalidate and authorize atomically.",
+      "profiles": {
+        "read": "vgi.catalog.dependencies.read.v1",
+        "schema_ddl": "vgi.schema.lifecycle.v1"
+      },
+      "status": "reference_implemented_full_provider_coverage_pending"
+    }
   },
   "areas": {
     "capabilities": {
@@ -144,6 +158,16 @@
             "tests/catalog/test_view_metadata_cross_sdk.py"
           ],
           "limits": "Python durable HTTP reference supplies qualified metadata mutation. Other SDKs have matching records/requests and explicit unsupported paths; production provider implementations and full SDK negotiation remain pending. Native schema-comment SQL is rejected by both inspected engine pins."
+        },
+        {
+          "status": "dependency_aware_schema_lifecycle_reference_implemented",
+          "sources": [
+            "tests/catalog/dependencies_reference.py",
+            "tests/catalog/test_dependencies_protocol.py",
+            "native:test/sql/duckdb2/schema_dependencies.test",
+            "native:src/storage/vgi_transaction.cpp"
+          ],
+          "limits": "Native 1.5 and durable Python reference qualification; production providers and native 2.0 remain open."
         }
       ]
     },
@@ -394,7 +418,8 @@
         "CatalogObjectRef",
         "ObjectDependency",
         "MetadataPatch",
-        "MetadataSnapshot"
+        "MetadataSnapshot",
+        "DependencySnapshot"
       ],
       "existing_methods": [
         "catalog_version",
@@ -404,7 +429,8 @@
         "catalog_view_drop"
       ],
       "new_methods": [
-        "catalog_object_metadata_set"
+        "catalog_object_metadata_set",
+        "catalog_dependencies"
       ],
       "scope": [
         "Shared qualified object references; explicit ownership/drop/alter dependency semantics; mutation visibility and metadata-version rules",
@@ -416,7 +442,19 @@
         "P2",
         "P3"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "status": "dependency_graph_and_schema_lifecycle_reference_implemented",
+          "sources": [
+            "vgi/catalog/dependencies.py",
+            "tests/catalog/dependencies_reference.py",
+            "tests/catalog/test_dependencies.py",
+            "tests/catalog/test_dependencies_protocol.py",
+            "docs/protocol/shared-catalog-values.md"
+          ],
+          "limits": "Schema/table/simple-view authority and shared ownership planner only. Broader object-kind enforcement, rename policy, cross-attachment authority and production SDK providers remain pending."
+        }
+      ]
     },
     "transactions": {
       "title": "Transactions and write replay",
@@ -858,7 +896,18 @@
       "disposition": "include",
       "target": "ObjectDependency",
       "status": "pending_contract_review",
-      "evidence": []
+      "evidence": [
+        {
+          "status": "dependency_reference_and_native_15_evidence",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md",
+            "tests/catalog/test_dependencies.py",
+            "tests/catalog/test_dependencies_protocol.py",
+            "native:test/sql/duckdb2/schema_dependencies.test"
+          ],
+          "limits": "Shared dependency identities/planning and the durable schema/table/simple-view reference are implemented. Native 1.5 qualifies schema lifecycle and transaction cache isolation. General rename/alter dependency authority, production SDK implementations, contract freeze and native 2.0 remain pending."
+        }
+      ]
     },
     {
       "id": "audit-065",
@@ -1000,7 +1049,18 @@
       "disposition": "include",
       "target": "ObjectDependency",
       "status": "pending_contract_review",
-      "evidence": []
+      "evidence": [
+        {
+          "status": "dependency_reference_and_native_15_evidence",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md",
+            "tests/catalog/test_dependencies.py",
+            "tests/catalog/test_dependencies_protocol.py",
+            "native:test/sql/duckdb2/schema_dependencies.test"
+          ],
+          "limits": "Shared dependency identities/planning and the durable schema/table/simple-view reference are implemented. Native 1.5 qualifies schema lifecycle and transaction cache isolation. General rename/alter dependency authority, production SDK implementations, contract freeze and native 2.0 remain pending."
+        }
+      ]
     },
     {
       "id": "audit-100",
@@ -1045,7 +1105,18 @@
       "disposition": "existing_contract",
       "target": "SchemaCreateRequest.on_conflict",
       "status": "pending_contract_review",
-      "evidence": []
+      "evidence": [
+        {
+          "status": "dependency_reference_and_native_15_evidence",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md",
+            "tests/catalog/test_dependencies.py",
+            "tests/catalog/test_dependencies_protocol.py",
+            "native:test/sql/duckdb2/schema_dependencies.test"
+          ],
+          "limits": "Shared dependency identities/planning and the durable schema/table/simple-view reference are implemented. Native 1.5 qualifies schema lifecycle and transaction cache isolation. General rename/alter dependency authority, production SDK implementations, contract freeze and native 2.0 remain pending."
+        }
+      ]
     },
     {
       "id": "audit-103",
@@ -1131,7 +1202,18 @@
       "disposition": "existing_contract",
       "target": "catalog_schema_drop.path/ignore_not_found/cascade",
       "status": "pending_contract_review",
-      "evidence": []
+      "evidence": [
+        {
+          "status": "dependency_reference_and_native_15_evidence",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md",
+            "tests/catalog/test_dependencies.py",
+            "tests/catalog/test_dependencies_protocol.py",
+            "native:test/sql/duckdb2/schema_dependencies.test"
+          ],
+          "limits": "Shared dependency identities/planning and the durable schema/table/simple-view reference are implemented. Native 1.5 qualifies schema lifecycle and transaction cache isolation. General rename/alter dependency authority, production SDK implementations, contract freeze and native 2.0 remain pending."
+        }
+      ]
     },
     {
       "id": "audit-125",
@@ -4511,6 +4593,217 @@
       "java": "9b043369555dd1c59153ab48f2fee0b2234417a4",
       "csharp": "135f12867ee82b3ae2b811cd6eb5a4e88c1c134d",
       "cpp": "ada9c1394b84ab62d203fccdc30593c6f105837f"
+    }
+  },
+  "dependency_lifecycle_validation": {
+    "status": "reference_and_shared_codecs_qualified_on_duckdb_15",
+    "engine_revision": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "haybarn_2_source_revision": "e1784fa4231072d7152b8aaa20977bdb8ff4ace3",
+    "protocol_method_count": 80,
+    "protocol_hash": "e23f22d5fcbbc06ad977a3719414ed8a741b2ddf268ab0d536807611e73182fe",
+    "ec2_workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+    "contract": [
+      "Raw canonical attachment-relative identities preserve schema components, object kind and trigger owner; no client aliases or engine IDs.",
+      "Complete versioned graph reads require selected/current support, authenticate attachment and transaction ownership, and do not reserve later mutation rights.",
+      "RESTRICT computes owned closure before checking blockers; CASCADE follows all edges, handles reference cycles, and authorizes every affected object before effects.",
+      "Schema REPLACE is an atomic non-cascading drop/create; descendants and dependent objects block it.",
+      "Provider state, metadata and versions survive malformed requests, authorization errors and injected failures after the SQLite UPDATE.",
+      "Independent clients, durable transaction snapshots, reconnects, rollback, commit and concurrent-write conflicts retain one authoritative graph.",
+      "Mutable native worker transactions own their schema/object caches; committed catalog_contents cannot seed them; commit/rollback retain bound entries without sharing snapshot metadata.",
+      "Native schema/table/view CASCADE invalidates caches across schemas; nontransactional workers and catalog_version_frozen attachments retain shared catalog caching."
+    ],
+    "checks": {
+      "python_catalog_and_codegen": {
+        "passed": 844,
+        "skipped": 4,
+        "skip_reason": "External-worker parametrizations require VGI_METADATA_WORKERS; the separately configured run passes all 29 checks."
+      },
+      "public_rpc_cross_sdk": {
+        "passed": 29,
+        "sdk_count": 7
+      },
+      "native_schema_lifecycle": {
+        "test_cases": 1,
+        "assertions": 42
+      },
+      "mypy": {
+        "sources": 212
+      },
+      "ruff": "passed",
+      "native_build": "passed",
+      "native_reference": {
+        "test_cases": 3,
+        "assertions": 218
+      },
+      "go": {
+        "packages": 13,
+        "failures": 0
+      },
+      "rust": {
+        "passed": 488,
+        "failed": 0,
+        "ignored": 4
+      },
+      "typescript": {
+        "passed": 608,
+        "skipped": 68,
+        "bundle_entries": 4
+      },
+      "java": {
+        "passed": 664,
+        "skipped": 2,
+        "failures": 0,
+        "errors": 0
+      },
+      "csharp": {
+        "passed": 608,
+        "failed": 0
+      },
+      "cpp": {
+        "ctests_passed": 68
+      },
+      "flechette_codec": {
+        "passed": 10
+      },
+      "all_sdk_generation": "passed",
+      "manifest_corpus_inventory_registry": {
+        "passed": 53
+      },
+      "native_schema_create_copy_cache": {
+        "sdk_count": 7,
+        "test_cases_per_sdk": 1,
+        "assertions_per_sdk": 99
+      },
+      "native_full_suites": {
+        "python": {
+          "passed": 344,
+          "skipped": 33,
+          "additional_crash_checks": 2
+        },
+        "go": {
+          "passed": 338,
+          "skipped": 40
+        },
+        "rust": {
+          "passed": 325,
+          "skipped": 42
+        },
+        "typescript": {
+          "passed": 330,
+          "skipped": 46
+        },
+        "java": {
+          "passed": 324,
+          "skipped": 37,
+          "additional_crash_checks": 2
+        },
+        "csharp": {
+          "passed": 330,
+          "skipped": 37
+        },
+        "cpp": {
+          "test_cases": 326,
+          "assertions": 12100,
+          "skipped": 47,
+          "additional_bearer_cases": 2,
+          "additional_bearer_assertions": 13
+        }
+      },
+      "source_verification": {
+        "repositories": 15,
+        "files": 33030,
+        "errors": 0
+      }
+    },
+    "requirement_evidence": {
+      "Raw identities and malformed graph validation": [
+        "tests/catalog/test_dependencies.py",
+        "conformance/catalog-contracts.json: object_ref, trigger_ref, object_dependency, dependency_snapshot, empty_dependency_snapshot"
+      ],
+      "Atomic RESTRICT/REPLACE/CASCADE including outside-schema views": [
+        "tests/catalog/test_dependencies_protocol.py::test_restrict_replace_cascade_and_literal_paths_are_atomic"
+      ],
+      "Transaction lifecycle and reconnect": [
+        "tests/catalog/test_dependencies_protocol.py::test_transaction_visibility_rollback_commit_and_reconnect"
+      ],
+      "Authoritative recheck, concurrent writers and read-only snapshots": [
+        "tests/catalog/test_dependencies_protocol.py::test_discovery_does_not_reserve_or_authorize_a_later_drop"
+      ],
+      "Authorization and rollback of a failure after storage mutation": [
+        "tests/catalog/test_dependencies_protocol.py::test_failed_cascade_preserves_all_metadata_and_versions"
+      ],
+      "Sealed routing, capability withdrawal and transaction ownership": [
+        "tests/catalog/test_dependencies_protocol.py::test_capability_lifecycle_guarantees_ownership_and_routing"
+      ],
+      "Unsupported SDK providers": [
+        "tests/catalog/test_view_metadata_cross_sdk.py::test_unqualified_provider_rejects_dependency_discovery"
+      ],
+      "Native transaction-local schema visibility and concurrent isolation": [
+        "native:test/sql/duckdb2/schema_dependencies.test",
+        "native:test/run_dependencies.py",
+        "native:make test_dependencies"
+      ],
+      "Upstream nested replacement/drop semantics": [
+        "haybarn2:src/parser/parsed_data/create_schema_info.cpp",
+        "haybarn2:src/catalog/duck_catalog.cpp",
+        "haybarn2:test/sql/catalog/nested_schema/drop_nested_schema.test"
+      ],
+      "Frozen catalog metadata and transaction-scoped inventory reuse": [
+        "native:test/sql/integration/catalog/catalog_contents.test",
+        "native:test/sql/integration/catalog/catalog_contents_fallback.test",
+        "native:test/sql/integration/macro/macros.test"
+      ],
+      "Canonical parent spelling under case-insensitive lookup": [
+        "tests/catalog/test_dependencies_protocol.py::test_resolved_graph_paths_use_the_owning_schema_spelling"
+      ]
+    },
+    "limits": [
+      "Only the durable Python reference advertises dependency discovery and the new schema lifecycle guarantee; SDK schemas/codecs alone do not qualify provider enforcement.",
+      "The reference persists metadata-only tables and binds only SELECT * FROM one relation. Broader SQL, query execution and table data writes are not advertised.",
+      "Owned-object planning is proven through shared-record tests; production indexes, triggers, macros, constraints, object renames and cross-attachment dependencies remain open.",
+      "Native 2.0, browser/transport qualification, full contract review/freeze, coordinated major release and distribution remain open.",
+      "Mutable transaction-owned caches avoid cross-transaction reuse and may increase metadata fetches; frozen metadata retains the shared cache. Performance and retained-entry lifetime qualification remain required.",
+      "Previously recorded Flechette stdio limitation remains open; separate codec tests are not transport qualification."
+    ],
+    "counts_overlap": true,
+    "logs": [
+      "logs/dependencies-python.log",
+      "logs/dependencies-go.log",
+      "logs/dependencies-rust.log",
+      "logs/dependencies-ts.log",
+      "logs/dependencies-java.log",
+      "logs/dependencies-csharp.log",
+      "logs/dependencies-cpp.log",
+      "logs/dependencies-cross-sdk.log",
+      "logs/dependencies-flechette.log",
+      "logs/dependencies-final-verification.log",
+      "logs/dependencies-final-build.log",
+      "logs/dependencies-final-native-schema-metadata.log",
+      "logs/dependencies-final-native-matrix-a.log",
+      "logs/dependencies-final-native-matrix-b.log",
+      "logs/dependencies-final-native-python.log",
+      "logs/dependencies-final-native-go.log",
+      "logs/dependencies-final-native-rust.log",
+      "logs/dependencies-final-native-ts.log",
+      "logs/dependencies-final-native-java.log",
+      "logs/dependencies-final-native-csharp.log",
+      "logs/dependencies-final-native-cpp.log",
+      "logs/dependencies-final-native-ts-detail.log",
+      "state/dependencies-final-frozen-cpp-native/run.log",
+      "logs/dependencies-final-canonical-validation.log",
+      "logs/dependencies-final-generation.log"
+    ],
+    "diagnostics": "Earlier dependencies-native-* and dependencies-before-frozen-native-* runs include failures or canceled runs. They are diagnostic evidence only; qualification uses final logs listed here.",
+    "source_inventory": "state/sources.json and state/source-verification.json in the unique EC2 workspace record committed revisions and source bytes.",
+    "native_revision": "964f1987265be5c23cc4028c54e153b6aef076b9",
+    "python_base_revision": "5a42fbe6ac7972c6fb9306f3d4e16661b1e550d3",
+    "sdk_revisions": {
+      "go": "d56848ac05c32a3b962fa5fc82c85c2355f7462c",
+      "rust": "d76a65372e7a49fcb4ce1b67dec906d0fa16b008",
+      "typescript": "f64abf2ddaf41171cfa3b629bc718d83dfe99140",
+      "java": "7120e1cb0f5d18a82af2f020eb1e636be656cb71",
+      "csharp": "0f3f04f7a8f252d912433bf5ef92f4ad5f521ad8",
+      "cpp": "585bed91b19c8774b005a2445bedc863030810ee"
     }
   }
 }

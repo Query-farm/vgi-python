@@ -20,6 +20,7 @@ from vgi_rpc.rpc._types import rpc_methods
 
 from vgi.catalog.capabilities import SCHEMA_OPTIONS_CREATE, SCHEMA_OPTIONS_READ, CatalogCapabilities
 from vgi.catalog.catalog_interface import OnConflict, TableInfo, ViewInfo
+from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot, ObjectDependency
 from vgi.catalog.layout import (
     LayoutChangeMode,
     NullOrder,
@@ -177,6 +178,27 @@ def render() -> str:
             layout=layout,
         ),
     }
+    root = CatalogObjectRef(kind="schema", schema_path=[], name="one.two")
+    nested = CatalogObjectRef(kind="schema", schema_path=["one.two"], name="nested")
+    table = CatalogObjectRef(kind="table", schema_path=["one.two", "nested"], name='table."name')
+    trigger = CatalogObjectRef(kind="trigger", schema_path=table.schema_path, name="on.change", owner_table=table.name)
+    owned = ObjectDependency(dependent=trigger.serialize_to_bytes(), subject=table.serialize_to_bytes(), kind="owned")
+    edges = [
+        ObjectDependency(dependent=nested.serialize_to_bytes(), subject=root.serialize_to_bytes()),
+        ObjectDependency(dependent=table.serialize_to_bytes(), subject=nested.serialize_to_bytes()),
+        owned,
+    ]
+    records.update(
+        object_ref=table,
+        trigger_ref=trigger,
+        object_dependency=owned,
+        dependency_snapshot=DependencySnapshot(
+            catalog_version=42,
+            objects=[r.serialize_to_bytes() for r in [root, nested, table, trigger]],
+            dependencies=[e.serialize_to_bytes() for e in edges],
+        ),
+        empty_dependency_snapshot=DependencySnapshot(catalog_version=0),
+    )
     encoded = {name: record.serialize_to_bytes() for name, record in records.items()}
     encoded.update(column_requests())
     return (

@@ -18,6 +18,8 @@ from vgi_rpc import ArrowSerializableDataclass
 
 from vgi.exceptions import CatalogCapabilityError
 
+CATALOG_DEPENDENCIES_READ = "vgi.catalog.dependencies.read.v1"
+SCHEMA_LIFECYCLE = "vgi.schema.lifecycle.v1"
 SCHEMA_METADATA_ALTER = "vgi.schema.metadata.alter.v1"
 SCHEMA_OPTIONS_READ = "vgi.schema.options.read.v1"
 SCHEMA_OPTIONS_CREATE = "vgi.schema.options.create.v1"
@@ -62,7 +64,14 @@ class CatalogCapabilities(ArrowSerializableDataclass):
 
     _known: ClassVar[dict[str, frozenset[str]]] = {
         "read": frozenset(
-            {SCHEMA_OPTIONS_READ, TABLE_OPTIONS_READ, TABLE_LAYOUT_READ, ROW_SCALAR_EXPRESSION, VIEW_BARRIER_READ}
+            {
+                CATALOG_DEPENDENCIES_READ,
+                SCHEMA_OPTIONS_READ,
+                TABLE_OPTIONS_READ,
+                TABLE_LAYOUT_READ,
+                ROW_SCALAR_EXPRESSION,
+                VIEW_BARRIER_READ,
+            }
         ),
         "ddl": frozenset(
             {
@@ -74,6 +83,7 @@ class CatalogCapabilities(ArrowSerializableDataclass):
                 COLUMN_NESTED_NULLABILITY,
                 COLUMN_NESTED_COMMENT,
                 SCHEMA_METADATA_ALTER,
+                SCHEMA_LIFECYCLE,
                 SCHEMA_OPTIONS_CREATE,
                 SCHEMA_OPTIONS_ALTER,
                 TABLE_OPTIONS_CREATE,

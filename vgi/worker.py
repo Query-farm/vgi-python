@@ -91,6 +91,7 @@ from vgi.arguments import Arguments
 from vgi.catalog import CatalogInterface
 from vgi.catalog.attach_option import AttachOptionSpec, extract_attach_option_specs
 from vgi.catalog.capabilities import (
+    CATALOG_DEPENDENCIES_READ,
     COLUMN_NESTED_ADD,
     COLUMN_NESTED_COMMENT,
     COLUMN_NESTED_DEFAULT,
@@ -98,6 +99,7 @@ from vgi.catalog.capabilities import (
     COLUMN_NESTED_NULLABILITY,
     COLUMN_NESTED_RENAME,
     COLUMN_NESTED_TYPE,
+    SCHEMA_LIFECYCLE,
     SCHEMA_METADATA_ALTER,
     SCHEMA_OPTIONS_ALTER,
     SCHEMA_OPTIONS_CREATE,
@@ -129,6 +131,7 @@ from vgi.catalog.catalog_interface import (
     _validate_at_params,
     serialize_column_statistics,
 )
+from vgi.catalog.dependencies import DependencySnapshot
 from vgi.catalog.layout import LayoutChangeMode, LayoutCoverage, TableLayout, TableLayoutChange
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions
@@ -5014,6 +5017,13 @@ class Worker:
         options: bytes | None = None,
     ) -> None:
         """Create a new schema."""
+        schema_path_key(path)
+        if any("\0" in component for component in path):
+            raise ValueError("schema target components must contain no NUL")
+        if SCHEMA_LIFECYCLE in self._catalog_agreement(attach_opaque_data).ddl:
+            self._require_catalog_capability(
+                attach_opaque_data, SCHEMA_LIFECYCLE, "catalog_schema_create", transaction_opaque_data
+            )
         self._enrich_catalog_span(vgi_schema_path=path)
         cat = self._get_catalog()
         if options is not None:
@@ -5086,6 +5096,18 @@ class Worker:
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
         )
 
+    def catalog_dependencies(
+        self, attach_opaque_data: bytes, transaction_opaque_data: bytes | None = None
+    ) -> DependencySnapshot:
+        """Read and validate a complete graph from one provider snapshot."""
+        self._require_catalog_capability(attach_opaque_data, CATALOG_DEPENDENCIES_READ, "catalog_dependencies")
+        result = self._get_catalog().catalog_dependencies(
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
+        )
+        result.__post_init__()
+        return result
+
     def catalog_schema_drop(
         self,
         attach_opaque_data: bytes,
@@ -5095,6 +5117,13 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a schema."""
+        schema_path_key(path)
+        if any("\0" in component for component in path):
+            raise ValueError("schema target components must contain no NUL")
+        if SCHEMA_LIFECYCLE in self._catalog_agreement(attach_opaque_data).ddl:
+            self._require_catalog_capability(
+                attach_opaque_data, SCHEMA_LIFECYCLE, "catalog_schema_drop", transaction_opaque_data
+            )
         self._enrich_catalog_span(vgi_schema_path=path)
         cat = self._get_catalog()
         cat.schema_drop(

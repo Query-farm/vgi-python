@@ -502,3 +502,108 @@ Native registration of this RPC does not enable that grammar or advertise the
 new profile. Native SQL wiring, full SDK capability/provider implementations,
 nonempty schema replacement/drop dependencies, and the coordinated major
 version freeze/release remain open.
+
+## Dependency authority and schema lifecycle
+
+`catalog_dependencies(attach_opaque_data, transaction_opaque_data=NULL)` returns
+one `DependencySnapshot` under the selected read profile
+`vgi.catalog.dependencies.read.v1`. The provider constructs the complete graph
+and its `catalog_version` from one transaction-visible snapshot. A graph is
+advisory: a later mutation must resolve and authorize its target and every
+cascade member against the authoritative provider state inside the mutation's
+transaction. Discovery is neither a reservation nor permission to delete.
+When policy prevents complete disclosure, reject this read rather than omit
+inaccessible objects or edges. Enforcement still includes those objects.
+
+`CatalogObjectRef` has four fields:
+
+| Field | Meaning |
+| --- | --- |
+| `kind: string` | `schema`, `table`, `view`, `index`, `scalar_macro`, `table_macro`, `sequence`, `type`, `scalar_function`, `aggregate_function`, `table_function`, `window_function`, or `trigger`. Unknown kinds reject. A kind does not advertise DDL support. |
+| `schema_path: list<string>` | Raw owning-schema components. For a schema object, these are its parents; an empty list is valid only for a root schema. |
+| `name: string` | The final raw object identifier. Function/macro references name the overload family, not a private engine overload handle. |
+| `owner_table: string?` | Required only for a trigger, whose name is unique within its owning table. NULL for all other kinds. |
+
+All identifier components are nonempty strings without NUL. The attachment
+supplies catalog identity; references contain no client aliases, pointers or
+engine OIDs. Providers resolve input according to their identifier policy and
+return canonical spelling consistently throughout the graph. The shared record
+preserves spelling, case and component boundaries; it does not split dotted
+names or silently fold Unicode. Cross-attachment dependencies are outside this
+profile: a provider cannot advertise this complete graph while silently omitting
+an external dependency. This does not promise distributed catalog transactions.
+
+`ObjectDependency` carries `dependent` and `subject` as complete
+`CatalogObjectRef` IPC records, plus `kind: string`:
+
+- `requires`: dropping the subject is blocked under RESTRICT while a dependent
+  would remain. CASCADE includes the dependent. Schema membership and nested
+  schemas' parent edges use this policy.
+- `owned`: the dependent is automatically included when its owner is dropped,
+  including under RESTRICT. It may also be dropped explicitly. Dropping a
+  dependent never drops its subject. An object has at most one owner, and
+  ownership cycles reject. Indexes/triggers may use this policy only where the
+  provider implements its full semantics.
+
+`DependencySnapshot` contains a nonnegative int64 `catalog_version`,
+`objects: list<binary>` and `dependencies: list<binary>`. Objects with no edges
+are included. All IPC records contain exactly one complete row and one batch;
+missing fields, incorrect types/nullability, trailing bytes, duplicate object
+identities, dangling endpoints, self edges, duplicate/conflicting edges and
+invalid owner graphs reject. List order does not affect graph meaning. Reference
+cycles are permitted; CASCADE computes their finite deletion closure.
+
+The drop planner first computes the full closure of owned objects (and all
+references for CASCADE), then checks for blocking edges. This prevents an edge's
+iteration order from changing RESTRICT behavior. It returns a deletion set, not
+an execution order: providers must apply it atomically, authorize all members,
+and preserve graph consistency on failure. A provider may impose additional
+object-specific restrictions, such as rejecting an internal/default schema.
+
+The optional DDL profile `vgi.schema.lifecycle.v1` qualifies the existing
+`catalog_schema_create` and `catalog_schema_drop` RPCs with these guarantees:
+
+- Create resolves the complete raw target and requires existing parents. ERROR
+  and IGNORE do not modify existing metadata. REPLACE is an atomic RESTRICT drop
+  and creation; it never implicitly cascades, retains descendants, or orphans
+  objects. Omitted metadata/options take the new schema's defaults.
+- DROP with `cascade=false` rejects a nonempty schema. `cascade=true` removes its
+  subtree and dependent objects, including dependents in other schemas of the
+  same attachment. Missing targets obey `ignore_not_found`; ignoring a missing
+  target changes neither catalog version nor etag.
+- Failed validation/authorization/dependency checks leave all objects, metadata
+  and versions unchanged. Successful changes advance the transaction-visible
+  version once and invalidate committed snapshots only after commit. Rollback
+  restores the previous committed graph. A concurrent committed writer cannot
+  be overwritten by an older transaction's metadata snapshot.
+- Selecting this guarantee requires current provider support at each schema
+  mutation. Transaction handles additionally require `vgi.transaction.ddl.v1`.
+  Legacy availability of these existing RPCs is retained without claiming this
+  profile. Regardless of negotiation, providers must not bypass authorization or
+  their dependency enforcement.
+
+At the inspected Haybarn 2 pin, `CreateSchemaInfo::ShouldReplaceOnConflict`,
+`DuckCatalog::CreateSchema` and `test/sql/catalog/nested_schema/drop_nested_schema.test`
+confirm REPLACE uses a non-cascading drop and nested children block it. No new
+REPLACE/CASCADE flag is needed on the schema-create wire request.
+
+The durable SQLite Python reference now implements schema, table and simple-view
+dependencies over the public HTTP client, sealed MetaWorker routing and persistent
+transactions. It binds only `SELECT * FROM` one table/view (owner-relative or one
+explicit schema component); other SQL rejects before creation. It does not
+execute view queries or implement table data writes. Ownership/drop-closure
+semantics have executable shared-record tests; production index/trigger/macro,
+constraint, rename and cross-attachment authority remain unqualified.
+
+All SDKs receive the shared records and the discovery RPC with codec vectors.
+Only the reference advertises these new profiles. Ordinary providers reject
+unsupported discovery; generated types do not qualify provider enforcement.
+The native 1.5 adapter uses transaction-owned schema/object caches for nonempty
+worker transaction handles on mutable catalogs. Frozen catalogs promise invariant
+metadata and retain shared caches even when transactions scope function state. Committed `catalog_contents` snapshots cannot seed
+those caches, and ending the transaction retires entries through the existing
+bound-entry retention mechanism. Cross-schema CASCADE invalidates the complete
+relevant cache. `make test_dependencies` exercises real native schema lifecycle,
+concurrent metadata snapshots, rollback, reconnect and both cache settings.
+Full SDK provider coverage, native 2.0 qualification, broader freeze and release
+remain open.
