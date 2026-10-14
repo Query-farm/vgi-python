@@ -69,6 +69,7 @@ from vgi.catalog.catalog_interface import (
 from vgi.catalog.dependencies import DependencySnapshot
 from vgi.catalog.layout import TableLayout
 from vgi.catalog.options import OptionDefinitions
+from vgi.catalog.query import CatalogQueryPrepareRequest, CatalogQueryPrepareResult, ClientQueryCapabilities
 from vgi.filter_v2 import delta_revisions, replaying_accepted_state
 from vgi.function import StreamStateCodec, _is_state_codec
 from vgi.function_storage import BoundStorage, FrameworkNS, attach_catalog_bytes
@@ -720,6 +721,7 @@ class ClientCapabilities(ArrowSerializableDataclass):
         can_stream: Whether the client can consume an unbounded streaming scan.
         filter_encodings: Filter representations understood by the client.
         catalog: Optional offer of versioned catalog profiles. Absence selects none.
+        query_pushdown: Optional query encoding and semantic profile offer. Absence disables query execution.
     """
 
     engine: str
@@ -728,6 +730,7 @@ class ClientCapabilities(ArrowSerializableDataclass):
     can_stream: bool
     filter_encodings: list[str]
     catalog: Annotated[CatalogCapabilities | None, ArrowType(pa.binary())] = None
+    query_pushdown: ClientQueryCapabilities | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -3488,6 +3491,16 @@ class VgiProtocol(Protocol):
 
     def catalog_transaction_rollback(self, attach_opaque_data: bytes, transaction_opaque_data: bytes) -> None:
         """Rollback a transaction."""
+        ...
+
+    def catalog_query_prepare(self, request: CatalogQueryPrepareRequest) -> CatalogQueryPrepareResult:
+        """Authorize and describe a read-only query without executing its results."""
+        ...
+
+    def catalog_query_release(
+        self, attach_opaque_data: bytes, prepared_query_token: bytes, transaction_opaque_data: bytes | None = None
+    ) -> None:
+        """Idempotently release an owned preparation; existing executions retain their lifetime."""
         ...
 
     # ========== Catalog - Schemas ==========

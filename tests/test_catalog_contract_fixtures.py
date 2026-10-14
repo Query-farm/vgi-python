@@ -16,7 +16,23 @@ from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
 from vgi.codegen.catalog_contract_fixtures import render
 from vgi.column_path import RequiredFilterPaths
 from vgi.protocol import TableCreateRequest
+from vgi.query_parameters import QueryParameters
 from vgi.typed_values import TypedValueBatch
+
+
+def test_query_parameter_corpus_preserves_mapping_types_metadata_and_empty_row() -> None:
+    fixtures = json.loads(render())["records"]
+    for name in ("query_parameters", "query_empty_parameters"):
+        source = QueryParameters.deserialize_from_bytes(base64.b64decode(fixtures[name]))
+        restored = QueryParameters.deserialize_from_bytes(source.serialize_to_bytes())
+        assert restored.batch.equals(source.batch, check_metadata=True)
+        assert restored.batch.num_rows == 1
+        assert restored.mode == ("positional" if name == "query_empty_parameters" else "named")
+        if name == "query_empty_parameters":
+            assert restored.batch.num_columns == 0
+        else:
+            assert not restored.batch.column("optional")[0].is_valid
+            assert restored.schema.field("record").type[0].metadata == {b"nested": b"retained"}
 
 
 def test_column_requests_preserve_raw_paths_and_definitions() -> None:

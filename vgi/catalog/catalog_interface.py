@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from vgi.catalog.secret_type import SecretTypeSpec
     from vgi.catalog.setting import SettingSpec
     from vgi.protocol import ClientCapabilities
+    from vgi.query_provider import CatalogQueryProvider
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass, ArrowType
@@ -46,6 +47,7 @@ from vgi.catalog.dependencies import DependencySnapshot
 from vgi.catalog.layout import TableLayout, TableLayoutChange
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
+from vgi.catalog.query import QueryCapabilities
 from vgi.exceptions import CatalogReadOnlyError
 from vgi.metadata import (
     ArgumentMonotonicity,
@@ -319,6 +321,7 @@ class CatalogAttachResult(ArrowSerializableDataclass):
             schema and kind. Older workers omit it and read as ``False``.
         catalog_capabilities: Current provider profile advertisement, not authorization.
         selected_capabilities: Profiles selected for this attachment; absent means none.
+        query_pushdown: Immutable query agreement selected from the client's offer, or None.
     """
 
     attach_opaque_data: AttachOpaqueData
@@ -345,6 +348,7 @@ class CatalogAttachResult(ArrowSerializableDataclass):
     selected_capabilities: Annotated[CatalogCapabilities | None, ArrowType(pa.binary())] = field(
         default=None, kw_only=True
     )
+    query_pushdown: QueryCapabilities | None = field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -1839,6 +1843,10 @@ class CatalogInterface(ABC):
     #: sets it; a subclass whose contents vary per caller must set it back to
     #: ``False``.
     catalog_contents_attach_independent: ClassVar[bool] = False
+
+    #: Optional provider for prepared read-only catalog queries. The Worker
+    #: negotiates and binds it to each attachment; default catalogs select none.
+    query_provider: "CatalogQueryProvider | None" = None
 
     @property
     def interface_feature_flags(self) -> set[str]:

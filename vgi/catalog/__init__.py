@@ -45,12 +45,26 @@ from vgi.catalog.catalog_interface import (
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot, ObjectDependency
 from vgi.catalog.descriptors import Catalog, ForeignKeyDef, Index, Macro, Schema, Sql, Table, View
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
+from vgi.catalog.query import (
+    CatalogQueryPrepareRequest,
+    CatalogQueryPrepareResult,
+    ClientQueryCapabilities,
+    QueryCapabilities,
+    QueryEvaluationContext,
+    QueryObjectReference,
+)
 from vgi.catalog.secret_type import SecretTypeSpec
 from vgi.catalog.setting import Setting, SettingSpec
 from vgi.catalog.storage import CatalogStorage, CatalogStorageSqlite
 from vgi.write_results import WriteOperation, WriteResultMode, write_changes_batch, write_result_schema
 
 __all__ = [
+    "CatalogQueryPrepareRequest",
+    "CatalogQueryPrepareResult",
+    "ClientQueryCapabilities",
+    "QueryCapabilities",
+    "QueryEvaluationContext",
+    "QueryObjectReference",
     "CatalogObjectRef",
     "DependencySnapshot",
     "ObjectDependency",

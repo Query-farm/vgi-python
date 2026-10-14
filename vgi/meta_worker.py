@@ -38,6 +38,7 @@ from vgi_rpc.rpc import CallContext, Stream
 
 from vgi._redact import short_hash
 from vgi.catalog.catalog_interface import CatalogAttachResult
+from vgi.catalog.query import CatalogQueryPrepareRequest, CatalogQueryPrepareResult
 from vgi.invocation import GlobalInitResponse
 from vgi.protocol import (
     BindRequest,
@@ -109,6 +110,7 @@ _ATTACH_ID_METHODS = [
     "catalog_schema_alter_options",
     "catalog_schema_alter_metadata",
     "catalog_dependencies",
+    "catalog_query_release",
     "catalog_schema_drop",
     "catalog_schema_contents_tables",
     "catalog_schema_contents_views",
@@ -729,6 +731,12 @@ class MetaWorker:
                     attach_already_unwrapped=attach_already_unwrapped,
                 )
         raise ValueError(f"Unknown table_buffering function '{fn_name}'")
+
+    def catalog_query_prepare(self, request: CatalogQueryPrepareRequest) -> CatalogQueryPrepareResult:
+        """Route preparation through the same authenticated attachment as execution."""
+        return self._worker_for_attach(
+            request.attach_opaque_data, method_name="catalog_query_prepare"
+        ).catalog_query_prepare(request)
 
     def hosted_protocols(self) -> tuple[tuple[type, object], ...]:
         """Return every child worker class's ``hosted_protocols()``, in order.

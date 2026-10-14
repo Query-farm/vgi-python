@@ -135,6 +135,7 @@ from vgi.catalog.dependencies import DependencySnapshot
 from vgi.catalog.layout import LayoutChangeMode, LayoutCoverage, TableLayout, TableLayoutChange
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions
+from vgi.catalog.query import QUERY_EXECUTOR, CatalogQueryPrepareRequest, CatalogQueryPrepareResult
 from vgi.catalog.secret_type import SecretTypeSpec
 from vgi.catalog.setting import SettingSpec, extract_setting_specs
 from vgi.column_path import column_definition as decode_column_definition
@@ -1406,6 +1407,8 @@ class Worker:
 
         def add_function(func_cls: type[Function], schema_path: list[str] | None) -> None:
             meta = func_cls.get_metadata()
+            if meta.name.casefold() == QUERY_EXECUTOR:
+                raise ValueError(f"{QUERY_EXECUTOR} is reserved for the catalog query executor")
             if schema_path is not None:
                 key = (schema_path_key(schema_path), meta.name)
                 bucket = schema_registry.setdefault(key, [])
@@ -2578,6 +2581,11 @@ class Worker:
             ValueError: If function not found or ambiguous.
 
         """
+        if request.function_name == QUERY_EXECUTOR:
+            from vgi.query_execution import _check_bind, executor_type
+
+            _check_bind(request)
+            return executor_type(self)
         candidates = self._candidates_for(request.function_name, request.schema_path)
         if len(candidates) == 1:
             return candidates[0]
@@ -4428,6 +4436,10 @@ class Worker:
         # off the wire, because serialized state reaches the access log in
         # plaintext — see VgiCallState in vgi/protocol.py.
         attach_plaintext = self._unwrap_attach_full(getattr(request.bind_call, "attach_opaque_data", None))
+        if request.bind_call.function_name == QUERY_EXECUTOR:
+            from vgi.query_execution import check_init
+
+            check_init(request)
         func_cls = self._resolve_function(request.bind_call)
         instance = func_cls(logger=_logger)
 
@@ -4828,11 +4840,25 @@ class Worker:
         selected = available.select(offered)
         if TRANSACTION_DDL in selected.transaction and not result.supports_transactions:
             raise ValueError("DDL transaction profile requires supports_transactions")
+        from vgi.query_execution import negotiate
+
+        minted = (
+            uuid.uuid4().bytes + bytes(result.attach_opaque_data) if result.attach_opaque_data is not None else None
+        )
+        query_offer = request.client_capabilities.query_pushdown if request.client_capabilities is not None else None
+        query_selected = (
+            negotiate(self, minted, query_offer, supports_transactions=result.supports_transactions)
+            if minted is not None
+            else None
+        )
         result = _dataclass_replace(
             result,
             catalog_capabilities=available,
             selected_capabilities=selected,
-            attach_opaque_data_required=result.attach_opaque_data_required or bool(selected.names()),
+            query_pushdown=query_selected,
+            attach_opaque_data_required=result.attach_opaque_data_required
+            or bool(selected.names())
+            or query_selected is not None,
         )
         # Mint the shard identity: prepend a fresh framework UUID to the
         # catalog's plaintext (``uuid(16) || catalog_bytes``), then seal. Storage
@@ -4840,10 +4866,12 @@ class Worker:
         # the random-nonce ciphertext or the (possibly non-unique) catalog bytes.
         # ``_unwrap_attach`` strips the UUID back off, so the catalog only ever
         # sees its own bytes. See ``_AttachUnwrapper``.
-        if result.attach_opaque_data is not None:
-            minted = uuid.uuid4().bytes + bytes(result.attach_opaque_data)
+        if minted is not None:
             result = _dataclass_replace(
-                result, attach_opaque_data=self._seal_attach(attach_capabilities.encode(minted, selected))
+                result,
+                attach_opaque_data=self._seal_attach(
+                    attach_capabilities.encode(minted, selected, query_offer=query_offer, query_selected=query_selected)
+                ),
             )
         loggable = dict(cat.loggable_attach_options(options))
         self._log_catalog_lifecycle(
@@ -5095,6 +5123,20 @@ class Worker:
             changes=OptionChanges.deserialize_from_bytes(changes),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
         )
+
+    def catalog_query_prepare(self, request: CatalogQueryPrepareRequest) -> CatalogQueryPrepareResult:
+        """Prepare under the authenticated attachment's immutable query agreement."""
+        from vgi.query_execution import prepare
+
+        return prepare(self, request)
+
+    def catalog_query_release(
+        self, attach_opaque_data: bytes, prepared_query_token: bytes, transaction_opaque_data: bytes | None = None
+    ) -> None:
+        """Release this owner's receipt, including after expiry or capability withdrawal."""
+        from vgi.query_execution import release
+
+        release(self, attach_opaque_data, prepared_query_token, transaction_opaque_data)
 
     def catalog_dependencies(
         self, attach_opaque_data: bytes, transaction_opaque_data: bytes | None = None

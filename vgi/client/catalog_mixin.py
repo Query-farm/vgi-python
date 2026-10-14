@@ -78,6 +78,7 @@ from vgi.catalog.dependencies import DependencySnapshot
 from vgi.catalog.layout import TableLayout, TableLayoutChange
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions
+from vgi.catalog.query import CatalogQueryPrepareRequest, CatalogQueryPrepareResult
 from vgi.protocol import (
     CatalogAttachRequest,
     CatalogCreateRequest,
@@ -474,6 +475,25 @@ class CatalogClientMixin:
         with self._catalog_connect() as proxy:
             return proxy.catalog_dependencies(
                 attach_opaque_data=attach_opaque_data, transaction_opaque_data=transaction_opaque_data
+            )
+
+    def catalog_query_prepare(self, request: CatalogQueryPrepareRequest) -> CatalogQueryPrepareResult:
+        """Authorize and describe a query; this does not execute or fetch rows."""
+        request.__post_init__()
+        with self._catalog_connect() as proxy:
+            result = proxy.catalog_query_prepare(request=request)
+        result.validate_request(request)
+        return result
+
+    def catalog_query_release(
+        self, *, attach_opaque_data: bytes, prepared_query_token: bytes, transaction_opaque_data: bytes | None = None
+    ) -> None:
+        """Release preparation resources without canceling executions already started."""
+        with self._catalog_connect() as proxy:
+            proxy.catalog_query_release(
+                attach_opaque_data=attach_opaque_data,
+                prepared_query_token=prepared_query_token,
+                transaction_opaque_data=transaction_opaque_data,
             )
 
     # ========== Transaction Methods ==========

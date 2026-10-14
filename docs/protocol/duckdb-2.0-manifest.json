@@ -12,7 +12,7 @@
       "Overload collections replacing single macro definitions"
     ],
     "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
-    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery",
+    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition",
     "version_requirement": "Retaining the raw-path migration requires a major version and matching routing name. Complete the combined diff and migration guide before freeze."
   },
   "sources": {
@@ -515,15 +515,17 @@
       "evidence": []
     },
     "query": {
-      "title": "Catalog query execution \u2014 existing design to consolidate",
+      "title": "Catalog query execution \u2014 preparation lifecycle and shared codecs implemented; adapters pending",
       "disposition": "include",
       "status": "pending_contract_review",
       "records": [
+        "ClientQueryCapabilities",
+        "QueryCapabilities",
+        "QueryEvaluationContext",
+        "QueryObjectReference",
         "CatalogQueryPrepareRequest",
         "CatalogQueryPrepareResult",
-        "QueryParameters",
-        "PreparedQueryHandle",
-        "QueryCapabilities"
+        "QueryParameters"
       ],
       "existing_methods": [
         "bind",
@@ -543,7 +545,23 @@
         "P2",
         "P3"
       ],
-      "evidence": []
+      "evidence": [
+        "docs/protocol/shared-catalog-values.md#prepared-read-queries-and-typed-parameters",
+        "vgi/catalog/query.py",
+        "vgi/query_parameters.py",
+        "vgi/query_execution.py",
+        "vgi/query_provider.py",
+        "tests/catalog/query_reference.py",
+        "tests/catalog/test_query_protocol.py",
+        "conformance/catalog-contracts.json"
+      ],
+      "implementation_notes": [
+        "Parameter mapping is schema metadata on one Arrow batch; preparation carries schema-only IPC and each execution carries one same-schema row. No JSON type list or value interpolation.",
+        "Preparation receipts and execution locators are opaque binary tokens, not an extra public PreparedQueryHandle record. Release is a wire RPC; provider resolve/start/read/close are SDK hooks over the existing TABLE stream.",
+        "Python reference selects only vgi.remote.readonly.v1 for six exact read queries; automatic vgi.duckdb.relational.v1 is never inferred from a DuckDB backend name.",
+        "The native 1.5 adapter emits query_pushdown=NULL until explicit vgi_query is implemented. Other SDKs receive codecs and registered unsupported methods, not an execution capability.",
+        "Full logical-catalog authorization, data-snapshot integration, scheduled cleanup, performance and both engine adapters remain open before freeze."
+      ]
     },
     "logical_types": {
       "title": "Logical type preservation \u2014 design required",
@@ -3172,7 +3190,15 @@
       "disposition": "include",
       "target": "CatalogQueryPrepareRequest/CatalogQueryPrepareResult",
       "status": "pending_contract_review",
-      "evidence": []
+      "evidence": [
+        "docs/protocol/shared-catalog-values.md#prepared-read-queries-and-typed-parameters",
+        "vgi/catalog/query.py",
+        "vgi/query_parameters.py",
+        "vgi/query_execution.py",
+        "vgi/query_provider.py",
+        "tests/catalog/query_reference.py",
+        "tests/catalog/test_query_protocol.py"
+      ]
     },
     {
       "id": "audit-415",
@@ -4804,6 +4830,265 @@
       "java": "7120e1cb0f5d18a82af2f020eb1e636be656cb71",
       "csharp": "0f3f04f7a8f252d912433bf5ef92f4ad5f521ad8",
       "cpp": "585bed91b19c8774b005a2445bedc863030810ee"
+    }
+  },
+  "query_preparation_validation": {
+    "status": "partial_protocol_implementation_on_15",
+    "protocol_method_count": 82,
+    "development_protocol_hash": "28cf2ae30b6cf07dbd4db602e4972611319b993fb073b27de456b6fcf341dc00",
+    "engine_15": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+    "qualification_scope": "Shared SDK codec coverage and Python SDK lifecycle with a finite durable reference; no native query adapter or general SQL provider is qualified.",
+    "python_catalog_and_registry": {
+      "passed": 949,
+      "skipped": 4
+    },
+    "generator_manifest_lint_types": {
+      "passed": 228,
+      "strict_generation": "--check --require-all passed",
+      "ruff": "passed",
+      "mypy_sources": 216
+    },
+    "all_sdk_suites": "Python, Go, Rust, TypeScript, Java, C#, C++ suites passed; native 1.5 build passed. Later parameter-corpus checks exposed a TypeScript serialization issue; its fix passed both complete Arrow and Flechette backend suites and build/bundle checks.",
+    "native_regression": {
+      "status": "initial_full_runs_plus_targeted_fix_validation",
+      "scope": "Native DuckDB 1.5 integration against all seven workers. Every initial full run had one stale expected protocol hash failure; the corrected reflection test subsequently passed against all seven. Full suites were not rerun after that correction or the later TypeScript parameter codec fix.",
+      "initial_full_runs": {
+        "python": {
+          "passed": 343,
+          "skipped": 33,
+          "failed": 1,
+          "log": "logs/query-native-python.log"
+        },
+        "go": {
+          "passed": 337,
+          "skipped": 40,
+          "failed": 1,
+          "log": "logs/query-native-go.log"
+        },
+        "rust": {
+          "passed": 324,
+          "skipped": 42,
+          "failed": 1,
+          "log": "logs/query-native-rust.log"
+        },
+        "typescript": {
+          "passed": 329,
+          "skipped": 46,
+          "failed": 1,
+          "log": "logs/query-native-ts-detail.log"
+        },
+        "java": {
+          "passed": 323,
+          "skipped": 37,
+          "failed": 1,
+          "log": "logs/query-native-java.log"
+        },
+        "csharp": {
+          "passed": 329,
+          "skipped": 37,
+          "failed": 1,
+          "log": "logs/query-native-csharp.log"
+        },
+        "cpp": {
+          "passed": 325,
+          "skipped": 47,
+          "failed": 1,
+          "log": "state/query-cpp-native/run.log",
+          "counting": "The Catch summary includes 47 skipped cases in 372 reported passes; 325 cases actually executed and passed."
+        }
+      },
+      "reflection_fix": {
+        "passed_cases": 7,
+        "assertions_per_worker": 2,
+        "log": "logs/query-parameters-reflection.log"
+      },
+      "cpp_bearer_auth": {
+        "passed_cases": 2,
+        "passed_assertions": 13,
+        "log": "logs/query-native-cpp.log"
+      },
+      "skips": "Environment-gated tests that executed no assertions are not counted as passes.",
+      "additional_crash_recovery": {
+        "python": {
+          "passed_cases": 2,
+          "log": "logs/query-checkpoint-python-crash.log"
+        },
+        "java": {
+          "passed_cases": 2,
+          "log": "logs/query-checkpoint-java-crash.log"
+        }
+      }
+    },
+    "remaining": [
+      "Native 1.5 explicit-query adapter and typed parameter SQL binding",
+      "Native 2.0 optimizer/exporter integration and differential automatic-query qualification",
+      "Broader providers: logical-catalog policy, mutable snapshots, types and production cleanup",
+      "All broader P0-P3 and M0-M4 gates, combined freeze/version/routing/migration/release"
+    ],
+    "logs": [
+      "logs/query-sdk-python-second.log",
+      "logs/query-sdk-go-second.log",
+      "logs/query-sdk-rust-second.log",
+      "logs/query-sdk-ts-second.log",
+      "logs/query-sdk-java-second.log",
+      "logs/query-sdk-csharp-second.log",
+      "logs/query-sdk-cpp-second.log",
+      "logs/query-sdk-native-first.log",
+      "logs/query-generation-final.log",
+      "logs/query-cross-sdk-rpc-final.log",
+      "logs/query-native-api-python.log",
+      "logs/query-native-api-go.log",
+      "logs/query-native-api-rust.log",
+      "logs/query-native-api-typescript.log",
+      "logs/query-native-api-java.log",
+      "logs/query-native-api-csharp.log",
+      "logs/query-native-api-cpp.log",
+      "logs/query-native-python.log",
+      "logs/query-native-go.log",
+      "logs/query-native-rust.log",
+      "logs/query-native-ts-detail.log",
+      "logs/query-native-java.log",
+      "logs/query-native-csharp.log",
+      "logs/query-native-cpp.log",
+      "state/query-cpp-native/run.log",
+      "logs/query-parameters-reflection.log",
+      "logs/query-parameters-python.log",
+      "logs/query-parameters-go.log",
+      "logs/query-parameters-rust.log",
+      "logs/query-parameters-java.log",
+      "logs/query-parameters-csharp.log",
+      "logs/query-parameters-cpp.log",
+      "logs/query-checkpoint-ts-arrow-full.log",
+      "logs/query-checkpoint-ts-flechette-full.log",
+      "logs/query-checkpoint-ts-build.log",
+      "logs/query-checkpoint-ts-flechette-bundle.log",
+      "logs/query-checkpoint-python-crash.log",
+      "logs/query-checkpoint-java-crash.log"
+    ],
+    "source_inventory": "Verified 33,044 source files across 15 repositories with no differences. state/sources.json and state/source-verification.json record exact synchronized source bytes and revisions; committed heads are verified again after the checkpoint commits.",
+    "rust_sdk": {
+      "passed": 489,
+      "ignored": 4,
+      "log": "logs/query-sdk-rust-second.log"
+    },
+    "cross_sdk_rpc": {
+      "passed": 36,
+      "workers": [
+        "python",
+        "go",
+        "rust",
+        "typescript",
+        "java",
+        "csharp",
+        "cpp"
+      ],
+      "log": "logs/query-cross-sdk-rpc-final.log"
+    },
+    "native_catalog_api": {
+      "assertions_per_worker": 99,
+      "cases_per_worker": 1,
+      "workers": [
+        "python",
+        "go",
+        "rust",
+        "typescript",
+        "java",
+        "csharp",
+        "cpp"
+      ],
+      "log_pattern": "logs/query-native-api-{worker}.log"
+    },
+    "parameter_batch_corpus": {
+      "scope": "Shared IPC vectors preserve nested schema metadata, typed NULLs and an explicit one-row zero-column batch.",
+      "python": {
+        "passed": 7,
+        "log": "logs/query-parameters-python.log",
+        "note": "This later focused corpus run includes one test added after the 949-pass Python lane; it is not a replacement full-suite count."
+      },
+      "go": {
+        "status": "passed generated-package tests",
+        "log": "logs/query-parameters-go.log"
+      },
+      "rust": {
+        "passed": 1,
+        "log": "logs/query-parameters-rust.log"
+      },
+      "java": {
+        "status": "focused Gradle test task passed",
+        "log": "logs/query-parameters-java.log"
+      },
+      "csharp": {
+        "passed": 12,
+        "log": "logs/query-parameters-csharp.log"
+      },
+      "cpp": {
+        "passed_ctests": 9,
+        "log": "logs/query-parameters-cpp.log"
+      },
+      "typescript": {
+        "status": "fixed and validated against both backends",
+        "arrow_full_suite": {
+          "passed": 617,
+          "skipped": 68,
+          "log": "logs/query-checkpoint-ts-arrow-full.log"
+        },
+        "flechette_full_suite": {
+          "passed": 618,
+          "skipped": 67,
+          "log": "logs/query-checkpoint-ts-flechette-full.log"
+        },
+        "declarations_and_bundles": "passed; all four bundle entries import cleanly",
+        "build_log": "logs/query-checkpoint-ts-build.log",
+        "flechette_browser_bundle_log": "logs/query-checkpoint-ts-flechette-bundle.log",
+        "maintenance": "The zero-column batch carrier uses a narrow Flechette 2.4.1 internal encodeIPC import. Both backend suites and an explicit browser bundle cover this dependency; revalidate it when upgrading Flechette.",
+        "diagnostic_log": "logs/query-parameters-ts.log"
+      }
+    },
+    "checkpoint": {
+      "status": "validated_checkpoint",
+      "pending": [],
+      "next_checkpoint": {
+        "scope": "Native DuckDB 1.5 explicit vgi_query adapter using the prepared read-query contract",
+        "acceptance": [
+          "Opt-in capability negotiation with ordinary workers still selecting no query profile",
+          "Prepare and execute typed named/positional parameter batches without substituting values into SQL",
+          "Validate exact result schema and ordering; enforce cancellation and token cleanup",
+          "Focused native integration with the finite durable Python reference, including typed NULL/rebinding and error paths"
+        ],
+        "excludes": [
+          "Automatic DuckDB 2.0 optimizer integration",
+          "General SQL provider qualification",
+          "Protocol publication or version freeze"
+        ]
+      },
+      "review": "Read-only lifecycle, authorization, schema and continuation review found no commit blockers; production qualification remains outside this checkpoint.",
+      "revisions": {
+        "go": "636a8ab99842fb3b65fd9bfe49661063e748f046",
+        "rust": "55dfc0448876395fb7fc1e2de7f6e4092c79a831",
+        "typescript": "d8a7507796f37dc650ce2106947432b364f64ae6",
+        "java": "ad060adc8a76264977ca45569610e0625eb82fd7",
+        "csharp": "3d82a2b735cb9257852af11e75a58eb2ef8494d4",
+        "cpp": "d14efe73144cb5949f644ab4b797071af8084cc8",
+        "native": "632096327fe82c220adea7d672dd51fee943205c"
+      },
+      "final_consistency": {
+        "strict_generation": "--check --require-all passed",
+        "generation_manifest_and_corpus": "240 passed initially; one plan/manifest title mismatch corrected; all 11 manifest checks then passed",
+        "ruff": "passed",
+        "mypy_sources": 216,
+        "source_verification": {
+          "repositories": 15,
+          "files": 33044,
+          "errors": 0
+        },
+        "logs": [
+          "logs/query-checkpoint-final-validation.log",
+          "logs/query-checkpoint-lint-types.log",
+          "logs/query-checkpoint-manifest-final.log"
+        ]
+      },
+      "python_revision": "The commit containing this manifest; exact HEAD is recorded in the synchronized source inventory."
     }
   }
 }

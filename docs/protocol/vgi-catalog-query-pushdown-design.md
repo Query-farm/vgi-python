@@ -1,14 +1,22 @@
 # VGI 2 catalog query pushdown
 
-**Status:** proposed implementation design, not an implemented or normative wire contract.
-**Updated:** 2026-10-08. **Original proposal:** 2026-09-13.
+**Status:** engine integration design; the Python preparation/execution lifecycle and shared
+SDK codecs are implemented on the DuckDB 2.0 preparation branch. Native adapters remain open.
+**Updated:** 2026-10-13. **Original proposal:** 2026-09-13.
 **Scope:** optional, read-only catalog query execution; Python SDK; DuckDB 1.5 explicit-query adapter;
 DuckDB 2.0-development automatic-pushdown adapter.
 
-The implementation target is an optional extension of the VGI 2 protocol family, proposed for
-wire version **2.2.0** under the existing protocol name **`vgi.v2`**. The current Python SDK and
-DuckDB extension already use `2.1.0`; this is no longer a change to an unreleased `2.0.0` contract.
-New query APIs in this design remain proposals.
+The implementation belongs to the **combined successor protocol release**, alongside the
+catalog/type changes in the [manifest](duckdb-2.0-manifest.json). It does not reserve a separate
+2.2 minor release. The development branch retains `vgi.v2` / `2.1.0` placeholders while the
+combined breaking contract, final major version and routing transition are reviewed.
+
+The current wire authority is [prepared read queries and typed parameters](shared-catalog-values.md#prepared-read-queries-and-typed-parameters)
+and `vgi/catalog/query.py`. This earlier design's illustrative schemas/provider pseudocode are
+superseded by those definitions. Typed one-row parameter batches and explicit preparation release
+are included now. The finite reference qualifies lifecycle mechanics; it does not qualify a
+general SQL provider, native `vgi_query`, or automatic DuckDB 2.0 replacement. The commit table
+below records the original design survey, not current implementation heads.
 
 | Component | Current baseline | Role in this design |
 |---|---|---|
@@ -55,7 +63,7 @@ while using the bound-plan path.
 | Logical-plan SQL exporter and structured issues | Reuse the exporter in a pre-optimizer feasibility spike; do not build a general SQL decompiler |
 | `BoundTableFunction`, explicit parser contexts, ref-counted `LogicalType` | Add a dedicated 2.0 compatibility layer before enabling automatic queries |
 | `catalog_contents`, metadata etags, version adoption | Reuse existing metadata caches; distinguish committed metadata from transaction/data snapshots |
-| `vgi.v2` routing and wire `2.1.0` | Route new RPCs with generated protocol identifiers; propose coordinated `2.2.0` rollout |
+| `vgi.v2` routing and wire `2.1.0` | Route new RPCs with generated identifiers; release once with the combined successor transition |
 | Typed nested catalog records and six worker SDKs | Use typed structs for new query records and include C# schema/type generation |
 | Worker-batch validation, cancellation dispatcher, scan interrupt checks | Extend existing guards and lifecycle hooks rather than recreate them |
 | Credential-aware caches and HTTP grants | Preserve current identity isolation; keep query-result caching disabled |
@@ -165,7 +173,7 @@ No cross-attachment joins, upload of local temporary tables, distributed shuffle
 join placement, arbitrary mixed-query subtree extraction, or serialization of DuckDB internal
 AST/logical-plan objects. No new Substrait implementation is required.
 
-No automatic pushdown of parameters, correlated/LATERAL queries, recursive CTEs, windows,
+The first automatic adapter excludes bound parameters, correlated/LATERAL queries, recursive CTEs, windows,
 sampling, time travel, opaque local macro/UDF dependencies, external table functions, or queries
 whose order depends on an unproven physical insertion order. These can be added as independently tested profile
 revisions. A remote provider's broader explicit-query language must not silently broaden the
@@ -701,8 +709,9 @@ provider should decline such objects until it can reproduce their existing contr
 
 `PreparedQuery` contains a portable preparation recipe and output metadata, not a live result
 cursor. Recipes may be self-contained sealed data or identifiers into shared, bounded TTL
-storage. Large SQL recipes will need storage because token size is capped. No new release RPC
-is necessary for recipes: abandoned EXPLAIN/PREPARE attempts expire without executing anything.
+storage. Large SQL recipes need storage because token size is capped. The combined contract
+includes `catalog_query_release` for prompt idempotent cleanup; abandoned EXPLAIN/PREPARE
+attempts must still expire without executing anything.
 
 Receipt expiry gates starting a new execution. It does not interrupt an already accepted running
 execution, whose owner handle has its own deadline and idle lease. Transaction termination,
@@ -893,7 +902,7 @@ The seven implementation units below are milestones, not claims that any query A
 
 ### PR 1: contract and executable corpus
 
-Pin the `vgi.v2` / proposed `2.2.0` contract and turn the reviewed wire portion into a normative
+Review the query contract within the combined successor release and maintain its normative
 optional-extension specification. Specify typed nested records, metadata version-0/etag rules,
 and the initial automatic snapshot requirement. Add accepted and declined fixtures, exact Arrow
 schemas, malformed payloads, capability intersection cases,
@@ -1066,10 +1075,10 @@ universal speedup percentage; establish budgets from these measurements before d
 
 ## 13. Compatibility, alternatives, and launch gates
 
-The Python SDK and extension currently declare **2.1.0** under **`vgi.v2`**. The query capability
-and new RPC target the next coordinated additive surface revision, **2.2.0**, subject to release
-coordination if another feature claims that revision first. Do not append them silently to
-2.1.0 or rename the protocol to `vgi.v2.2`.
+The Python SDK and extension retain development placeholders **2.1.0** under **`vgi.v2`**.
+The query capability, preparation/release RPCs and parameter metadata join the combined breaking
+successor contract. Freeze the major version and routing/migration policy with that package;
+do not publish this development surface as a compatible 2.1.0 update.
 
 The [reporting SQL binding](../design/reporting-protocols/README.md#scope-and-compatibility)
 now exposes reads only, with mutations on RPC. It uses existing VGI facilities and does not
@@ -1118,7 +1127,7 @@ logical-table authorization equivalence; ordered streaming under
 parallel client settings; process-safe execution ownership; transaction integration; no accidental
 result cache use; and coordinated wire-version/codegen validation.
 
-Deferred design work: parameter binding; additional SQL/function/type profiles; remote writes;
+Deferred design work: broader backend parameter-type mappings; additional SQL/function/type profiles; remote writes;
 time travel; nested catalog views; cost-based placement; arbitrary partial subplans; query-result
 cache validators tied to data snapshots; split result streams with explicit global-order and
 partition semantics; and durable resumable execution with acknowledged batch IDs. None should

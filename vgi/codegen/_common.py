@@ -43,6 +43,14 @@ from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot, Objec
 from vgi.catalog.layout import SortKey, SqlExpression, TableLayout, TableLayoutChange
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
+from vgi.catalog.query import (
+    CatalogQueryPrepareRequest,
+    CatalogQueryPrepareResult,
+    ClientQueryCapabilities,
+    QueryCapabilities,
+    QueryEvaluationContext,
+    QueryObjectReference,
+)
 from vgi.column_path import RequiredFilterPaths
 from vgi.invocation import GlobalInitResponse
 from vgi.protocol import (
@@ -98,6 +106,12 @@ INFO_TYPES: tuple[type, ...] = (
 # preparation, before the catalog methods using them are frozen. Keep a single
 # inventory for schemas and typed models, including otherwise opaque IPC bodies.
 SHARED_CONTRACT_TYPES: tuple[type, ...] = (
+    ClientQueryCapabilities,
+    QueryCapabilities,
+    QueryEvaluationContext,
+    QueryObjectReference,
+    CatalogQueryPrepareRequest,
+    CatalogQueryPrepareResult,
     CatalogCapabilities,
     CatalogMetadataChanges,
     CatalogObjectRef,
@@ -143,6 +157,7 @@ EXTRA_RESPONSE_TYPES: tuple[type, ...] = (
 # Emitted for the languages that need to CHECK these shapes: Java (its records
 # mirror them) and C++ (it hand-builds them, and had no way to verify that).
 REQUEST_TYPES: tuple[type, ...] = (
+    CatalogQueryPrepareRequest,
     AggregateBindRequest,
     AggregateCombineRequest,
     AggregateDestructorRequest,

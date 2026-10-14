@@ -14,10 +14,57 @@ import pytest
 
 from vgi.catalog import CatalogMetadataChanges, OnConflict, SchemaObjectType
 from vgi.catalog.capabilities import CATALOG_DEPENDENCIES_READ, SCHEMA_METADATA_ALTER, CatalogCapabilities
+from vgi.catalog.query import (
+    QUERY_ENCODING,
+    QUERY_EXPLICIT,
+    CatalogQueryPrepareRequest,
+    ClientQueryCapabilities,
+    QueryEvaluationContext,
+)
 from vgi.client import Client
 from vgi.protocol import ClientCapabilities
+from vgi.query_parameters import QueryParameters
 
 WORKERS: dict[str, list[str]] = json.loads(os.environ.get("VGI_METADATA_WORKERS", "{}"))
+
+
+@pytest.mark.parametrize("sdk", sorted(WORKERS))
+def test_unqualified_provider_does_not_select_or_execute_queries(sdk: str) -> None:
+    offer = ClientCapabilities(
+        engine="reference-client",
+        native_formats=[],
+        catalogs=[],
+        can_stream=True,
+        filter_encodings=[],
+        query_pushdown=ClientQueryCapabilities(
+            encodings=[QUERY_ENCODING], semantic_profiles=[QUERY_EXPLICIT], engine_version="fixture-client-build"
+        ),
+    )
+    with Client(server_path=WORKERS[sdk], worker_limit=1) as client:
+        attached = client.catalog_attach(
+            name="contents_reval", data_version_spec=None, implementation_version=None, client_capabilities=offer
+        )
+        assert attached.query_pushdown is None
+        query = CatalogQueryPrepareRequest(
+            attach_opaque_data=attached.attach_opaque_data,
+            encoding=QUERY_ENCODING,
+            semantic_profile=QUERY_EXPLICIT,
+            mode="explicit",
+            capability_revision="unselected",
+            query="SELECT 1",
+            parameter_schema=QueryParameters.empty().schema_bytes(),
+            evaluation_context=QueryEvaluationContext(),
+        )
+        with pytest.raises(
+            Exception,
+            match="(?i)unsupported|unimplemented|not implemented|does not support|not supported|capability|negotiated",
+        ):
+            client.catalog_query_prepare(query)
+        with pytest.raises(
+            Exception,
+            match="(?i)unsupported|unimplemented|not implemented|does not support|not supported|capability|negotiated",
+        ):
+            client.catalog_query_release(attach_opaque_data=attached.attach_opaque_data, prepared_query_token=b"absent")
 
 
 @pytest.mark.parametrize("sdk", sorted(WORKERS))

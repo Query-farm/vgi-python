@@ -121,13 +121,20 @@ def _is_simple_map(dtype: pa.DataType) -> bool:
 
 
 def _is_supported_field(field: pa.Field[Any]) -> bool:
-    return _is_simple_scalar(field.type) or _is_simple_list(field.type) or _is_simple_map(field.type)
+    return (
+        _is_simple_scalar(field.type)
+        or _is_simple_list(field.type)
+        or _is_simple_map(field.type)
+        or pa.types.is_struct(field.type)
+    )
 
 
 def _cpp_param_type(field: pa.Field[Any]) -> str:
     """C++ parameter type for a schema field (with std::optional<T> for nullable)."""
     base: str
     t = field.type
+    if pa.types.is_struct(t):
+        return "const std::shared_ptr<arrow::Array>&"
     if t.equals(pa.binary()):
         base = "std::vector<uint8_t>"
     elif t.equals(pa.string()):
@@ -309,8 +316,34 @@ def _emit_builder(
 
     # Body — emit one push_back per field.
     pushes: list[str] = []
-    for f in schema:
-        pushes.append(f"\t{_build_array_call(f, f.name, method_name=method_name)}")
+    for i, f in enumerate(schema):
+        if pa.types.is_struct(f.type):
+            param = f.name
+            pushes.extend(
+                [
+                    f"\tif ({param}) {{",
+                    f"\t\tif ({param}->length() != 1 || !{param}->type()->Equals(schema->field({i})->type())"
+                    + (f" || {param}->IsNull(0)" if not f.nullable else "")
+                    + ") {",
+                    f'\t\t\tthrow {exception_type}("{func_name}: invalid {param} struct");',
+                    "\t\t}",
+                    f"\t\tarrays.push_back({param});",
+                    "\t} else {",
+                ]
+            )
+            if f.nullable:
+                pushes.extend(
+                    [
+                        f"\t\tauto null_array = arrow::MakeArrayOfNull(schema->field({i})->type(), 1);",
+                        f"\t\tif (!null_array.ok()) throw {exception_type}(null_array.status().ToString());",
+                        "\t\tarrays.push_back(null_array.ValueOrDie());",
+                    ]
+                )
+            else:
+                pushes.append(f'\t\tthrow {exception_type}("{func_name}: missing {param} struct");')
+            pushes.append("\t}")
+        else:
+            pushes.append(f"\t{_build_array_call(f, f.name, method_name=method_name)}")
     body = "\n".join(pushes)
 
     out = io.StringIO()

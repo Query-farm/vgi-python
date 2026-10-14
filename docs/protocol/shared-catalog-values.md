@@ -607,3 +607,133 @@ relevant cache. `make test_dependencies` exercises real native schema lifecycle,
 concurrent metadata snapshots, rollback, reconnect and both cache settings.
 Full SDK provider coverage, native 2.0 qualification, broader freeze and release
 remain open.
+
+## Prepared read queries and typed parameters
+
+This development contract is part of the combined successor release. It does
+not reserve a separate minor release. The Python worker/client and finite
+reference provider implement this lifecycle; the engine adapters and general
+provider qualification remain open. Generated SDK records alone do not enable
+query execution. The native extension continues to build against DuckDB 1.5
+and sends no query offer until its explicit adapter is implemented.
+
+`ClientCapabilities.query_pushdown` is a nullable inline
+`ClientQueryCapabilities` struct. It offers `encodings`, `semantic_profiles`,
+the actual `engine_version`, and `max_query_bytes`. Absence selects no query
+support. Unknown offers may be ignored. `CatalogAttachResult.query_pushdown`
+is a nullable inline `QueryCapabilities` struct containing the selected
+`encoding`, `semantic_profiles`, `execution_modes`, `backend_engine`,
+`backend_version`, `capability_revision`, `default_evaluation_context`, and
+`max_query_bytes`. The selected SQL limit is the minimum of the two limits.
+The offer and selection travel inside the authenticated attachment; a later
+capability or policy revision requires reattachment before more execution.
+
+The first encoding is `duckdb.sql.v1`. `vgi.remote.readonly.v1` selects
+`explicit` provider-dialect execution. `vgi.duckdb.relational.v1` selects
+`automatic` execution and requires transaction support plus provider
+certification for the actual client engine build. A backend named DuckDB does
+not establish semantic equivalence. No current reference advertises automatic
+support.
+
+`QueryEvaluationContext` contains `timezone` (default `UTC`), `collation`
+(`binary`), `default_order` (`asc`), `default_null_order` (`nulls_last`), and
+`preserve_insertion_order` (`true`). Context equality is exact; the provider
+must implement or decline the requested context. The context digest is SHA-256
+of `vgi.query.context.v1\0`, followed by the encoding, semantic profile, timezone,
+collation, order, and null order, each UTF-8 encoded and prefixed by its unsigned
+four-byte big-endian length, then one byte (`0`/`1`) for insertion order.
+This framing is independent of Arrow IPC serialization details.
+
+### Parameter batches
+
+Parameters use the existing one-row `TypedValueBatch` carrier, with schema
+metadata `vgi.query.parameters.v1` set to `named` or `positional`. There is no
+parallel JSON type list. Every value retains its Arrow type, nullability, and
+recursive field metadata. A typed NULL is a supplied value. Zero parameters
+are an explicit one-row, zero-column batch with the mapping metadata.
+
+Named fields contain exact, unique, nonempty placeholder names without a
+leading `$`, `:`, `@`, or `?`; numeric-only names are invalid. Positional fields
+are exactly `1` through `N`, in order. One repeated SQL placeholder maps to one
+field. Names and metadata are not normalized; the provider additionally checks
+its dialect's identifier rules. Duplicate metadata keys, omitted values,
+multiple rows/batches, trailing IPC data, and unsupported mappings reject.
+
+Preparation receives schema-only IPC. Each execution receives a full one-row
+IPC batch with exactly that schema, including field order, names, types,
+nullability, schema metadata, and nested metadata. Changes require another
+preparation. Values remain bound parameters, never SQL interpolation. A
+provider must fix binding to the declared types even when NULL-valued backend
+parameters would otherwise produce value-dependent overload resolution.
+
+### Preparation and execution
+
+`catalog_query_prepare(request)` is a unary describe/authorize operation; it
+must not execute the result query, including through a LIMIT 0 workaround.
+The request fields are:
+
+| Fields | Contract |
+| --- | --- |
+| `attach_opaque_data`, optional `transaction_opaque_data` | Current authenticated attachment and, when supplied, its transaction. Empty handles reject. |
+| `encoding`, `semantic_profile`, `mode`, `capability_revision` | Must match the immutable attachment agreement. |
+| `query`, `parameter_schema`, `evaluation_context` | Bounded SQL, schema-only IPC, and inline context. |
+| optional `catalog_version`, `catalog_etag` | Metadata snapshot hints; zero and empty etags are preserved rather than treated as absent. |
+| `referenced_objects` | Inline `QueryObjectReference` records, each with an inline canonical `CatalogObjectRef` and schema-only `expected_schema`. Explicit mode requires an empty list. |
+| optional `expected_output_schema`, `required_ordering` | Exact output contract when supplied; ordering is `unspecified` or `query_order`. |
+
+Automatic mode requires a transaction, metadata version, expected output
+schema, and a nonempty table-only object manifest. Raw schema path components
+remain attachment-relative. The provider must validate the complete logical
+catalog, authorization, and data snapshot, not merely compare metadata versions.
+
+`CatalogQueryPrepareResult` is an exclusive accepted/declined union. A decline
+has `status=declined`, a bounded `reason_code`, optional `reason_detail`, and
+all acceptance fields NULL. A placement decline occurs before execution;
+malformed input, authorization failures and backend errors remain errors.
+Acceptance requires a nonempty opaque `prepared_query_token`, output schema,
+result ordering, context digest and absolute expiry. Validated catalog
+version/etag and row/byte estimates are optional, except automatic acceptance
+requires the validated version. Required output schema and ordering must match.
+
+Execution uses TABLE `bind`/`init` with the reserved, schema-less name
+`__vgi_catalog_query`, followed by the existing Arrow result stream. Its two
+nonnull binary positional arguments are the preparation token and parameter
+batch. The SDK owns one executor per Worker, hidden from catalog inventories.
+It accepts only the full output projection and one reader (`max_workers=1`);
+input batches, splits, secondary initialization, scan pushdown, time travel,
+COPY, external settings/secrets, dynamic filters and cache validators reject.
+The output schema, including metadata, remains exact throughout execution.
+
+Preparation tokens bind identity, attachment, transaction, capability revision,
+SQL, parameter/output schemas and context. Bind resolves them without running
+SQL. Each successful primary init starts a new execution; neither an ambiguous
+failure nor a lost owner authorizes a retry or local fallback. Continuation
+tokens resume an existing execution and must never reconstruct it by rerunning
+SQL. The Python client uses `table_scan_continue` for reconnects and rejects the
+older rebind-and-discard resumable path for this executor.
+
+`catalog_query_release(attach_opaque_data, prepared_query_token,
+transaction_opaque_data=None)` idempotently releases an owner's preparation.
+It remains usable for cleanup after expiry or capability withdrawal. Existing
+executions have independent handles/deadlines and survive preparation release
+or expiry. EOS, errors, cancellation, transaction end, attachment revocation
+and execution expiry must release execution resources. Since cancellation is
+best effort, providers need a janitor independent of client release calls.
+
+Protocol bounds are SQL 1 MiB, request/result envelopes 8 MiB, parameter batch
+8 MiB, schema-only IPC 1 MiB, opaque tokens 64 KiB, 1,024 parameters/referenced
+objects, and 32 schema-path components. Recursive parameter metadata validation
+is bounded at depth 64. The SDK limits preparation lifetime to one hour and
+execution lifetime to 24 hours; providers should choose shorter leases and
+enforce resource-count and storage quotas.
+
+The SQLite reference stores immutable preparations and ordered Arrow fragments
+in shared storage. It binds only six exact read queries over scalar parameters
+and an immutable seven-row relation, with no general SQL sandbox or automatic
+equivalence claim. It materializes results during init, uses two-minute leases,
+64 resources and a 16 MiB result-storage quota, and exposes an independent sweep
+operation for abandoned resources. Public HTTP tests cover typed NULL rebinding,
+reconnect to a different worker, cancellation, release, transaction end,
+ownership, schema mismatch, lost results, expiry and policy changes. General
+provider authorization/snapshot integration, a scheduled production janitor,
+native explicit/automatic adapters and performance qualification remain open.

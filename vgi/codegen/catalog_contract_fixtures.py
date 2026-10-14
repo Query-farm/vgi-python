@@ -32,8 +32,20 @@ from vgi.catalog.layout import (
 )
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
+from vgi.catalog.query import (
+    QUERY_AUTOMATIC,
+    QUERY_ENCODING,
+    QUERY_EXPLICIT,
+    CatalogQueryPrepareRequest,
+    CatalogQueryPrepareResult,
+    ClientQueryCapabilities,
+    QueryCapabilities,
+    QueryEvaluationContext,
+    QueryObjectReference,
+)
 from vgi.column_path import RequiredFilterPaths
 from vgi.protocol import TableCreateRequest, VgiProtocol
+from vgi.query_parameters import QueryParameters
 from vgi.typed_values import TypedValueBatch
 
 
@@ -200,6 +212,63 @@ def render() -> str:
         empty_dependency_snapshot=DependencySnapshot(catalog_version=0),
     )
     encoded = {name: record.serialize_to_bytes() for name, record in records.items()}
+    parameters = QueryParameters.from_batch(values.batch, mode="named")
+    context = QueryEvaluationContext()
+    query_offer = ClientQueryCapabilities(
+        encodings=[QUERY_ENCODING],
+        semantic_profiles=[QUERY_AUTOMATIC, QUERY_EXPLICIT],
+        engine_version="fixture-client-build",
+    )
+    query_capabilities = QueryCapabilities(
+        encoding=QUERY_ENCODING,
+        semantic_profiles=query_offer.semantic_profiles,
+        execution_modes=["automatic", "explicit"],
+        backend_engine="duckdb",
+        backend_version="fixture-provider-build",
+        capability_revision="policy-1",
+        default_evaluation_context=context,
+    )
+    reference = QueryObjectReference(object=table, expected_schema=schema.serialize().to_pybytes())
+    prepare = CatalogQueryPrepareRequest(
+        attach_opaque_data=b"attachment",
+        transaction_opaque_data=b"transaction",
+        encoding=QUERY_ENCODING,
+        semantic_profile=QUERY_AUTOMATIC,
+        mode="automatic",
+        capability_revision="policy-1",
+        query='SELECT * FROM "table"',
+        parameter_schema=parameters.schema_bytes(),
+        evaluation_context=context,
+        catalog_version=0,
+        catalog_etag="",
+        referenced_objects=[reference],
+        expected_output_schema=schema.serialize().to_pybytes(),
+        required_ordering="query_order",
+    )
+    accepted = CatalogQueryPrepareResult(
+        status="accepted",
+        prepared_query_token=b"opaque-preparation",
+        output_schema=prepare.expected_output_schema,
+        result_ordering="query_order",
+        validated_catalog_version=0,
+        validated_catalog_etag="",
+        context_digest=context.digest(prepare.encoding, prepare.semantic_profile),
+        expires_at_epoch_ms=2_000_000_000_000,
+        estimated_rows=0,
+        estimated_bytes=0,
+    )
+    query_records: dict[str, ArrowSerializableDataclass | QueryParameters] = dict(
+        query_offer=query_offer,
+        query_capabilities=query_capabilities,
+        query_context=context,
+        query_object_reference=reference,
+        query_prepare=prepare,
+        query_accepted=accepted,
+        query_declined=CatalogQueryPrepareResult(status="declined", reason_code="unsupported_query"),
+        query_parameters=parameters,
+        query_empty_parameters=QueryParameters.empty(),
+    )
+    encoded.update({name: record.serialize_to_bytes() for name, record in query_records.items()})
     encoded.update(column_requests())
     return (
         json.dumps(

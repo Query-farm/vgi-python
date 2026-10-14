@@ -164,7 +164,9 @@ def _params(m: RegistryMethod, pascal: str, request_field: list[pa.Field[Any]]) 
         request_field[:] = [field]
         go = _record_type(record, m.name)
         if "." in go:
-            raise GeneratorError(f"{m.name}: cannot declare VgiRpcParamsSchema on {go} from another package")
+            # A local defined type retains the generated record's fields while
+            # allowing the RPC envelope method to live in this package.
+            go = go_types.go_name(record) + "Wire"
         return go, None
 
     name = f"{pascal}Params"
@@ -367,6 +369,14 @@ def _render_body(model: Sequence[RegistryMethod]) -> str:
             wrapped.setdefault(gm.params_type, []).append(gm.method.name)
     for go_type, names in sorted(wrapped.items()):
         lines.append("")
+        method = next(gm.method for gm in methods if gm.method.name == names[0])
+        record = method.params[0].record
+        assert record is not None
+        generated = _record_type(record, method.name)
+        if generated.startswith("generated."):
+            lines += _comment([f"{go_type} preserves the generated record inside the packed request envelope."])
+            lines.append(f"type {go_type} {generated}")
+            lines.append("")
         lines += _comment(
             [
                 f"VgiRpcParamsSchema advertises the wrapped protocol shape of vgi.v2 {', '.join(names)}: "

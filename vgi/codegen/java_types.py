@@ -166,6 +166,9 @@ def _component(f: pa.Field[Any], origin: str) -> _Component:
             ann = (f"@ArrowField(ArrowFieldType.{override})",) if override else ()
             return _Component(f.name, boxed if f.nullable else plain, (*nullable, *ann))
 
+    if pa.types.is_struct(dtype):
+        return _Component(f.name, _element(dtype, where), nullable)
+
     if pa.types.is_list(dtype):
         item = dtype.value_field
         if item.name != "item" or not item.nullable:
