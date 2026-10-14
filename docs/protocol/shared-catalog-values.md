@@ -1,8 +1,10 @@
 # Shared catalog values and column paths
 
-These definitions are implemented on the DuckDB 2.0 preparation branch in the
-normal SDK modules and generator inventories. They are part of the combined
-successor contract. The published protocol is still `vgi.v2` / `2.1.0`; the
+The operation sections through prepared read queries describe implemented
+records and bounded reference behavior on the DuckDB 2.0 preparation branch.
+The combined-design section at the end specifies the next changes; those
+records, profiles and methods are not implemented or advertised yet. Both are
+part of one combined successor contract. The published protocol is still `vgi.v2` / `2.1.0`; the
 unpublished development snapshot now carries typed schema/table options,
 layouts, raw column mutation paths, and capability negotiation. See the
 operation contracts below.
@@ -738,3 +740,566 @@ reconnect to a different worker, cancellation, release, transaction end,
 ownership, schema mismatch, lost results, expiry and policy changes. General
 provider authorization/snapshot integration, a scheduled production janitor,
 native explicit/automatic adapters and performance qualification remain open.
+
+
+## Combined expression, constraint, transaction and trigger design
+
+**Design checkpoint: 2026-10-14. Status: specified for implementation and review;
+not frozen, generated, executable or advertised.** The definitions in this
+section supersede placeholder records in the manifest and the older trigger
+proposal. They belong to the same major transition as the existing development
+changes. Engine pins and the 82-method implemented inventory remain unchanged.
+A specified shape does not close P1: the acceptance cases below still require
+reference behavior and cross-SDK qualification.
+
+### Shared SQL definitions and evaluation phases
+
+Keep `SqlExpression(sql, profile, schema_path)` for exactly one **scalar** SQL
+expression and add required `evaluation_context: QueryEvaluationContext`.
+Reuse the existing context record and its explicit timezone, collation, order,
+NULL order and insertion-order settings. Do not create another settings map or
+infer semantics from a backend's name/version. Profiles must specify every
+additional relevant engine setting as fixed or unsupported; the context record
+is not permission to inherit arbitrary session state.
+
+Add `SqlStatement` with those same four fields for one query/DML statement.
+Its selected semantic profile specifies the allowed statement kind. It cannot
+contain scripts, transaction control or unrestricted statement execution.
+Scalar expressions, table-macro queries and trigger actions have distinct
+profiles and bind scopes despite sharing text/context conventions. No private
+AST, bound-plan serialization or unversioned engine-to-SQL map crosses the wire.
+The context digest used by existing queries is unchanged; reusing the record
+for persisted definitions does not make their digests query tokens.
+
+The receiving authority binds the definition in the containing operation's
+transaction, under the raw owner `schema_path` and declared row/parameter scope.
+The containing request supplies the table/object and target `ColumnPath`.
+No client catalog alias, implicit caller search path, cross-attachment target or
+temporary dependency is permitted for a persistent definition. Binding resolves
+types, casts, permissions and dependencies before effects. A client's claimed
+dependency list is neither authoritative nor authorization. Readback preserves
+the SQL/profile/context and resolved type without claiming source whitespace
+round trips. Renames either rewrite/rebind all affected definitions atomically
+without changing meaning, or reject; cache invalidation alone is insufficient.
+
+| Use | Binding and evaluation rule |
+| --- | --- |
+| Column DEFAULT | Bind at definition time without row references or query parameters. Evaluate for each row requiring a default at INSERT/defaulted UPDATE, not universally at CREATE. Deterministic scalar support does not imply volatile, sequence, subquery, aggregate or window support. |
+| ADD COLUMN | Distinguish population of existing rows from the future-write default. Preserve NULL parent structs for nested fields. An engine-expanded ADD/UPDATE/SET DEFAULT is one atomic statement, even if implemented by multiple calls. |
+| Generated column | Store generated category, expression and declared/resolved Arrow type. The first profile targets deterministic virtual generation. Bind in dependency order and reject cycles. Stored generation needs its own qualified rewrite profile. |
+| CHECK | Bind to the candidate row. FALSE rejects; TRUE or NULL passes. Enforced addition validates existing rows and installs future checks atomically. |
+| ALTER TYPE USING | Evaluate once per affected row against the old schema, then apply the specified target-type cast. Validate data, dependent definitions and schema together; never substitute a future DEFAULT for USING. |
+| Partition, sort and index key | Deterministic row expressions. Layout retains explicit direction/NULL order and REWRITE/FUTURE_WRITES semantics; an index or physical layout does not imply scan ordering. |
+| Macro default | Retain `duckdb.macro.default.v1`: the owner evaluates once at CREATE and discovery returns the resolved typed literal. It is not an invocation-time closure over other parameters. |
+| Macro body | Scalar bodies use scalar scope; table bodies use query scope. `MacroOverload` gains required `evaluation_context`; supplied default-expression contexts must match it. Keep overload/parameter identity. |
+| Trigger action | One profiled DML statement with explicit transition-relation scope and execution owner. It is not a scalar expression or a general remote SQL execution capability. |
+
+In the combined breaking transition, versioned Arrow field metadata keys
+`vgi.column.default.v1` and `vgi.column.generated.v1` carry single-record IPC
+`SqlExpression` values; `vgi.column.generation.v1` carries `virtual` or `stored`.
+The containing Arrow field remains authoritative for the logical type. Absent
+default metadata means no declared default; a SQL expression `NULL` is a
+declared default. Removal uses the existing explicit mutation, not an empty
+payload. Generated category and expression must occur together. Reject legacy
+`default`/generated metadata alongside these authoritative keys rather than
+choosing one silently. Before freeze, prove arbitrary metadata-byte preservation
+through every SDK and define the native translation of existing UTF-8 metadata.
+Existing default/USING mutation payloads change to `SqlExpression` IPC; no second
+column-RPC family is added. CHECK and index definitions use the same record.
+
+The existing `vgi.expression.duckdb.scalar.v1` reference proves only its narrow
+arithmetic/string/NULL subset. It remains unqualified for these additional roles.
+The implementation checkpoint must publish a finite grammar/function/type matrix
+and role-specific eligibility rules before selecting broader expression profiles.
+
+### Canonical constraints and index definitions
+
+Replace the five parallel constraint collections in `TableCreateRequest` and
+`TableInfo` in this major transition. There is one authoritative representation:
+creation carries `constraint_definitions: list<binary>` of `ConstraintDefinition`;
+discovery carries `constraints: list<binary>` of `ConstraintInfo`. Both lists
+are required; empty means no constraints. CREATE definitions request
+ENFORCED + ALL_ROWS and require the enforcement profile; reject any downgrade.
+Metadata-only creation is not implied by this request shape. Native adapters translate engine
+logical indices into raw paths at the boundary. They must not transmit physical
+indices, synthetic row IDs, backing-index OIDs or both legacy and canonical forms.
+An absent read profile cannot be handled by hiding enforced constraints or
+returning a false empty list: reject materialization when the client cannot
+honor the table's required semantics.
+
+| Record/field | Proposed wire value and invariant |
+| --- | --- |
+| `ConstraintDefinition.declared_name` | Nullable UTF-8 SQL label. Non-NULL labels are unique within the table under the provider's identifier rules. It is not mutation identity. |
+| `kind` | Enum `NOT_NULL`, `UNIQUE`, `PRIMARY_KEY`, `CHECK`, `FOREIGN_KEY`. |
+| `column_paths` | Ordered, non-NULL raw `ColumnPath` list. NOT_NULL has one; UNIQUE/PRIMARY/FK have nonempty duplicate-free paths; CHECK has none. |
+| `check_expression` | Nullable `SqlExpression` IPC; required exactly for CHECK. |
+| `foreign_key` | Nullable `ForeignKeyDefinition` IPC; required exactly for FK. |
+| `ForeignKeyDefinition.referenced_table` | `CatalogObjectRef` for a table in the same attachment; no client alias. |
+| `referenced_column_paths` | Ordered, duplicate-free paths with the same arity as the local key. |
+| `match`, `on_update`, `on_delete` | Explicit enums: SIMPLE/FULL and NO_ACTION/RESTRICT/CASCADE/SET_NULL/SET_DEFAULT. No MATCH PARTIAL or deferred checking is implied. |
+| `ConstraintInfo.ref` | Sole identity: `CatalogObjectRef(kind="constraint", schema_path, owner_table, name)`. `name` is a provider-issued persisted logical key, compared exactly and never reused; it is not an engine OID or SQL label. |
+| `definition` | Complete canonical `ConstraintDefinition` IPC. |
+| `enforcement`, `validation` | ENFORCED/METADATA_ONLY and ALL_ROWS/FUTURE_WRITES/UNVALIDATED. Only ENFORCED + ALL_ROWS may become trusted engine constraint facts. |
+| `referenced_constraint` | Nullable canonical constraint ref; required for an FK and NULL otherwise. Provider binds the actual referenced UNIQUE/PRIMARY key at creation. |
+
+Extend `CatalogObjectRef` to accept `constraint` with required `owner_table`,
+as it already does for triggers. Changing a declared label preserves the
+logical key. Table/schema renames update the owning coordinates and all graph
+references atomically. An engine that discarded a SQL label reports NULL;
+it cannot invent a preserved user declaration. Providers unable to persist
+logical keys cannot select canonical mutation support.
+
+Add one mutation method, `catalog_table_constraints_apply(request)`, replacing
+the manifest's provisional separate add/drop methods. Its request contains
+attachment, optional transaction, raw table identity, required nonempty
+`expected_revision: binary`, and ordered nonempty changes. Read discovery's
+`TableInfo.definition_revision` before mutation; a stale revision rejects.
+Add this nullable binary field to discovery; it is required nonempty whenever
+canonical mutation support is selected. It changes on relevant schema,
+constraint, enforcement or dependency changes, including changes through existing
+column RPCs, and is never reused across DROP/recreation. No-op mutations retain
+it; comment-only changes may change the catalog version without changing this
+semantic revision. A change is a strict union:
+
+| Change | Fields and behavior |
+| --- | --- |
+| ADD | Complete definition; requested enforcement/validation. Allocate identity only when the whole request succeeds. |
+| DROP | Canonical constraint ref and explicit CASCADE boolean. Missing identity errors; no silent retargeting by SQL label. |
+| RENAME | Ref and nullable replacement declared label; key and semantics remain unchanged. |
+| REPLACE | Ref, complete replacement definition and requested enforcement/validation. Retains the key, but revalidates every dependent binding. |
+
+The response is `ConstraintSnapshot(table, definition_revision, constraints)`
+from the successful mutation snapshot. All changes validate and publish together;
+unsupported kinds/actions reject before mutation. Multiple changes may not
+address the same existing key in one request; a newly allocated ADD cannot be
+addressed until readback. Existing SET/DROP NOT NULL operations update this same
+canonical state and obey the same dependencies. Their native grammar remains
+available; they do not maintain a second constraint collection.
+
+ENFORCED + ALL_ROWS requires validation of existing data and enforcement for
+all subsequent writes, including COPY, other clients and provider-side writes.
+A metadata-only declaration is never an enforcement promise. PRIMARY permits
+one primary key and contributes NOT NULL. Dropping it removes a field's NOT NULL
+property only when no independent enforced requirement remains. UNIQUE permits
+NULL-containing keys under the selected SQL profile. Arrow `nullable=false`
+and canonical enforced NOT NULL/PRIMARY semantics must agree in both creation
+and discovery. Metadata-only/unvalidated declarations cannot justify narrowing
+Arrow nullability. Nested STRUCT paths observe visible values: a NULL parent
+hides its children. List indexing/traversal is not implied.
+
+Baseline FK execution is immediate MATCH SIMPLE with NO_ACTION/RESTRICT. Any
+NULL local component exempts a SIMPLE row; FULL permits all NULL or no NULL.
+FULL and each propagating action require their additional selected profile.
+SET_NULL/SET_DEFAULT must still satisfy affected constraints. CASCADE must
+atomically apply all effects or fail. Cross-attachment targets reject. Broader
+same-attachment cross-schema references can be implemented by providers; the
+native pin's narrower same-schema rule still applies. Changing/dropping a
+referenced key cannot silently retarget an FK to another available key.
+
+Retain existing index create/get/list/drop RPCs. Replace string expressions and
+stringified options in their successor records with an `IndexDefinition`:
+`table: CatalogObjectRef`, `algorithm: string`, ordered nonempty `keys`,
+`options: TypedValueBatch`, explicit `constraint_type: NONE|UNIQUE|PRIMARY`, and
+nullable `associated_constraint: CatalogObjectRef`. Each key contains exactly
+one raw column path or `SqlExpression`; implicit ordering/collation is forbidden.
+Expression context supplies collation. For a raw column key, the initial profile
+admits only explicitly established binary column collation; it rejects a
+nonbinary or unresolved column collation. Broader collation support remains
+part of the separate candidate review and cannot be inferred from an algorithm
+name. Physical key-order options require an algorithm profile. A UNIQUE index does not silently create a logical PRIMARY
+constraint. Constraint-associated indexes require an authoritative association;
+PRIMARY without one rejects. Add `catalog_index_option_definitions` using the
+existing `OptionDefinitions` representation. `IndexInfo` returns effective
+options through `OptionState` and the complete resolved definition. Unknown
+algorithms, options, types or expressions reject before index construction.
+
+Profiles use existing `CatalogCapabilities` categories: read
+`vgi.constraint.records.read.v1` and `vgi.index.definition.read.v1`; DDL
+`vgi.constraint.create.v1`, `vgi.constraint.mutate.v1`,
+`vgi.index.definition.create.v1`, `vgi.index.drop.v1`; write
+`vgi.constraint.enforce.v1`. DDL profiles require corresponding readback.
+Define `vgi.constraint.fk.match_full.v1` and action-specific
+`vgi.constraint.fk.{cascade,set_null,set_default}.v1` as additional write
+profiles. All accepted requests must satisfy the profile; a provider may reject
+unsupported constraint kinds, mutation forms or algorithms before effects.
+These names are proposed and currently absent from the negotiated registry.
+
+The inspected 2.0 pin supports CREATE-time constraint forms but accepts only
+UNIQUE/PRIMARY through general ADD CONSTRAINT; SET/DROP NOT NULL have separate
+paths. DROP CONSTRAINT is rejected by its transformer. General provider mutation
+support is still included in this protocol design. Native adapters reject forms
+the engine cannot express rather than simulate unrelated SQL. Existing native
+index RPC codecs are not evidence that native index creation is integrated.
+
+### Dependencies for semantic ALTER
+
+Keep `ObjectDependency.kind = requires|owned` for DROP behavior. Add required
+`blocks_alter: bool` and nullable, nonempty `subject_column_paths` to specify
+semantic ALTER protection; NULL protects the whole subject. Harmless comments
+or label changes do not count as semantic ALTER. Edge identity is the dependent
+ref, nullable dependent column path, and subject ref. Merge subject paths only
+within that identity; reject conflicting edge kinds or ALTER flags. Protecting a parent path also protects
+its nested descendants, and changing a parent invalidates dependent child paths.
+
+Constraint, trigger and index refs participate in the same graph. A constraint
+is owned by its table; an FK requires the exact referenced key and referenced
+columns. A dedicated backing index is owned by its constraint and the constraint
+requires the index. That mixed `requires`/`owned` cycle is legal; ownership cycles
+remain invalid. A shared index is independently owned and required by each user.
+DROP INDEX RESTRICT cannot disable enforcement. A supported CASCADE or replacement
+must authorize and atomically resolve the complete closure, including FKs.
+
+Generated-column dependency ordering also needs a nullable
+`dependent_column_path`. This identifies the column within a dependent table;
+it is NULL for object-level dependents. Same-table column edges become legal
+only with distinct, valid column targets. Build cycle nodes from full object
+and column identity; multiple generated columns in one table do not collapse
+into a single self edge. Their column dependency graph must be acyclic.
+A new field does not make the current object-only planner column-aware: extend
+validation, rename/type/drop planning and cross-SDK fixtures before qualification.
+The current dependency reference remains evidence only for its existing schema,
+table and simple-view scope.
+
+### Transaction guarantees and composite writes
+
+Use `CatalogCapabilities.transaction`, not a second `TransactionCapabilities`
+boolean record. Retain existing begin/commit/rollback and attachment-bound,
+authenticated transaction handles. Specify these additional independent promises:
+
+| Profile | Required guarantee |
+| --- | --- |
+| `vgi.transaction.ddl.v1` (existing) | Advertised DDL, its metadata/dependencies and transaction-local reads commit or roll back together. |
+| `vgi.transaction.dml.v1` | Advertised data mutations share the worker transaction and roll back together. |
+| `vgi.transaction.mixed.v1` | DDL plus DML, metadata and dependencies commit atomically; requires DDL and DML profiles. |
+| `vgi.transaction.multiple_dml.v1` | All base/trigger operations of an admitted multi-DML statement share one atomic transaction; requires DML and the statement lifecycle below. |
+| `vgi.transaction.statement_rollback.v1` | A failed statement restores a provider savepoint while retaining earlier transaction work. Without this profile, failure makes the entire transaction rollback-only. |
+
+A nonempty token or `supports_transactions=true` does not establish any of these
+additional promises. Tokens bind principal, attachment and transaction; wrong,
+expired, unknown or terminal tokens reject further mutation. Data, schema,
+dependency graph and visible catalog versions publish together. Committed state
+is unchanged on rollback. No cross-catalog/attachment distributed atomicity is
+promised, and sequence allocation or external effects are not silently included.
+Reject a definition requiring unqualified external effects before execution.
+
+Preflight the complete expanded statement before its first effect: CTAS,
+ADD/UPDATE/SET DEFAULT, follow-up constraints, multi-DML CTEs and engine-owned
+trigger actions must not discover missing atomicity after partial mutation.
+Once any constituent operation fails, COMMIT cannot publish its partial effects.
+Repeated COMMIT of a committed token and repeated ROLLBACK of a rolled-back token
+are idempotent within a declared retention window; opposite terminal operations
+reject. These stronger completion promises require a provider implementation;
+the existing transaction boolean alone is insufficient.
+
+A lost mutation/COMMIT response means unknown outcome. Reconnecting, DETACH or
+attempting ROLLBACK does not prove that COMMIT failed. Baseline clients never
+replay a possibly dispatched mutation. Audit all generic catalog unary retries:
+this checkpoint's source review found that native stale-pool retry remains for
+other catalog methods even though query preparation now disables it. Fixing and
+testing this is required before advertising the new mutation profiles.
+
+### Trigger definitions and statement ownership
+
+Reuse `CatalogObjectRef(kind="trigger", schema_path, owner_table, name)`.
+Persistent definitions are worker-authoritative and survive reconnect/DETACH;
+local engine entries are versioned materializations. Temporary status follows
+the owning table and its lifetime, never an independent persistent-creation flag.
+
+`TriggerDefinition` contains the ref, `timing: BEFORE|AFTER`, singular
+`event: INSERT|UPDATE|DELETE`, `granularity: STATEMENT|ROW`,
+`update_columns: list<ColumnPath>`, nullable `new_table_alias`/`old_table_alias`,
+`action: SqlStatement`, `execution_owner: ENGINE|BACKEND`, nullable comment and
+string tags. `TriggerInfo` adds a nonempty opaque definition revision and complete
+resolved dependencies. One definition has one event. Empty UPDATE paths means
+any UPDATE; nonempty paths mean columns mentioned in SET, not values that
+actually changed. No WHEN clause or arbitrary SQL script is introduced.
+
+Use `catalog_table_triggers`, `catalog_trigger_get`, `catalog_trigger_create`,
+`catalog_trigger_drop`, and `catalog_trigger_alter_metadata`. They take existing
+attachment/transaction context and raw object identity. CREATE takes a complete
+definition plus ERROR/IGNORE/REPLACE; REPLACE atomically changes definition,
+dependencies and write requirements. Metadata alteration takes
+`CatalogMetadataChanges` plus an expected revision. DROP has explicit
+ignore-missing/CASCADE semantics. GET returns optional `TriggerInfo`; listing
+returns complete infos, catalog version and table requirements revision from
+one authorized snapshot. CREATE/ALTER return canonical readback. Incomplete
+permission-filtered listing cannot be used as an executable trigger plan.
+
+The initial `vgi.trigger.duckdb.statement.v1` action profile follows the inspected
+pin: one INSERT/UPDATE/DELETE/MERGE action, statement BEFORE/AFTER forms, one
+trigger event, and only one-component UPDATE OF paths. A literal identifier
+`"a.b"` stays one component. Transition tables are AFTER STATEMENT only, cannot
+coexist with UPDATE OF, and respect event applicability (no OLD for INSERT or
+NEW for DELETE). INSTEAD OF, BEFORE ROW and UPDATE ROW reject. Row and statement
+triggers cannot mix for one table/event. A separate
+`vgi.trigger.duckdb.row_after.v1` profile would cover only the pinned AFTER
+INSERT/DELETE subset; generated source columns, row transition tables,
+unsupported action forms, cascading row triggers, RETURNING and ON CONFLICT
+remain rejected. Explicitly reject row UPDATE action bodies, bodies without an
+applicable OLD/NEW column reference, row self-writes, and recursive trigger
+cycles. Statement INSERT ON CONFLICT DO UPDATE with AFTER NEW transition tables
+is also rejected by the pin. Do not silently turn a row trigger into a statement
+trigger.
+
+Execution ownership is exclusive for the complete table trigger plan in the
+initial profile. ENGINE means the qualified client expands definitions once and
+the backend does not also fire them. BACKEND means the provider owns all trigger
+execution; clients never install those definitions as executable engine entries.
+The initial profile rejects mixed owners rather than leave relative ordering
+undefined. Ordering is an explicit provider-resolved list of ref/revision pairs
+within each event/timing/granularity phase. The DuckDB profile must match the
+pinned engine's case-insensitive alphabetical order and validate that order;
+list order is not incidental hash-map order.
+
+Add nullable `write_requirements: WriteRequirements` to `TableInfo` and the
+existing write-discovery result (`WriteFunctionResult`, currently an alias of
+`ScanFunctionResult`), including inlined results. Non-write discovery uses NULL.
+The record carries table identity, nonempty `requirements_revision: binary`,
+required profile names, execution owner, per-operation minimum result modes,
+and ordered trigger ref/revision lists for each phase. Reuse existing
+`count < rows < changes`; ENGINE transition-table/row-image support requires
+exact `changes`, including when the caller omitted RETURNING.
+
+Add nullable `catalog_write: CatalogWriteBinding` to `BindRequest`, containing
+table identity, operation and expected requirements revision. The worker resolves
+that table independently from its registered write function and returns the
+validated ownership/revision in existing sealed `bind_opaque_data`; no second
+public bind token is needed. Add nullable `write_context: WriteExecutionContext`
+to `InitRequest`, containing statement ticket, operation ID, stream ID and
+nullable source change-set ID for an action consuming a parent operation's
+OLD/NEW relation.
+The worker checks the agreement, sealed bind and current transactional
+requirements atomically before effects. A cached table, inline function or old
+bind is not permission to bypass a newly required profile. Missing writer context
+is not grandfathered. Reject incapable writers before mutation, including 1.5
+clients facing ENGINE triggers. A backend-owned plan may accept legacy writers
+only if it can independently recover and enforce the complete SQL statement
+semantics; per-batch exchange execution alone is insufficient.
+
+A TABLE batch, stream EOF, `execution_id`, or transactor exchange is not a SQL
+statement boundary. Include these methods and records in the combined contract:
+
+| Method | Proposed request and outcome |
+| --- | --- |
+| `catalog_write_statement_begin` | Attachment, nonempty transaction, unique statement ID, optional parent statement ticket, complete finite write intents/operation IDs and expected requirement revisions. Return an opaque ticket and canonical pinned plan before any BEFORE action. |
+| `catalog_write_statement_complete` | Attachment, transaction, ticket, and terminal receipts for every declared operation/stream and required trigger action. Return a completion receipt only after all base and AFTER effects succeed. |
+| `catalog_write_statement_abort` | Same owner/ticket and reason. Restore the statement savepoint if qualified; otherwise mark the whole transaction rollback-only. Repeated abort is idempotent; it cannot undo an already committed transaction. |
+
+A `WriteIntent` identifies a nonempty operation ID, target/event, expected
+requirements revision, planned result mode, parent operation where applicable
+and phase (BEFORE/base/AFTER). It also contains immutable
+`updated_column_paths: list<ColumnPath>`: nonempty for UPDATE, empty for INSERT
+or DELETE. These are the SET targets, including assignments leaving values
+unchanged; the authority validates them against the bound operation before
+selecting UPDATE OF triggers. The canonical pinned plan includes ordered
+`predecessor_operation_ids` for every operation, derived by the authority from
+BEFORE/base/AFTER and trigger order. Init rejects until all predecessors have
+authoritative successful completion records. Merely matching final receipts
+cannot justify executing an AFTER action before its base operation. The
+predecessor graph must be acyclic. Trigger actions additionally identify their exact
+trigger ref and definition revision; base operations have neither. The authority
+matches these against the required phase order, rather than treating any write
+to the same target as completion of that trigger. The authority validates the full
+finite action/dependency plan before BEGIN succeeds. Unknown dynamically added
+write targets, unbounded recursion and unqualified parallel plans reject.
+Initial execution permits one stream per operation; stream identity is real,
+but does not advertise parallel/substream execution. All effects use one provider
+transaction. Complete OLD/NEW sets span every input batch, retain duplicates and
+handle zero affected rows. A statement trigger still follows the qualified
+engine's zero-row behavior. Trigger actions use declared operation identities
+and cannot recursively open an unrelated transaction. For the initial ROW
+profile, one action operation is the vectorized action over all applicable rows
+of its parent operation, not repeated invocations of the same operation ID.
+It records the parent's complete change-set identity and preserves multiplicity;
+row batches cannot become independently firing statements.
+
+`WriteOperationReceipt` contains the statement ticket, operation ID, stream ID,
+requirements revision, nullable trigger ref/revision, nonnegative affected-row
+count, nonnegative output-row count, and nullable `change_set_id: binary`.
+Trigger ref/revision must occur together and match the pinned intent. A successful
+`changes` operation has a nonempty change-set ID, one OLD/NEW pair per affected
+row, and output count equal to affected count. Other result modes have no change
+set. The ID names the complete transaction-owned image relation already delivered
+by that operation; it does not imply an extra fetch API or permission to replay
+writes. Actions consuming OLD/NEW include this ID in `WriteExecutionContext`;
+the authority checks that it belongs to their completed parent operation.
+
+Deliver exactly one receipt as `vgi.write.operation_receipt.v1` custom metadata
+encoded as one complete single-record `WriteOperationReceipt` IPC payload,
+on a final zero-row IPC record batch with the agreed output schema, after all
+ordinary output batches. No data may follow that batch. Stream EOS alone is not
+a completion receipt. The authority durably records completion only after the
+operation's effects and full result/change-set production finish; an error
+produces no success receipt and aborts the statement or transaction. A zero-row
+write must still initialize/finalize its declared operation and emit a receipt;
+a client-supplied zero count is not a substitute. Each stream has at most one
+terminal receipt; repeated control acknowledgements must match it exactly.
+COMPLETE's receipt list must match all authoritative operation records, including
+zero-row actions, with no missing or duplicated identities. SDK/native readers
+must preserve and inspect this metadata even when they normally skip empty
+batches. This transport path needs explicit cross-SDK feasibility tests before
+freeze; no new statement capability is inferred from existing stream framing.
+
+Before/base/after phases require authoritative operation completion tracking;
+client-supplied receipts alone cannot prove effects occurred. Tickets have
+states ACTIVE, COMPLETED and ABORTED. Only ACTIVE can transition to either
+terminal state. Repeating the same terminal transition returns the original
+outcome; the opposite transition rejects. Aborting a completed historical ticket
+must never restore a savepoint and erase later successful statements. COMMIT
+rejects while any statement ticket is ACTIVE/incomplete or the transaction is
+rollback-only, so omission of COMPLETE cannot publish base effects without AFTER
+actions. ROLLBACK terminally aborts remaining ACTIVE tickets.
+
+The tuple `(ticket, operation_id, stream_id)` identifies one stream execution.
+The sole stream slot is allocated by `(ticket, operation_id)`; changing the
+stream ID cannot allocate another execution for that operation. A
+duplicate/reconnected init cannot start it again. Reconnect restores control
+and status access only; it does not authorize replay or restart of a consumed
+stream without a separately qualified resumability profile. A reconnect resumes
+only an existing owner/ticket; it never starts a substitute statement. Cancellation,
+expiry, transaction end and DETACH reclaim execution resources and abort or mark
+rollback-only as required. They do not drop persistent trigger definitions.
+Concurrent trigger/constraint changes either serialize with the statement or
+produce a conflict before its effects can commit. The provider must not accept
+stale requirements based solely on a caller's expected revision.
+
+Proposed read/DDL profiles are `vgi.trigger.read.v1`,
+`vgi.trigger.create.v1`, `vgi.trigger.drop.v1`, `vgi.trigger.metadata.v1`.
+SQL/action semantic profiles belong to the read category, as the existing
+scalar-expression profile does; they do not independently grant execution.
+Proposed write profiles are `vgi.write.statement.v1`,
+`vgi.trigger.engine.v1` and `vgi.trigger.backend.v1`; action profiles are additional
+requirements. ENGINE requires statement lifecycle, DML atomicity, matching
+client execution support and the applicable result mode. Read/create profiles do
+not imply execution. Definition changes must also update write requirements
+atomically. None of these profiles is currently advertised.
+
+### Durable mutation outcomes and bounded replay
+
+Include an optional durable-replay contract in this combined design, instead of
+adding identity fields to every existing mutation method. Ordinary methods keep
+their selected successor shapes and the no-automatic-retry rule. A separate
+`vgi.mutation.replay.v1` transaction profile permits these two new methods only
+when the provider can prove durable admission/effect/outcome tracking:
+
+```text
+catalog_mutation_execute(attach_opaque_data, transaction_opaque_data?,
+                         operation_id, method, request) -> MutationReceipt
+catalog_operation_status(attach_opaque_data, transaction_opaque_data?,
+                         operation_id) -> MutationReceipt
+```
+
+`request` is the **exact bytes** of one IPC parameters batch for the normal
+method, validated against that method's schema before dispatch. Preserve those
+bytes for retries; an equivalent re-encoding is not the same request. Inner and
+outer attachment/transaction fields must match exactly; a method without a
+transaction field requires NULL outside. The outer principal remains the only
+principal. Reuse normal authorization, capability checks and mutation handlers;
+this wrapper is not a privileged second dispatch route. Authenticate and check
+identity conflicts first. For an existing identity, return its retained receipt
+without redispatching or reapplying active-transaction/current-definition
+preconditions. STATUS likewise accepts the matching completed transaction
+identity. Otherwise recovery of a COMMIT receipt or an operation completed
+before rollback would be impossible. Only a new admitted operation enters the
+normal mutation checks; terminal transactions cannot accept new effects.
+
+The initial allowlist is explicit: transaction begin/commit/rollback;
+schema create/drop/alter-options/alter-metadata; table create/drop/rename,
+alter-options/alter-layout, comment and column-comment mutations, column
+add/drop/rename/default-set/default-drop/type-change/not-null-set/not-null-drop;
+view create/drop/rename/comment/column-comment; macro create/drop; index
+create/drop; canonical constraint apply; and trigger create/drop/alter-metadata.
+These refer to the exact corresponding `catalog_*` methods in the registry.
+Unknown/unlisted methods reject. Catalog provisioning, ATTACH/DETACH, query
+prepare/execution, discovery, statement lifecycle, stream init/process/finalize
+and either wrapper method are excluded. Wrapping one stream init cannot make a
+streamed write replayable. A future streaming replay profile needs chunk and
+completion identity; it is not advertised by this profile.
+
+`operation_id` is exactly 24 bytes: an 8-byte unsigned big-endian admission
+deadline in epoch milliseconds (positive, at most int64 max), followed by 16
+cryptographically random bytes. The complete value is immutable. Its identity
+is scoped to principal plus attachment across all methods; transaction and
+method are conflict-checked attributes, not namespaces permitting reuse.
+A new request is admitted only when provider admission time is strictly before
+the deadline and the deadline is at most 24 hours ahead. The provider uses a
+durable nondecreasing admission-time watermark shared by workers/restarts;
+clock rollback cannot reactivate an expired ID. Admission after deadline always
+rejects, including a previously known ID; use STATUS to recover its outcome.
+The deadline does not cancel an operation already admitted.
+
+| `MutationReceipt` field | Meaning |
+| --- | --- |
+| `operation_id: binary` | Exact 24-byte identity. |
+| `status` | Enum UNKNOWN, IN_PROGRESS, SUCCEEDED, FAILED. |
+| `request_digest: binary?` | SHA-256 of the method, transaction presence/value and exact inner request bytes; present for known identities. |
+| `result: binary?` | Original successful method-result IPC, NULL for a void method; never a newly executed result. |
+| `error: binary?` | Existing structured RPC error encoded as IPC, present exactly for FAILED. |
+| `expires_at_epoch_ms: int64?` | Guaranteed terminal receipt retention deadline; present exactly for terminal states. |
+
+Digest bytes are SHA-256 of ASCII `vgi.mutation.request.v1` plus NUL, then
+method UTF-8 prefixed by unsigned 64-bit big-endian byte length, one transaction
+presence byte (0/1), the transaction bytes prefixed by the same length format
+when present, and length-prefixed exact request bytes. Store and compare the
+original method/transaction/request as well: hash equality alone is not an
+identity-conflict check. UNKNOWN has all four nullable fields NULL; IN_PROGRESS
+has only a digest; SUCCEEDED has digest/expiry and optional result but no error;
+FAILED has digest/expiry/error and no result. Malformed unions reject.
+
+Admission, duplicate exclusion and durable effect/outcome reconciliation must
+share authoritative storage. Concurrent exact duplicates return the same pending
+or terminal receipt; differing method/transaction/request bytes reject without
+dispatch. Retain unresolved records until reconciled, even past their deadline.
+Never evict pending operations to admit new work; reject new admissions at quota.
+Keep terminal receipts until at least `max(admission_deadline, terminal_time)`
+plus 24 hours. After retention, UNKNOWN does not prove nonexecution. Clients
+must not change the ID/deadline or fall back to the original RPC after an
+ambiguous response. Status cannot dispatch or resume work as a side effect.
+
+SUCCEEDED inside an existing transaction means the operation completed there,
+not that the transaction committed. Its record survives rollback/reconnect so
+replay cannot rerun it. Commit/rollback receipts establish transaction outcome.
+A transport timeout, cancellation or disconnect alone cannot become FAILED:
+uncertain effects remain IN_PROGRESS until authoritative recovery determines
+the outcome. A provider without recoverable transactions/journaling cannot
+select this profile. No exactly-once promise follows merely from carrying IDs.
+
+This profile's feasibility gate includes concurrent duplicates, conflicting
+bytes, crash between effect and receipt, ambiguous COMMIT, rollback after a
+successful inner operation, quota, expiry and clock rollback. Its record and
+method design is included now; reference implementation and advertisement remain
+pending. This decision avoids treating reliable replay as an implicit property
+of the existing transaction token or stream execution ID.
+
+### Design acceptance and implementation order
+
+1. Qualify the expression/context carrier and role matrix, including typed NULL,
+   generated dependency cycles, old-row USING evaluation and schema metadata
+   preservation. Preserve the existing macro-default evaluation distinction.
+2. Implement canonical constraint read/create/apply and typed index records in
+   a durable reference. Prove real enforcement, existing-data failure rollback,
+   FK NULL/action semantics, primary-key nullability and backing-index closure.
+3. Implement write-requirement checks and statement transaction state before
+   exposing trigger execution. Prove CTAS/expanded ADD and multi-operation
+   failures cannot partially commit; include lost replies and stale bind caches.
+4. Implement persistent trigger CRUD/readback plus BACKEND and ENGINE reference
+   paths independently. Test exclusivity, order, zero/multiple batches, exact
+   OLD/NEW, trigger changes after bind, reconnect, cancellation and cleanup.
+5. Extend dependency planning to constraints and column/ALTER blockers. Test
+   rename/replacement, inaccessible dependents, cross-schema identity and no
+   cross-attachment authority assumption.
+6. Prove the durable-replay admission/outcome rules independently; never enable
+   it as a shortcut around the baseline no-retry rule.
+7. Generate the selected records/methods across all seven SDKs, with positive
+   reference behavior and safe unsupported paths. Freeze only after these proofs;
+   then qualify the native 2.0 adapter separately. No implementation is required
+   to advertise every profile, but all must understand the frozen wire inventory.
+
+Source evidence is the pinned catalog field audit and local Haybarn 2.0 checkout
+`e1784fa4231072d7152b8aaa20977bdb8ff4ace3`, especially `constraint.hpp`,
+`transform_alter.cpp`, `bind_create_table.cpp`, `bind_create.cpp`,
+`bind_trigger_expansion.cpp` and `table_catalog_entry.cpp`. Existing implementation
+anchors are `vgi/catalog/layout.py`, `query.py`, `dependencies.py`,
+`catalog_interface.py`, `vgi/protocol.py`, `vgi/write_results.py`, and the durable
+schema/layout/column/query fixtures. Source inspection establishes engine limits;
+it does not qualify the proposed runtime contracts.

@@ -36,6 +36,12 @@ remain those of the macro create RPC.
 
 ## Field definitions
 
+The [combined expression design](shared-catalog-values.md#shared-sql-definitions-and-evaluation-phases)
+proposes required evaluation context on `SqlExpression` and `MacroOverload` for
+this same successor release. That change is not yet implemented in the records
+below. CREATE-time default folding and literal-default discovery remain unchanged;
+the new context must not turn defaults into invocation-time expressions.
+
 `MacroOverload` contains:
 
 | Field | Encoding and meaning |

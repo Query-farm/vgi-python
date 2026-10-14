@@ -13,7 +13,8 @@
     ],
     "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
     "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition",
-    "version_requirement": "Retaining the raw-path migration requires a major version and matching routing name. Complete the combined diff and migration guide before freeze."
+    "version_requirement": "Retaining the raw-path migration requires a major version and matching routing name. Complete the combined diff and migration guide before freeze.",
+    "planned_diff": "This design adds required SQL context, canonical constraints replacing five parallel arrays, typed index definitions/options, ALTER/column dependency edges, write requirement/statement lifecycle records, trigger CRUD and durable mutation replay/status. These are specified but not implemented; do not count them in the current protocol hash."
   },
   "sources": {
     "native_revision": "1a0a059",
@@ -27,9 +28,9 @@
   "shared_representations": {
     "identity": "Raw components and attachment-relative CatalogObjectRef; no local aliases, pointers or OIDs. Full identity in all caches.",
     "values": "TypedValueBatch preserving original Arrow metadata and typed NULLs. Option RESET differs from NULL and omission.",
-    "expressions": "SqlExpression declares semantic profile and owner schema. No private AST/bound-plan serialization.",
+    "expressions": "Specified successor: SqlExpression + required QueryEvaluationContext; SqlStatement for one query/DML body; containing operation defines evaluation phase. Existing narrow scalar reference remains the only qualified expression subset.",
     "capabilities": "Agreement scoped to sealed attachment state; validate per-object requirements and current write eligibility at execution.",
-    "mutation": "Whole-operation validation, worker authority, coherent transactions and metadata/dependency updates. Durable operation identity is required for replay.",
+    "mutation": "Specified successor: explicit statement tickets/commit fence and per-table requirements; baseline no ambiguous retry. Optional catalog_mutation_execute + status use exact request bytes and durable bounded identity/outcome retention, pending proof.",
     "rollout": "Use versioned endpoints/processes with draining; prove transaction/reconnect and downgrade behavior. The existing dispatcher cannot host two versions under one protocol name.",
     "column_paths": "Nine existing column RPCs use raw component paths, with per-operation nested DDL profiles and one-component 1.5 adapter targets. TableInfo.required_filters now uses AND-of-OR raw component paths across SDKs and the native 1.5 optimizer; native 2.0 integration remains open.",
     "metadata_changes": "CatalogMetadataChanges: explicit comment presence plus literal string tag SET/REMOVE, atomic whole-patch validation, effect-sensitive versions/etags. Shared record; first negotiated operation is catalog_schema_alter_metadata.",
@@ -45,7 +46,8 @@
         "read": "vgi.catalog.dependencies.read.v1",
         "schema_ddl": "vgi.schema.lifecycle.v1"
       },
-      "status": "reference_implemented_full_provider_coverage_pending"
+      "status": "reference_implemented_full_provider_coverage_pending",
+      "proposed_extension": "Constraint refs, semantic blocks_alter, subject_column_paths and dependent_column_path. Shared edge/cycle identity must include column scope; existing reference does not validate this extension."
     }
   },
   "areas": {
@@ -81,6 +83,14 @@
             "tests/catalog/test_schema_options_protocol.py"
           ],
           "limits": "Attachment negotiation, current-profile checks and metadata projection implemented for schema options. Object-level secure-view/trigger restrictions and their execution checks remain pending."
+        },
+        {
+          "status": "write_requirements_specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership",
+            "docs/protocol/shared-catalog-values.md#transaction-guarantees-and-composite-writes"
+          ],
+          "limits": "Proposed authoritative revision checks include cached binds and writers predating trigger creation. Read/discovery support alone cannot authorize mutation."
         }
       ]
     },
@@ -99,13 +109,12 @@
       "existing_methods": [
         "catalog_schema_create",
         "catalog_schema_get",
-        "catalog_schema_drop"
-      ],
-      "new_methods": [
+        "catalog_schema_drop",
         "catalog_schema_option_definitions",
         "catalog_schema_alter_options",
         "catalog_schema_alter_metadata"
       ],
+      "new_methods": [],
       "scope": [
         "Creation options, SET/RESET operations, option readback in `SchemaInfo`, and complete schema comment/tag mutations",
         "Typed values, supported option names, expression policy, NULL versus absent versus RESET, nested targets, conflict policy, version changes, and rollback. Existing path/comment/tag create fields are reused."
@@ -189,13 +198,12 @@
       ],
       "existing_methods": [
         "catalog_table_create",
-        "catalog_table_get"
-      ],
-      "new_methods": [
+        "catalog_table_get",
         "catalog_table_option_definitions",
         "catalog_table_alter_options",
         "catalog_table_alter_layout"
       ],
+      "new_methods": [],
       "scope": [
         "Complete create metadata; table options and SET/RESET; partition and sort definitions on create, alter, and discovery",
         "Preserve sort expression/direction/null order and distinguish desired layout from guarantees about scan output. Define whether alteration rewrites existing data, affects future writes, or rejects the change."
@@ -228,6 +236,13 @@
             "docs/protocol/shared-catalog-values.md"
           ],
           "limits": "Python HTTP reference implements options and layout with actual fixture-row rewrites and durable DDL transactions. Expression semantics, production providers, native SQL enablement, full lifecycle review and coordinated release qualification remain pending."
+        },
+        {
+          "status": "shared_expression_context_specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#shared-sql-definitions-and-evaluation-phases"
+          ],
+          "limits": "Required context and consistent scalar/statement roles are designed. Existing bounded layout/macro/column fixtures do not qualify these additional expression roles."
         }
       ]
     },
@@ -297,6 +312,13 @@
             "docs/protocol/shared-catalog-values.md"
           ],
           "limits": "Native 1.5 validates full raw paths and preserves component prefixes through filters/struct extracts. Presence requirements are not a proof of authorization or remote predicate enforcement. Native 2.0 optimizer bindings and mutation/dependency semantics remain open."
+        },
+        {
+          "status": "shared_expression_context_specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#shared-sql-definitions-and-evaluation-phases"
+          ],
+          "limits": "Required context and consistent scalar/statement roles are designed. Existing bounded layout/macro/column fixtures do not qualify these additional expression roles."
         }
       ]
     },
@@ -314,11 +336,10 @@
         "catalog_view_get",
         "catalog_view_drop",
         "catalog_view_rename",
-        "catalog_view_comment_set"
-      ],
-      "new_methods": [
+        "catalog_view_comment_set",
         "catalog_view_column_comment_set"
       ],
+      "new_methods": [],
       "scope": [
         "Ordered aliases, security mode, create/read metadata, column comments and their mutation",
         "Preserve the SELECT-definition contract or explicitly version its replacement. Security barriers must survive create/discovery/refresh/rebind; define name resolution, replacement, dependencies, and unsupported-reader behavior."
@@ -351,12 +372,19 @@
     "constraints": {
       "title": "Constraints and indexes",
       "disposition": "include",
-      "status": "pending_contract_review",
+      "status": "specified_reference_pending",
       "records": [
         "ConstraintDefinition",
+        "ConstraintInfo",
+        "ConstraintSnapshot",
+        "ConstraintChange",
+        "ForeignKeyDefinition",
+        "IndexDefinition",
         "IndexInfo",
         "IndexCreateRequest",
-        "TypedValueBatch"
+        "TypedValueBatch",
+        "OptionDefinitions",
+        "OptionState"
       ],
       "existing_methods": [
         "catalog_index_create",
@@ -365,20 +393,35 @@
         "catalog_schema_contents_indexes"
       ],
       "new_methods": [
-        "catalog_table_constraint_add",
-        "catalog_table_constraint_drop"
+        "catalog_table_constraints_apply",
+        "catalog_index_option_definitions"
       ],
       "scope": [
         "Constraint addition and supported mutation/discovery; full native integration of existing index RPCs; typed index options if string values are insufficient",
         "Worker enforcement versus metadata-only declaration, existing-data validation, logical column identity, FK target paths, dependent objects, and atomic changes. Do not promise SQL constraint forms the selected engine itself rejects."
       ],
-      "capability_contract": "pending_P1",
+      "capability_contract": "Proposed read: vgi.constraint.records.read.v1, vgi.index.definition.read.v1; DDL: vgi.constraint.create.v1, vgi.constraint.mutate.v1, vgi.index.definition.create.v1, vgi.index.drop.v1; write: vgi.constraint.enforce.v1 plus explicit FK match/action profiles. No new profiles are implemented or advertised.",
       "gates": [
         "P1",
         "P2",
         "P3"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#canonical-constraints-and-index-definitions",
+            "docs/protocol/shared-catalog-values.md#dependencies-for-semantic-alter",
+            "docs/protocol/shared-catalog-values.md#shared-sql-definitions-and-evaluation-phases"
+          ],
+          "limits": "Normative design/source review only. No canonical constraint/index record or provider enforcement implementation in this checkpoint."
+        }
+      ],
+      "implementation_work": [
+        "Replace five parallel constraint arrays with canonical create/read records across all SDKs.",
+        "Implement durable logical keys, revision checks, atomic mutation and real enforcement/reference behavior.",
+        "Port native index integration; keep unsupported SQL forms rejected at the inspected engine pin."
+      ]
     },
     "macros": {
       "title": "Macros \u2014 concrete contract and reference implemented; adapters pending",
@@ -418,6 +461,13 @@
             "python:tests/catalog/test_macro_overload_protocol.py"
           ],
           "limits": "Native family materialization/DDL and production owner binding remain unqualified; unsupported SDK adapters reject families."
+        },
+        {
+          "status": "shared_expression_context_specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#shared-sql-definitions-and-evaluation-phases"
+          ],
+          "limits": "Required context and consistent scalar/statement roles are designed. Existing bounded layout/macro/column fixtures do not qualify these additional expression roles."
         }
       ]
     },
@@ -430,18 +480,20 @@
         "ObjectDependency",
         "MetadataPatch",
         "MetadataSnapshot",
-        "DependencySnapshot"
+        "DependencySnapshot",
+        "ConstraintInfo",
+        "ColumnPath"
       ],
       "existing_methods": [
         "catalog_version",
         "catalog_contents",
         "catalog_schema_drop",
         "catalog_table_drop",
-        "catalog_view_drop"
+        "catalog_view_drop",
+        "catalog_dependencies"
       ],
       "new_methods": [
-        "catalog_object_metadata_set",
-        "catalog_dependencies"
+        "catalog_object_metadata_set"
       ],
       "scope": [
         "Shared qualified object references; explicit ownership/drop/alter dependency semantics; mutation visibility and metadata-version rules",
@@ -464,18 +516,31 @@
             "docs/protocol/shared-catalog-values.md"
           ],
           "limits": "Schema/table/simple-view authority and shared ownership planner only. Broader object-kind enforcement, rename policy, cross-attachment authority and production SDK providers remain pending."
+        },
+        {
+          "status": "alter_and_column_dependencies_specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#dependencies-for-semantic-alter"
+          ],
+          "limits": "Existing schema/table/simple-view dependency reference remains qualified only for its old shape. Constraint refs, ALTER blockers and column graph validation are proposed, not implemented."
         }
       ]
     },
     "transactions": {
       "title": "Transactions and write replay",
       "disposition": "include",
-      "status": "pending_contract_review",
+      "status": "specified_reference_pending",
       "records": [
-        "TransactionCapabilities",
+        "CatalogCapabilities",
         "OperationIdentity",
         "MutationReceipt",
-        "WriteRequirements"
+        "WriteRequirements",
+        "CatalogWriteBinding",
+        "WriteExecutionContext",
+        "WriteIntent",
+        "WriteStatementTicket",
+        "WriteStatementReceipt",
+        "WriteOperationReceipt"
       ],
       "existing_methods": [
         "catalog_transaction_begin",
@@ -483,52 +548,95 @@
         "catalog_transaction_rollback"
       ],
       "new_methods": [
+        "catalog_write_statement_begin",
+        "catalog_write_statement_complete",
+        "catalog_write_statement_abort",
+        "catalog_mutation_execute",
         "catalog_operation_status"
       ],
       "scope": [
         "Explicit DDL rollback and mixed DDL/DML atomicity guarantees; operation identity/deduplication if retry support is included",
         "Expanded ADD COLUMN, CTAS, multi-DML CTEs, and triggers use coherent transaction state. Reuse begin/commit/rollback and OLD/NEW `changes` mode. Define ambiguous commit/reply-loss behavior; never retry side effects just because transport failed. No distributed atomicity claim across independent catalogs."
       ],
-      "capability_contract": "pending_P1",
+      "capability_contract": "Existing vgi.transaction.ddl.v1; proposed DML, mixed, multiple-DML and statement-rollback profiles in CatalogCapabilities.transaction. vgi.write.statement.v1 provides explicit statement boundaries; vgi.mutation.replay.v1 independently gates durable unary mutation admission/outcomes.",
       "gates": [
         "P1",
         "P2",
         "P3"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#transaction-guarantees-and-composite-writes",
+            "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership",
+            "docs/protocol/shared-catalog-values.md#durable-mutation-outcomes-and-bounded-replay"
+          ],
+          "limits": "Reuse existing transaction/RPC framing. No new transaction, statement or replay guarantee is currently advertised; crash/atomicity proof remains required."
+        }
+      ],
+      "implementation_work": [
+        "Audit native generic mutation retries; baseline ambiguous effects must not retry.",
+        "Implement authoritative statement tickets, operation/stream completion and a COMMIT fence.",
+        "Prove durable replay with exact request bytes, bounded non-reactivatable IDs and retained outcomes; ordinary mutations remain no-retry."
+      ]
     },
     "triggers": {
-      "title": "Triggers \u2014 design required",
+      "title": "Triggers \u2014 contract specified; reference pending",
       "disposition": "include",
-      "status": "pending_contract_review",
+      "status": "specified_reference_pending",
       "records": [
+        "TriggerDefinition",
         "TriggerInfo",
         "TriggerCreateRequest",
-        "WriteRequirements"
+        "SqlStatement",
+        "WriteRequirements",
+        "CatalogWriteBinding",
+        "WriteExecutionContext",
+        "WriteIntent",
+        "WriteStatementTicket",
+        "WriteStatementReceipt",
+        "WriteOperationReceipt"
       ],
       "existing_methods": [],
       "new_methods": [
         "catalog_table_triggers",
         "catalog_trigger_get",
         "catalog_trigger_create",
-        "catalog_trigger_drop"
+        "catalog_trigger_drop",
+        "catalog_trigger_alter_metadata"
       ],
       "scope": [
         "Table-owned identity, list/get/create/drop and metadata mutation, event/timing/granularity, UPDATE OF, transition aliases, action definition, dependencies, and execution mode",
         "Prefer worker authority for persistent definitions. Distinguish engine-executed from backend-executed triggers so they cannot fire twice. Define SQL dialect, ordering, supported row/statement forms, OLD/NEW requirements, rollback, detach/reconnect, and cross-client discovery."
       ],
-      "capability_contract": "pending_P1",
+      "capability_contract": "Proposed read vgi.trigger.read.v1; DDL create/drop/metadata; write vgi.trigger.engine.v1 or vgi.trigger.backend.v1 exclusively, requiring qualified statement/transaction and applicable action profiles. No trigger profile is implemented or advertised.",
       "gates": [
         "P1",
         "P2",
         "P3"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership",
+            "docs/protocol/shared-catalog-values.md#transaction-guarantees-and-composite-writes",
+            "docs/protocol/shared-catalog-values.md#dependencies-for-semantic-alter"
+          ],
+          "limits": "Single event and one-component UPDATE OF align with pinned grammar. Portable lifecycle is designed; custom-table trigger execution is not qualified."
+        }
+      ],
+      "implementation_work": [
+        "Implement durable table-owned definition CRUD/readback and complete dependencies.",
+        "Recheck requirements at write bind/init and reject stale/incapable writers before effects.",
+        "Prove whole-statement BEFORE/base/AFTER, OLD/NEW across batches, ordering, failure rollback and reconnect before enabling either execution owner."
+      ]
     },
     "query": {
-      "title": "Catalog query execution \u2014 preparation lifecycle and shared codecs implemented; adapters pending",
+      "title": "Catalog query execution \u2014 explicit 1.5 adapter implemented; automatic pending",
       "disposition": "include",
-      "status": "pending_contract_review",
+      "status": "reference_and_native_15_explicit_implemented_automatic_pending",
       "records": [
         "ClientQueryCapabilities",
         "QueryCapabilities",
@@ -540,17 +648,16 @@
       ],
       "existing_methods": [
         "bind",
-        "init"
-      ],
-      "new_methods": [
+        "init",
         "catalog_query_prepare",
         "catalog_query_release"
       ],
+      "new_methods": [],
       "scope": [
         "Negotiated query preparation, typed parameters/context, prepared-result schema and lifetime, and execution through the existing TABLE stream",
         "Reuse the existing read-query proposal. Separate explicit provider-dialect queries from automatic semantic-equivalence pushdown; define decline-before-execution, transaction/identity binding, ordered results, cancellation, token cleanup, and reconnect behavior."
       ],
-      "capability_contract": "pending_P1",
+      "capability_contract": "ClientQueryCapabilities/QueryCapabilities select duckdb.sql.v1 with vgi.remote.readonly.v1 for explicit mode. vgi.duckdb.relational.v1 automatic mode requires transaction support and separately certified engine/context equivalence; it is not currently advertised by the finite reference.",
       "gates": [
         "P1",
         "P2",
@@ -564,14 +671,24 @@
         "vgi/query_provider.py",
         "tests/catalog/query_reference.py",
         "tests/catalog/test_query_protocol.py",
-        "conformance/catalog-contracts.json"
+        "conformance/catalog-contracts.json",
+        {
+          "status": "native_15_explicit_reference_validated",
+          "source": "native_query_adapter_validation",
+          "sources": [
+            "native:src/vgi_query_function.cpp",
+            "native:test/run_queries.py",
+            "tests/catalog/query_native.py"
+          ],
+          "limits": "18 finite-reference subprocess scenarios. No general provider or automatic native 2.0 qualification."
+        }
       ],
       "implementation_notes": [
-        "Parameter mapping is schema metadata on one Arrow batch; preparation carries schema-only IPC and each execution carries one same-schema row. No JSON type list or value interpolation.",
-        "Preparation receipts and execution locators are opaque binary tokens, not an extra public PreparedQueryHandle record. Release is a wire RPC; provider resolve/start/read/close are SDK hooks over the existing TABLE stream.",
-        "Python reference selects only vgi.remote.readonly.v1 for six exact read queries; automatic vgi.duckdb.relational.v1 is never inferred from a DuckDB backend name.",
-        "The native 1.5 adapter emits query_pushdown=NULL until explicit vgi_query is implemented. Other SDKs receive codecs and registered unsupported methods, not an execution capability.",
-        "Full logical-catalog authorization, data-snapshot integration, scheduled cleanup, performance and both engine adapters remain open before freeze."
+        "Parameter mapping is schema metadata on one Arrow batch; preparation carries schema-only IPC and execution carries one same-schema row. No JSON type list or value interpolation.",
+        "Prepared tokens and execution locators are opaque; preparation release is a wire RPC. Resolve/start/read/close remain provider hooks over the existing TABLE stream.",
+        "The finite Python reference accepts six exact read queries; explicit support never implies automatic semantic equivalence.",
+        "Native 1.5 explicit vgi_query is implemented and tested: vgi_query_enabled before ATTACH, typed parameters, fresh prepared-statement binding, exact output validation and independent cleanup. See native_query_adapter_validation.",
+        "General SQL providers, mutable snapshots, production janitor behavior, HTTP/WASM query qualification and automatic native 2.0 integration remain open."
       ]
     },
     "logical_types": {
@@ -1305,9 +1422,17 @@
       ],
       "area": "tables",
       "disposition": "existing_contract",
-      "target": "TableCreateRequest.constraints",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "TableCreateRequest.constraint_definitions",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#canonical-constraints-and-index-definitions"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-128",
@@ -1335,8 +1460,8 @@
       ],
       "area": "tables",
       "disposition": "include",
-      "target": "TableLayout.partition_by",
-      "status": "pending_contract_review",
+      "target": "TableLayout.partition_by / SqlExpression.evaluation_context",
+      "status": "specified_reference_pending",
       "evidence": [
         {
           "status": "partial_reference_implementation",
@@ -1345,6 +1470,13 @@
             "vgi/catalog/layout.py"
           ],
           "limits": "Wire fields and reference behavior implemented; field review, native 2.0 adapter and production qualification remain outstanding."
+        },
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#shared-sql-definitions-and-evaluation-phases"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
         }
       ]
     },
@@ -1359,8 +1491,8 @@
       ],
       "area": "tables",
       "disposition": "include",
-      "target": "TableLayout.sorted_by",
-      "status": "pending_contract_review",
+      "target": "TableLayout.sorted_by / SqlExpression.evaluation_context",
+      "status": "specified_reference_pending",
       "evidence": [
         {
           "status": "partial_reference_implementation",
@@ -1369,6 +1501,13 @@
             "vgi/catalog/layout.py"
           ],
           "limits": "Wire fields and reference behavior implemented; field review, native 2.0 adapter and production qualification remain outstanding."
+        },
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#shared-sql-definitions-and-evaluation-phases"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
         }
       ]
     },
@@ -1439,7 +1578,15 @@
       "disposition": "engine_only",
       "target": null,
       "status": "pending_native_qualification",
-      "evidence": []
+      "evidence": [
+        {
+          "status": "engine_only_with_portable_dependency_requirements",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#dependencies-for-semantic-alter"
+          ],
+          "limits": "Native column_dependency_manager stays local; portable generated-column dependencies need the proposed column edge fields."
+        }
+      ]
     },
     {
       "id": "audit-135",
@@ -1452,9 +1599,17 @@
       ],
       "area": "constraints",
       "disposition": "include",
-      "target": "ConstraintDefinition",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "ConstraintDefinition / ConstraintInfo",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#canonical-constraints-and-index-definitions"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-136",
@@ -1593,9 +1748,17 @@
       ],
       "area": "columns",
       "disposition": "include",
-      "target": "Arrow.field.metadata.generated_expression",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "Arrow metadata vgi.column.generation.v1 + vgi.column.generated.v1",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#shared-sql-definitions-and-evaluation-phases"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-157",
@@ -1609,8 +1772,8 @@
       ],
       "area": "columns",
       "disposition": "existing_contract",
-      "target": "Arrow.field.metadata.default",
-      "status": "pending_contract_review",
+      "target": "Arrow metadata vgi.column.default.v1 / SqlExpression",
+      "status": "specified_reference_pending",
       "evidence": [
         {
           "status": "partial_column_path_qualification",
@@ -1620,6 +1783,13 @@
             "../vgi/test/sql/duckdb2/column_paths.test"
           ],
           "limits": "Raw paths and the durable reference are implemented; flat 1.5 SQL, defaults, metadata readback, and rollback pass. Shared expressions, complete attributes/dependencies, and native 2.0 binding remain open."
+        },
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#shared-sql-definitions-and-evaluation-phases"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
         }
       ]
     },
@@ -1635,9 +1805,17 @@
       ],
       "area": "columns",
       "disposition": "existing_contract",
-      "target": "Arrow.field.metadata.generated_expression",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "Arrow metadata vgi.column.generated.v1 / SqlExpression",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#shared-sql-definitions-and-evaluation-phases"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-159",
@@ -1682,8 +1860,16 @@
       "area": "constraints",
       "disposition": "existing_contract",
       "target": "ConstraintDefinition.kind",
-      "status": "pending_contract_review",
-      "evidence": []
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#canonical-constraints-and-index-definitions"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-175",
@@ -1709,9 +1895,17 @@
       ],
       "area": "constraints",
       "disposition": "existing_contract",
-      "target": "ConstraintDefinition.columns",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "ConstraintDefinition.column_paths",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#canonical-constraints-and-index-definitions"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-177",
@@ -1723,9 +1917,17 @@
       ],
       "area": "constraints",
       "disposition": "existing_contract",
-      "target": "ConstraintDefinition.columns",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "ConstraintDefinition.column_paths",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#canonical-constraints-and-index-definitions"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-178",
@@ -1737,9 +1939,17 @@
       ],
       "area": "constraints",
       "disposition": "existing_contract",
-      "target": "ConstraintDefinition.kind",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "ConstraintDefinition.kind=PRIMARY_KEY",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#canonical-constraints-and-index-definitions"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-179",
@@ -1751,9 +1961,17 @@
       ],
       "area": "constraints",
       "disposition": "existing_contract",
-      "target": "ConstraintDefinition.expression",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "ConstraintDefinition.check_expression / SqlExpression",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#canonical-constraints-and-index-definitions"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-180",
@@ -1765,9 +1983,17 @@
       ],
       "area": "constraints",
       "disposition": "existing_contract",
-      "target": "ConstraintDefinition.columns/referenced_columns",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "ConstraintDefinition.column_paths / ForeignKeyDefinition.referenced_column_paths",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#canonical-constraints-and-index-definitions"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-181",
@@ -1779,9 +2005,17 @@
       ],
       "area": "constraints",
       "disposition": "existing_contract",
-      "target": "ConstraintDefinition.referenced_table",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "ForeignKeyDefinition.referenced_table",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#canonical-constraints-and-index-definitions"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-182",
@@ -1793,9 +2027,17 @@
       ],
       "area": "constraints",
       "disposition": "existing_contract",
-      "target": "ObjectDependency",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "ConstraintInfo.referenced_constraint / ObjectDependency",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#dependencies-for-semantic-alter"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-183",
@@ -1996,8 +2238,8 @@
       ],
       "area": "columns",
       "disposition": "include",
-      "target": "column_type_change.column_path/type/using_expression",
-      "status": "pending_contract_review",
+      "target": "column_type_change.column_path/target_type/SqlExpression IPC",
+      "status": "specified_reference_pending",
       "evidence": [
         {
           "status": "partial_column_path_qualification",
@@ -2007,6 +2249,13 @@
             "../vgi/test/sql/duckdb2/column_paths.test"
           ],
           "limits": "Raw paths and the durable reference are implemented; flat 1.5 SQL, defaults, metadata readback, and rollback pass. Shared expressions, complete attributes/dependencies, and native 2.0 binding remain open."
+        },
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#shared-sql-definitions-and-evaluation-phases"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
         }
       ]
     },
@@ -2021,8 +2270,8 @@
       ],
       "area": "columns",
       "disposition": "include",
-      "target": "column_default_set.column_path/expression",
-      "status": "pending_contract_review",
+      "target": "column_default_set.column_path/SqlExpression IPC",
+      "status": "specified_reference_pending",
       "evidence": [
         {
           "status": "partial_column_path_qualification",
@@ -2032,6 +2281,13 @@
             "../vgi/test/sql/duckdb2/column_paths.test"
           ],
           "limits": "Raw paths and the durable reference are implemented; flat 1.5 SQL, defaults, metadata readback, and rollback pass. Shared expressions, complete attributes/dependencies, and native 2.0 binding remain open."
+        },
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#shared-sql-definitions-and-evaluation-phases"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
         }
       ]
     },
@@ -2046,9 +2302,17 @@
       ],
       "area": "constraints",
       "disposition": "existing_contract",
-      "target": "ConstraintDefinition/ObjectDependency",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "ForeignKeyDefinition / ConstraintInfo / ObjectDependency; bound key indexes remain local",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#canonical-constraints-and-index-definitions"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-220",
@@ -2061,8 +2325,8 @@
       ],
       "area": "columns",
       "disposition": "include",
-      "target": "not_null_set.column_path",
-      "status": "pending_contract_review",
+      "target": "not_null_set.column_path / canonical ConstraintInfo",
+      "status": "specified_reference_pending",
       "evidence": [
         {
           "status": "partial_column_path_qualification",
@@ -2072,6 +2336,13 @@
             "../vgi/test/sql/duckdb2/column_paths.test"
           ],
           "limits": "Raw paths and the durable reference are implemented; flat 1.5 SQL, defaults, metadata readback, and rollback pass. Shared expressions, complete attributes/dependencies, and native 2.0 binding remain open."
+        },
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#canonical-constraints-and-index-definitions"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
         }
       ]
     },
@@ -2086,8 +2357,8 @@
       ],
       "area": "columns",
       "disposition": "include",
-      "target": "not_null_drop.column_path",
-      "status": "pending_contract_review",
+      "target": "not_null_drop.column_path / canonical ConstraintInfo",
+      "status": "specified_reference_pending",
       "evidence": [
         {
           "status": "partial_column_path_qualification",
@@ -2097,6 +2368,13 @@
             "../vgi/test/sql/duckdb2/column_paths.test"
           ],
           "limits": "Raw paths and the durable reference are implemented; flat 1.5 SQL, defaults, metadata readback, and rollback pass. Shared expressions, complete attributes/dependencies, and native 2.0 binding remain open."
+        },
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#canonical-constraints-and-index-definitions"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
         }
       ]
     },
@@ -2126,9 +2404,17 @@
       ],
       "area": "constraints",
       "disposition": "include",
-      "target": "ConstraintDefinition",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "catalog_table_constraints_apply / ConstraintDefinition",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#canonical-constraints-and-index-definitions"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-224",
@@ -2141,8 +2427,8 @@
       ],
       "area": "tables",
       "disposition": "include",
-      "target": "TableLayout.partition_by",
-      "status": "pending_contract_review",
+      "target": "TableLayout.partition_by / SqlExpression",
+      "status": "specified_reference_pending",
       "evidence": [
         {
           "status": "partial_reference_implementation",
@@ -2151,6 +2437,13 @@
             "vgi/catalog/layout.py"
           ],
           "limits": "Wire fields and reference behavior implemented; field review, native 2.0 adapter and production qualification remain outstanding."
+        },
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#shared-sql-definitions-and-evaluation-phases"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
         }
       ]
     },
@@ -2165,8 +2458,8 @@
       ],
       "area": "tables",
       "disposition": "include",
-      "target": "TableLayout.sorted_by",
-      "status": "pending_contract_review",
+      "target": "TableLayout.sorted_by / SqlExpression",
+      "status": "specified_reference_pending",
       "evidence": [
         {
           "status": "partial_reference_implementation",
@@ -2175,6 +2468,13 @@
             "vgi/catalog/layout.py"
           ],
           "limits": "Wire fields and reference behavior implemented; field review, native 2.0 adapter and production qualification remain outstanding."
+        },
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#shared-sql-definitions-and-evaluation-phases"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
         }
       ]
     },
@@ -2294,9 +2594,17 @@
       ],
       "area": "transactions",
       "disposition": "existing_contract",
-      "target": "Arrow.field.metadata.default",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "Arrow metadata vgi.column.default.v1 / future-row default evaluation",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#shared-sql-definitions-and-evaluation-phases"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-242",
@@ -2309,9 +2617,17 @@
       ],
       "area": "transactions",
       "disposition": "include",
-      "target": "TransactionCapabilities.ddl_rollback/mixed_atomicity",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "CatalogCapabilities.transaction mixed profile / statement lifecycle",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#transaction-guarantees-and-composite-writes"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-243",
@@ -2324,9 +2640,17 @@
       ],
       "area": "transactions",
       "disposition": "include",
-      "target": "TransactionCapabilities.ddl_rollback/mixed_atomicity",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "CatalogCapabilities.transaction mixed profile / atomic constraint apply",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#transaction-guarantees-and-composite-writes"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-244",
@@ -2354,9 +2678,17 @@
       ],
       "area": "transactions",
       "disposition": "existing_contract",
-      "target": "Arrow.field.metadata.default",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "Arrow metadata vgi.column.default.v1 / explicit existing-row population",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#shared-sql-definitions-and-evaluation-phases"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-258",
@@ -2673,9 +3005,17 @@
       ],
       "area": "triggers",
       "disposition": "include",
-      "target": "TriggerInfo.table",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "CatalogObjectRef(kind=trigger).owner_table",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-301",
@@ -2701,9 +3041,17 @@
       ],
       "area": "constraints",
       "disposition": "existing_contract",
-      "target": "IndexCreateRequest.schema_path/name/table_name",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "IndexCreateRequest identity / IndexDefinition.table",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#canonical-constraints-and-index-definitions"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-324",
@@ -2715,9 +3063,17 @@
       ],
       "area": "constraints",
       "disposition": "existing_contract",
-      "target": "IndexCreateRequest.index_type",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "IndexDefinition.algorithm",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#canonical-constraints-and-index-definitions"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-325",
@@ -2729,9 +3085,17 @@
       ],
       "area": "constraints",
       "disposition": "existing_contract",
-      "target": "IndexCreateRequest.constraint_type",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "IndexDefinition.constraint_type/associated_constraint",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#canonical-constraints-and-index-definitions"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-326",
@@ -2743,9 +3107,17 @@
       ],
       "area": "constraints",
       "disposition": "include",
-      "target": "IndexCreateRequest.options",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "IndexDefinition.options: TypedValueBatch / OptionDefinitions / OptionState",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#canonical-constraints-and-index-definitions"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-327",
@@ -2757,9 +3129,17 @@
       ],
       "area": "constraints",
       "disposition": "existing_contract",
-      "target": "IndexCreateRequest.expressions",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "IndexDefinition.keys: ColumnPath or SqlExpression",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#canonical-constraints-and-index-definitions"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-328",
@@ -2813,7 +3193,7 @@
       ],
       "area": "macros",
       "disposition": "existing_contract",
-      "target": "MacroOverload.arguments_schema/documentation",
+      "target": "MacroParameter.declared_type/name/documentation; complete descriptions still under review",
       "status": "pending_contract_review",
       "evidence": []
     },
@@ -2841,7 +3221,7 @@
       ],
       "area": "macros",
       "disposition": "existing_contract",
-      "target": "MacroOverload.kind/parameters",
+      "target": "MacroOverload.macro_type/parameters",
       "status": "pending_contract_review",
       "evidence": []
     },
@@ -2855,9 +3235,17 @@
       ],
       "area": "macros",
       "disposition": "include",
-      "target": "MacroParameter.default_expression",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "MacroParameter.default_expression / CREATE-time resolved default_value",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#shared-sql-definitions-and-evaluation-phases"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-349",
@@ -2869,7 +3257,7 @@
       ],
       "area": "macros",
       "disposition": "existing_contract",
-      "target": "MacroOverload.arguments_schema",
+      "target": "MacroParameter.declared_type",
       "status": "pending_contract_review",
       "evidence": []
     },
@@ -2883,9 +3271,17 @@
       ],
       "area": "macros",
       "disposition": "existing_contract",
-      "target": "MacroOverload.definition",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "MacroOverload.definition/macro_type/profile/evaluation_context",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#shared-sql-definitions-and-evaluation-phases"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-362",
@@ -2967,9 +3363,17 @@
       ],
       "area": "triggers",
       "disposition": "include",
-      "target": "TriggerInfo.name/comment/tags/dependencies",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "TriggerDefinition.ref/comment/tags / TriggerInfo.dependencies; temporary follows owner",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-382",
@@ -2981,9 +3385,17 @@
       ],
       "area": "triggers",
       "disposition": "include",
-      "target": "TriggerInfo.table",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "CatalogObjectRef(kind=trigger).owner_table",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-383",
@@ -2995,9 +3407,17 @@
       ],
       "area": "triggers",
       "disposition": "include",
-      "target": "TriggerInfo.timing",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "TriggerDefinition.timing",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-384",
@@ -3009,9 +3429,17 @@
       ],
       "area": "triggers",
       "disposition": "include",
-      "target": "TriggerInfo.events",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "TriggerDefinition.event (singular)",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-385",
@@ -3023,9 +3451,17 @@
       ],
       "area": "triggers",
       "disposition": "include",
-      "target": "TriggerInfo.update_columns",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "TriggerDefinition.update_columns: ColumnPath list; native one-component only",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-386",
@@ -3037,9 +3473,17 @@
       ],
       "area": "triggers",
       "disposition": "include",
-      "target": "TriggerInfo.granularity",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "TriggerDefinition.granularity",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-387",
@@ -3051,9 +3495,17 @@
       ],
       "area": "triggers",
       "disposition": "include",
-      "target": "TriggerInfo.new_table_alias/old_table_alias",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "TriggerDefinition.new_table_alias/old_table_alias",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-388",
@@ -3065,9 +3517,17 @@
       ],
       "area": "triggers",
       "disposition": "include",
-      "target": "TriggerInfo.action",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "TriggerDefinition.action: SqlStatement / execution_owner / statement lifecycle",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-404",
@@ -3191,9 +3651,17 @@
       ],
       "area": "transactions",
       "disposition": "include",
-      "target": "TransactionCapabilities.multiple_dml",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "CatalogCapabilities.transaction multiple-DML profile / statement lifecycle",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#transaction-guarantees-and-composite-writes"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     },
     {
       "id": "audit-413",
@@ -3220,7 +3688,7 @@
       "area": "query",
       "disposition": "include",
       "target": "CatalogQueryPrepareRequest/CatalogQueryPrepareResult",
-      "status": "pending_contract_review",
+      "status": "reviewed_explicit_15_automatic_pending",
       "evidence": [
         "docs/protocol/shared-catalog-values.md#prepared-read-queries-and-typed-parameters",
         "vgi/catalog/query.py",
@@ -3228,7 +3696,12 @@
         "vgi/query_execution.py",
         "vgi/query_provider.py",
         "tests/catalog/query_reference.py",
-        "tests/catalog/test_query_protocol.py"
+        "tests/catalog/test_query_protocol.py",
+        {
+          "status": "native_15_explicit_reference_validated",
+          "source": "native_query_adapter_validation",
+          "limits": "Automatic native 2.0 optimizer integration remains unqualified."
+        }
       ]
     },
     {
@@ -3241,9 +3714,17 @@
       ],
       "area": "transactions",
       "disposition": "existing_contract",
-      "target": "mutation.transaction_opaque_data",
-      "status": "pending_contract_review",
-      "evidence": []
+      "target": "Existing transaction_opaque_data ownership plus qualified DDL/DML/mixed profiles",
+      "status": "specified_reference_pending",
+      "evidence": [
+        {
+          "status": "specified_reference_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#transaction-guarantees-and-composite-writes"
+          ],
+          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        }
+      ]
     }
   ],
   "proposals": [
@@ -3351,6 +3832,11 @@
             "tests/test_duckdb2_manifest.py"
           ],
           "limits": "All 151 audit rows and 19 plan target/candidate areas inventoried, plus identity. Scope/capability/field decisions remain open."
+        },
+        {
+          "status": "partial_field_design_reconciled",
+          "source": "combined_design_review",
+          "limits": "Specific expression/constraint/transaction/trigger mappings now have concrete decisions. Other field/capability and candidate decisions remain open."
         }
       ]
     },
@@ -3374,6 +3860,11 @@
             "docs/protocol/shared-catalog-values.md"
           ],
           "limits": "Schema-option reference only. Broader catalog/query operations and complete capabilities remain pending."
+        },
+        {
+          "status": "normative_design_reference_pending",
+          "source": "docs/protocol/shared-catalog-values.md#combined-expression-constraint-transaction-and-trigger-design",
+          "limits": "No new reference execution evidence in this checkpoint; specified does not mean qualified."
         }
       ]
     },
@@ -5381,5 +5872,116 @@
       "Broader P0-P3 and M0-M4 gates, combined freeze/version/routing/migration and publication remain open."
     ],
     "source_inventory": "Verified 33,065 files across 15 repositories with zero mismatches. state/sources.json records exact synchronized revisions and source hashes; state/source-verification.json is checked again after the checkpoint commits."
+  },
+  "combined_design_review": {
+    "date": "2026-10-14",
+    "status": "specified_reference_and_freeze_review_pending",
+    "source": "docs/protocol/shared-catalog-values.md#combined-expression-constraint-transaction-and-trigger-design",
+    "engine_15": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "engine_20": "e1784fa4231072d7152b8aaa20977bdb8ff4ace3",
+    "implemented_protocol_methods": 82,
+    "implemented_protocol_hash": "28cf2ae30b6cf07dbd4db602e4972611319b993fb073b27de456b6fcf341dc00",
+    "newly_specified_method_count": 12,
+    "newly_specified_methods": [
+      "catalog_table_constraints_apply",
+      "catalog_index_option_definitions",
+      "catalog_table_triggers",
+      "catalog_trigger_get",
+      "catalog_trigger_create",
+      "catalog_trigger_drop",
+      "catalog_trigger_alter_metadata",
+      "catalog_write_statement_begin",
+      "catalog_write_statement_complete",
+      "catalog_write_statement_abort",
+      "catalog_mutation_execute",
+      "catalog_operation_status"
+    ],
+    "reviewed_field_ids": [
+      "audit-127",
+      "audit-129",
+      "audit-130",
+      "audit-135",
+      "audit-156",
+      "audit-157",
+      "audit-158",
+      "audit-174",
+      "audit-176",
+      "audit-177",
+      "audit-178",
+      "audit-179",
+      "audit-180",
+      "audit-181",
+      "audit-182",
+      "audit-217",
+      "audit-218",
+      "audit-219",
+      "audit-220",
+      "audit-221",
+      "audit-223",
+      "audit-224",
+      "audit-225",
+      "audit-241",
+      "audit-242",
+      "audit-243",
+      "audit-245",
+      "audit-300",
+      "audit-323",
+      "audit-324",
+      "audit-325",
+      "audit-326",
+      "audit-327",
+      "audit-348",
+      "audit-350",
+      "audit-381",
+      "audit-382",
+      "audit-383",
+      "audit-384",
+      "audit-385",
+      "audit-386",
+      "audit-387",
+      "audit-388",
+      "audit-412",
+      "audit-415",
+      "audit-414"
+    ],
+    "reconciled_existing_work": [
+      "Native 1.5 explicit vgi_query checkpoint",
+      "Implemented catalog methods moved from proposed to existing inventory",
+      "Macro prototype targets corrected to actual parameter records"
+    ],
+    "review_findings_resolved": [
+      "Singular trigger event and one-component UPDATE OF at the engine pin",
+      "Stable constraint refs distinct from optional SQL labels",
+      "Column-scoped dependency identity and cycle checks",
+      "Explicit table definition revision lifecycle and CREATE enforcement",
+      "Statement terminal-state rules, COMMIT fence and no stream reinitialization",
+      "Retained replay receipts remain recoverable after transaction completion",
+      "Authority selects UPDATE OF using immutable SET paths and validates exact trigger ref/revision per intent",
+      "Operation receipts use final empty-batch IPC metadata; zero-row completion and one stream per operation are explicit",
+      "Canonical predecessor completion gates BEFORE/base/AFTER initialization"
+    ],
+    "qualification_limits": [
+      "No new runtime records, methods or profiles implemented by this design checkpoint.",
+      "Reference enforcement, statement/trigger/replay crash behavior and SDK generation remain prerequisites to P1/P2.",
+      "Unreviewed areas/candidates remain in the manifest; no broad release/native gate is complete."
+    ],
+    "validation": {
+      "status": "remote_inventory_and_generation_checks_passed",
+      "manifest_tests_passed": 11,
+      "audit_rows": 151,
+      "contract_areas": 20,
+      "previous_pending_reviews": 134,
+      "remaining_pending_reviews": 84,
+      "resolved_review_entries": 50,
+      "strict_generation": "--check --require-all passed; runtime inventory unchanged",
+      "source_verification": {
+        "repositories": 15,
+        "files": 33065,
+        "mismatches": 0
+      },
+      "workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+      "log": "logs/combined-protocol-design-checkpoint.log",
+      "limits": "Inventory/consistency checks only. No new runtime or wire implementation was introduced or qualified."
+    }
   }
 }

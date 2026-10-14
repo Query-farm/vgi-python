@@ -543,6 +543,13 @@ The `ScanTriggers` contract also implies that returned catalog entries remain al
 
 ### 6.5 Proposed VGI trigger protocol
 
+**Historical proposal, superseded for the combined successor release:** use
+[the shared trigger/statement contract](shared-catalog-values.md#trigger-definitions-and-statement-ownership).
+It replaces the engine-to-definition map and broad `supports_triggers` flag with
+profiled SQL/context, exclusive execution ownership, current write requirements
+and an authoritative statement lifecycle. The names and delivery phases below
+are historical source material, not an independent release plan or current RPCs.
+
 The remote VGI catalog should be authoritative for persistent trigger definitions. Keeping definitions only in a local extension cache would lose them on detach and would give different clients inconsistent catalogs.
 
 Suggested identity and definition:
