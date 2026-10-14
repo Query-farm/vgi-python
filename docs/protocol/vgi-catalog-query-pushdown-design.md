@@ -1,8 +1,10 @@
 # VGI 2 catalog query pushdown
 
 **Status:** engine integration design; the Python preparation/execution lifecycle and shared
-SDK codecs are implemented on the DuckDB 2.0 preparation branch. Native adapters remain open.
-**Updated:** 2026-10-13. **Original proposal:** 2026-09-13.
+SDK codecs and the opt-in native 1.5 explicit adapter are implemented on the preparation
+branch. Native adapter validation is recorded separately in the manifest; automatic 2.0
+integration remains open.
+**Updated:** 2026-10-14. **Original proposal:** 2026-09-13.
 **Scope:** optional, read-only catalog query execution; Python SDK; DuckDB 1.5 explicit-query adapter;
 DuckDB 2.0-development automatic-pushdown adapter.
 
@@ -15,7 +17,8 @@ The current wire authority is [prepared read queries and typed parameters](share
 and `vgi/catalog/query.py`. This earlier design's illustrative schemas/provider pseudocode are
 superseded by those definitions. Typed one-row parameter batches and explicit preparation release
 are included now. The finite reference qualifies lifecycle mechanics; it does not qualify a
-general SQL provider, native `vgi_query`, or automatic DuckDB 2.0 replacement. The commit table
+general SQL provider or automatic DuckDB 2.0 replacement. Native `vgi_query`
+qualification is a separate checkpoint against that finite reference. The commit table
 below records the original design survey, not current implementation heads.
 
 | Component | Current baseline | Role in this design |
@@ -102,7 +105,38 @@ FROM vgi_query('warehouse', '
 ```
 
 Here the outer query runs locally and the SQL string uses the attached provider's namespace.
-This syntax is an implementation target, not an existing registered function.
+The development adapter registers this function on the pinned DuckDB 1.5 build.
+Enable negotiation with `SET vgi_query_enabled=true` **before** attaching the
+provider. A provider must select explicit query support; enabling the setting
+alone does not confer support. Disabling it also prevents subsequent execution.
+
+Named parameters use a typed struct. Positional parameters use a struct or
+`row(...)` with an explicit mapping mode:
+
+```sql
+SELECT * FROM vgi_query('warehouse', 'SELECT $value AS result',
+                       parameters := {'value': NULL::INTEGER});
+SELECT * FROM vgi_query('warehouse', 'SELECT $1 AS result',
+                       parameters := row(42::INTEGER),
+                       parameter_mode := 'positional');
+```
+
+SQL text uses the provider's negotiated default evaluation context. Parameter
+values travel in Arrow IPC and never become SQL text. Untyped NULLs require a
+cast; changing parameter types requires fresh preparation. DuckDB prepared
+statements always rebind this function, so executions use current values and
+the current transaction identity. Output schema and metadata remain exact,
+including empty output. The adapter uses one ordered reader, disables result
+caching and scan pushdown, and never retries ambiguous preparation or
+initialization failures.
+Preparation release follows successful init; bind-only plans release on disposal.
+Cancellation is enabled for this executor even when ordinary scan cancellation
+is disabled. The provider still owns expiry/janitor cleanup after lost clients.
+
+`make test_queries` runs the finite reference through the exact built native
+shell and a direct connection-interruption test, then inspects durable
+execution/resource records. It does not qualify
+arbitrary SQL providers, every transport/platform, or native DuckDB 2.0.
 
 ```text
 Original SQL

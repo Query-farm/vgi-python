@@ -5120,7 +5120,8 @@
         ]
       },
       "python_revision": "The commit containing this manifest; exact HEAD is recorded in the synchronized source inventory."
-    }
+    },
+    "superseded_scope": "Historical SDK/preparation checkpoint. The native 1.5 explicit adapter listed here as remaining is implemented and separately qualified by native_query_adapter_validation; preserve these original counts and limits."
   },
   "types_macros_validation": {
     "status": "historical_checkpoint_variant_encoding_superseded",
@@ -5280,5 +5281,105 @@
     "workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
     "engine_15": "105edd31b57fe7e6d32ee648efad562e45a9f908",
     "source_inventory": "state/sources.json records exact repository revisions and source hashes; state/source-verification.json verifies 33,056 files across 15 repositories with zero mismatches. Final committed heads are synchronized after recording this evidence."
+  },
+  "native_query_adapter_validation": {
+    "status": "native_15_explicit_adapter_validated_against_finite_reference",
+    "date": "2026-10-14",
+    "native_revision": "733b546ca21f81a14b46fcdbf7168031eb3f336f",
+    "engine_15": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+    "platform": "Linux ARM64, native subprocess transport",
+    "protocol_method_count": 82,
+    "development_protocol_hash": "28cf2ae30b6cf07dbd4db602e4972611319b993fb073b27de456b6fcf341dc00",
+    "wire_delta": "None: existing query preparation/executor and catalog_detach contracts.",
+    "behavior": [
+      "Opt-in vgi_query_enabled before ATTACH; immutable explicit duckdb.sql.v1 / vgi.remote.readonly.v1 selection.",
+      "Typed named/positional one-row Arrow parameter batches, typed NULLs and provider-default context digest.",
+      "Fresh binding per DuckDB prepared statement execution; attachment and transaction ownership preserved.",
+      "Exact schema/metadata and required-value checks, including empty output; one ordered reader without caching or scan pushdown.",
+      "No ambiguous prepare/init retries; independent preparation release and execution cancellation.",
+      "Native DETACH invokes the existing authenticated catalog_detach RPC best effort; lost clients still require provider expiry/janitor cleanup."
+    ],
+    "native_build": {
+      "status": "pass",
+      "targets": [
+        "shell",
+        "vgi_loadable_extension",
+        "vgi_catalog_tests"
+      ],
+      "log": "logs/native-query-adapter-build-final.log"
+    },
+    "native_unit": {
+      "cases": 12,
+      "assertions": 73,
+      "filter": "[query-rpc],[wire-contract-guards]",
+      "log": "logs/native-query-adapter-native-final.log"
+    },
+    "native_integration": {
+      "passed": 18,
+      "command": "make test_queries",
+      "cases": [
+        "values",
+        "ordered_empty",
+        "prepared_autocommit",
+        "prepared_transaction",
+        "prepare_only",
+        "not_offered",
+        "provider_disabled",
+        "declined",
+        "missing_parameter",
+        "unsupported_parameter",
+        "prepare_error",
+        "prepare_disconnect",
+        "start_error",
+        "read_error",
+        "output_schema",
+        "rollback",
+        "early_limit",
+        "interrupt"
+      ],
+      "assertions": "Every scenario checks execution counts and zero retained preparations, executions, fragments and attachments. prepare_disconnect checks exactly one preparation attempt/allocation. Interruption uses Connection::Interrupt(), followed by explicit DETACH while the connection remains alive.",
+      "log": "logs/native-query-adapter-native-final.log"
+    },
+    "python": {
+      "passed": 104,
+      "scope": "test_query_parameters.py, test_query_contract.py, test_query_protocol.py",
+      "ruff": "vgi and tests/catalog pass; final fixture changes checked separately",
+      "mypy_sources": 218,
+      "logs": [
+        "logs/native-query-adapter-python.log",
+        "logs/native-query-adapter-fixture-final.log"
+      ]
+    },
+    "native_catalog_metadata_regression": {
+      "workers": [
+        "python",
+        "go",
+        "rust",
+        "typescript",
+        "java",
+        "csharp",
+        "cpp"
+      ],
+      "cases_per_worker": 1,
+      "assertions_per_worker": 99,
+      "logs": "logs/native-query-adapter-metadata-{worker}.log"
+    },
+    "generation_and_inventory": {
+      "status": "strict --check --require-all, settings generation and manifest checks pass",
+      "audit_rows": 151,
+      "contract_areas": 20,
+      "remaining_reviews": 134,
+      "log": "logs/native-query-adapter-contract-final.log"
+    },
+    "review": "Two cross-reviews of native adapter/lifecycle and RPC/negotiation. The sole remaining blocker, inherited pooled prepare retry on ambiguous IO failure, was fixed and covered by prepare_disconnect.",
+    "diagnostics": "Earlier native/fast/build-interrupt logs include diagnostic failures. Missing native catalog_detach notification was fixed. The initial CLI SIGINT case exited batch input before DETACH; it was replaced with direct connection interruption without weakening resource assertions. Final qualification uses the logs named above.",
+    "qualification_limits": [
+      "Finite durable Python reference only; no general SQL/provider, mutable snapshot or production janitor qualification.",
+      "Native HTTP/WASM, other platforms, automatic DuckDB 2.0 integration and performance remain unqualified.",
+      "Shared SDK wire inventory is unchanged; complete SDK/native suites were not repeated in this checkpoint.",
+      "Broader P0-P3 and M0-M4 gates, combined freeze/version/routing/migration and publication remain open."
+    ],
+    "source_inventory": "Verified 33,065 files across 15 repositories with zero mismatches. state/sources.json records exact synchronized revisions and source hashes; state/source-verification.json is checked again after the checkpoint commits."
   }
 }

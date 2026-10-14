@@ -612,10 +612,11 @@ remain open.
 
 This development contract is part of the combined successor release. It does
 not reserve a separate minor release. The Python worker/client and finite
-reference provider implement this lifecycle; the engine adapters and general
-provider qualification remain open. Generated SDK records alone do not enable
-query execution. The native extension continues to build against DuckDB 1.5
-and sends no query offer until its explicit adapter is implemented.
+reference provider implement this lifecycle. The native DuckDB 1.5 explicit
+adapter is opt-in; automatic 2.0 integration and general provider qualification
+remain open. Generated SDK records alone do not enable query execution.
+`SET vgi_query_enabled=true` before ATTACH offers only explicit read queries;
+the default remains false and existing attachments require reattachment.
 
 `ClientCapabilities.query_pushdown` is a nullable inline
 `ClientQueryCapabilities` struct. It offers `encodings`, `semantic_profiles`,
