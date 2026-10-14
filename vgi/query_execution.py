@@ -30,10 +30,11 @@ from vgi.catalog.query import (
 )
 from vgi.exceptions import CatalogCapabilityError, OpaqueDataNotRecognizedError
 from vgi.invocation import BindResponse, FunctionType, GlobalInitResponse
+from vgi.logical_types import require_logical_batch, require_logical_profiles, require_logical_values
 from vgi.query_parameters import QueryParameters
 from vgi.query_provider import CatalogQueryProvider, QueryExecution, QueryOwner, QueryPreparation
 from vgi.table_function import BindParams, InitParams, ProcessParams, TableFunctionGenerator
-from vgi.typed_values import _validate_scalar
+from vgi.typed_values import TypedValueBatch, _validate_scalar
 
 if TYPE_CHECKING:
     from vgi.protocol import BindRequest, InitRequest
@@ -195,6 +196,8 @@ def prepare(worker: Worker, request: CatalogQueryPrepareRequest) -> CatalogQuery
     request.serialize_to_bytes()  # Enforce the aggregate envelope bound on direct calls too.
     provider, owner, selected = _current(worker, request.attach_opaque_data, request.transaction_opaque_data)
     request.validate_agreement(selected)
+    logical_profiles = worker._effective_catalog_capabilities(request.attach_opaque_data).read
+    require_logical_profiles(read_query_schema(request.parameter_schema), selected_profiles=logical_profiles)
     response = provider.prepare(owner=owner, request=request)
     if not isinstance(response, CatalogQueryPrepareResult):
         raise TypeError("provider must return a CatalogQueryPrepareResult")
@@ -202,6 +205,7 @@ def prepare(worker: Worker, request: CatalogQueryPrepareRequest) -> CatalogQuery
         response.validate_request(request)
         if response.status == "declined":
             return response
+        require_logical_profiles(read_query_schema(response.output_schema), selected_profiles=logical_profiles)
         assert response.prepared_query_token is not None and response.expires_at_epoch_ms is not None
         now = _now_ms()
         if not now < response.expires_at_epoch_ms <= now + _MAX_PREPARE_LIFETIME_MS:
@@ -281,6 +285,10 @@ def _bound(
         raise OpaqueDataNotRecognizedError("query_token")
     parameters = QueryParameters.deserialize_from_bytes(arguments.parameter_values)
     parameters.validate_prepared_schema(preparation.request.parameter_schema)
+    assert request.attach_opaque_data is not None
+    logical_profiles = worker._effective_catalog_capabilities(request.attach_opaque_data).read
+    require_logical_profiles(read_query_schema(preparation.result.output_schema), selected_profiles=logical_profiles)
+    require_logical_values(TypedValueBatch(parameters.batch), selected_profiles=logical_profiles)
     return provider, owner, selected, preparation, parameters
 
 
@@ -400,6 +408,10 @@ def executor_type(worker: Worker) -> type[TableFunctionGenerator[Any, Any]]:
                 ):
                     raise ValueError("query result batch changed the accepted schema")
                 batch.validate(full=True)
+                require_logical_batch(
+                    batch,
+                    selected_profiles=worker._effective_catalog_capabilities(call.attach_opaque_data).read,
+                )
                 for i, definition in enumerate(batch.schema):
                     for value in batch.column(i):
                         _validate_scalar(value, definition)

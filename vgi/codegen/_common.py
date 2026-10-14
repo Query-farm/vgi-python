@@ -41,6 +41,7 @@ from vgi.catalog.catalog_interface import (
 )
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot, ObjectDependency
 from vgi.catalog.layout import SortKey, SqlExpression, TableLayout, TableLayoutChange
+from vgi.catalog.macros import MacroOverload, MacroParameter
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
 from vgi.catalog.query import (
@@ -106,6 +107,8 @@ INFO_TYPES: tuple[type, ...] = (
 # preparation, before the catalog methods using them are frozen. Keep a single
 # inventory for schemas and typed models, including otherwise opaque IPC bodies.
 SHARED_CONTRACT_TYPES: tuple[type, ...] = (
+    MacroParameter,
+    MacroOverload,
     ClientQueryCapabilities,
     QueryCapabilities,
     QueryEvaluationContext,

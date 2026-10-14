@@ -68,6 +68,7 @@ from vgi.catalog.catalog_interface import (
 )
 from vgi.catalog.dependencies import DependencySnapshot
 from vgi.catalog.layout import TableLayout
+from vgi.catalog.macros import MAX_MACRO_BYTES, MacroOverload, validate_macro_overloads
 from vgi.catalog.options import OptionDefinitions
 from vgi.catalog.query import CatalogQueryPrepareRequest, CatalogQueryPrepareResult, ClientQueryCapabilities
 from vgi.filter_v2 import delta_revisions, replaying_accepted_state
@@ -1055,6 +1056,9 @@ class MacroCreateRequest(ArrowSerializableDataclass):
             supplied. Built with ``vgi.argument_spec.macro_arguments_schema``.
         transaction_opaque_data: Opaque DuckDB transaction handle (bytes); ``None``
             when not inside a transaction.
+        overloads: Complete ordered family, requiring the macro-overloads create
+            profile. Legacy fields must be empty when present. Expression
+            defaults are bound once by the owner before atomic publication.
     """
 
     attach_opaque_data: bytes
@@ -1067,6 +1071,27 @@ class MacroCreateRequest(ArrowSerializableDataclass):
     parameter_default_values: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
     arguments_schema: Annotated[pa.Schema | None, ArrowType(pa.binary())] = None
     transaction_opaque_data: bytes | None = None
+    overloads: list[MacroOverload] | None = None
+
+    def __post_init__(self) -> None:
+        """Validate the exclusive legacy or overload-family representation."""
+        validate_macro_overloads(
+            macro_type=self.macro_type.value,
+            schema_path=self.schema_path,
+            parameters=self.parameters,
+            definition=self.definition,
+            parameter_default_values=self.parameter_default_values,
+            arguments_schema=self.arguments_schema,
+            overloads=self.overloads,
+        )
+
+    def serialize_to_bytes(self) -> bytes:
+        """Revalidate mutable overload families before sending a create request."""
+        self.__post_init__()
+        result = ArrowSerializableDataclass.serialize_to_bytes(self)
+        if self.overloads is not None and len(result) > MAX_MACRO_BYTES:
+            raise ValueError("macro record is too large")
+        return result
 
 
 if TYPE_CHECKING:

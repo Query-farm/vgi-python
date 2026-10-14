@@ -45,6 +45,7 @@ from vgi.catalog.capabilities import (
 )
 from vgi.catalog.dependencies import DependencySnapshot
 from vgi.catalog.layout import TableLayout, TableLayoutChange
+from vgi.catalog.macros import MAX_MACRO_BYTES, MacroOverload, validate_macro_overloads
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
 from vgi.catalog.query import QueryCapabilities
@@ -658,6 +659,10 @@ class MacroInfo(CatalogSchemaObject, ArrowSerializableDataclass):
             worker did not supply per-parameter docs (older workers); the extension
             falls back to ``parameters`` for names. Built with
             ``vgi.argument_spec.macro_arguments_schema``.
+        overloads: Complete ordered overload family under the negotiated macro
+            profile. When present, legacy parameters/definition must be empty
+            and their optional metadata absent. Discovery returns resolved
+            literal defaults; declared parameter types are independent.
 
     """
 
@@ -666,6 +671,27 @@ class MacroInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     parameter_default_values: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
     definition: str = ""
     arguments_schema: Annotated[pa.Schema | None, ArrowType(pa.binary())] = None
+    overloads: list[MacroOverload] | None = None
+
+    def __post_init__(self) -> None:
+        """Keep the legacy definition and the overload collection mutually exclusive."""
+        validate_macro_overloads(
+            macro_type=self.macro_type.value,
+            schema_path=self.schema_path,
+            parameters=self.parameters,
+            definition=self.definition,
+            parameter_default_values=self.parameter_default_values,
+            arguments_schema=self.arguments_schema,
+            overloads=self.overloads,
+        )
+
+    def serialize_to_bytes(self) -> bytes:
+        """Revalidate mutable overload families before catalog publication."""
+        self.__post_init__()
+        result = super().serialize_to_bytes()
+        if self.overloads is not None and len(result) > MAX_MACRO_BYTES:
+            raise ValueError("macro record is too large")
+        return result
 
 
 class FunctionType(Enum):
@@ -2842,6 +2868,25 @@ class CatalogInterface(ABC):
                 no per-parameter docs are supplied.
         """
         raise NotImplementedError("Macro create not implemented.")
+
+    def macro_create_overloads(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        schema_path: SchemaPath,
+        name: str,
+        macro_type: "MacroType",
+        overloads: list[MacroOverload],
+        on_conflict: OnConflict,
+    ) -> None:
+        """Bind and atomically store a negotiated macro family.
+
+        Providers resolve supported default expressions once at creation and
+        return resolved literals on discovery. Advertise the create profile
+        only when definition binding and the complete family are supported.
+        """
+        raise NotImplementedError("Macro overload creation not implemented.")
 
     def macro_drop(
         self,

@@ -44,6 +44,7 @@ from vgi.catalog.catalog_interface import (
 )
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot, ObjectDependency
 from vgi.catalog.descriptors import Catalog, ForeignKeyDef, Index, Macro, Schema, Sql, Table, View
+from vgi.catalog.macros import MacroOverload, MacroParameter
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.query import (
     CatalogQueryPrepareRequest,
@@ -91,6 +92,8 @@ __all__ = [
     "ForeignKeyInfo",
     "IndexInfo",
     "MacroInfo",
+    "MacroOverload",
+    "MacroParameter",
     "CatalogContentsResult",
     "SchemaContentsInfo",
     "SchemaInfo",

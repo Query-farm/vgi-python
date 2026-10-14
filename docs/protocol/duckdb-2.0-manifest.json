@@ -12,7 +12,7 @@
       "Overload collections replacing single macro definitions"
     ],
     "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
-    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition",
+    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition",
     "version_requirement": "Retaining the raw-path migration requires a major version and matching routing name. Complete the combined diff and migration guide before freeze."
   },
   "sources": {
@@ -381,9 +381,9 @@
       "evidence": []
     },
     "macros": {
-      "title": "Macros",
+      "title": "Macros \u2014 concrete contract and reference implemented; adapters pending",
       "disposition": "include",
-      "status": "pending_contract_review",
+      "status": "reference_implemented_native_qualification_pending",
       "records": [
         "MacroInfo",
         "MacroCreateRequest",
@@ -402,13 +402,24 @@
         "Overload collections, declared parameter types, expression/default representation, documentation, and owner-relative definitions",
         "Reconcile the existing single-definition request and typed-value defaults with engine overloads and expression defaults. Define resolution and stable round trips; do not introduce a function overload handle just to mirror DuckDB internals."
       ],
-      "capability_contract": "pending_P1",
+      "capability_contract": "vgi.macro.overloads.read.v1 and vgi.macro.overloads.create.v1; create requires read; transaction DDL requires the existing transaction profile",
       "gates": [
         "P1",
         "P2",
         "P3"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "status": "concrete_wire_contract_and_python_reference",
+          "paths": [
+            "python:docs/protocol/macro-contract.md",
+            "python:vgi/catalog/macros.py",
+            "python:tests/catalog/test_macro_contract.py",
+            "python:tests/catalog/test_macro_overload_protocol.py"
+          ],
+          "limits": "Native family materialization/DDL and production owner binding remain unqualified; unsupported SDK adapters reject families."
+        }
+      ]
     },
     "dependencies": {
       "title": "Dependencies and catalog consistency",
@@ -564,11 +575,10 @@
       ]
     },
     "logical_types": {
-      "title": "Logical type preservation \u2014 design required",
+      "title": "Logical type preservation \u2014 concrete contract and codecs implemented; adapters pending",
       "disposition": "include",
-      "status": "pending_contract_review",
+      "status": "reference_implemented_native_qualification_pending",
       "records": [
-        "LogicalTypeAnnotation",
         "TypedValueBatch"
       ],
       "existing_methods": [
@@ -580,13 +590,24 @@
         "Recursive type annotations/capabilities for ambiguous Arrow mappings, particularly TUPLE and VARIANT",
         "Verify actual import/export at the selected engine pin. Define nested round trips, missing versus NULL, numeric/time identity, and SDK metadata preservation. Reject opaque aggregate-state layouts unless a portable state contract is proven."
       ],
-      "capability_contract": "pending_P1",
+      "capability_contract": "CatalogCapabilities.read explicitly selects vgi.type.tuple.v1 and vgi.type.variant.arrow.v1. Recursive vgi.logical_type.v1 field metadata is semantic and may not be stripped.",
       "gates": [
         "P1",
         "P2",
         "P3"
       ],
-      "evidence": []
+      "evidence": [
+        {
+          "status": "portable_contract_and_python_codec",
+          "paths": [
+            "python:docs/protocol/logical-types.md",
+            "python:vgi/logical_types.py",
+            "python:tests/test_logical_types.py",
+            "native:test/cpp/test_schema_metadata.cpp"
+          ],
+          "limits": "Haybarn 2.0 native import/export is not qualified; 1.5 rejects annotated schemas before Arrow storage interpretation."
+        }
+      ]
     },
     "optimizer": {
       "title": "Optimizer and observability additions \u2014 design required",
@@ -5090,5 +5111,98 @@
       },
       "python_revision": "The commit containing this manifest; exact HEAD is recorded in the synchronized source inventory."
     }
+  },
+  "types_macros_validation": {
+    "status": "wire_contracts_and_reference_implemented_native_adapters_pending",
+    "workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+    "engine_15": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "protocol_method_count": 82,
+    "development_protocol_hash": "28cf2ae30b6cf07dbd4db602e4972611319b993fb073b27de456b6fcf341dc00",
+    "hash_scope": "Embedded MacroInfo/MacroCreateRequest changes do not alter the outer reflection hash. Required generation parity and shared codec vectors verify their layouts.",
+    "python": {
+      "passed": 1077,
+      "skipped": 5,
+      "log": "logs/types-macros-python-complete.log"
+    },
+    "generator_and_logical_checks": {
+      "passed": 308,
+      "counts_overlap": true,
+      "strict_generation": "passed --check --require-all",
+      "ruff": "passed",
+      "mypy_sources": 218
+    },
+    "sdk_suites": {
+      "go": "all packages passed",
+      "rust": {
+        "passed": 492,
+        "ignored": 4
+      },
+      "typescript_arrow": {
+        "passed": 621,
+        "skipped": 68
+      },
+      "typescript_flechette": {
+        "passed": 622,
+        "skipped": 67
+      },
+      "java": "full test suite and worker distribution passed",
+      "csharp": {
+        "passed": 630
+      },
+      "cpp": {
+        "passed": 68
+      }
+    },
+    "shared_corpus": "14 new vectors in all seven SDKs; logical tuple/struct identity and four NULL/absence cases; declared/untyped macro parameters, literal/expression defaults, complete and legacy parent records.",
+    "native_build": "Final DuckDB 1.5 static/loadable extension and test targets passed.",
+    "qualification_limits": [
+      "Native DuckDB 2.0 import/export and macro family materialization/DDL remain unqualified.",
+      "Production SQL owner binding, durable family mutations, cross-SDK logical execution semantics and performance remain open.",
+      "No version freeze, protocol publication, native engine upgrade or broad phase completion."
+    ],
+    "sdk_revisions": {
+      "go": "aa133e4c751798d30e8aada06291c622ff5067fa",
+      "rust": "5c9aa03c35bbf2fecaac5345d45b0e011613a45c",
+      "typescript": "132b0f9800e454896b15f6fac8a59c84685786dd",
+      "java": "28dc31eb661306c3e2001421696319bc0c1a1455",
+      "csharp": "248509d2d2cf55a91c7389ddbecaf9b3cf2cd072",
+      "cpp": "30f20037f7f91b64aba2b58c746312ef048d8d6f"
+    },
+    "logs": [
+      "logs/types-macros-python-complete.log",
+      "logs/types-macros-go-final.log",
+      "logs/types-macros-rust-final.log",
+      "logs/types-macros-ts-final.log",
+      "logs/types-macros-ts-focused.log",
+      "logs/types-macros-flechette-final.log",
+      "logs/types-macros-java-complete.log",
+      "logs/types-macros-csharp.log",
+      "logs/types-macros-cpp.log",
+      "logs/types-macros-native-final.log",
+      "logs/types-macros-native-guards.log",
+      "logs/types-macros-native-matrix.log"
+    ],
+    "diagnostics": "Earlier logs without final/complete suffix include integration failures subsequently corrected; do not treat them as final qualification.",
+    "native_revision": "00d336d1dfa55b2bb386b146bd46d4436f072ef0",
+    "native_guards": {
+      "cases": 3,
+      "assertions": 14,
+      "log": "logs/types-macros-native-guards.log"
+    },
+    "native_macro_catalog_regression": {
+      "workers": [
+        "python",
+        "go",
+        "rust",
+        "typescript",
+        "java",
+        "csharp",
+        "cpp"
+      ],
+      "cases_per_worker": 7,
+      "assertions_per_worker": 420,
+      "log": "logs/types-macros-native-matrix.log"
+    },
+    "source_inventory": "Final committed revisions and bytes recorded in state/sources.json and state/source-verification.json; checked after commit."
   }
 }

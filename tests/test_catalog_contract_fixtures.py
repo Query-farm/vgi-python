@@ -10,12 +10,14 @@ from pathlib import Path
 import pyarrow as pa
 
 from vgi.catalog.capabilities import SCHEMA_OPTIONS_CREATE, SCHEMA_OPTIONS_READ, CatalogCapabilities
-from vgi.catalog.catalog_interface import TableInfo, ViewInfo
+from vgi.catalog.catalog_interface import MacroInfo, TableInfo, ViewInfo
 from vgi.catalog.layout import LayoutChangeMode, SortKey, SqlExpression, TableLayout, TableLayoutChange
+from vgi.catalog.macros import MacroOverload, MacroParameter
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
 from vgi.codegen.catalog_contract_fixtures import render
 from vgi.column_path import RequiredFilterPaths
-from vgi.protocol import TableCreateRequest
+from vgi.logical_types import LOGICAL_TYPE_PROFILES, decode_variant, validate_logical_values
+from vgi.protocol import MacroCreateRequest, TableCreateRequest
 from vgi.query_parameters import QueryParameters
 from vgi.typed_values import TypedValueBatch
 
@@ -121,3 +123,47 @@ def test_views_preserve_security_modes() -> None:
         info = ViewInfo.deserialize_from_bytes(base64.b64decode(fixtures[name]))
         assert info.security == security
         assert ViewInfo.deserialize_from_bytes(info.serialize_to_bytes()) == info
+
+
+def test_logical_type_vectors_preserve_tuple_null_and_absence() -> None:
+    fixtures = {name: base64.b64decode(value) for name, value in json.loads(render())["records"].items()}
+    vectors = {
+        name: TypedValueBatch.deserialize_from_bytes(payload)
+        for name, payload in fixtures.items()
+        if name.startswith("logical_")
+    }
+    for values in vectors.values():
+        validate_logical_values(values, selected_profiles=LOGICAL_TYPE_PROFILES)
+        assert TypedValueBatch.deserialize_from_bytes(values.serialize_to_bytes()).batch.equals(
+            values.batch, check_metadata=True
+        )
+    assert not vectors["logical_tuple"].schema.equals(vectors["logical_struct"].schema, check_metadata=True)
+    assert not vectors["logical_variant_sql_null"].batch.column(0)[0].is_valid
+    null = decode_variant(vectors["logical_variant_null"].batch.column(0)[0].as_py())
+    absent = decode_variant(vectors["logical_variant_absent"].batch.column(0)[0].as_py())
+    present = decode_variant(vectors["logical_variant_null_member"].batch.column(0)[0].as_py())
+    assert null.schema.field(0).type == pa.null()
+    assert absent.schema.field(0).type.num_fields == 0
+    assert present.schema.field(0).type.field(0).name == "present"
+    assert present.schema.field(0).type.field(0).type == pa.int64()
+
+
+def test_macro_vectors_preserve_full_family_and_legacy_absence() -> None:
+    fixtures = {name: base64.b64decode(value) for name, value in json.loads(render())["records"].items()}
+    parameter = MacroParameter.deserialize_from_bytes(fixtures["macro_parameter"])
+    assert parameter.declared_type is not None and parameter.declared_type.field(0).type == pa.int64()
+    assert parameter.default_value is not None and not parameter.default_value.batch.column(0)[0].is_valid
+    expression = MacroParameter.deserialize_from_bytes(fixtures["macro_parameter_expression"])
+    assert expression.default_expression is not None and expression.default_expression.sql == "2 + 3"
+    assert MacroParameter.deserialize_from_bytes(fixtures["macro_parameter_untyped"]).declared_type is None
+    overload = MacroOverload.deserialize_from_bytes(fixtures["macro_overload"])
+    assert [parameter.name for parameter in overload.parameters] == ["x", "fallback", "scale"]
+    create = MacroCreateRequest.deserialize_from_bytes(fixtures["macro_create"])
+    info = MacroInfo.deserialize_from_bytes(fixtures["macro_info"])
+    assert create.overloads is not None and len(create.overloads) == 2
+    assert info.overloads is not None and len(info.overloads) == 2
+    resolved = info.overloads[0].parameters[2]
+    assert resolved.default_expression is None
+    assert resolved.default_value is not None and resolved.default_value.batch.column(0)[0].as_py() == 5
+    assert MacroCreateRequest.deserialize_from_bytes(fixtures["macro_create_legacy"]).overloads is None
+    assert MacroInfo.deserialize_from_bytes(fixtures["macro_info_legacy"]).overloads is None

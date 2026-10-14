@@ -45,7 +45,7 @@ import pyarrow as pa
 
 from vgi.catalog.catalog_interface import CatalogAttachResult
 from vgi.codegen._common import SHARED_CONTRACT_TYPES, GeneratorError, provenance_comment
-from vgi.protocol import CatalogContentsResponse, SchemaContents
+from vgi.protocol import CatalogContentsResponse, MacroCreateRequest, SchemaContents
 
 if TYPE_CHECKING:
     from typing import TextIO
@@ -64,6 +64,7 @@ JAVA_RECORDS: tuple[type, ...] = (
     CatalogAttachResult,
     SchemaContents,
     CatalogContentsResponse,
+    MacroCreateRequest,
 )
 
 #: The Java name of a protocol class, where it is not the Python one.

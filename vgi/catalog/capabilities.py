@@ -43,6 +43,10 @@ COLUMN_NESTED_COMMENT = "vgi.column.nested.comment.v1"
 VIEW_BARRIER_READ = "vgi.view.barrier.read.v1"
 VIEW_BARRIER_CREATE = "vgi.view.barrier.create.v1"
 TRANSACTION_DDL = "vgi.transaction.ddl.v1"
+MACRO_OVERLOADS_READ = "vgi.macro.overloads.read.v1"
+MACRO_OVERLOADS_CREATE = "vgi.macro.overloads.create.v1"
+LOGICAL_TYPE_TUPLE = "vgi.type.tuple.v1"
+LOGICAL_TYPE_VARIANT = "vgi.type.variant.arrow.v1"
 
 _PROFILE = re.compile(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*\.v[1-9][0-9]*\Z")
 
@@ -71,6 +75,9 @@ class CatalogCapabilities(ArrowSerializableDataclass):
                 TABLE_LAYOUT_READ,
                 ROW_SCALAR_EXPRESSION,
                 VIEW_BARRIER_READ,
+                MACRO_OVERLOADS_READ,
+                LOGICAL_TYPE_TUPLE,
+                LOGICAL_TYPE_VARIANT,
             }
         ),
         "ddl": frozenset(
@@ -93,12 +100,14 @@ class CatalogCapabilities(ArrowSerializableDataclass):
                 TABLE_LAYOUT_ALTER_REWRITE,
                 TABLE_METADATA_CREATE,
                 VIEW_BARRIER_CREATE,
+                MACRO_OVERLOADS_CREATE,
             }
         ),
         "write": frozenset(),
         "transaction": frozenset({TRANSACTION_DDL}),
     }
     _requires: ClassVar[dict[str, frozenset[str]]] = {
+        MACRO_OVERLOADS_CREATE: frozenset({MACRO_OVERLOADS_READ}),
         VIEW_BARRIER_CREATE: frozenset({VIEW_BARRIER_READ}),
         TABLE_OPTIONS_CREATE: frozenset({TABLE_OPTIONS_READ}),
         TABLE_OPTIONS_ALTER: frozenset({TABLE_OPTIONS_READ}),

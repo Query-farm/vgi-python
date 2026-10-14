@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import json
+from dataclasses import replace
 from typing import Any, TextIO
 
 import pyarrow as pa
@@ -19,7 +20,7 @@ from vgi_rpc import ArrowSerializableDataclass
 from vgi_rpc.rpc._types import rpc_methods
 
 from vgi.catalog.capabilities import SCHEMA_OPTIONS_CREATE, SCHEMA_OPTIONS_READ, CatalogCapabilities
-from vgi.catalog.catalog_interface import OnConflict, TableInfo, ViewInfo
+from vgi.catalog.catalog_interface import MacroInfo, MacroType, OnConflict, TableInfo, ViewInfo
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot, ObjectDependency
 from vgi.catalog.layout import (
     LayoutChangeMode,
@@ -30,6 +31,7 @@ from vgi.catalog.layout import (
     TableLayout,
     TableLayoutChange,
 )
+from vgi.catalog.macros import MACRO_DEFAULT_PROFILE, MACRO_PROFILE, MacroOverload, MacroParameter
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
 from vgi.catalog.query import (
@@ -44,7 +46,8 @@ from vgi.catalog.query import (
     QueryObjectReference,
 )
 from vgi.column_path import RequiredFilterPaths
-from vgi.protocol import TableCreateRequest, VgiProtocol
+from vgi.logical_types import encode_variant, tuple_field, variant_field
+from vgi.protocol import MacroCreateRequest, TableCreateRequest, VgiProtocol
 from vgi.query_parameters import QueryParameters
 from vgi.typed_values import TypedValueBatch
 
@@ -91,6 +94,85 @@ def column_requests() -> dict[str, bytes]:
                 writer.write_batch(batch)
             result[f"{operation}_{variant}"] = sink.getvalue().to_pybytes()
     return result
+
+
+def logical_and_macro_records() -> dict[str, TypedValueBatch | ArrowSerializableDataclass]:
+    """Cover dynamic type identity and complete macro families in every SDK corpus."""
+
+    def scalar(field: pa.Field[Any], value: Any) -> TypedValueBatch:
+        return TypedValueBatch(
+            pa.RecordBatch.from_arrays([pa.array([value], type=field.type)], schema=pa.schema([field]))
+        )
+
+    pair = tuple_field("pair", [pa.field("", pa.uint64()), pa.field("", pa.string())])
+    tuple_values = scalar(pair, {"element1": 2**64 - 1, "element2": None})
+    struct_values = scalar(pair.remove_metadata(), {"element1": 2**64 - 1, "element2": None})
+    variant_null = encode_variant(scalar(pa.field("value", pa.null()), None))
+    absent = encode_variant(scalar(pa.field("value", pa.struct([])), {}))
+    null_member = encode_variant(
+        scalar(pa.field("value", pa.struct([pa.field("present", pa.int64())])), {"present": None})
+    )
+    scope = ["one.two", "nested"]
+    literal = scalar(pa.field("fallback", pa.int64(), metadata={b"domain": b"retained"}), None)
+    parameter = MacroParameter(
+        name="fallback", declared_type=literal.schema, default_value=literal, documentation="A typed NULL default"
+    )
+    expression_parameter = MacroParameter(
+        name="scale",
+        declared_type=pa.schema([pa.field("scale", pa.int32())]),
+        default_expression=SqlExpression(sql="2 + 3", profile=MACRO_DEFAULT_PROFILE, schema_path=scope),
+    )
+    overload = MacroOverload(
+        parameters=[MacroParameter(name="x"), parameter, expression_parameter],
+        definition="coalesce(x, fallback) * scale",
+        profile=MACRO_PROFILE,
+        schema_path=scope,
+        macro_type="scalar",
+    )
+    second = MacroOverload(
+        parameters=[MacroParameter(name="x", declared_type=pa.schema([pa.field("x", pa.string())]))],
+        definition="upper(x)",
+        profile=MACRO_PROFILE,
+        schema_path=scope,
+        macro_type="scalar",
+    )
+    published = replace(
+        overload,
+        parameters=[
+            overload.parameters[0],
+            parameter,
+            replace(
+                expression_parameter, default_expression=None, default_value=scalar(pa.field("scale", pa.int32()), 5)
+            ),
+        ],
+    )
+    common: dict[str, Any] = dict(name="macro.with.dot", schema_path=scope, macro_type=MacroType.SCALAR)
+    return {
+        "logical_tuple": tuple_values,
+        "logical_struct": struct_values,
+        "logical_variant_sql_null": scalar(variant_field("value"), None),
+        "logical_variant_null": scalar(variant_field("value"), variant_null),
+        "logical_variant_absent": scalar(variant_field("value"), absent),
+        "logical_variant_null_member": scalar(variant_field("value"), null_member),
+        "macro_parameter": parameter,
+        "macro_parameter_expression": expression_parameter,
+        "macro_parameter_untyped": MacroParameter(name="x"),
+        "macro_overload": overload,
+        "macro_create": MacroCreateRequest(
+            **common,
+            attach_opaque_data=b"attach",
+            parameters=[],
+            definition="",
+            on_conflict=OnConflict.REPLACE,
+            transaction_opaque_data=b"transaction",
+            overloads=[overload, second],
+        ),
+        "macro_create_legacy": MacroCreateRequest(
+            **common, attach_opaque_data=b"attach", parameters=["x"], definition="x + 1", on_conflict=OnConflict.ERROR
+        ),
+        "macro_info": MacroInfo(**common, parameters=[], overloads=[published, second], comment=None, tags={}),
+        "macro_info_legacy": MacroInfo(**common, parameters=["x"], definition="x + 1", comment=None, tags={}),
+    }
 
 
 def render() -> str:
@@ -211,6 +293,7 @@ def render() -> str:
         ),
         empty_dependency_snapshot=DependencySnapshot(catalog_version=0),
     )
+    records.update(logical_and_macro_records())
     encoded = {name: record.serialize_to_bytes() for name, record in records.items()}
     parameters = QueryParameters.from_batch(values.batch, mode="named")
     context = QueryEvaluationContext()

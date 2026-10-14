@@ -59,6 +59,7 @@ from vgi.catalog import (
     FunctionInfo,
     IndexInfo,
     MacroInfo,
+    MacroOverload,
     MacroType,
     OnConflict,
     ScanBranch,
@@ -1943,6 +1944,7 @@ class CatalogClientMixin:
         on_conflict: OnConflict = OnConflict.ERROR,
         parameter_default_values: pa.RecordBatch | None = None,
         arguments_schema: pa.Schema | None = None,
+        overloads: list[MacroOverload] | None = None,
     ) -> None:
         """Create a new macro.
 
@@ -1960,6 +1962,9 @@ class CatalogClientMixin:
                 parameter, in ``parameters`` order) carrying per-parameter
                 descriptions via the ``vgi_doc`` field metadata key. Build with
                 ``vgi.argument_spec.macro_arguments_schema``.
+            overloads: Complete negotiated overload family. When supplied,
+                parameters must be empty, definition must be the empty string,
+                and legacy default/documentation schemas must be absent.
 
         """
         with self._catalog_connect() as proxy:
@@ -1975,6 +1980,7 @@ class CatalogClientMixin:
                     parameter_default_values=parameter_default_values,
                     arguments_schema=arguments_schema,
                     transaction_opaque_data=transaction_opaque_data,
+                    overloads=overloads,
                 )
             )
 
