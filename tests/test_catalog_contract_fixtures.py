@@ -16,7 +16,7 @@ from vgi.catalog.macros import MacroOverload, MacroParameter
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
 from vgi.codegen.catalog_contract_fixtures import render
 from vgi.column_path import RequiredFilterPaths
-from vgi.logical_types import LOGICAL_TYPE_PROFILES, decode_variant, validate_logical_values
+from vgi.logical_types import LOGICAL_TYPE_PROFILES, validate_logical_values
 from vgi.protocol import MacroCreateRequest, TableCreateRequest
 from vgi.query_parameters import QueryParameters
 from vgi.typed_values import TypedValueBatch
@@ -139,13 +139,24 @@ def test_logical_type_vectors_preserve_tuple_null_and_absence() -> None:
         )
     assert not vectors["logical_tuple"].schema.equals(vectors["logical_struct"].schema, check_metadata=True)
     assert not vectors["logical_variant_sql_null"].batch.column(0)[0].is_valid
-    null = decode_variant(vectors["logical_variant_null"].batch.column(0)[0].as_py())
-    absent = decode_variant(vectors["logical_variant_absent"].batch.column(0)[0].as_py())
-    present = decode_variant(vectors["logical_variant_null_member"].batch.column(0)[0].as_py())
-    assert null.schema.field(0).type == pa.null()
-    assert absent.schema.field(0).type.num_fields == 0
-    assert present.schema.field(0).type.field(0).name == "present"
-    assert present.schema.field(0).type.field(0).type == pa.int64()
+    expected = {
+        "logical_variant_null": ("010000", "00"),
+        "logical_variant_absent": ("010000", "020000"),
+        "logical_variant_null_member": ("0101000770726573656e74", "020100000100"),
+    }
+    for name, (metadata, value) in expected.items():
+        field = vectors[name].schema.field(0)
+        assert field.metadata == {
+            b"ARROW:extension:name": b"arrow.parquet.variant",
+            b"ARROW:extension:metadata": b"",
+        }
+        assert field.type == pa.struct(
+            [pa.field("metadata", pa.binary(), nullable=False), pa.field("value", pa.binary())]
+        )
+        assert vectors[name].batch.column(0)[0].as_py() == {
+            "metadata": bytes.fromhex(metadata),
+            "value": bytes.fromhex(value),
+        }
 
 
 def test_macro_vectors_preserve_full_family_and_legacy_absence() -> None:

@@ -46,7 +46,7 @@ from vgi.catalog.query import (
     QueryObjectReference,
 )
 from vgi.column_path import RequiredFilterPaths
-from vgi.logical_types import encode_variant, tuple_field, variant_field
+from vgi.logical_types import tuple_field, variant_field
 from vgi.protocol import MacroCreateRequest, TableCreateRequest, VgiProtocol
 from vgi.query_parameters import QueryParameters
 from vgi.typed_values import TypedValueBatch
@@ -107,11 +107,14 @@ def logical_and_macro_records() -> dict[str, TypedValueBatch | ArrowSerializable
     pair = tuple_field("pair", [pa.field("", pa.uint64()), pa.field("", pa.string())])
     tuple_values = scalar(pair, {"element1": 2**64 - 1, "element2": None})
     struct_values = scalar(pair.remove_metadata(), {"element1": 2**64 - 1, "element2": None})
-    variant_null = encode_variant(scalar(pa.field("value", pa.null()), None))
-    absent = encode_variant(scalar(pa.field("value", pa.struct([])), {}))
-    null_member = encode_variant(
-        scalar(pa.field("value", pa.struct([pa.field("present", pa.int64())])), {"present": None})
-    )
+    # Canonical Parquet Variant v1 bytes, carried opaquely by Arrow's
+    # arrow.parquet.variant extension. These are not nested Arrow IPC streams.
+    variant_null = {"metadata": bytes.fromhex("010000"), "value": bytes.fromhex("00")}
+    absent = {"metadata": bytes.fromhex("010000"), "value": bytes.fromhex("020000")}
+    null_member = {
+        "metadata": bytes.fromhex("0101000770726573656e74"),
+        "value": bytes.fromhex("020100000100"),
+    }
     scope = ["one.two", "nested"]
     literal = scalar(pa.field("fallback", pa.int64(), metadata={b"domain": b"retained"}), None)
     parameter = MacroParameter(

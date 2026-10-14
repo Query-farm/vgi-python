@@ -30,7 +30,7 @@ def values():
     definition = variant_field("x")
     # NULL still has a declared logical type and cannot bypass negotiation.
     return TypedValueBatch(
-        pa.RecordBatch.from_arrays([pa.array([None], type=pa.binary())], schema=pa.schema([definition]))
+        pa.RecordBatch.from_arrays([pa.array([None], type=definition.type)], schema=pa.schema([definition]))
     )
 
 
@@ -154,7 +154,7 @@ def test_query_preparation_rejects_unnegotiated_parameter_schema_before_provider
     monkeypatch.setattr(provider, "prepare", prepare)
     field = variant_field("value")
     parameters = QueryParameters.from_batch(
-        pa.RecordBatch.from_arrays([pa.array([None], type=pa.binary())], schema=pa.schema([field])),
+        pa.RecordBatch.from_arrays([pa.array([None], type=field.type)], schema=pa.schema([field])),
         mode="named",
     )
     with pytest.raises(ValueError, match="not negotiated"):

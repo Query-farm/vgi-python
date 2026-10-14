@@ -587,10 +587,10 @@
       ],
       "new_methods": [],
       "scope": [
-        "Recursive type annotations/capabilities for ambiguous Arrow mappings, particularly TUPLE and VARIANT",
-        "Verify actual import/export at the selected engine pin. Define nested round trips, missing versus NULL, numeric/time identity, and SDK metadata preservation. Reject opaque aggregate-state layouts unless a portable state contract is proven."
+        "Recursive VGI TUPLE annotation and canonical Arrow Parquet Variant capability with unshredded metadata/value storage",
+        "Qualify canonical Variant semantics, missing versus NULL and SDK byte/metadata preservation at each engine pin. Original DuckDB integer width/signedness and its full type domain are not promised; unsupported mappings reject. Reject opaque aggregate-state layouts without a portable contract."
       ],
-      "capability_contract": "CatalogCapabilities.read explicitly selects vgi.type.tuple.v1 and vgi.type.variant.arrow.v1. Recursive vgi.logical_type.v1 field metadata is semantic and may not be stripped.",
+      "capability_contract": "CatalogCapabilities.read selects vgi.type.tuple.v1 and vgi.type.variant.parquet.v1 independently. TUPLE retains vgi.logical_type.v1=tuple; VARIANT uses canonical ARROW:extension:name=arrow.parquet.variant with empty extension metadata and unshredded metadata/value struct storage. The former per-cell IPC profile and custom scalar encodings are superseded and rejected.",
       "gates": [
         "P1",
         "P2",
@@ -598,14 +598,24 @@
       ],
       "evidence": [
         {
-          "status": "portable_contract_and_python_codec",
+          "status": "historical_checkpoint_variant_encoding_superseded",
           "paths": [
             "python:docs/protocol/logical-types.md",
             "python:vgi/logical_types.py",
             "python:tests/test_logical_types.py",
             "native:test/cpp/test_schema_metadata.cpp"
           ],
-          "limits": "Haybarn 2.0 native import/export is not qualified; 1.5 rejects annotated schemas before Arrow storage interpretation."
+          "limits": "Original types/macros checkpoint used the now-superseded per-cell IPC VARIANT proposal. Its counts and revisions remain historical evidence only. TUPLE and macro contracts remain; canonical VARIANT requires separate validation."
+        },
+        {
+          "status": "canonical_variant_transport_validated_native_adapters_pending",
+          "paths": [
+            "python:docs/protocol/logical-types.md",
+            "python:vgi/logical_types.py",
+            "python:tests/test_logical_types.py",
+            "native:test/cpp/test_schema_metadata.cpp"
+          ],
+          "limits": "PyArrow 25.0.1 transports canonical struct/binary bytes opaquely; no public Variant API or general binary parser is claimed. Native 1.5 rejects unsupported canonical VARIANT. Backend decoding, native 2.0 mapping, shredding and full domain/performance qualification remain open."
         }
       ]
     },
@@ -5113,7 +5123,7 @@
     }
   },
   "types_macros_validation": {
-    "status": "wire_contracts_and_reference_implemented_native_adapters_pending",
+    "status": "historical_checkpoint_variant_encoding_superseded",
     "workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
     "engine_15": "105edd31b57fe7e6d32ee648efad562e45a9f908",
     "protocol_method_count": 82,
@@ -5203,6 +5213,72 @@
       "assertions_per_worker": 420,
       "log": "logs/types-macros-native-matrix.log"
     },
-    "source_inventory": "Final committed revisions and bytes recorded in state/sources.json and state/source-verification.json; checked after commit."
+    "source_inventory": "Final committed revisions and bytes recorded in state/sources.json and state/source-verification.json; checked after commit.",
+    "superseded_scope": "The VARIANT encoding in this tested snapshot was replaced at user direction by canonical arrow.parquet.variant. Preserve these counts/revisions as historical; they do not validate the replacement. Macro and TUPLE work remains applicable."
+  },
+  "canonical_variant_validation": {
+    "status": "canonical_variant_transport_validated_native_adapters_pending",
+    "profile": "vgi.type.variant.parquet.v1",
+    "extension": "arrow.parquet.variant",
+    "initial_scope": "Unshredded canonical metadata/value struct; opaque byte/metadata/validity preservation; no per-cell IPC or custom scalar encodings.",
+    "pyarrow": "25.0.1; opaque struct/binary transport without a public Variant API",
+    "qualification_limits": [
+      "Binary semantic validation requires a qualified backend decoder.",
+      "Canonical Variant semantics do not preserve every original DuckDB logical type or integer width/signedness. Standard unsigned widening is allowed; unsupported mappings reject.",
+      "Native DuckDB 2.0 mappings, shredded storage, cross-SDK execution and performance remain unqualified."
+    ],
+    "validation": {
+      "python": {
+        "passed": 1024,
+        "skipped": 5,
+        "scope": "tests/catalog, tests/test_logical_types.py, tests/test_catalog_contract_fixtures.py",
+        "ruff": "pass",
+        "mypy": "218 source files pass",
+        "generation": "strict check with all SDK roots passes",
+        "manifest": "151 audit rows and 20 contract areas; 134 reviews remain",
+        "log": "logs/canonical-variant-python.log"
+      },
+      "go": {
+        "scope": "vgi/generated package",
+        "status": "pass",
+        "log": "logs/canonical-variant-go.log"
+      },
+      "rust": {
+        "scope": "catalog_contracts",
+        "passed": 14,
+        "log": "logs/canonical-variant-rust.log"
+      },
+      "typescript": {
+        "scope": "catalog-contracts plus build:types",
+        "arrow_passed": 14,
+        "flechette_passed": 14,
+        "typecheck": "pass",
+        "log": "logs/canonical-variant-ts.log"
+      },
+      "java": {
+        "scope": "CatalogContractsTest",
+        "passed": 13,
+        "log": "logs/canonical-variant-java.log"
+      },
+      "csharp": {
+        "scope": "CatalogContractsTests",
+        "passed": 19,
+        "log": "logs/canonical-variant-csharp.log"
+      },
+      "cpp": {
+        "scope": "Python catalog records survive the C++ worker codec",
+        "ctest_passed": 1,
+        "log": "logs/canonical-variant-cpp.log"
+      },
+      "native_15": {
+        "scope": "incremental vgi_catalog_tests build and wire-contract-guards",
+        "cases": 3,
+        "assertions": 16,
+        "log": "logs/canonical-variant-native.log"
+      }
+    },
+    "workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+    "engine_15": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "source_inventory": "state/sources.json records exact repository revisions and source hashes; state/source-verification.json verifies 33,056 files across 15 repositories with zero mismatches. Final committed heads are synchronized after recording this evidence."
   }
 }

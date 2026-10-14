@@ -46,7 +46,7 @@ TRANSACTION_DDL = "vgi.transaction.ddl.v1"
 MACRO_OVERLOADS_READ = "vgi.macro.overloads.read.v1"
 MACRO_OVERLOADS_CREATE = "vgi.macro.overloads.create.v1"
 LOGICAL_TYPE_TUPLE = "vgi.type.tuple.v1"
-LOGICAL_TYPE_VARIANT = "vgi.type.variant.arrow.v1"
+LOGICAL_TYPE_VARIANT = "vgi.type.variant.parquet.v1"
 
 _PROFILE = re.compile(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*\.v[1-9][0-9]*\Z")
 

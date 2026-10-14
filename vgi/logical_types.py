@@ -1,14 +1,14 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
-"""Portable TUPLE and VARIANT storage, independent of a DuckDB ABI.
+"""TUPLE identity and the canonical Arrow Parquet Variant carrier.
 
-See docs/protocol/logical-types.md. These helpers do not qualify an engine
-adapter or implicitly advertise support in an attach handshake.
+VARIANT bytes follow Apache Parquet's VariantEncoding, never a VGI encoding.
+These helpers validate the Arrow carrier only. The consuming backend owns binary
+Variant decoding and semantic support; see docs/protocol/logical-types.md.
 """
 
 from __future__ import annotations
 
-import re
 from collections.abc import Collection, Mapping, Sequence
 from typing import Any, cast
 
@@ -17,47 +17,15 @@ import pyarrow as pa
 from vgi.typed_values import TypedValueBatch
 
 LOGICAL_TYPE_KEY = b"vgi.logical_type.v1"
+EXTENSION_NAME_KEY = b"ARROW:extension:name"
+EXTENSION_METADATA_KEY = b"ARROW:extension:metadata"
+VARIANT_EXTENSION_NAME = b"arrow.parquet.variant"
 TUPLE_PROFILE = "vgi.type.tuple.v1"
-VARIANT_PROFILE = "vgi.type.variant.arrow.v1"
+VARIANT_PROFILE = "vgi.type.variant.parquet.v1"
 LOGICAL_TYPE_PROFILES = (TUPLE_PROFILE, VARIANT_PROFILE)
 MAX_VARIANT_BYTES = 8 * 1024 * 1024
 MAX_LOGICAL_DEPTH = 64
 MAX_LOGICAL_FIELDS = 4096
-MAX_LOGICAL_VALUES = 65536
-
-# A format is not inferred from a field name or the first non-NULL value.
-_SPECIAL_STORAGE: dict[bytes, pa.DataType] = {
-    b"hugeint": pa.binary(16),
-    b"uhugeint": pa.binary(16),
-    b"bignum": pa.string(),
-    b"bit": pa.string(),
-    b"uuid": pa.binary(16),
-    b"time_tz": pa.struct(
-        [pa.field("micros", pa.int64(), nullable=False), pa.field("offset_seconds", pa.int32(), nullable=False)]
-    ),
-    b"interval": pa.struct(
-        [
-            pa.field("months", pa.int32(), nullable=False),
-            pa.field("days", pa.int32(), nullable=False),
-            pa.field("micros", pa.int64(), nullable=False),
-        ]
-    ),
-    b"geometry": pa.binary(),
-}
-
-
-def logical_field(
-    name: str, kind: str, *, nullable: bool = True, metadata: Mapping[bytes, bytes] | None = None
-) -> pa.Field[Any]:
-    """Declare a fixed special scalar representation from the contract."""
-    key = kind.encode("ascii")
-    if key not in _SPECIAL_STORAGE:
-        raise ValueError("unknown logical scalar kind")
-    values = dict(metadata or {})
-    if LOGICAL_TYPE_KEY in values and values[LOGICAL_TYPE_KEY] != key:
-        raise ValueError("conflicting logical type metadata")
-    values[LOGICAL_TYPE_KEY] = key
-    return pa.field(name, _SPECIAL_STORAGE[key], nullable=nullable, metadata=values)
 
 
 def tuple_field(
@@ -67,7 +35,7 @@ def tuple_field(
     nullable: bool = True,
     metadata: Mapping[bytes, bytes] | None = None,
 ) -> pa.Field[Any]:
-    """Declare an unnamed tuple; retain each child's type and other metadata."""
+    """Declare an unnamed tuple, retaining all recursive child metadata."""
     values = dict(metadata or {})
     if LOGICAL_TYPE_KEY in values and values[LOGICAL_TYPE_KEY] != b"tuple":
         raise ValueError("conflicting logical type metadata")
@@ -77,28 +45,76 @@ def tuple_field(
 
 
 def variant_field(name: str, *, nullable: bool = True, metadata: Mapping[bytes, bytes] | None = None) -> pa.Field[Any]:
-    """Declare a dynamic typed value stored as a complete scalar IPC stream."""
+    """Declare canonical unshredded Arrow Parquet Variant storage."""
     values = dict(metadata or {})
-    if LOGICAL_TYPE_KEY in values and values[LOGICAL_TYPE_KEY] != b"variant":
-        raise ValueError("conflicting logical type metadata")
-    values[LOGICAL_TYPE_KEY] = b"variant"
-    return pa.field(name, pa.binary(), nullable=nullable, metadata=values)
+    if any(key.startswith(b"vgi.logical_type.") for key in values):
+        raise ValueError("Parquet Variant must use the canonical Arrow extension annotation")
+    if values.get(EXTENSION_NAME_KEY, VARIANT_EXTENSION_NAME) != VARIANT_EXTENSION_NAME:
+        raise ValueError("conflicting Arrow extension name")
+    if values.get(EXTENSION_METADATA_KEY, b"") != b"":
+        raise ValueError("Parquet Variant extension metadata must be empty")
+    values[EXTENSION_NAME_KEY] = VARIANT_EXTENSION_NAME
+    values[EXTENSION_METADATA_KEY] = b""
+    storage = pa.struct([pa.field("metadata", pa.binary(), nullable=False), pa.field("value", pa.binary())])
+    return pa.field(name, storage, nullable=nullable, metadata=values)
 
 
 def select_logical_type_profiles(offered: Collection[str], supported: Collection[str]) -> list[str]:
-    """Select known common profiles deterministically; empty offers select none."""
+    """Select known common profiles; an empty offer never selects a profile."""
     return sorted(set(offered) & set(supported) & set(LOGICAL_TYPE_PROFILES))
 
 
-def _field_kind(field: pa.Field[Any]) -> bytes | None:
+def _metadata(field: pa.Field[Any]) -> dict[bytes, bytes]:
     if not field.equals(field.with_metadata(cast(Any, field.metadata)), check_metadata=True):
         raise ValueError("logical type field metadata keys must be unique")
-    metadata = field.metadata or {}
-    if any(key.startswith(b"vgi.logical_type.") and key != LOGICAL_TYPE_KEY for key in metadata):
-        raise ValueError("unsupported logical type annotation version")
-    if b"ARROW:extension:name" in metadata or isinstance(field.type, pa.BaseExtensionType):
-        raise ValueError("extension types require a separately qualified logical type profile")
-    return metadata.get(LOGICAL_TYPE_KEY)
+    return field.metadata or {}
+
+
+def _registered_variant(dtype: pa.DataType) -> bool:
+    return isinstance(dtype, pa.BaseExtensionType) and dtype.extension_name == VARIANT_EXTENSION_NAME.decode()
+
+
+def _is_variant(field: pa.Field[Any]) -> bool:
+    return (field.metadata or {}).get(EXTENSION_NAME_KEY) == VARIANT_EXTENSION_NAME or _registered_variant(field.type)
+
+
+def _storage(dtype: pa.DataType) -> pa.DataType:
+    return dtype.storage_type if isinstance(dtype, pa.BaseExtensionType) else dtype
+
+
+def _binary_type(dtype: pa.DataType, *, allow_encoded: bool = False) -> bool:
+    if allow_encoded and (pa.types.is_dictionary(dtype) or pa.types.is_run_end_encoded(dtype)):
+        return _binary_type(dtype.value_type, allow_encoded=True)
+    return pa.types.is_binary(dtype) or pa.types.is_large_binary(dtype) or pa.types.is_binary_view(dtype)
+
+
+def _check_variant(field: pa.Field[Any], selected: Collection[str]) -> None:
+    if VARIANT_PROFILE not in selected:
+        raise ValueError("variant logical type profile was not negotiated")
+    metadata = _metadata(field)
+    if metadata.get(EXTENSION_METADATA_KEY, b"") != b"":
+        raise ValueError("Parquet Variant extension metadata must be empty")
+    if isinstance(field.type, pa.BaseExtensionType):
+        if not _registered_variant(field.type):
+            raise ValueError("conflicting registered Arrow extension type")
+        if cast(Any, field.type).__arrow_ext_serialize__() != b"":
+            raise ValueError("Parquet Variant extension metadata must be empty")
+    if metadata.get(EXTENSION_NAME_KEY, VARIANT_EXTENSION_NAME) != VARIANT_EXTENSION_NAME:
+        raise ValueError("conflicting Arrow extension name")
+    dtype = _storage(field.type)
+    if not pa.types.is_struct(dtype):
+        raise ValueError("Parquet Variant requires struct storage")
+    names = [child.name for child in dtype]
+    if "typed_value" in names:
+        raise ValueError("shredded Parquet Variant is not supported by this profile")
+    if sorted(names) != ["metadata", "value"]:
+        raise ValueError("unshredded Parquet Variant requires exactly metadata and value fields")
+    meta_field = dtype.field("metadata")
+    value_field = dtype.field("value")
+    if meta_field.nullable or not _binary_type(meta_field.type, allow_encoded=True):
+        raise ValueError("Parquet Variant metadata must be non-nullable binary storage")
+    if not _binary_type(value_field.type):
+        raise ValueError("Parquet Variant value must use binary storage")
 
 
 def _check_field(field: pa.Field[Any], selected: Collection[str], depth: int, budget: list[int]) -> None:
@@ -107,52 +123,32 @@ def _check_field(field: pa.Field[Any], selected: Collection[str], depth: int, bu
     budget[0] += 1
     if budget[0] > MAX_LOGICAL_FIELDS:
         raise ValueError("too many logical type fields")
-    kind = _field_kind(field)
-    dtype = field.type
-    if kind == b"tuple":
+    metadata = _metadata(field)
+    if any(key.startswith(b"vgi.logical_type.") and key != LOGICAL_TYPE_KEY for key in metadata):
+        raise ValueError("unsupported logical type annotation version")
+    kind = metadata.get(LOGICAL_TYPE_KEY)
+    if kind is not None:
+        if kind != b"tuple":
+            raise ValueError("unsupported logical type annotation; VARIANT uses arrow.parquet.variant")
         if TUPLE_PROFILE not in selected:
             raise ValueError("tuple logical type profile was not negotiated")
-        if not pa.types.is_struct(dtype):
+        if EXTENSION_NAME_KEY in metadata or isinstance(field.type, pa.BaseExtensionType):
+            raise ValueError("tuple cannot also declare an Arrow extension")
+        if not pa.types.is_struct(field.type):
             raise ValueError("tuple requires an Arrow struct")
-        if [child.name for child in dtype] != [f"element{i + 1}" for i in range(dtype.num_fields)]:
+        if [child.name for child in field.type] != [f"element{i + 1}" for i in range(field.type.num_fields)]:
             raise ValueError("tuple members require positional element1 through elementN names")
-    elif kind == b"variant":
-        if VARIANT_PROFILE not in selected:
-            raise ValueError("variant logical type profile was not negotiated")
-        if dtype != pa.binary():
-            raise ValueError("variant requires binary Arrow storage")
-    elif kind is not None:
-        if VARIANT_PROFILE not in selected or kind not in _SPECIAL_STORAGE:
-            raise ValueError("unsupported logical type annotation")
-        if not dtype.equals(_SPECIAL_STORAGE[kind], check_metadata=False):
-            raise ValueError("logical scalar storage does not match its annotation")
-        if kind == b"geometry" and b"vgi.geometry.crs" not in (field.metadata or {}):
-            raise ValueError("geometry requires explicit CRS metadata (empty means unspecified)")
-    elif not (
-        pa.types.is_null(dtype)
-        or pa.types.is_boolean(dtype)
-        or pa.types.is_integer(dtype)
-        or pa.types.is_floating(dtype)
-        or pa.types.is_decimal(dtype)
-        or pa.types.is_string(dtype)
-        or pa.types.is_binary(dtype)
-        or pa.types.is_date32(dtype)
-        or pa.types.is_time64(dtype)
-        or pa.types.is_timestamp(dtype)
-        or pa.types.is_struct(dtype)
-        or pa.types.is_list(dtype)
-    ):
-        raise ValueError(f"Arrow type is outside the logical type profile: {dtype}")
-    if pa.types.is_timestamp(dtype) and dtype.tz not in (None, "UTC"):
-        raise ValueError("timestamp timezone must be absent or UTC")
-    if pa.types.is_struct(dtype) and len({child.name for child in dtype}) != dtype.num_fields:
-        raise ValueError("object field names must be unique")
+    if _is_variant(field):
+        _check_variant(field, selected)
+    dtype = _storage(field.type)
     for i in range(dtype.num_fields):
         _check_field(dtype.field(i), selected, depth + 1, budget)
+    if pa.types.is_dictionary(dtype):
+        _check_field(pa.field("dictionary-value", dtype.value_type), selected, depth + 1, budget)
 
 
 def validate_logical_schema(schema: pa.Schema, *, selected_profiles: Collection[str] = ()) -> None:
-    """Reject unknown, ambiguous or unnegotiated recursive representations."""
+    """Validate recursive annotations without restricting ordinary Arrow types."""
     if not schema.equals(schema.with_metadata(schema.metadata), check_metadata=True):
         raise ValueError("logical type schema metadata keys must be unique")
     budget = [0]
@@ -160,164 +156,55 @@ def validate_logical_schema(schema: pa.Schema, *, selected_profiles: Collection[
         _check_field(field, selected_profiles, 0, budget)
 
 
-def _validate_values(
-    value: pa.Scalar[Any], field: pa.Field[Any], profiles: Collection[str], depth: int, budget: list[int]
-) -> None:
+def _contains_annotation(field: pa.Field[Any], depth: int = 0) -> bool:
     if depth > MAX_LOGICAL_DEPTH:
-        raise ValueError("logical value nesting is too deep")
-    if not value.is_valid:
-        return
-    kind = _field_kind(field)
-    if kind == b"variant":
-        payload = cast(bytes, value.as_py())
-        _decode_variant(payload, profiles, depth + 1, budget)
-    elif kind == b"bignum":
-        if re.fullmatch(r"0|-?[1-9][0-9]*", cast(str, value.as_py())) is None:
-            raise ValueError("bignum requires a canonical decimal integer")
-    elif kind == b"bit":
-        if re.fullmatch(r"[01]*", cast(str, value.as_py())) is None:
-            raise ValueError("bit requires a string of zeroes and ones")
-    elif kind == b"time_tz":
-        data = value.as_py()
-        if not 0 <= data["micros"] < 86_400_000_000 or not -57_599 <= data["offset_seconds"] <= 57_599:
-            raise ValueError("time_tz components are out of range")
-    if isinstance(value, pa.StructScalar):
-        for i, child in enumerate(value.type):
-            _validate_values(cast(Any, value)[i], child, profiles, depth + 1, budget)
-    elif isinstance(value, pa.ListScalar):
-        assert value.values is not None
-        for child_value in value.values:
-            _validate_values(child_value, value.type.value_field, profiles, depth + 1, budget)
-
-
-def _check_array_size(array: pa.Array[Any], depth: int, budget: list[int]) -> None:
-    if depth > MAX_LOGICAL_DEPTH:
-        raise ValueError("logical value nesting is too deep")
-    budget[1] += len(array)
-    if budget[1] > MAX_LOGICAL_VALUES:
-        raise ValueError("too many logical value slots")
-    if isinstance(array, pa.StructArray):
-        for i in range(array.type.num_fields):
-            _check_array_size(array.field(i), depth + 1, budget)
-    elif isinstance(array, pa.ListArray):
-        _check_array_size(array.values, depth + 1, budget)
-
-
-def _read_variant_batch(payload: bytes, profiles: Collection[str], depth: int, budget: list[int]) -> TypedValueBatch:
-    # Bound logical slots BEFORE TypedValueBatch traverses nullable children:
-    # a huge NullArray can otherwise have a tiny IPC representation.
-    source = pa.BufferReader(payload)
-    with pa.ipc.open_stream(source) as reader:
-        validate_logical_schema(reader.schema, selected_profiles=profiles)
-        try:
-            batch = reader.read_next_batch()
-        except StopIteration as exc:
-            raise ValueError("variant IPC contains no batch") from exc
-        if batch.num_rows != 1 or batch.num_columns != 1:
-            raise ValueError("variant IPC requires exactly one row and one field")
-        batch.validate(full=True)
-        if batch.nbytes > MAX_VARIANT_BYTES:
-            raise ValueError("expanded variant batch exceeds its byte budget")
-        _check_array_size(batch.column(0), depth, budget)
-        try:
-            reader.read_next_batch()
-        except StopIteration:
-            pass
-        else:
-            raise ValueError("variant IPC must contain exactly one batch")
-        if source.tell() != len(payload):
-            raise ValueError("variant IPC has trailing data")
-    return TypedValueBatch(batch)
-
-
-def _decode_variant(payload: bytes, profiles: Collection[str], depth: int, budget: list[int]) -> TypedValueBatch:
-    if not isinstance(payload, bytes) or not 0 < len(payload) <= MAX_VARIANT_BYTES:
-        raise ValueError("invalid variant payload size")
-    budget[0] += len(payload)
-    if budget[0] > MAX_VARIANT_BYTES:
-        raise ValueError("expanded variant payload exceeds its byte budget")
-    values = _read_variant_batch(payload, profiles, depth, budget)
-    if values.schema.names != ["value"]:
-        raise ValueError("variant IPC requires exactly one field named value")
-    field = values.schema.field(0)
-    if not field.nullable:
-        raise ValueError("variant payload value field must be nullable")
-    if _field_kind(field) == b"variant":
-        raise ValueError("a variant payload cannot directly wrap another variant")
-    validate_logical_schema(values.schema, selected_profiles=profiles)
-    scalar = values.batch.column(0)[0]
-    if not scalar.is_valid and not pa.types.is_null(field.type):
-        raise ValueError("variant null must use Arrow null type; typed SQL NULL uses outer validity")
-    _validate_values(scalar, field, profiles, depth, budget)
-    return values
-
-
-def decode_variant(payload: bytes, *, selected_profiles: Collection[str] = (VARIANT_PROFILE,)) -> TypedValueBatch:
-    """Decode and validate one present VARIANT; SQL NULL has no payload."""
-    if VARIANT_PROFILE not in selected_profiles:
-        raise ValueError("variant logical type profile was not negotiated")
-    return _decode_variant(payload, selected_profiles, 0, [0, 0])
-
-
-def encode_variant(values: TypedValueBatch, *, selected_profiles: Collection[str] = (VARIANT_PROFILE,)) -> bytes:
-    """Encode one dynamic value without inference, casts, JSON or engine bytes."""
-    payload = values.serialize_to_bytes()
-    decode_variant(payload, selected_profiles=selected_profiles)
-    return payload
-
-
-def validate_logical_values(values: TypedValueBatch, *, selected_profiles: Collection[str] = ()) -> None:
-    """Validate one typed-value batch, including nested variant IPC payloads."""
-    validate_logical_schema(values.schema, selected_profiles=selected_profiles)
-    size_budget = [0, 0]
-    for array in values.batch.columns:
-        _check_array_size(array, 0, size_budget)
-    values.__post_init__()
-    for i, field in enumerate(values.schema):
-        _validate_values(values.batch.column(i)[0], field, selected_profiles, 0, [0, 0])
-
-
-def _contains_annotation(field: pa.Field[Any]) -> bool:
-    if any(key.startswith(b"vgi.logical_type.") for key in (field.metadata or {})):
+        raise ValueError("logical type nesting is too deep")
+    if any(key.startswith(b"vgi.logical_type.") for key in (field.metadata or {})) or _is_variant(field):
         return True
-    dtype = field.type
-    if any(_contains_annotation(dtype.field(i)) for i in range(dtype.num_fields)):
+    dtype = _storage(field.type)
+    if any(_contains_annotation(dtype.field(i), depth + 1) for i in range(dtype.num_fields)):
         return True
     if pa.types.is_dictionary(dtype):
-        return _contains_annotation(pa.field("dictionary-value", dtype.value_type))
-    if isinstance(dtype, pa.BaseExtensionType):
-        return _contains_annotation(pa.field("extension-storage", dtype.storage_type))
+        return _contains_annotation(pa.field("dictionary-value", dtype.value_type), depth + 1)
     return False
 
 
 def require_logical_profiles(schema: pa.Schema, *, selected_profiles: Collection[str] = ()) -> bool:
-    """Validate annotated subtrees; return whether any annotation was present.
-
-    Call this at catalog/bind boundaries with the attachment's selected read
-    profiles. Existing maps, dictionaries and unrelated Arrow extensions remain
-    legal unless they contain an explicitly annotated portable logical type.
-    """
-
-    def visit(field: pa.Field[Any], depth: int = 0) -> None:
-        if depth > MAX_LOGICAL_DEPTH:
-            raise ValueError("logical type nesting is too deep")
-        if any(key.startswith(b"vgi.logical_type.") for key in (field.metadata or {})):
-            _check_field(field, selected_profiles, depth, [0])
-            return
-        dtype = field.type
-        for i in range(dtype.num_fields):
-            visit(dtype.field(i), depth + 1)
-        if pa.types.is_dictionary(dtype):
-            visit(pa.field("dictionary-value", dtype.value_type), depth + 1)
-        elif isinstance(dtype, pa.BaseExtensionType):
-            visit(pa.field("extension-storage", dtype.storage_type), depth + 1)
-
+    """Check annotated subtrees; leave legacy unannotated schemas unchanged."""
     annotated = False
     for field in schema:
         if _contains_annotation(field):
-            visit(field)
+            _check_field(field, selected_profiles, 0, [0])
             annotated = True
     return annotated
+
+
+def _decoded_scalar(value: pa.Scalar[Any] | None) -> pa.Scalar[Any] | None:
+    while isinstance(value, (pa.DictionaryScalar, pa.ExtensionScalar, pa.RunEndEncodedScalar)):
+        if not value.is_valid:
+            return None
+        value = cast("pa.Scalar[Any] | None", value.value)
+    return value
+
+
+def _variant_carrier(value: pa.Scalar[Any]) -> None:
+    scalar = _decoded_scalar(value)
+    if scalar is None or not scalar.is_valid:
+        return
+    if not isinstance(scalar, pa.StructScalar):
+        raise ValueError("Parquet Variant requires a struct scalar")
+    total = 0
+    for name in ("metadata", "value"):
+        child = _decoded_scalar(cast(Any, scalar)[name])
+        if child is None or not child.is_valid:
+            if name == "metadata" or not scalar.type.field(name).nullable:
+                raise ValueError(f"present Parquet Variant requires non-NULL {name}")
+            continue
+        total += cast(Any, child).as_buffer().size
+    if total > MAX_VARIANT_BYTES:
+        raise ValueError("Parquet Variant carrier exceeds its byte budget")
+    # Deliberately no binary parser here: a backend must validate and decode
+    # Apache Parquet VariantEncoding before interpreting these opaque bytes.
 
 
 def _require_annotated_value(
@@ -325,10 +212,14 @@ def _require_annotated_value(
 ) -> None:
     if depth > MAX_LOGICAL_DEPTH:
         raise ValueError("logical value nesting is too deep")
-    if value is None or not value.is_valid or not _contains_annotation(field):
+    if not _contains_annotation(field):
         return
-    if any(key.startswith(b"vgi.logical_type.") for key in (field.metadata or {})):
-        _validate_values(value, field, profiles, depth, [0, 0])
+    if value is None or not value.is_valid:
+        if not field.nullable:
+            raise ValueError("NULL supplied for a non-nullable logical field")
+        return
+    if _is_variant(field):
+        _variant_carrier(value)
         return
     if isinstance(value, pa.StructScalar):
         for i, child in enumerate(value.type):
@@ -354,7 +245,7 @@ def _require_annotated_value(
 
 
 def require_logical_batch(batch: pa.RecordBatch, *, selected_profiles: Collection[str] = ()) -> None:
-    """Validate all annotated output rows; leave legacy columns on the fast path."""
+    """Check every annotated output carrier; skip ordinary unannotated columns."""
     if not require_logical_profiles(batch.schema, selected_profiles=selected_profiles):
         return
     batch.validate(full=True)
@@ -365,5 +256,12 @@ def require_logical_batch(batch: pa.RecordBatch, *, selected_profiles: Collectio
 
 
 def require_logical_values(values: TypedValueBatch, *, selected_profiles: Collection[str] = ()) -> None:
-    """Validate annotated values while retaining legacy unannotated Arrow support."""
+    """Check negotiated logical annotations and canonical Variant carriers."""
+    require_logical_batch(values.batch, selected_profiles=selected_profiles)
+
+
+def validate_logical_values(values: TypedValueBatch, *, selected_profiles: Collection[str] = ()) -> None:
+    """Validate typed values and carrier shape without decoding Variant bytes."""
+    values.__post_init__()
+    validate_logical_schema(values.schema, selected_profiles=selected_profiles)
     require_logical_batch(values.batch, selected_profiles=selected_profiles)
