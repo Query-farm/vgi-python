@@ -75,6 +75,7 @@ from vgi.catalog import (
 )
 from vgi.catalog.catalog_interface import deserialize_column_statistics
 from vgi.catalog.layout import TableLayout, TableLayoutChange
+from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions
 from vgi.protocol import (
     CatalogAttachRequest,
@@ -740,6 +741,26 @@ class CatalogClientMixin:
             return proxy.catalog_schema_option_definitions(
                 attach_opaque_data=attach_opaque_data,
                 path=path,
+                transaction_opaque_data=transaction_opaque_data,
+            )
+
+    def schema_alter_metadata(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        path: list[str],
+        changes: CatalogMetadataChanges,
+        ignore_not_found: bool = False,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+    ) -> None:
+        """Atomically change comments/tags; requires vgi.schema.metadata.alter.v1."""
+        changes.__post_init__()
+        with self._catalog_connect() as proxy:
+            proxy.catalog_schema_alter_metadata(
+                attach_opaque_data=attach_opaque_data,
+                path=path,
+                changes=changes.serialize_to_bytes(),
+                ignore_not_found=ignore_not_found,
                 transaction_opaque_data=transaction_opaque_data,
             )
 

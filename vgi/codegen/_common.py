@@ -40,6 +40,7 @@ from vgi.catalog.catalog_interface import (
     ViewInfo,
 )
 from vgi.catalog.layout import SortKey, SqlExpression, TableLayout, TableLayoutChange
+from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
 from vgi.column_path import RequiredFilterPaths
 from vgi.invocation import GlobalInitResponse
@@ -97,6 +98,7 @@ INFO_TYPES: tuple[type, ...] = (
 # inventory for schemas and typed models, including otherwise opaque IPC bodies.
 SHARED_CONTRACT_TYPES: tuple[type, ...] = (
     CatalogCapabilities,
+    CatalogMetadataChanges,
     OptionDefinitions,
     SqlExpression,
     SortKey,

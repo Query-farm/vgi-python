@@ -98,6 +98,7 @@ from vgi.catalog.capabilities import (
     COLUMN_NESTED_NULLABILITY,
     COLUMN_NESTED_RENAME,
     COLUMN_NESTED_TYPE,
+    SCHEMA_METADATA_ALTER,
     SCHEMA_OPTIONS_ALTER,
     SCHEMA_OPTIONS_CREATE,
     SCHEMA_OPTIONS_READ,
@@ -129,6 +130,7 @@ from vgi.catalog.catalog_interface import (
     serialize_column_statistics,
 )
 from vgi.catalog.layout import LayoutChangeMode, LayoutCoverage, TableLayout, TableLayoutChange
+from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions
 from vgi.catalog.secret_type import SecretTypeSpec
 from vgi.catalog.setting import SettingSpec, extract_setting_specs
@@ -5040,6 +5042,30 @@ class Worker:
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             path=path,
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
+        )
+
+    def catalog_schema_alter_metadata(
+        self,
+        attach_opaque_data: bytes,
+        path: list[str],
+        changes: bytes,
+        ignore_not_found: bool = False,
+        transaction_opaque_data: bytes | None = None,
+    ) -> None:
+        """Validate the full metadata patch before invoking the provider."""
+        self._require_catalog_capability(
+            attach_opaque_data, SCHEMA_METADATA_ALTER, "catalog_schema_alter_metadata", transaction_opaque_data
+        )
+        schema_path_key(path)
+        if any("\0" in component for component in path):
+            raise ValueError("schema metadata target components must contain no NUL")
+        patch = CatalogMetadataChanges.deserialize_from_bytes(changes)
+        self._get_catalog().schema_alter_metadata(
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
+            path=path,
+            changes=patch,
+            ignore_not_found=ignore_not_found,
         )
 
     def catalog_schema_alter_options(

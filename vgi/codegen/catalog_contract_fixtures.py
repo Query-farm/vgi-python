@@ -29,6 +29,7 @@ from vgi.catalog.layout import (
     TableLayout,
     TableLayoutChange,
 )
+from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
 from vgi.column_path import RequiredFilterPaths
 from vgi.protocol import TableCreateRequest, VgiProtocol
@@ -132,6 +133,14 @@ def render() -> str:
         ),
         "values": values,
         "empty_values": empty,
+        "metadata_patch": CatalogMetadataChanges(
+            set_comment=True,
+            comment="",
+            set_tags={"a.b": "", "__proto__": "literal", "": "empty-key"},
+            remove_tags=["old", "OLD"],
+        ),
+        "metadata_clear_comment": CatalogMetadataChanges(set_comment=True),
+        "metadata_noop": CatalogMetadataChanges(),
         "changes": OptionChanges(set_values=values, reset_names=["reset.me"]),
         "reset_only": OptionChanges(reset_names=["reset.me"]),
         "state": OptionState(values=values, explicit_names=["optional"]),

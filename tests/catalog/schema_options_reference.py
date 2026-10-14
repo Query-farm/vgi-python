@@ -29,6 +29,7 @@ from vgi.catalog import (
     TransactionOpaqueData,
 )
 from vgi.catalog.capabilities import (
+    SCHEMA_METADATA_ALTER,
     SCHEMA_OPTIONS_ALTER,
     SCHEMA_OPTIONS_CREATE,
     SCHEMA_OPTIONS_READ,
@@ -36,6 +37,7 @@ from vgi.catalog.capabilities import (
     CatalogCapabilities,
 )
 from vgi.catalog.catalog_interface import CatalogContentsResult, OnConflict, SchemaContentsInfo
+from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions
 from vgi.schema_path import schema_path_key
 from vgi.typed_values import TypedValueBatch
@@ -59,7 +61,7 @@ DEFINITIONS = OptionDefinitions(
 )
 PROFILES = CatalogCapabilities(
     read=[SCHEMA_OPTIONS_READ],
-    ddl=sorted([SCHEMA_OPTIONS_CREATE, SCHEMA_OPTIONS_ALTER]),
+    ddl=sorted([SCHEMA_OPTIONS_CREATE, SCHEMA_OPTIONS_ALTER, SCHEMA_METADATA_ALTER]),
     transaction=[TRANSACTION_DDL],
 )
 
@@ -262,6 +264,37 @@ class SchemaOptionsCatalog(ReadOnlyCatalogInterface):
             comment=comment,
             tags=tags,
         )
+
+    def schema_alter_metadata(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: list[str],
+        changes: CatalogMetadataChanges,
+        ignore_not_found: bool = False,
+    ) -> None:
+        changes.__post_init__()
+        key = _key(path)
+        with closing(sqlite3.connect(self.database_path)) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            version, data = self._snapshot(db, attach_opaque_data, transaction_opaque_data)
+            if key not in data:
+                if ignore_not_found:
+                    return
+                raise ValueError("schema does not exist")
+            previous = self._decode(data[key], AttachOpaqueData(b""))
+            comment, tags = changes.apply_to(previous.comment, previous.tags)
+            if comment == previous.comment and tags == previous.tags:
+                return
+            data[key] = self._encode(replace(previous, comment=comment, tags=tags))
+            if transaction_opaque_data is None:
+                db.execute("UPDATE catalog SET version=?, data=? WHERE id=1", (version + 1, json.dumps(data)))
+            else:
+                db.execute(
+                    "UPDATE transactions SET version=?, data=? WHERE id=?",
+                    (version + 1, json.dumps(data), transaction_opaque_data),
+                )
 
     def schema_alter_options(
         self,

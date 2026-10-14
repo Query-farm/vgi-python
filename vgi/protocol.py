@@ -3525,6 +3525,17 @@ class VgiProtocol(Protocol):
         """Discover literal option definitions for an existing or proposed schema."""
         ...
 
+    def catalog_schema_alter_metadata(
+        self,
+        attach_opaque_data: bytes,
+        path: SchemaPath,
+        changes: bytes,
+        ignore_not_found: bool = False,
+        transaction_opaque_data: bytes | None = None,
+    ) -> None:
+        """Atomically apply a CatalogMetadataChanges patch under the selected DDL profile."""
+        ...
+
     def catalog_schema_alter_options(
         self,
         attach_opaque_data: bytes,

@@ -43,6 +43,7 @@ from vgi.catalog.capabilities import (
     CatalogCapabilities,
 )
 from vgi.catalog.layout import TableLayout, TableLayoutChange
+from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
 from vgi.exceptions import CatalogReadOnlyError
 from vgi.metadata import (
@@ -2055,6 +2056,25 @@ class CatalogInterface(ABC):
         """
         raise NotImplementedError("Schema option discovery not implemented.")
 
+    def schema_alter_metadata(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: SchemaPath,
+        changes: CatalogMetadataChanges,
+        ignore_not_found: bool = False,
+    ) -> None:
+        """Apply a complete metadata patch atomically, preserving options and contents.
+
+        Validate the patch even when ignoring a missing target. Missing targets
+        without IGNORE raise; an empty patch is not a schema-existence bypass.
+        Effective no-ops preserve versions and etags. Metadata changes advance
+        the transaction-visible version and invalidate committed snapshots on
+        commit, under the provider's declared transaction guarantees.
+        """
+        raise NotImplementedError("Schema metadata alteration not implemented.")
+
     def schema_alter_options(
         self,
         *,
@@ -3894,6 +3914,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     catalog_transaction_commit = _read_only("commit transaction")
     catalog_transaction_rollback = _read_only("rollback transaction")
     schema_create = _read_only("create schema")
+    schema_alter_metadata = _read_only("alter schema metadata")
     schema_drop = _read_only("drop schema")
     table_create = _read_only("create table")
     table_drop = _read_only("drop table")

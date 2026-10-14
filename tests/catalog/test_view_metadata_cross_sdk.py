@@ -12,8 +12,10 @@ from dataclasses import replace
 
 import pytest
 
-from vgi.catalog import OnConflict, SchemaObjectType
+from vgi.catalog import CatalogMetadataChanges, OnConflict, SchemaObjectType
+from vgi.catalog.capabilities import SCHEMA_METADATA_ALTER, CatalogCapabilities
 from vgi.client import Client
+from vgi.protocol import ClientCapabilities
 
 WORKERS: dict[str, list[str]] = json.loads(os.environ.get("VGI_METADATA_WORKERS", "{}"))
 
@@ -114,3 +116,36 @@ def test_schema_creation_metadata_over_public_rpc(sdk: str) -> None:
         client.schema_drop(**target)
         assert client.schema_get(**target) is None
         assert client.schema_get(attach_opaque_data=token, path=["a", "b"]).comment == "nested"
+
+
+@pytest.mark.parametrize("sdk", sorted(WORKERS))
+def test_unqualified_provider_rejects_schema_metadata_mutation(sdk: str) -> None:
+    offer = ClientCapabilities(
+        engine="reference-client",
+        native_formats=[],
+        catalogs=[],
+        can_stream=False,
+        filter_encodings=[],
+        catalog=CatalogCapabilities(ddl=[SCHEMA_METADATA_ALTER]),
+    )
+    with Client(server_path=WORKERS[sdk], worker_limit=1) as client:
+        attached = client.catalog_attach(
+            name="contents_reval", data_version_spec=None, implementation_version=None, client_capabilities=offer
+        )
+        token = attached.attach_opaque_data
+        assert (
+            attached.selected_capabilities is None
+            or SCHEMA_METADATA_ALTER not in attached.selected_capabilities.names()
+        )
+        target = dict(attach_opaque_data=token, path=["main"])
+        before = client.schema_get(**target)
+        version = client.catalog_version(attach_opaque_data=token)
+        with pytest.raises(
+            Exception,
+            match="(?i)not implemented|unimplemented|not supported|does not support|requires.*vgi.schema.metadata",
+        ):
+            client.schema_alter_metadata(
+                **target, changes=CatalogMetadataChanges(set_comment=True, comment="bad", set_tags={"a": "bad"})
+            )
+        assert client.schema_get(**target) == before
+        assert client.catalog_version(attach_opaque_data=token) == version

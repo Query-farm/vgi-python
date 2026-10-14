@@ -436,6 +436,69 @@ The public-client tests are in `tests/catalog/test_view_metadata_cross_sdk.py`
 (set `VGI_METADATA_WORKERS` to SDK-name/worker-argv JSON); durable HTTP coverage is
 in `tests/catalog/test_schema_metadata_protocol.py`.
 
-Schema comment/tag **mutation** still needs its contract, capability mapping,
-and implementation. Native nested-schema routing and native 2.0 qualification
-also remain open. This checkpoint does not freeze or release the protocol.
+At this creation checkpoint, schema metadata mutation was still open; the
+following section records its subsequent contract and reference implementation.
+Native nested-schema routing and native 2.0 qualification remain open. Neither
+checkpoint freezes or releases the protocol.
+
+## Atomic schema metadata mutation
+
+`catalog_schema_alter_metadata(attach_opaque_data, path, changes,
+ignore_not_found=false, transaction_opaque_data=NULL)` applies one
+`CatalogMetadataChanges` IPC record. The change record is shared so future
+object-specific metadata operations can use identical semantics. Its fields are:
+
+| Field | Required wire representation | Meaning |
+| --- | --- | --- |
+| `set_comment` | non-null bool | False leaves the comment unchanged; true applies `comment`. |
+| `comment` | nullable UTF-8 | With `set_comment=true`, NULL clears and `""` stores an empty comment. A non-null value with `set_comment=false` is invalid. |
+| `set_tags` | non-null map of UTF-8 to UTF-8 | Set the supplied literal, case-sensitive keys. Empty values and empty keys are valid; map order has no meaning. |
+| `remove_tags` | non-null list of UTF-8 | Remove exactly these keys. A missing key is a no-op. Duplicate keys are invalid. |
+
+The IPC payload has exactly one batch, one row and all four fields; additional
+batches and trailing bytes reject. Missing fields, wrong types,
+NULL non-nullable fields, duplicate SET keys, duplicate removals, and overlap
+between SET and REMOVE reject before the provider is called. Tags are metadata
+strings, not parsed SQL identifiers; a dotted key remains one key. `path` uses
+nonempty raw schema identifier components without NUL. Invalid requests reject
+even with `ignore_not_found=true`.
+
+The provider validates the target, authorization and any object restrictions,
+then applies the whole patch atomically in the transaction's snapshot. It must
+preserve options, child schemas and contained objects. A missing target rejects
+unless explicitly ignored; an empty patch does not bypass this existence check.
+If the effective metadata is unchanged, versions and etags stay unchanged.
+Changes advance the transaction-visible catalog version. Committed changes must
+invalidate old catalog snapshots; rollback must preserve committed metadata and
+versions. There is no implicit retry after an ambiguous transport failure.
+
+The operation requires selected DDL profile **`vgi.schema.metadata.alter.v1`**.
+It needs no additional read profile because schema comments and tags already
+have mandatory readback fields. A transaction handle also requires
+`vgi.transaction.ddl.v1`. The Python worker checks the immutable attachment
+agreement against current provider support before applying the operation;
+withdrawn support, unnegotiated support and a transaction owned by another
+attachment reject before effects. Negotiation does not grant authorization.
+
+The durable SQLite schema reference implements this profile through the public
+HTTP client. It covers readback, literal/nested path isolation, options
+preservation, simultaneous comment/tag edits, no-ops, missing targets, malformed
+patches, commit, rollback, reconnect, etag invalidation and routed sealed handles.
+The seven ordinary SDK fixture catalogs do **not** advertise this new profile;
+the public-client test requires their calls to reject with no metadata/version
+change. Their generated request inventories and shared codec corpus include the
+new method/record. This is P1 reference behavior plus P2 schema preparation,
+not qualification of production metadata mutation in every SDK.
+
+`test_metadata_changes.py` checks strict shape and patch semantics. All SDK codec
+suites round-trip populated, clear-comment and no-op vectors, including a literal
+`__proto__` tag. This exposed and fixed TypeScript's generic map normalizer losing
+that key; Arrow-js and Flechette codecs are checked separately. Flechette's
+previously recorded stdio transport limitation remains open.
+
+The pinned DuckDB 1.5 engine and refreshed Haybarn 2.0 source both reject SQL
+`COMMENT ON SCHEMA` (2.0: `src/parser/peg/transformer/transform_comment.cpp`).
+Native registration of this RPC does not enable that grammar or advertise the
+new profile. Native SQL wiring, full SDK capability/provider implementations,
+nonempty schema replacement/drop dependencies, and the coordinated major
+version freeze/release remain open.

@@ -18,6 +18,7 @@ from vgi_rpc import ArrowSerializableDataclass
 
 from vgi.exceptions import CatalogCapabilityError
 
+SCHEMA_METADATA_ALTER = "vgi.schema.metadata.alter.v1"
 SCHEMA_OPTIONS_READ = "vgi.schema.options.read.v1"
 SCHEMA_OPTIONS_CREATE = "vgi.schema.options.create.v1"
 SCHEMA_OPTIONS_ALTER = "vgi.schema.options.alter.v1"
@@ -72,6 +73,7 @@ class CatalogCapabilities(ArrowSerializableDataclass):
                 COLUMN_NESTED_DEFAULT,
                 COLUMN_NESTED_NULLABILITY,
                 COLUMN_NESTED_COMMENT,
+                SCHEMA_METADATA_ALTER,
                 SCHEMA_OPTIONS_CREATE,
                 SCHEMA_OPTIONS_ALTER,
                 TABLE_OPTIONS_CREATE,

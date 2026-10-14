@@ -37,6 +37,7 @@ from vgi.catalog.catalog_interface import (
     OrderPreservation,
     ReadOnlyCatalogInterface,
 )
+from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.exceptions import CatalogReadOnlyError
 from vgi.protocol import ClientCapabilities
 
@@ -237,6 +238,16 @@ def _not_implemented_test_cases() -> list[tuple[str, str, Callable[[MinimalCatal
                 path=["new_schema"],
                 comment=None,
                 tags={},
+            ),
+        ),
+        (
+            "schema_alter_metadata",
+            "Schema metadata alteration not implemented",
+            lambda c: c.schema_alter_metadata(
+                attach_opaque_data=TEST_ATTACH_ID,
+                transaction_opaque_data=None,
+                path=["main"],
+                changes=CatalogMetadataChanges(),
             ),
         ),
         (
@@ -442,6 +453,15 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
                 path=["new"],
                 comment=None,
                 tags={},
+            ),
+        ),
+        (
+            "schema_alter_metadata",
+            lambda c: c.schema_alter_metadata(
+                attach_opaque_data=TEST_ATTACH_ID,
+                transaction_opaque_data=None,
+                path=["main"],
+                changes=CatalogMetadataChanges(),
             ),
         ),
         (

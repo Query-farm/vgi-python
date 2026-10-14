@@ -12,7 +12,7 @@
       "Overload collections replacing single macro definitions"
     ],
     "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
-    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation",
+    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation",
     "version_requirement": "Retaining the raw-path migration requires a major version and matching routing name. Complete the combined diff and migration guide before freeze."
   },
   "sources": {
@@ -31,7 +31,8 @@
     "capabilities": "Agreement scoped to sealed attachment state; validate per-object requirements and current write eligibility at execution.",
     "mutation": "Whole-operation validation, worker authority, coherent transactions and metadata/dependency updates. Durable operation identity is required for replay.",
     "rollout": "Use versioned endpoints/processes with draining; prove transaction/reconnect and downgrade behavior. The existing dispatcher cannot host two versions under one protocol name.",
-    "column_paths": "Nine existing column RPCs use raw component paths, with per-operation nested DDL profiles and one-component 1.5 adapter targets. TableInfo.required_filters now uses AND-of-OR raw component paths across SDKs and the native 1.5 optimizer; native 2.0 integration remains open."
+    "column_paths": "Nine existing column RPCs use raw component paths, with per-operation nested DDL profiles and one-component 1.5 adapter targets. TableInfo.required_filters now uses AND-of-OR raw component paths across SDKs and the native 1.5 optimizer; native 2.0 integration remains open.",
+    "metadata_changes": "CatalogMetadataChanges: explicit comment presence plus literal string tag SET/REMOVE, atomic whole-patch validation, effect-sensitive versions/etags. Shared record; first negotiated operation is catalog_schema_alter_metadata."
   },
   "areas": {
     "capabilities": {
@@ -78,7 +79,8 @@
         "CatalogSchemaCreateParams",
         "OptionDefinitions",
         "OptionChanges",
-        "OptionState"
+        "OptionState",
+        "CatalogMetadataChanges"
       ],
       "existing_methods": [
         "catalog_schema_create",
@@ -87,7 +89,8 @@
       ],
       "new_methods": [
         "catalog_schema_option_definitions",
-        "catalog_schema_alter_options"
+        "catalog_schema_alter_options",
+        "catalog_schema_alter_metadata"
       ],
       "scope": [
         "Creation options, SET/RESET operations, option readback in `SchemaInfo`, and complete schema comment/tag mutations",
@@ -128,6 +131,19 @@
             "native:test/cpp/test_schema_metadata.cpp"
           ],
           "limits": "Creation, discovery, ERROR/IGNORE and empty-schema REPLACE only. Schema comment/tag mutation, nonempty/descendant/dependency lifecycle and native 2.0 qualification remain open."
+        },
+        {
+          "status": "schema_metadata_mutation_reference_implemented",
+          "sources": [
+            "vgi/catalog/metadata_changes.py",
+            "vgi/catalog/capabilities.py",
+            "vgi/worker.py",
+            "tests/catalog/schema_options_reference.py",
+            "tests/catalog/test_schema_metadata_protocol.py",
+            "tests/catalog/test_metadata_changes.py",
+            "tests/catalog/test_view_metadata_cross_sdk.py"
+          ],
+          "limits": "Python durable HTTP reference supplies qualified metadata mutation. Other SDKs have matching records/requests and explicit unsupported paths; production provider implementations and full SDK negotiation remain pending. Native schema-comment SQL is rejected by both inspected engine pins."
         }
       ]
     },
@@ -4331,6 +4347,170 @@
       "java": "81e84af967189a68988aff71109aaff0ef9ebf3a",
       "csharp": "b01d9a48536001e27eed9727cd2392bf73d3ea93",
       "cpp": "47d1aa24e0cb9fff0da9539c619158ac71f3fb32"
+    }
+  },
+  "schema_metadata_mutation_validation": {
+    "status": "reference_and_shared_codecs_qualified_on_duckdb_15",
+    "engine_revision": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "haybarn_2_source_revision": "e1784fa4231072d7152b8aaa20977bdb8ff4ace3",
+    "protocol_hash": "f98de1aecf595fb5866082998a4a6d77d1850e781edce50b5b08ffc163e83b94",
+    "protocol_method_count": 79,
+    "method": "catalog_schema_alter_metadata",
+    "record": "CatalogMetadataChanges",
+    "ddl_profile": "vgi.schema.metadata.alter.v1",
+    "transaction_profile": "vgi.transaction.ddl.v1",
+    "contract": [
+      "Four complete fields distinguish unchanged, NULL and empty comments and literal tag SET/REMOVE.",
+      "Duplicate SET keys/removals, overlapping SET/REMOVE, incomplete/wrong wire shape, extra or absent batches, trailing bytes and malformed schema paths reject before provider effects.",
+      "Empty/effective no-op patches preserve versions and etags; missing targets obey explicit IGNORE.",
+      "Changes preserve options and unrelated metadata, advance transaction-visible versions, and invalidate committed snapshots on commit.",
+      "Selected and currently available DDL support is required; transaction handles also require DDL transaction guarantees.",
+      "A routed/reconnected attachment preserves its sealed agreement."
+    ],
+    "ec2_workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+    "checks": {
+      "native_build": "passed",
+      "native_schema_create_copy_cache": {
+        "sdk_count": 7,
+        "test_cases_per_sdk": 1,
+        "assertions_per_sdk": 99
+      },
+      "native_protocol_reflection": {
+        "sdk_count": 7,
+        "test_cases_per_sdk": 1,
+        "assertions_per_sdk": 2
+      },
+      "native_reference": {
+        "test_cases": 3,
+        "assertions": 218
+      },
+      "python_catalog_and_codegen": {
+        "passed": 803,
+        "skipped": 3,
+        "skip_reason": "External-worker cases require VGI_METADATA_WORKERS; separately configured run passes all 22 checks."
+      },
+      "manifest_corpus_native_inventory": {
+        "passed": 23
+      },
+      "go": {
+        "packages": 13
+      },
+      "rust": {
+        "passed": 487,
+        "ignored": 4
+      },
+      "typescript": {
+        "passed": 604,
+        "skipped": 68,
+        "bundle_entries": 4
+      },
+      "java": {
+        "passed": 660,
+        "skipped": 2
+      },
+      "csharp": {
+        "passed": 602
+      },
+      "cpp": {
+        "ctests_passed": 68
+      },
+      "flechette_codec": {
+        "passed": 9
+      },
+      "ruff": "passed",
+      "mypy": {
+        "sources": 211
+      },
+      "all_sdk_generation": "passed",
+      "public_rpc_schema_and_view_lifecycles": {
+        "passed": 22,
+        "sdk_count": 7,
+        "schema_metadata_mutation": "All seven ordinary providers reject without changing metadata or catalog versions; positive lifecycle coverage uses the durable Python reference."
+      },
+      "source_verification": {
+        "repositories": 15,
+        "files": 33020,
+        "errors": 0
+      },
+      "final_manifest_corpus_inventory": {
+        "passed": 20
+      }
+    },
+    "limits": [
+      "Only the durable SQLite Python reference implements and advertises the new metadata-mutation profile.",
+      "Other SDK record codecs and generated RPC methods are prepared; ordinary providers reject this operation without effects. Full negotiated provider behavior remains P2 work.",
+      "Both inspected engine pins reject COMMENT ON SCHEMA SQL. Registering the RPC enables no native SQL capability.",
+      "Nonempty/descendant schema replacement/drop dependency semantics remain unresolved.",
+      "Native 2.0 port, broader contract freeze, production transport qualification and coordinated major release remain open.",
+      "Previously recorded Flechette stdio limitation remains open; codec qualification does not close it."
+    ],
+    "counts_overlap": true,
+    "requirement_evidence": {
+      "Comment omission, NULL, empty string and literal case-sensitive tags": [
+        "tests/catalog/test_metadata_changes.py::test_patch_retains_omission_null_empty_and_literal_tags",
+        "conformance/catalog-contracts.json: metadata_patch, metadata_clear_comment, metadata_noop"
+      ],
+      "Full validation before effects, including missing-target IGNORE": [
+        "tests/catalog/test_metadata_changes.py",
+        "tests/catalog/test_schema_metadata_protocol.py::test_invalid_patch_rejects_before_provider_even_with_missing_target_ignore",
+        "tests/catalog/test_schema_metadata_protocol.py::test_missing_target_and_malformed_path_preserve_versions"
+      ],
+      "Atomic metadata updates preserve options; no-ops retain versions and etags": [
+        "tests/catalog/test_schema_metadata_protocol.py::test_atomic_patch_noops_versions_and_snapshot_invalidation"
+      ],
+      "Transaction isolation, rollback, commit, reconnect and invalidated snapshots": [
+        "tests/catalog/test_schema_metadata_protocol.py::test_patch_transaction_isolation_rollback_commit_and_reconnect"
+      ],
+      "Selected/current capability checks and sealed routing": [
+        "tests/catalog/test_schema_metadata_protocol.py::test_patch_requires_current_negotiation_and_routes_sealed_handles"
+      ],
+      "DDL transaction guarantees and transaction ownership": [
+        "tests/catalog/test_schema_metadata_protocol.py::test_patch_rejects_without_transaction_ddl_and_foreign_transaction"
+      ],
+      "Unqualified providers reject without effects": [
+        "tests/catalog/test_view_metadata_cross_sdk.py::test_unqualified_provider_rejects_schema_metadata_mutation"
+      ],
+      "Matching SDK schemas and actual codec round trips": [
+        "scripts/regen_generated.py --check --require-all",
+        "Per-SDK catalog contract tests using the three shared metadata patch vectors"
+      ],
+      "Native 1.5 registration and existing schema metadata regression coverage": [
+        "test/sql/integration/reflection/vgi_v2_hash.test",
+        "test/cpp/test_schema_metadata.cpp"
+      ]
+    },
+    "logs": [
+      "logs/schema-alter-native.log",
+      "logs/schema-alter-python.log",
+      "logs/schema-alter-cross-sdk.log",
+      "logs/schema-alter-go.log",
+      "logs/schema-alter-rust.log",
+      "logs/schema-alter-ts.log",
+      "logs/schema-alter-java.log",
+      "logs/schema-alter-csharp.log",
+      "logs/schema-alter-cpp.log",
+      "logs/schema-alter-flechette.log",
+      "logs/schema-alter-native-reference.log",
+      "logs/schema-alter-final-verification.log",
+      "logs/schema-alter-native-python.log",
+      "logs/schema-alter-native-go.log",
+      "logs/schema-alter-native-rust.log",
+      "logs/schema-alter-native-typescript.log",
+      "logs/schema-alter-native-java.log",
+      "logs/schema-alter-native-csharp.log",
+      "logs/schema-alter-native-cpp.log",
+      "logs/schema-alter-committed-verification.log"
+    ],
+    "source_inventory": "state/sources.json and state/source-verification.json in the unique EC2 workspace record committed revisions and source bytes.",
+    "native_revision": "4365cd1ff82c11f6824edbded7ca6ff9fbc7ba18",
+    "python_base_revision": "1e63e89d243b165ed357dcb731ca22e7e660e5fb",
+    "sdk_revisions": {
+      "go": "216a0171b7d2bae59bb282cac9ede4f14dd295bd",
+      "rust": "5b5506c730c52c841591bfb2a8eb39a7107980dc",
+      "typescript": "97556e619ec7e8804c4d41838415e57ccafa03be",
+      "java": "9b043369555dd1c59153ab48f2fee0b2234417a4",
+      "csharp": "135f12867ee82b3ae2b811cd6eb5a4e88c1c134d",
+      "cpp": "ada9c1394b84ab62d203fccdc30593c6f105837f"
     }
   }
 }
