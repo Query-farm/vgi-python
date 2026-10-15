@@ -14,7 +14,7 @@
     "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
     "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the successor schema inventory; required canonical table constraint lists replace the legacy parent arrays and revision-checked catalog_table_constraints_apply joins the public method surface; typed index definitions/options replace legacy index fields and add catalog_index_option_definitions; required semantic ALTER flags and raw subject/dependent column paths extend embedded dependency records",
     "version_requirement": "Retaining the raw-path migration requires a major version and matching routing name. Complete the combined diff and migration guide before freeze.",
-    "planned_diff": "Remaining combined design: write requirement/statement lifecycle records; trigger CRUD and durable mutation replay/status. SQL/context, canonical constraints, typed indexes and semantic ALTER dependency planning are implemented with bounded reference/native1.5 evidence; broader provider qualification and pending methods remain outside the current protocol hash."
+    "planned_diff": "Remaining combined design: minimal trigger metadata/discovery, one execution owner and stale-bind requirements under review after an existing-write-path gap audit. Reuse current transaction and streamed-write lifecycles. Durable mutation replay/status, savepoints/statement rollback and general statement tickets/receipts are excluded by the 2026-10-15 user scope decision. SQL/context, canonical constraints, typed indexes and semantic ALTER dependencies retain their bounded reference/native1.5 evidence; no release freeze is implied."
   },
   "sources": {
     "native_revision": "1a0a059",
@@ -30,7 +30,7 @@
     "values": "TypedValueBatch preserving original Arrow metadata and typed NULLs. Option RESET differs from NULL and omission.",
     "expressions": "Implemented: SqlExpression and SqlStatement with required QueryEvaluationContext, required matching macro context, canonical bounded base64-IPC column metadata. Finite scalar and durable CHECK proof on 1.5; general statement execution and new persistent DEFAULT/generated semantics remain unqualified.",
     "capabilities": "Agreement scoped to sealed attachment state; validate per-object requirements and current write eligibility at execution.",
-    "mutation": "Specified successor: explicit statement tickets/commit fence and per-table requirements; baseline no ambiguous retry. Optional catalog_mutation_execute + status use exact request bytes and durable bounded identity/outcome retention, pending proof.",
+    "mutation": "Reuse existing begin/commit/rollback, write init/exchange/finalize and OLD/NEW changes. A failed write requires full transaction rollback and cannot partially commit. Ambiguous dispatch is an error without automatic retry. New generic statement lifecycle, durable mutation replay/status and savepoint machinery are outside this package; audit concrete gaps before proposing wire additions.",
     "rollout": "Use versioned endpoints/processes with draining; prove transaction/reconnect and downgrade behavior. The existing dispatcher cannot host two versions under one protocol name.",
     "column_paths": "Nine existing column RPCs use raw component paths, with per-operation nested DDL profiles and one-component 1.5 adapter targets. TableInfo.required_filters now uses AND-of-OR raw component paths across SDKs and the native 1.5 optimizer; native 2.0 integration remains open.",
     "metadata_changes": "CatalogMetadataChanges: explicit comment presence plus literal string tag SET/REMOVE, atomic whole-patch validation, effect-sensitive versions/etags. Shared record; first negotiated operation is catalog_schema_alter_metadata.",
@@ -85,12 +85,12 @@
           "limits": "Attachment negotiation, current-profile checks and metadata projection implemented for schema options. Object-level secure-view/trigger restrictions and their execution checks remain pending."
         },
         {
-          "status": "write_requirements_specified_reference_pending",
+          "status": "minimal_write_requirements_gap_audit_pending",
           "sources": [
             "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership",
             "docs/protocol/shared-catalog-values.md#transaction-guarantees-and-composite-writes"
           ],
-          "limits": "Proposed authoritative revision checks include cached binds and writers predating trigger creation. Read/discovery support alone cannot authorize mutation."
+          "limits": "Current-definition checks must cover cached binds and writers predating trigger creation. Audit existing bind/init paths before selecting the minimum metadata carrier; no generic write-requirement, statement-ticket or receipt record is finalized by this review."
         }
       ]
     },
@@ -577,38 +577,23 @@
       ]
     },
     "transactions": {
-      "title": "Transactions and write replay",
-      "disposition": "include",
-      "status": "specified_reference_pending",
+      "title": "Transactions and write execution",
+      "disposition": "existing_contract",
+      "status": "existing_lifecycle_gap_audit_pending",
       "records": [
-        "CatalogCapabilities",
-        "OperationIdentity",
-        "MutationReceipt",
-        "WriteRequirements",
-        "CatalogWriteBinding",
-        "WriteExecutionContext",
-        "WriteIntent",
-        "WriteStatementTicket",
-        "WriteStatementReceipt",
-        "WriteOperationReceipt"
+        "CatalogCapabilities"
       ],
       "existing_methods": [
         "catalog_transaction_begin",
         "catalog_transaction_commit",
         "catalog_transaction_rollback"
       ],
-      "new_methods": [
-        "catalog_write_statement_begin",
-        "catalog_write_statement_complete",
-        "catalog_write_statement_abort",
-        "catalog_mutation_execute",
-        "catalog_operation_status"
-      ],
+      "new_methods": [],
       "scope": [
-        "Explicit DDL rollback and mixed DDL/DML atomicity guarantees; operation identity/deduplication if retry support is included",
-        "Expanded ADD COLUMN, CTAS, multi-DML CTEs, and triggers use coherent transaction state. Reuse begin/commit/rollback and OLD/NEW `changes` mode. Define ambiguous commit/reply-loss behavior; never retry side effects just because transport failed. No distributed atomicity claim across independent catalogs."
+        "Reuse existing transaction handles, begin/commit/rollback, write init/exchange/finalize and OLD/NEW results; audit concrete DuckDB2 gaps before adding wire fields",
+        "Keep supported DDL, DML and trigger effects in the existing provider transaction; failed writes cannot partially commit. No savepoints, durable replay/status service or general statement ticket/receipt framework in this package. Ambiguous dispatch remains an error without automatic retry."
       ],
-      "capability_contract": "Existing vgi.transaction.ddl.v1; proposed DML, mixed, multiple-DML and statement-rollback profiles in CatalogCapabilities.transaction. vgi.write.statement.v1 provides explicit statement boundaries; vgi.mutation.replay.v1 independently gates durable unary mutation admission/outcomes.",
+      "capability_contract": "Reuse existing vgi.transaction.ddl.v1 and current begin/commit/rollback plus streamed-write execution. Qualify existing behavior for each admitted DuckDB2 form before enabling it; no new statement, replay or savepoint profile is approved. A failed write requires full transaction rollback; ambiguous dispatch must not trigger automatic retry.",
       "gates": [
         "P1",
         "P2",
@@ -616,37 +601,32 @@
       ],
       "evidence": [
         {
-          "status": "specified_reference_pending",
+          "date": "2026-10-15",
+          "status": "user_scope_decision_existing_lifecycle_gap_audit_pending",
           "sources": [
             "docs/protocol/shared-catalog-values.md#transaction-guarantees-and-composite-writes",
-            "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership",
-            "docs/protocol/shared-catalog-values.md#durable-mutation-outcomes-and-bounded-replay"
+            "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership"
           ],
-          "limits": "Reuse existing transaction/RPC framing. No new transaction, statement or replay guarantee is currently advertised; crash/atomicity proof remains required."
+          "limits": "This scope correction adds no runtime guarantee. Existing transaction, mutation no-retry and reference checkpoint evidence remains valid within its tested limits. Unsupported composite writes remain disabled until existing paths prove atomic completion and full rollback on failure."
         }
       ],
       "implementation_work": [
-        "Audit native generic mutation retries; baseline ambiguous effects must not retry.",
-        "Implement authoritative statement tickets, operation/stream completion and a COMMIT fence.",
-        "Prove durable replay with exact request bytes, bounded non-reactivatable IDs and retained outcomes; ordinary mutations remain no-retry."
+        "Map CTAS, expanded ALTER, multi-DML CTEs and trigger execution onto the current transaction and init/exchange/finalize paths; identify concrete missing behavior before proposing fields or RPCs.",
+        "Prove admitted writes and trigger effects commit together and failed writes require full transaction rollback; retain one execution owner and reject stale or incapable writers before effects.",
+        "Retain no automatic retry after ambiguous mutation dispatch and audit uncovered legacy mutation paths. Do not add durable outcomes/status, savepoints or a generic statement ticket/receipt framework."
       ]
     },
     "triggers": {
       "title": "Triggers \u2014 contract specified; reference pending",
       "disposition": "include",
-      "status": "specified_reference_pending",
+      "status": "minimal_contract_and_existing_execution_gap_review_pending",
       "records": [
+        "CatalogObjectRef",
+        "ObjectDependency",
         "TriggerDefinition",
         "TriggerInfo",
         "TriggerCreateRequest",
-        "SqlStatement",
-        "WriteRequirements",
-        "CatalogWriteBinding",
-        "WriteExecutionContext",
-        "WriteIntent",
-        "WriteStatementTicket",
-        "WriteStatementReceipt",
-        "WriteOperationReceipt"
+        "SqlStatement"
       ],
       "existing_methods": [],
       "new_methods": [
@@ -660,7 +640,7 @@
         "Table-owned identity, list/get/create/drop and metadata mutation, event/timing/granularity, UPDATE OF, transition aliases, action definition, dependencies, and execution mode",
         "Prefer worker authority for persistent definitions. Distinguish engine-executed from backend-executed triggers so they cannot fire twice. Define SQL dialect, ordering, supported row/statement forms, OLD/NEW requirements, rollback, detach/reconnect, and cross-client discovery."
       ],
-      "capability_contract": "Proposed read vgi.trigger.read.v1; DDL create/drop/metadata; write vgi.trigger.engine.v1 or vgi.trigger.backend.v1 exclusively, requiring qualified statement/transaction and applicable action profiles. No trigger profile is implemented or advertised.",
+      "capability_contract": "Candidate trigger discovery/DDL profiles and exactly one engine or backend execution owner remain under review. Reuse existing transactions and write phases; establish current requirements and stale-bind rejection before effects. No trigger profile or general statement/recovery profile is implemented or advertised.",
       "gates": [
         "P1",
         "P2",
@@ -668,20 +648,22 @@
       ],
       "evidence": [
         {
-          "status": "specified_reference_pending",
+          "date": "2026-10-15",
+          "status": "minimal_contract_gap_audit_pending",
           "sources": [
             "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership",
             "docs/protocol/shared-catalog-values.md#transaction-guarantees-and-composite-writes",
             "docs/protocol/shared-catalog-values.md#dependencies-for-semantic-alter"
           ],
-          "limits": "Single event and one-component UPDATE OF align with pinned grammar. Portable lifecycle is designed; custom-table trigger execution is not qualified."
+          "limits": "Pinned grammar still establishes singular events and one-component UPDATE OF. Minimal persistent metadata, execution ownership and stale-bind protection remain necessary review subjects; prior generic statement ticket/receipt proposals are superseded. No trigger execution is qualified."
         }
       ],
       "implementation_work": [
-        "Implement durable table-owned definition CRUD/readback and complete dependencies.",
-        "Recheck requirements at write bind/init and reject stale/incapable writers before effects.",
-        "Prove whole-statement BEFORE/base/AFTER, OLD/NEW across batches, ordering, failure rollback and reconnect before enabling either execution owner."
-      ]
+        "Audit current write binding, init/exchange/finalize and OLD/NEW results against pinned trigger hooks before finalizing candidate metadata or CRUD records.",
+        "Determine the minimum table-owned trigger metadata, dependency and current-definition checks needed to select exactly one execution owner and reject stale/incapable writes before effects.",
+        "Qualify supported BEFORE/base/AFTER ordering, row/statement firing, transition data and full transaction rollback using the existing write path; leave unsupported forms disabled."
+      ],
+      "record_inventory_status": "Candidate trigger record names only; fields and CRUD shapes are not finalized. Reuse current identities, SQL carriers, dependencies, transactions, write phases and OLD/NEW results."
     },
     "query": {
       "title": "Catalog query execution \u2014 explicit 1.5 adapter implemented; automatic pending",
@@ -905,8 +887,7 @@
       "status": "pending_contract_review",
       "records": [
         "StatementRequest",
-        "StatementResult",
-        "OperationIdentity"
+        "StatementResult"
       ],
       "existing_methods": [],
       "new_methods": [
@@ -3056,14 +3037,15 @@
       "area": "triggers",
       "disposition": "include",
       "target": "CatalogObjectRef(kind=trigger).owner_table",
-      "status": "specified_reference_pending",
+      "status": "pending_contract_review",
       "evidence": [
         {
-          "status": "specified_reference_pending",
+          "date": "2026-10-15",
+          "status": "minimal_trigger_mapping_review_pending",
           "sources": [
             "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership"
           ],
-          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+          "limits": "Preserve this pinned field requirement while reviewing minimal metadata, execution ownership and stale-bind checks against existing write paths. Candidate record names are not finalized and generic statement lifecycle machinery is outside the package."
         }
       ]
     },
@@ -3484,14 +3466,15 @@
       "area": "triggers",
       "disposition": "include",
       "target": "TriggerDefinition.ref/comment/tags / TriggerInfo.dependencies; temporary follows owner",
-      "status": "specified_reference_pending",
+      "status": "pending_contract_review",
       "evidence": [
         {
-          "status": "specified_reference_pending",
+          "date": "2026-10-15",
+          "status": "minimal_trigger_mapping_review_pending",
           "sources": [
             "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership"
           ],
-          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+          "limits": "Preserve this pinned field requirement while reviewing minimal metadata, execution ownership and stale-bind checks against existing write paths. Candidate record names are not finalized and generic statement lifecycle machinery is outside the package."
         }
       ]
     },
@@ -3506,14 +3489,15 @@
       "area": "triggers",
       "disposition": "include",
       "target": "CatalogObjectRef(kind=trigger).owner_table",
-      "status": "specified_reference_pending",
+      "status": "pending_contract_review",
       "evidence": [
         {
-          "status": "specified_reference_pending",
+          "date": "2026-10-15",
+          "status": "minimal_trigger_mapping_review_pending",
           "sources": [
             "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership"
           ],
-          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+          "limits": "Preserve this pinned field requirement while reviewing minimal metadata, execution ownership and stale-bind checks against existing write paths. Candidate record names are not finalized and generic statement lifecycle machinery is outside the package."
         }
       ]
     },
@@ -3528,14 +3512,15 @@
       "area": "triggers",
       "disposition": "include",
       "target": "TriggerDefinition.timing",
-      "status": "specified_reference_pending",
+      "status": "pending_contract_review",
       "evidence": [
         {
-          "status": "specified_reference_pending",
+          "date": "2026-10-15",
+          "status": "minimal_trigger_mapping_review_pending",
           "sources": [
             "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership"
           ],
-          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+          "limits": "Preserve this pinned field requirement while reviewing minimal metadata, execution ownership and stale-bind checks against existing write paths. Candidate record names are not finalized and generic statement lifecycle machinery is outside the package."
         }
       ]
     },
@@ -3550,14 +3535,15 @@
       "area": "triggers",
       "disposition": "include",
       "target": "TriggerDefinition.event (singular)",
-      "status": "specified_reference_pending",
+      "status": "pending_contract_review",
       "evidence": [
         {
-          "status": "specified_reference_pending",
+          "date": "2026-10-15",
+          "status": "minimal_trigger_mapping_review_pending",
           "sources": [
             "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership"
           ],
-          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+          "limits": "Preserve this pinned field requirement while reviewing minimal metadata, execution ownership and stale-bind checks against existing write paths. Candidate record names are not finalized and generic statement lifecycle machinery is outside the package."
         }
       ]
     },
@@ -3572,14 +3558,15 @@
       "area": "triggers",
       "disposition": "include",
       "target": "TriggerDefinition.update_columns: ColumnPath list; native one-component only",
-      "status": "specified_reference_pending",
+      "status": "pending_contract_review",
       "evidence": [
         {
-          "status": "specified_reference_pending",
+          "date": "2026-10-15",
+          "status": "minimal_trigger_mapping_review_pending",
           "sources": [
             "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership"
           ],
-          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+          "limits": "Preserve this pinned field requirement while reviewing minimal metadata, execution ownership and stale-bind checks against existing write paths. Candidate record names are not finalized and generic statement lifecycle machinery is outside the package."
         }
       ]
     },
@@ -3594,14 +3581,15 @@
       "area": "triggers",
       "disposition": "include",
       "target": "TriggerDefinition.granularity",
-      "status": "specified_reference_pending",
+      "status": "pending_contract_review",
       "evidence": [
         {
-          "status": "specified_reference_pending",
+          "date": "2026-10-15",
+          "status": "minimal_trigger_mapping_review_pending",
           "sources": [
             "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership"
           ],
-          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+          "limits": "Preserve this pinned field requirement while reviewing minimal metadata, execution ownership and stale-bind checks against existing write paths. Candidate record names are not finalized and generic statement lifecycle machinery is outside the package."
         }
       ]
     },
@@ -3616,14 +3604,15 @@
       "area": "triggers",
       "disposition": "include",
       "target": "TriggerDefinition.new_table_alias/old_table_alias",
-      "status": "specified_reference_pending",
+      "status": "pending_contract_review",
       "evidence": [
         {
-          "status": "specified_reference_pending",
+          "date": "2026-10-15",
+          "status": "minimal_trigger_mapping_review_pending",
           "sources": [
             "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership"
           ],
-          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+          "limits": "Preserve this pinned field requirement while reviewing minimal metadata, execution ownership and stale-bind checks against existing write paths. Candidate record names are not finalized and generic statement lifecycle machinery is outside the package."
         }
       ]
     },
@@ -3637,15 +3626,16 @@
       ],
       "area": "triggers",
       "disposition": "include",
-      "target": "TriggerDefinition.action: SqlStatement / execution_owner / statement lifecycle",
-      "status": "specified_reference_pending",
+      "target": "Candidate trigger action using SqlStatement and exactly one execution owner; reuse existing transaction/write phases",
+      "status": "pending_contract_review",
       "evidence": [
         {
-          "status": "specified_reference_pending",
+          "date": "2026-10-15",
+          "status": "minimal_trigger_mapping_review_pending",
           "sources": [
             "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership"
           ],
-          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+          "limits": "Preserve this pinned field requirement while reviewing minimal metadata, execution ownership and stale-bind checks against existing write paths. Candidate record names are not finalized and generic statement lifecycle machinery is outside the package."
         }
       ]
     },
@@ -3771,15 +3761,16 @@
       ],
       "area": "transactions",
       "disposition": "include",
-      "target": "CatalogCapabilities.transaction multiple-DML profile / statement lifecycle",
-      "status": "specified_reference_pending",
+      "target": "Existing transaction and streamed-write lifecycle; SupportsMultipleDMLCTEs remains disabled pending concrete gap qualification",
+      "status": "pending_contract_review",
       "evidence": [
         {
-          "status": "specified_reference_pending",
+          "date": "2026-10-15",
+          "status": "existing_write_path_gap_audit_pending",
           "sources": [
             "docs/protocol/shared-catalog-values.md#transaction-guarantees-and-composite-writes"
           ],
-          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+          "limits": "Qualify multiple writes, RETURNING and full transaction rollback with current execution phases before enabling the engine hook; no general statement ticket/receipt or savepoint framework is approved."
         }
       ]
     },
@@ -3834,15 +3825,16 @@
       ],
       "area": "transactions",
       "disposition": "existing_contract",
-      "target": "Existing transaction_opaque_data ownership plus qualified DDL/DML/mixed profiles",
-      "status": "specified_reference_pending",
+      "target": "Existing transaction_opaque_data ownership, begin/commit/rollback and qualified atomic DDL/write behavior",
+      "status": "existing_contract_additional_qualification_pending",
       "evidence": [
         {
-          "status": "specified_reference_pending",
+          "date": "2026-10-15",
+          "status": "existing_contract_scope_reaffirmed",
           "sources": [
             "docs/protocol/shared-catalog-values.md#transaction-guarantees-and-composite-writes"
           ],
-          "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+          "limits": "Existing transaction checkpoint evidence remains bounded to tested operations. Audit CTAS, expanded ALTER and nested writes using the existing lifecycle; full transaction rollback is the failure policy, without savepoints or durable mutation recovery."
         }
       ]
     }
@@ -3956,7 +3948,7 @@
         {
           "status": "partial_field_design_reconciled",
           "source": "combined_design_review",
-          "limits": "Specific expression/constraint/transaction/trigger mappings now have concrete decisions. Other field/capability and candidate decisions remain open."
+          "limits": "The historical design review covered specific expression/constraint/transaction/trigger mappings. The 2026-10-15 user decision supersedes overbuilt transaction/recovery proposals and reopens minimum trigger/execution mappings; remaining scope/capability/field reviews are still open."
         }
       ]
     },
@@ -3982,9 +3974,9 @@
           "limits": "Schema-option reference only. Broader catalog/query operations and complete capabilities remain pending."
         },
         {
-          "status": "normative_design_reference_pending",
+          "status": "historical_design_partial_scope_superseded",
           "source": "docs/protocol/shared-catalog-values.md#combined-expression-constraint-transaction-and-trigger-design",
-          "limits": "No new reference execution evidence in this checkpoint; specified does not mean qualified."
+          "limits": "No runtime execution evidence was introduced by the historical design checkpoint. Current write/trigger scope follows write_scope_decision_2026_10_15 and reuses existing execution machinery pending a concrete gap audit."
         }
       ]
     },
@@ -5995,27 +5987,12 @@
   },
   "combined_design_review": {
     "date": "2026-10-14",
-    "status": "specified_reference_and_freeze_review_pending",
+    "status": "historical_design_review_partially_superseded_2026_10_15",
     "source": "docs/protocol/shared-catalog-values.md#combined-expression-constraint-transaction-and-trigger-design",
     "engine_15": "105edd31b57fe7e6d32ee648efad562e45a9f908",
     "engine_20": "e1784fa4231072d7152b8aaa20977bdb8ff4ace3",
     "implemented_protocol_methods": 82,
     "implemented_protocol_hash": "28cf2ae30b6cf07dbd4db602e4972611319b993fb073b27de456b6fcf341dc00",
-    "newly_specified_method_count": 12,
-    "newly_specified_methods": [
-      "catalog_table_constraints_apply",
-      "catalog_index_option_definitions",
-      "catalog_table_triggers",
-      "catalog_trigger_get",
-      "catalog_trigger_create",
-      "catalog_trigger_drop",
-      "catalog_trigger_alter_metadata",
-      "catalog_write_statement_begin",
-      "catalog_write_statement_complete",
-      "catalog_write_statement_abort",
-      "catalog_mutation_execute",
-      "catalog_operation_status"
-    ],
     "reviewed_field_ids": [
       "audit-127",
       "audit-129",
@@ -6069,20 +6046,9 @@
       "Implemented catalog methods moved from proposed to existing inventory",
       "Macro prototype targets corrected to actual parameter records"
     ],
-    "review_findings_resolved": [
-      "Singular trigger event and one-component UPDATE OF at the engine pin",
-      "Stable constraint refs distinct from optional SQL labels",
-      "Column-scoped dependency identity and cycle checks",
-      "Explicit table definition revision lifecycle and CREATE enforcement",
-      "Statement terminal-state rules, COMMIT fence and no stream reinitialization",
-      "Retained replay receipts remain recoverable after transaction completion",
-      "Authority selects UPDATE OF using immutable SET paths and validates exact trigger ref/revision per intent",
-      "Operation receipts use final empty-batch IPC metadata; zero-row completion and one stream per operation are explicit",
-      "Canonical predecessor completion gates BEFORE/base/AFTER initialization"
-    ],
     "qualification_limits": [
       "No new runtime records, methods or profiles implemented by this design checkpoint.",
-      "Reference enforcement, statement/trigger/replay crash behavior and SDK generation remain prerequisites to P1/P2.",
+      "At the time of this historical review, proposed statement/trigger/replay runtime proof was absent. The statement/replay framework is now out of scope; trigger execution must first undergo the existing-write-path gap audit.",
       "Unreviewed areas/candidates remain in the manifest; no broad release/native gate is complete."
     ],
     "validation": {
@@ -6102,7 +6068,35 @@
       "workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
       "log": "logs/combined-protocol-design-checkpoint.log",
       "limits": "Inventory/consistency checks only. No new runtime or wire implementation was introduced or qualified."
-    }
+    },
+    "scope_superseded_by": "write_scope_decision_2026_10_15",
+    "historical_newly_specified_method_count": 12,
+    "historical_newly_specified_methods": [
+      "catalog_table_constraints_apply",
+      "catalog_index_option_definitions",
+      "catalog_table_triggers",
+      "catalog_trigger_get",
+      "catalog_trigger_create",
+      "catalog_trigger_drop",
+      "catalog_trigger_alter_metadata",
+      "catalog_write_statement_begin",
+      "catalog_write_statement_complete",
+      "catalog_write_statement_abort",
+      "catalog_mutation_execute",
+      "catalog_operation_status"
+    ],
+    "historical_review_findings_resolved": [
+      "Singular trigger event and one-component UPDATE OF at the engine pin",
+      "Stable constraint refs distinct from optional SQL labels",
+      "Column-scoped dependency identity and cycle checks",
+      "Explicit table definition revision lifecycle and CREATE enforcement",
+      "Statement terminal-state rules, COMMIT fence and no stream reinitialization",
+      "Retained replay receipts remain recoverable after transaction completion",
+      "Authority selects UPDATE OF using immutable SET paths and validates exact trigger ref/revision per intent",
+      "Operation receipts use final empty-batch IPC metadata; zero-row completion and one stream per operation are explicit",
+      "Canonical predecessor completion gates BEFORE/base/AFTER initialization"
+    ],
+    "current_applicability": "The method list, findings and validation counts record the 2026-10-14 design review, not the active package. The 2026-10-15 user decision supersedes its generic statement lifecycle, durable replay/status and savepoint assumptions. Runtime checkpoint tests and unrelated SQL/constraint/index decisions are retained."
   },
   "expression_constraint_checkpoint": {
     "date": "2026-10-14",
@@ -6189,7 +6183,7 @@
       "Legacy TableCreateRequest/TableInfo constraint arrays and public apply RPC are unchanged.",
       "Finite direct durable constraint reference; no new capability advertisement or production/native enforcement.",
       "Scalar evaluation proof does not establish persisted DEFAULT/generated columns or SqlStatement execution.",
-      "Indexes, ALTER dependency scope, statement lifecycle, triggers and durable retry/status remain pending.",
+      "At this checkpoint indexes and ALTER dependency scope remained pending; later checkpoints record their bounded completion. Current write/trigger follow-up follows write_scope_decision_2026_10_15, without generic statement lifecycle or durable mutation recovery.",
       "No P0-P3 or M0-M4 gate closed; no version freeze/publication."
     ],
     "remote_workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
@@ -6211,7 +6205,7 @@
     "remaining": [
       "Native CHECK and nested constraints; persistent column-expression translation.",
       "Qualified enforcement/mutation in other SDK providers; generic bind/write race authorization is not established.",
-      "Typed indexes, semantic ALTER dependencies, statement/write lifecycle, triggers and durable replay."
+      "Typed indexes and semantic ALTER dependency work are recorded by later checkpoints. Current remaining write/trigger scope is the existing-lifecycle gap audit and minimum metadata/owner/stale-bind review; generic statement lifecycle and durable mutation recovery are excluded."
     ],
     "test_evidence": [
       {
@@ -6448,7 +6442,7 @@
       "Protocol version remains an unpublished development placeholder; no engine pin, release gate, publication or broad DuckDB2 qualification changes.",
       "Single-attempt subprocess/HTTP policy covers catalog_query_prepare, catalog_table_create, catalog_table_constraints_apply, catalog_index_create and catalog_index_drop. Explicit predispatch415 codec and401 auth handling remain bounded. This is not durable replay or a guarantee for all legacy mutation methods."
     ],
-    "next": "Semantic ALTER dependencies, then write requirements/statement lifecycle before triggers and durable replay.",
+    "next": "Semantic ALTER dependencies completed in the subsequent checkpoint; current follow-up: Audit concrete DuckDB2 write/trigger gaps against existing transactions, init/exchange/finalize and OLD/NEW results; propose only necessary metadata, execution-owner and stale-bind checks. No new general statement lifecycle or recovery service.",
     "remote_workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
     "logs_directory": "logs/",
     "review": "Subagent reviews covered generated binary-field types, refusal before effects, native cache invalidation and retry boundaries. Review found the HTTP automatic-retry gap; fixed it and proved request counts on a real loopback server."
@@ -6578,8 +6572,39 @@
       "Single-attempt coverage now includes table rename and column rename/type/drop; this does not qualify every legacy mutation or supply durable replay.",
       "No engine pin, release version, route, publication or broad DuckDB2 qualification changes."
     ],
-    "next": "Write requirements and statement lifecycle, then triggers and durable mutation replay.",
+    "next": "Audit concrete DuckDB2 write/trigger gaps against existing transactions, init/exchange/finalize and OLD/NEW results; propose only necessary metadata, execution-owner and stale-bind checks. No new general statement lifecycle or recovery service.",
     "remote_workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
     "logs_directory": "logs/"
+  },
+  "write_scope_decision_2026_10_15": {
+    "date": "2026-10-15",
+    "status": "user_directed_scope_correction",
+    "reason": "The user rejected overengineering lost-response recovery, savepoints and a new transaction framework when VGI already has transaction and streamed-write fundamentals.",
+    "reuse": [
+      "Existing transaction handles and catalog_transaction_begin/commit/rollback.",
+      "Existing write bind/init/exchange/finalize and OLD/NEW changes result mode.",
+      "Full transaction rollback for failed writes; no partial commit of admitted base/trigger effects.",
+      "No automatic mutation retry after ambiguous dispatch."
+    ],
+    "excluded_from_current_package": [
+      "Durable mutation replay/status service and operation outcome retention.",
+      "Savepoints and statement-level rollback profiles or machinery.",
+      "General statement ticket, intent, execution-context and receipt lifecycle framework or RPCs."
+    ],
+    "removed_proposed_methods": [
+      "catalog_write_statement_begin",
+      "catalog_write_statement_complete",
+      "catalog_write_statement_abort",
+      "catalog_mutation_execute",
+      "catalog_operation_status"
+    ],
+    "remaining_review": [
+      "Audit concrete DuckDB2 execution gaps against existing code before adding protocol fields or methods.",
+      "Keep minimum trigger metadata/discovery, one execution owner, complete dependencies and stale-bind/current-definition checks under review; candidate record names are not finalized.",
+      "Prove supported CTAS, expanded ALTER, multi-DML CTE and trigger behavior with current transaction/write phases; reject unsupported forms."
+    ],
+    "preserved_evidence": "All tested runtime checkpoints, protocol hashes/method counts, engine pins and audit source rows remain intact. Historical design proposals are explicitly marked superseded; unrelated prepared-read query recovery and persisted provider event replay are unchanged.",
+    "next": "Audit concrete DuckDB2 write/trigger gaps against existing transactions, init/exchange/finalize and OLD/NEW results; propose only necessary metadata, execution-owner and stale-bind checks. No new general statement lifecycle or recovery service.",
+    "validation": "Manifest content updated locally only; no new runtime tests, protocol changes or release-gate completion are claimed."
   }
 }

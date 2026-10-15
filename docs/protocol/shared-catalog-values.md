@@ -750,7 +750,9 @@ generated; bounded public constraint migration verified on pinned 1.5; remaining
 specified and not frozen.** The definitions in this
 section supersede placeholder records in the manifest and the older trigger
 proposal. They belong to the same major transition as the existing development
-changes. Engine pins remain unchanged; the public inventory now has 83 methods.
+changes. Engine pins remain unchanged; the public inventory now has 84 methods.
+The 2026-10-15 scope correction below supersedes the earlier transaction and
+durable recovery proposals; it changes documentation only.
 A specified shape does not close P1. The implementation evidence below applies
 only to its stated scope; the remaining acceptance cases still require proof.
 
@@ -823,8 +825,9 @@ the manifest's `constraint_public_checkpoint`.
 This checkpoint adds one method and changes parent schemas; no version is
 published or release gate closed. Generic legacy
 write/bind authorization remains provider-owned: preliminary table reads are
-not atomic with later operations. Typed indexes, semantic ALTER dependencies,
-statement lifecycle, triggers and durable replay remain pending.
+not atomic with later operations. Later checkpoints implement typed indexes and
+semantic ALTER dependencies. Trigger execution remains pending; the 2026-10-15
+scope correction replaces the earlier statement lifecycle/replay proposals.
 
 ### Shared SQL definitions and evaluation phases
 
@@ -1098,41 +1101,33 @@ without the dependency profile retain their legacy transaction behavior.
 
 ### Transaction guarantees and composite writes
 
-Use `CatalogCapabilities.transaction`, not a second `TransactionCapabilities`
-boolean record. Retain existing begin/commit/rollback and attachment-bound,
-authenticated transaction handles. Specify these additional independent promises:
+**Scope correction, 2026-10-15:** reuse VGI's existing transaction and write
+lifecycle. The earlier savepoint, general statement-ticket/receipt and durable
+mutation recovery proposals are withdrawn from this protocol package. These
+were design-only proposals; no corresponding RPCs or profiles were implemented.
 
-| Profile | Required guarantee |
-| --- | --- |
-| `vgi.transaction.ddl.v1` (existing) | Advertised DDL, its metadata/dependencies and transaction-local reads commit or roll back together. |
-| `vgi.transaction.dml.v1` | Advertised data mutations share the worker transaction and roll back together. |
-| `vgi.transaction.mixed.v1` | DDL plus DML, metadata and dependencies commit atomically; requires DDL and DML profiles. |
-| `vgi.transaction.multiple_dml.v1` | All base/trigger operations of an admitted multi-DML statement share one atomic transaction; requires DML and the statement lifecycle below. |
-| `vgi.transaction.statement_rollback.v1` | A failed statement restores a provider savepoint while retaining earlier transaction work. Without this profile, failure makes the entire transaction rollback-only. |
+Keep `supports_transactions`, the existing begin/commit/rollback RPCs, opaque
+attachment-bound transaction handles, and write init/exchange/finalize. Retain
+`CatalogCapabilities.transaction` and the implemented `vgi.transaction.ddl.v1`
+profile. Existing providers already implement real transactions; the task is to
+qualify the DuckDB2 paths that use them, not introduce another coordinator.
+Additional DML/mixed/multi-operation profiles are not selected changes: first
+identify a concrete interoperability gap that the existing contract cannot cover.
 
-A nonempty token or `supports_transactions=true` does not establish any of these
-additional promises. Tokens bind principal, attachment and transaction; wrong,
-expired, unknown or terminal tokens reject further mutation. Data, schema,
-dependency graph and visible catalog versions publish together. Committed state
-is unchanged on rollback. No cross-catalog/attachment distributed atomicity is
-promised, and sequence allocation or external effects are not silently included.
-Reject a definition requiring unqualified external effects before execution.
+For accepted composite operations, DDL, row writes and trigger effects must use
+the same provider transaction. Audit CTAS, expanded ALTER and multi-DML execution
+for correct token propagation, finalization and error handling. A failed write
+must not permit its partial effects to commit; use the existing whole-transaction
+rollback/invalidation path. Do not add savepoints or promise preservation of
+previous statements after a partially applied write fails. Preserve existing
+provider-specific handling of errors that occur before effects.
 
-Preflight the complete expanded statement before its first effect: CTAS,
-ADD/UPDATE/SET DEFAULT, follow-up constraints, multi-DML CTEs and engine-owned
-trigger actions must not discover missing atomicity after partial mutation.
-Once any constituent operation fails, COMMIT cannot publish its partial effects.
-Repeated COMMIT of a committed token and repeated ROLLBACK of a rolled-back token
-are idempotent within a declared retention window; opposite terminal operations
-reject. These stronger completion promises require a provider implementation;
-the existing transaction boolean alone is insufficient.
-
-A lost mutation/COMMIT response means unknown outcome. Reconnecting, DETACH or
-attempting ROLLBACK does not prove that COMMIT failed. Baseline clients never
-replay a possibly dispatched mutation. Audit all generic catalog unary retries:
-this checkpoint's source review found that native stale-pool retry remains for
-other catalog methods even though query preparation now disables it. Fixing and
-testing this is required before advertising the new mutation profiles.
+Reuse existing commit/rollback semantics, including the interface's existing
+idempotency requirement. No retained-outcome journal, recovery endpoint or new
+retention window is introduced. Report an ambiguous mutation/COMMIT response as
+an error with unknown outcome; do not automatically replay a possibly dispatched
+mutation. Keep and complete the existing single-attempt transport safeguards.
+No distributed atomicity across independent attachments is promised.
 
 ### Trigger definitions and statement ownership
 
@@ -1187,225 +1182,50 @@ within each event/timing/granularity phase. The DuckDB profile must match the
 pinned engine's case-insensitive alphabetical order and validate that order;
 list order is not incidental hash-map order.
 
-Add nullable `write_requirements: WriteRequirements` to `TableInfo` and the
-existing write-discovery result (`WriteFunctionResult`, currently an alias of
-`ScanFunctionResult`), including inlined results. Non-write discovery uses NULL.
-The record carries table identity, nonempty `requirements_revision: binary`,
-required profile names, execution owner, per-operation minimum result modes,
-and ordered trigger ref/revision lists for each phase. Reuse existing
-`count < rows < changes`; ENGINE transition-table/row-image support requires
-exact `changes`, including when the caller omitted RETURNING.
+For execution, audit the existing table/write discovery, sealed bind state,
+transaction context, init/exchange/finalize and OLD/NEW `changes` results first.
+Use those paths to carry and validate table identity, execution ownership,
+required result mode and current definition revision wherever possible. A cached
+binding must not bypass a newly required trigger or constraint; determine the
+smallest missing validation or metadata field from the actual execution path
+before selecting a new wire record. The earlier `WriteRequirements`,
+`CatalogWriteBinding`, `WriteExecutionContext` and intent/ticket/receipt design
+is withdrawn as a selected implementation plan.
 
-Add nullable `catalog_write: CatalogWriteBinding` to `BindRequest`, containing
-table identity, operation and expected requirements revision. The worker resolves
-that table independently from its registered write function and returns the
-validated ownership/revision in existing sealed `bind_opaque_data`; no second
-public bind token is needed. Add nullable `write_context: WriteExecutionContext`
-to `InitRequest`, containing statement ticket, operation ID, stream ID and
-nullable source change-set ID for an action consuming a parent operation's
-OLD/NEW relation.
-The worker checks the agreement, sealed bind and current transactional
-requirements atomically before effects. A cached table, inline function or old
-bind is not permission to bypass a newly required profile. Missing writer context
-is not grandfathered. Reject incapable writers before mutation, including 1.5
-clients facing ENGINE triggers. A backend-owned plan may accept legacy writers
-only if it can independently recover and enforce the complete SQL statement
-semantics; per-batch exchange execution alone is insufficient.
+The remaining concrete trigger questions are execution ownership, ordering,
+UPDATE OF targets, complete OLD/NEW results, zero-row behavior and errors across
+multiple batches. Existing function finalization may provide the needed boundary;
+prove that against the pinned engine. A batch is not necessarily the complete
+original SQL statement: the current transactor issues backend SQL per batch.
+Do not infer statement-trigger semantics merely from those backend statements,
+and do not infer that a new coordinator is required merely because batching
+exists. Add only a demonstrated missing boundary or metadata value to the
+existing path, with a focused regression. If a trigger form cannot be supported
+correctly yet, reject it before effects rather than add a general workflow system.
 
-A TABLE batch, stream EOF, `execution_id`, or transactor exchange is not a SQL
-statement boundary. Include these methods and records in the combined contract:
+All supported base and trigger writes use the existing transaction. Propagate
+failure through the existing error/rollback path and ensure finalization errors
+cannot lead to commit. Trigger/constraint changes concurrent with a write must
+serialize or cause a conflict using provider transaction and revision checks.
+There is no separate statement-begin/complete/abort RPC family, statement ticket,
+operation receipt transport, recovery service or savepoint support in this scope.
 
-| Method | Proposed request and outcome |
-| --- | --- |
-| `catalog_write_statement_begin` | Attachment, nonempty transaction, unique statement ID, optional parent statement ticket, complete finite write intents/operation IDs and expected requirement revisions. Return an opaque ticket and canonical pinned plan before any BEFORE action. |
-| `catalog_write_statement_complete` | Attachment, transaction, ticket, and terminal receipts for every declared operation/stream and required trigger action. Return a completion receipt only after all base and AFTER effects succeed. |
-| `catalog_write_statement_abort` | Same owner/ticket and reason. Restore the statement savepoint if qualified; otherwise mark the whole transaction rollback-only. Repeated abort is idempotent; it cannot undo an already committed transaction. |
-
-A `WriteIntent` identifies a nonempty operation ID, target/event, expected
-requirements revision, planned result mode, parent operation where applicable
-and phase (BEFORE/base/AFTER). It also contains immutable
-`updated_column_paths: list<ColumnPath>`: nonempty for UPDATE, empty for INSERT
-or DELETE. These are the SET targets, including assignments leaving values
-unchanged; the authority validates them against the bound operation before
-selecting UPDATE OF triggers. The canonical pinned plan includes ordered
-`predecessor_operation_ids` for every operation, derived by the authority from
-BEFORE/base/AFTER and trigger order. Init rejects until all predecessors have
-authoritative successful completion records. Merely matching final receipts
-cannot justify executing an AFTER action before its base operation. The
-predecessor graph must be acyclic. Trigger actions additionally identify their exact
-trigger ref and definition revision; base operations have neither. The authority
-matches these against the required phase order, rather than treating any write
-to the same target as completion of that trigger. The authority validates the full
-finite action/dependency plan before BEGIN succeeds. Unknown dynamically added
-write targets, unbounded recursion and unqualified parallel plans reject.
-Initial execution permits one stream per operation; stream identity is real,
-but does not advertise parallel/substream execution. All effects use one provider
-transaction. Complete OLD/NEW sets span every input batch, retain duplicates and
-handle zero affected rows. A statement trigger still follows the qualified
-engine's zero-row behavior. Trigger actions use declared operation identities
-and cannot recursively open an unrelated transaction. For the initial ROW
-profile, one action operation is the vectorized action over all applicable rows
-of its parent operation, not repeated invocations of the same operation ID.
-It records the parent's complete change-set identity and preserves multiplicity;
-row batches cannot become independently firing statements.
-
-`WriteOperationReceipt` contains the statement ticket, operation ID, stream ID,
-requirements revision, nullable trigger ref/revision, nonnegative affected-row
-count, nonnegative output-row count, and nullable `change_set_id: binary`.
-Trigger ref/revision must occur together and match the pinned intent. A successful
-`changes` operation has a nonempty change-set ID, one OLD/NEW pair per affected
-row, and output count equal to affected count. Other result modes have no change
-set. The ID names the complete transaction-owned image relation already delivered
-by that operation; it does not imply an extra fetch API or permission to replay
-writes. Actions consuming OLD/NEW include this ID in `WriteExecutionContext`;
-the authority checks that it belongs to their completed parent operation.
-
-Deliver exactly one receipt as `vgi.write.operation_receipt.v1` custom metadata
-encoded as one complete single-record `WriteOperationReceipt` IPC payload,
-on a final zero-row IPC record batch with the agreed output schema, after all
-ordinary output batches. No data may follow that batch. Stream EOS alone is not
-a completion receipt. The authority durably records completion only after the
-operation's effects and full result/change-set production finish; an error
-produces no success receipt and aborts the statement or transaction. A zero-row
-write must still initialize/finalize its declared operation and emit a receipt;
-a client-supplied zero count is not a substitute. Each stream has at most one
-terminal receipt; repeated control acknowledgements must match it exactly.
-COMPLETE's receipt list must match all authoritative operation records, including
-zero-row actions, with no missing or duplicated identities. SDK/native readers
-must preserve and inspect this metadata even when they normally skip empty
-batches. This transport path needs explicit cross-SDK feasibility tests before
-freeze; no new statement capability is inferred from existing stream framing.
-
-Before/base/after phases require authoritative operation completion tracking;
-client-supplied receipts alone cannot prove effects occurred. Tickets have
-states ACTIVE, COMPLETED and ABORTED. Only ACTIVE can transition to either
-terminal state. Repeating the same terminal transition returns the original
-outcome; the opposite transition rejects. Aborting a completed historical ticket
-must never restore a savepoint and erase later successful statements. COMMIT
-rejects while any statement ticket is ACTIVE/incomplete or the transaction is
-rollback-only, so omission of COMPLETE cannot publish base effects without AFTER
-actions. ROLLBACK terminally aborts remaining ACTIVE tickets.
-
-The tuple `(ticket, operation_id, stream_id)` identifies one stream execution.
-The sole stream slot is allocated by `(ticket, operation_id)`; changing the
-stream ID cannot allocate another execution for that operation. A
-duplicate/reconnected init cannot start it again. Reconnect restores control
-and status access only; it does not authorize replay or restart of a consumed
-stream without a separately qualified resumability profile. A reconnect resumes
-only an existing owner/ticket; it never starts a substitute statement. Cancellation,
-expiry, transaction end and DETACH reclaim execution resources and abort or mark
-rollback-only as required. They do not drop persistent trigger definitions.
-Concurrent trigger/constraint changes either serialize with the statement or
-produce a conflict before its effects can commit. The provider must not accept
-stale requirements based solely on a caller's expected revision.
-
-Proposed read/DDL profiles are `vgi.trigger.read.v1`,
+Proposed read/DDL profiles remain `vgi.trigger.read.v1`,
 `vgi.trigger.create.v1`, `vgi.trigger.drop.v1`, `vgi.trigger.metadata.v1`.
 SQL/action semantic profiles belong to the read category, as the existing
 scalar-expression profile does; they do not independently grant execution.
-Proposed write profiles are `vgi.write.statement.v1`,
-`vgi.trigger.engine.v1` and `vgi.trigger.backend.v1`; action profiles are additional
-requirements. ENGINE requires statement lifecycle, DML atomicity, matching
-client execution support and the applicable result mode. Read/create profiles do
-not imply execution. Definition changes must also update write requirements
-atomically. None of these profiles is currently advertised.
+Candidate execution profiles `vgi.trigger.engine.v1` and
+`vgi.trigger.backend.v1` remain under review. Execution requires matching client
+and provider behavior, transaction support and the applicable result mode.
+Read/create profiles do not imply execution. None is currently advertised.
 
-### Durable mutation outcomes and bounded replay
+### Mutation response failures
 
-Include an optional durable-replay contract in this combined design, instead of
-adding identity fields to every existing mutation method. Ordinary methods keep
-their selected successor shapes and the no-automatic-retry rule. A separate
-`vgi.mutation.replay.v1` transaction profile permits these two new methods only
-when the provider can prove durable admission/effect/outcome tracking:
-
-```text
-catalog_mutation_execute(attach_opaque_data, transaction_opaque_data?,
-                         operation_id, method, request) -> MutationReceipt
-catalog_operation_status(attach_opaque_data, transaction_opaque_data?,
-                         operation_id) -> MutationReceipt
-```
-
-`request` is the **exact bytes** of one IPC parameters batch for the normal
-method, validated against that method's schema before dispatch. Preserve those
-bytes for retries; an equivalent re-encoding is not the same request. Inner and
-outer attachment/transaction fields must match exactly; a method without a
-transaction field requires NULL outside. The outer principal remains the only
-principal. Reuse normal authorization, capability checks and mutation handlers;
-this wrapper is not a privileged second dispatch route. Authenticate and check
-identity conflicts first. For an existing identity, return its retained receipt
-without redispatching or reapplying active-transaction/current-definition
-preconditions. STATUS likewise accepts the matching completed transaction
-identity. Otherwise recovery of a COMMIT receipt or an operation completed
-before rollback would be impossible. Only a new admitted operation enters the
-normal mutation checks; terminal transactions cannot accept new effects.
-
-The initial allowlist is explicit: transaction begin/commit/rollback;
-schema create/drop/alter-options/alter-metadata; table create/drop/rename,
-alter-options/alter-layout, comment and column-comment mutations, column
-add/drop/rename/default-set/default-drop/type-change/not-null-set/not-null-drop;
-view create/drop/rename/comment/column-comment; macro create/drop; index
-create/drop; canonical constraint apply; and trigger create/drop/alter-metadata.
-These refer to the exact corresponding `catalog_*` methods in the registry.
-Unknown/unlisted methods reject. Catalog provisioning, ATTACH/DETACH, query
-prepare/execution, discovery, statement lifecycle, stream init/process/finalize
-and either wrapper method are excluded. Wrapping one stream init cannot make a
-streamed write replayable. A future streaming replay profile needs chunk and
-completion identity; it is not advertised by this profile.
-
-`operation_id` is exactly 24 bytes: an 8-byte unsigned big-endian admission
-deadline in epoch milliseconds (positive, at most int64 max), followed by 16
-cryptographically random bytes. The complete value is immutable. Its identity
-is scoped to principal plus attachment across all methods; transaction and
-method are conflict-checked attributes, not namespaces permitting reuse.
-A new request is admitted only when provider admission time is strictly before
-the deadline and the deadline is at most 24 hours ahead. The provider uses a
-durable nondecreasing admission-time watermark shared by workers/restarts;
-clock rollback cannot reactivate an expired ID. Admission after deadline always
-rejects, including a previously known ID; use STATUS to recover its outcome.
-The deadline does not cancel an operation already admitted.
-
-| `MutationReceipt` field | Meaning |
-| --- | --- |
-| `operation_id: binary` | Exact 24-byte identity. |
-| `status` | Enum UNKNOWN, IN_PROGRESS, SUCCEEDED, FAILED. |
-| `request_digest: binary?` | SHA-256 of the method, transaction presence/value and exact inner request bytes; present for known identities. |
-| `result: binary?` | Original successful method-result IPC, NULL for a void method; never a newly executed result. |
-| `error: binary?` | Existing structured RPC error encoded as IPC, present exactly for FAILED. |
-| `expires_at_epoch_ms: int64?` | Guaranteed terminal receipt retention deadline; present exactly for terminal states. |
-
-Digest bytes are SHA-256 of ASCII `vgi.mutation.request.v1` plus NUL, then
-method UTF-8 prefixed by unsigned 64-bit big-endian byte length, one transaction
-presence byte (0/1), the transaction bytes prefixed by the same length format
-when present, and length-prefixed exact request bytes. Store and compare the
-original method/transaction/request as well: hash equality alone is not an
-identity-conflict check. UNKNOWN has all four nullable fields NULL; IN_PROGRESS
-has only a digest; SUCCEEDED has digest/expiry and optional result but no error;
-FAILED has digest/expiry/error and no result. Malformed unions reject.
-
-Admission, duplicate exclusion and durable effect/outcome reconciliation must
-share authoritative storage. Concurrent exact duplicates return the same pending
-or terminal receipt; differing method/transaction/request bytes reject without
-dispatch. Retain unresolved records until reconciled, even past their deadline.
-Never evict pending operations to admit new work; reject new admissions at quota.
-Keep terminal receipts until at least `max(admission_deadline, terminal_time)`
-plus 24 hours. After retention, UNKNOWN does not prove nonexecution. Clients
-must not change the ID/deadline or fall back to the original RPC after an
-ambiguous response. Status cannot dispatch or resume work as a side effect.
-
-SUCCEEDED inside an existing transaction means the operation completed there,
-not that the transaction committed. Its record survives rollback/reconnect so
-replay cannot rerun it. Commit/rollback receipts establish transaction outcome.
-A transport timeout, cancellation or disconnect alone cannot become FAILED:
-uncertain effects remain IN_PROGRESS until authoritative recovery determines
-the outcome. A provider without recoverable transactions/journaling cannot
-select this profile. No exactly-once promise follows merely from carrying IDs.
-
-This profile's feasibility gate includes concurrent duplicates, conflicting
-bytes, crash between effect and receipt, ambiguous COMMIT, rollback after a
-successful inner operation, quota, expiry and clock rollback. Its record and
-method design is included now; reference implementation and advertisement remain
-pending. This decision avoids treating reliable replay as an implicit property
-of the existing transaction token or stream execution ID.
+Durable mutation replay/status is out of scope for this combined release.
+Do not add `catalog_mutation_execute`, `catalog_operation_status`, operation
+identity records, receipt journals or automatic write recovery. Ordinary errors
+and the existing no-automatic-retry policy are sufficient for this work. Existing
+read/query result replay functionality is unaffected by this scope decision.
 
 ### Design acceptance and implementation order
 
@@ -1415,18 +1235,18 @@ of the existing transaction token or stream execution ID.
 2. Implement canonical constraint read/create/apply and typed index records in
    a durable reference. Prove real enforcement, existing-data failure rollback,
    FK NULL/action semantics, primary-key nullability and backing-index closure.
-3. Implement write-requirement checks and statement transaction state before
-   exposing trigger execution. Prove CTAS/expanded ADD and multi-operation
-   failures cannot partially commit; include lost replies and stale bind caches.
-4. Implement persistent trigger CRUD/readback plus BACKEND and ENGINE reference
-   paths independently. Test exclusivity, order, zero/multiple batches, exact
-   OLD/NEW, trigger changes after bind, reconnect, cancellation and cleanup.
+3. Audit existing transaction propagation, write finalization and failure handling
+   for CTAS, expanded ALTER, multi-DML and trigger execution. Add focused tests for
+   concrete gaps; fix the current paths before proposing new protocol machinery.
+   No savepoints or general statement-ticket/receipt lifecycle is required.
+4. Implement persistent trigger CRUD/readback plus supported BACKEND and ENGINE
+   paths using existing transactions and streams. Test exclusivity, order,
+   zero/multiple batches, exact OLD/NEW, stale binds and failure rollback. Select
+   additional metadata only when those paths demonstrate a missing contract.
 5. Extend dependency planning to constraints and column/ALTER blockers. Test
    rename/replacement, inaccessible dependents, cross-schema identity and no
    cross-attachment authority assumption.
-6. Prove the durable-replay admission/outcome rules independently; never enable
-   it as a shortcut around the baseline no-retry rule.
-7. Generate the selected records/methods across all seven SDKs, with positive
+6. Generate the selected records/methods across all seven SDKs, with positive
    reference behavior and safe unsupported paths. Freeze only after these proofs;
    then qualify the native 2.0 adapter separately. No implementation is required
    to advertise every profile, but all must understand the frozen wire inventory.
