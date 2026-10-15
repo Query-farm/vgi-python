@@ -141,9 +141,7 @@ def test_raw_paths_keep_dots_quotes_case_and_struct_boundaries():
     with pytest.raises(ValueError, match="missing or ambiguous"):
         value.validate_schema(pa.schema([pa.field("a.b", pa.int32())]))
     with pytest.raises(ValueError, match="non-struct"):
-        definition(paths=[["items", "element"]]).validate_schema(
-            pa.schema([pa.field("items", pa.list_(pa.int32()))])
-        )
+        definition(paths=[["items", "element"]]).validate_schema(pa.schema([pa.field("items", pa.list_(pa.int32()))]))
 
 
 @pytest.mark.parametrize(
@@ -279,9 +277,7 @@ def test_snapshot_and_request_roundtrip_and_enforce_exact_owner():
     with pytest.raises(ValueError, match="another table"):
         snapshot([info(owner=table("other"))])
     with pytest.raises(ValueError, match="another table"):
-        apply(
-            [ConstraintChange(operation=ConstraintOperation.DROP, ref=identity(owner=table("other")), cascade=False)]
-        )
+        apply([ConstraintChange(operation=ConstraintOperation.DROP, ref=identity(owner=table("other")), cascade=False)])
     with pytest.raises(ValueError, match="owning table schema"):
         wrong_expression = replace(expression(), schema_path=["other"])
         apply([change(definition(ConstraintKind.CHECK, [], check_expression=wrong_expression))])
@@ -390,7 +386,10 @@ def test_constraint_refs_join_existing_owned_backing_index_dependency_closure():
 
     def edge(dependent, subject, kind):
         return ObjectDependency(
-            dependent=dependent.serialize_to_bytes(), subject=subject.serialize_to_bytes(), kind=kind
+            dependent=dependent.serialize_to_bytes(),
+            subject=subject.serialize_to_bytes(),
+            kind=kind,
+            blocks_alter=True,
         ).serialize_to_bytes()
 
     graph = DependencySnapshot(
@@ -409,3 +408,71 @@ def test_constraint_refs_join_existing_owned_backing_index_dependency_closure():
         replace(constraint, owner_table=None)
     with pytest.raises(ValueError):
         replace(owner, owner_table="unexpected")
+
+
+def test_constraint_fk_paths_and_mixed_backing_index_cycles_preserve_exact_drop_closure():
+    parent, child = table("parent"), table("child")
+    key, foreign = identity("primary-key", parent), identity("foreign-key", child)
+    backing = CatalogObjectRef(kind="index", schema_path=parent.schema_path, name="backing-index")
+
+    def edge(dependent, subject, kind="requires", paths=None, blocks=True):
+        return ObjectDependency(
+            dependent=dependent.serialize_to_bytes(),
+            subject=subject.serialize_to_bytes(),
+            kind=kind,
+            blocks_alter=blocks,
+            subject_column_paths=paths,
+        ).serialize_to_bytes()
+
+    graph = DependencySnapshot(
+        catalog_version=7,
+        objects=[value.serialize_to_bytes() for value in [parent, child, key, foreign, backing]],
+        dependencies=[
+            edge(key, parent, "owned", [["id.part"], ["nested", "id"]]),
+            edge(backing, key, "owned", blocks=False),
+            edge(key, backing),
+            edge(foreign, child, "owned", [["parent_id"], ["nested", "parent_id"]]),
+            edge(foreign, key),
+            edge(foreign, parent, paths=[["id.part"], ["nested", "id"]]),
+        ],
+    )
+    schemas = {
+        parent.key(): pa.schema(
+            [
+                pa.field("id.part", pa.int64()),
+                pa.field("nested", pa.struct([pa.field("id", pa.int64())])),
+                pa.field("id", pa.struct([pa.field("part", pa.int64())])),
+            ]
+        ),
+        child.key(): pa.schema(
+            [pa.field("parent_id", pa.int64()), pa.field("nested", pa.struct([pa.field("parent_id", pa.int64())]))]
+        ),
+    }
+    graph.validate_columns(schemas)
+    graph.assert_alter_allowed(parent, column_path=["id", "part"], action="type", schemas=schemas)
+    for path in [["id.part"], ["nested"], ["nested", "id"]]:
+        with pytest.raises(ValueError, match="dependent"):
+            graph.assert_alter_allowed(parent, column_path=path, action="type", schemas=schemas)
+        with pytest.raises(ValueError, match="dependent"):
+            graph.plan_alter(parent, column_path=path, action="drop", schemas=schemas)
+        plan = graph.plan_alter(parent, column_path=path, action="drop", cascade=True, schemas=schemas)
+        assert {value.key() for value in plan.drop_objects} == {key.key(), foreign.key(), backing.key()}
+        assert [(drop.table, drop.column_path) for drop in plan.drop_columns] == [(parent, path)]
+    with pytest.raises(ValueError, match="dependent"):
+        graph.drop_set(backing)
+    assert {value.key() for value in graph.drop_set(backing, cascade=True)} == {
+        backing.key(),
+        key.key(),
+        foreign.key(),
+    }
+    assert {value.key() for value in graph.drop_set(parent, cascade=True)} == {
+        parent.key(),
+        key.key(),
+        foreign.key(),
+        backing.key(),
+    }
+    # The FK protects exactly the key columns, not every column of its parent.
+    foreign_edge = next(
+        edge for edge in graph.edges() if edge.dependent_ref() == foreign and edge.subject_ref() == parent
+    )
+    assert foreign_edge.subject_column_paths == [["id.part"], ["nested", "id"]]

@@ -483,10 +483,12 @@ def render() -> str:
     nested = CatalogObjectRef(kind="schema", schema_path=["one.two"], name="nested")
     table = CatalogObjectRef(kind="table", schema_path=["one.two", "nested"], name='table."name')
     trigger = CatalogObjectRef(kind="trigger", schema_path=table.schema_path, name="on.change", owner_table=table.name)
-    owned = ObjectDependency(dependent=trigger.serialize_to_bytes(), subject=table.serialize_to_bytes(), kind="owned")
+    owned = ObjectDependency(
+        dependent=trigger.serialize_to_bytes(), subject=table.serialize_to_bytes(), blocks_alter=True, kind="owned"
+    )
     edges = [
-        ObjectDependency(dependent=nested.serialize_to_bytes(), subject=root.serialize_to_bytes()),
-        ObjectDependency(dependent=table.serialize_to_bytes(), subject=nested.serialize_to_bytes()),
+        ObjectDependency(dependent=nested.serialize_to_bytes(), subject=root.serialize_to_bytes(), blocks_alter=False),
+        ObjectDependency(dependent=table.serialize_to_bytes(), subject=nested.serialize_to_bytes(), blocks_alter=False),
         owned,
     ]
     records.update(
@@ -499,6 +501,46 @@ def render() -> str:
             dependencies=[e.serialize_to_bytes() for e in edges],
         ),
         empty_dependency_snapshot=DependencySnapshot(catalog_version=0),
+    )
+    index = CatalogObjectRef(kind="index", schema_path=table.schema_path, name="key.index")
+    literal = ObjectDependency(
+        dependent=index.serialize_to_bytes(),
+        subject=table.serialize_to_bytes(),
+        blocks_alter=True,
+        subject_column_paths=[["a.b"]],
+    )
+    nested_column = ObjectDependency(
+        dependent=index.serialize_to_bytes(),
+        subject=table.serialize_to_bytes(),
+        blocks_alter=True,
+        subject_column_paths=[["record", "a.b"]],
+    )
+    generated = ObjectDependency(
+        dependent=table.serialize_to_bytes(),
+        subject=table.serialize_to_bytes(),
+        blocks_alter=True,
+        subject_column_paths=[["a.b"], ["record", "a.b"]],
+        dependent_column_path=["generated"],
+    )
+    generated_chain = ObjectDependency(
+        dependent=table.serialize_to_bytes(),
+        subject=table.serialize_to_bytes(),
+        blocks_alter=True,
+        subject_column_paths=[["generated"]],
+        dependent_column_path=["second.generated"],
+    )
+    records.update(
+        index_ref=index,
+        dependency_membership=edges[0],
+        dependency_column_literal=literal,
+        dependency_column_nested=nested_column,
+        dependency_generated=generated,
+        dependency_generated_chain=generated_chain,
+        dependency_column_snapshot=DependencySnapshot(
+            catalog_version=43,
+            objects=[table.serialize_to_bytes(), index.serialize_to_bytes()],
+            dependencies=[e.serialize_to_bytes() for e in [literal, generated, generated_chain]],
+        ),
     )
     records.update(logical_and_macro_records())
     records.update(constraint_records())

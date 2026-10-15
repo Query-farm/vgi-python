@@ -160,6 +160,7 @@ from vgi.catalog.options import OptionChanges, OptionDefinitions
 from vgi.catalog.query import QUERY_EXECUTOR, CatalogQueryPrepareRequest, CatalogQueryPrepareResult
 from vgi.catalog.secret_type import SecretTypeSpec
 from vgi.catalog.setting import SettingSpec, extract_setting_specs
+from vgi.catalog.sql import column_expressions
 from vgi.column_path import column_definition as decode_column_definition
 from vgi.column_path import column_path_key
 from vgi.exceptions import OpaqueDataNotRecognizedError
@@ -2806,6 +2807,40 @@ class Worker:
         available = self._get_catalog().catalog_capabilities(attach_opaque_data=self._unwrap_attach(envelope))
         return available.select(selected)
 
+    def _require_dependency_transaction(self, attach: bytes, transaction: bytes | None, operation: str) -> None:
+        """Keep dependency-aware metadata and DDL in the negotiated transaction."""
+        if transaction is None:
+            return
+        selected = self._catalog_agreement(attach)
+        available = self._get_catalog().catalog_capabilities(attach_opaque_data=self._unwrap_attach(attach))
+        # Omitting the graph read profile cannot weaken a provider's dependency
+        # mutation contract. Legacy providers without it retain their behavior.
+        if CATALOG_DEPENDENCIES_READ in selected.read or CATALOG_DEPENDENCIES_READ in available.read:
+            self._require_catalog_capability(attach, TRANSACTION_DDL, operation)
+
+    @staticmethod
+    def _require_column_expression_profiles(schema: pa.Schema, selected: CatalogCapabilities, operation: str) -> bool:
+        """Validate canonical field expressions recursively without rewriting metadata.
+
+        Legacy text metadata retains its existing adapter path. Canonical IPC
+        definitions require their exact selected/current semantic profile even
+        when nested inside a struct, dictionary or extension storage type.
+        """
+        pending = list(schema)
+        found = False
+        while pending:
+            field = pending.pop()
+            expressions = column_expressions(field)
+            for expression in (expressions.default, expressions.generated):
+                if expression is not None:
+                    selected.require(expression.profile, available=selected, operation=operation)
+                    found = True
+            dtype = field.type
+            while isinstance(dtype, pa.BaseExtensionType) or pa.types.is_dictionary(dtype):
+                dtype = dtype.storage_type if isinstance(dtype, pa.BaseExtensionType) else dtype.value_type
+            pending.extend(dtype.field(index) for index in range(dtype.num_fields))
+        return found
+
     @staticmethod
     def _schema_for_capabilities(info: SchemaInfo, selected: CatalogCapabilities) -> SchemaInfo:
         if SCHEMA_OPTIONS_READ not in selected.read and info.options is not None:
@@ -2911,6 +2946,7 @@ class Worker:
     def _table_for_capabilities(info: TableInfo, selected: CatalogCapabilities) -> TableInfo:
         schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
         require_logical_profiles(schema, selected_profiles=selected.read)
+        Worker._require_column_expression_profiles(schema, selected, "read column expressions")
         infos = info.constraint_infos()
         validate_constraint_schema(
             schema, [item.definition for item in infos], trusted=[item.definition for item in infos if item.trusted]
@@ -5198,6 +5234,7 @@ class Worker:
         options: bytes | None = None,
     ) -> None:
         """Create a new schema."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "create schema")
         schema_path_key(path)
         if any("\0" in component for component in path):
             raise ValueError("schema target components must contain no NUL")
@@ -5312,6 +5349,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a schema."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "drop schema")
         schema_path_key(path)
         if any("\0" in component for component in path):
             raise ValueError("schema target components must contain no NUL")
@@ -5554,6 +5592,9 @@ class Worker:
     def catalog_table_create(self, request: TableCreateRequest) -> None:
         """Create a new table."""
         request.__post_init__()
+        self._require_dependency_transaction(
+            request.attach_opaque_data, request.transaction_opaque_data, "create table"
+        )
         self._enrich_catalog_span(vgi_schema_path=request.schema_path, vgi_table_name=request.name)
         cat = self._get_catalog()
         if request.on_conflict == OnConflict.REPLACE:
@@ -5561,6 +5602,13 @@ class Worker:
                 request.attach_opaque_data, request.transaction_opaque_data, request.schema_path, request.name
             )
         schema = pa.ipc.read_schema(pa.py_buffer(request.columns))
+        if (
+            self._require_column_expression_profiles(
+                schema, self._effective_catalog_capabilities(request.attach_opaque_data), "create column expressions"
+            )
+            and request.transaction_opaque_data is not None
+        ):
+            self._require_catalog_capability(request.attach_opaque_data, TRANSACTION_DDL, "create column expressions")
         definitions = constraint_definitions(
             request.constraint_definitions,
             CatalogObjectRef(kind="table", schema_path=request.schema_path, name=request.name),
@@ -5723,6 +5771,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a table."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "drop table")
         self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
@@ -5877,6 +5926,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Set or clear the comment on a table."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "set table comment")
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_comment_set(
@@ -5899,6 +5949,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Set or clear the comment on a table column."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "set column comment")
         if len(column_path_key(column_path)) > 1:
             self._require_catalog_capability(
                 attach_opaque_data, COLUMN_NESTED_COMMENT, "catalog_table_column_comment_set", transaction_opaque_data
@@ -5925,6 +5976,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Rename a table."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "rename table")
         self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
@@ -5949,12 +6001,20 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Add a new column to a table."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "add column")
         self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
         if len(column_path_key(column_path)) > 1:
             self._require_catalog_capability(
                 attach_opaque_data, COLUMN_NESTED_ADD, "catalog_table_column_add", transaction_opaque_data
             )
-        decode_column_definition(column_definition, column_path, type_only=False)
+        field = decode_column_definition(column_definition, column_path, type_only=False)
+        if (
+            self._require_column_expression_profiles(
+                pa.schema([field]), self._effective_catalog_capabilities(attach_opaque_data), "add column expressions"
+            )
+            and transaction_opaque_data is not None
+        ):
+            self._require_catalog_capability(attach_opaque_data, TRANSACTION_DDL, "add column expressions")
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_add(
@@ -5980,6 +6040,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a column from a table."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "drop column")
         self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
         if len(column_path_key(column_path)) > 1:
             self._require_catalog_capability(
@@ -6009,6 +6070,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Rename a column."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "rename column")
         self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
         if len(column_path_key(column_path)) > 1:
             self._require_catalog_capability(
@@ -6038,6 +6100,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Set the default value expression for a column."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "set column default")
         self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
         if len(column_path_key(column_path)) > 1:
             self._require_catalog_capability(
@@ -6065,6 +6128,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Remove the default value from a column."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "drop column default")
         self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
         if len(column_path_key(column_path)) > 1:
             self._require_catalog_capability(
@@ -6093,6 +6157,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Change the type of a column."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "change column type")
         self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
         if len(column_path_key(column_path)) > 1:
             self._require_catalog_capability(
@@ -6208,6 +6273,7 @@ class Worker:
         column_comments: dict[str, str] | None = None,
     ) -> None:
         """Create a new view."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "create view")
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_view_name=name)
         aliases = [] if aliases is None else aliases
         ViewInfo.validate_aliases(aliases)
@@ -6246,6 +6312,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a view."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "drop view")
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_view_name=name)
         self._check_existing_view_security(attach_opaque_data, transaction_opaque_data, schema_path, name)
         cat = self._get_catalog()
@@ -6268,6 +6335,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Rename a view."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "rename view")
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_view_name=name)
         self._check_existing_view_security(attach_opaque_data, transaction_opaque_data, schema_path, name)
         cat = self._get_catalog()

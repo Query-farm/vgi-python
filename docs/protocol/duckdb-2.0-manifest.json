@@ -12,9 +12,9 @@
       "Overload collections replacing single macro definitions"
     ],
     "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
-    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the successor schema inventory; required canonical table constraint lists replace the legacy parent arrays and revision-checked catalog_table_constraints_apply joins the public method surface",
+    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the successor schema inventory; required canonical table constraint lists replace the legacy parent arrays and revision-checked catalog_table_constraints_apply joins the public method surface; typed index definitions/options replace legacy index fields and add catalog_index_option_definitions; required semantic ALTER flags and raw subject/dependent column paths extend embedded dependency records",
     "version_requirement": "Retaining the raw-path migration requires a major version and matching routing name. Complete the combined diff and migration guide before freeze.",
-    "planned_diff": "Remaining combined design: ALTER/column dependency edges; write requirement/statement lifecycle records; trigger CRUD and durable mutation replay/status. SQL/context, canonical constraints and typed indexes are implemented with bounded reference/native1.5 adapters; broader provider qualification and pending methods remain outside the current protocol hash."
+    "planned_diff": "Remaining combined design: write requirement/statement lifecycle records; trigger CRUD and durable mutation replay/status. SQL/context, canonical constraints, typed indexes and semantic ALTER dependency planning are implemented with bounded reference/native1.5 evidence; broader provider qualification and pending methods remain outside the current protocol hash."
   },
   "sources": {
     "native_revision": "1a0a059",
@@ -47,7 +47,7 @@
         "schema_ddl": "vgi.schema.lifecycle.v1"
       },
       "status": "reference_implemented_full_provider_coverage_pending",
-      "proposed_extension": "Constraint object references with required owner_table are implemented. Semantic blocks_alter, subject_column_paths and dependent_column_path remain proposed; column-scoped edge/cycle proof is pending."
+      "semantic_alter": "Implemented required blocks_alter, nullable subject_column_paths/dependent_column_path, schema-aware validation, legal object-cycle handling and separate column/object DROP closures. Durable metadata reference supports generated columns/simple views; physical constraint/index/trigger integration remains pending."
     }
   },
   "areas": {
@@ -512,7 +512,7 @@
     "dependencies": {
       "title": "Dependencies and catalog consistency",
       "disposition": "include",
-      "status": "pending_contract_review",
+      "status": "semantic_alter_verified_on_15_bounded_metadata_reference",
       "records": [
         "CatalogObjectRef",
         "ObjectDependency",
@@ -528,7 +528,11 @@
         "catalog_schema_drop",
         "catalog_table_drop",
         "catalog_view_drop",
-        "catalog_dependencies"
+        "catalog_dependencies",
+        "catalog_table_rename",
+        "catalog_table_column_rename",
+        "catalog_table_column_type_change",
+        "catalog_table_column_drop"
       ],
       "new_methods": [
         "catalog_object_metadata_set"
@@ -556,11 +560,19 @@
           "limits": "Schema/table/simple-view authority and shared ownership planner only. Broader object-kind enforcement, rename policy, cross-attachment authority and production SDK providers remain pending."
         },
         {
-          "status": "alter_and_column_dependencies_specified_reference_pending",
+          "status": "semantic_alter_and_column_dependencies_reference_implemented",
           "sources": [
+            "vgi/catalog/dependencies.py",
+            "vgi/worker.py",
+            "tests/catalog/dependencies_reference.py",
+            "tests/catalog/test_dependencies.py",
+            "tests/catalog/test_dependency_alter_lifecycle.py",
+            "tests/catalog/test_constraint_contract.py",
+            "conformance/catalog-contracts.json",
+            "native:test/run_semantic_alter.py",
             "docs/protocol/shared-catalog-values.md#dependencies-for-semantic-alter"
           ],
-          "limits": "Existing schema/table/simple-view dependency reference remains qualified only for its old shape. Constraint refs, ALTER blockers and column graph validation are proposed, not implemented."
+          "limits": "Metadata-only durable reference: table/column rename, type/drop, generated-column DAG and simple-view CASCADE, transactions/reconnect. No row conversion, physical generated values, production constraint/index/trigger closure, SQL rewrite or native2 qualification. Native1.5 conversion expressions and canonical generated-column materialization reject."
         }
       ]
     },
@@ -6440,5 +6452,134 @@
     "remote_workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
     "logs_directory": "logs/",
     "review": "Subagent reviews covered generated binary-field types, refusal before effects, native cache invalidation and retry boundaries. Review found the HTTP automatic-retry gap; fixed it and proved request counts on a real loopback server."
+  },
+  "semantic_alter_checkpoint": {
+    "date": "2026-10-14",
+    "status": "verified_on_pinned_15_bounded_metadata_reference",
+    "engine_15": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "public_method_count": 84,
+    "public_methods_added": [],
+    "protocol_hash": "8003abf6447266f5bc59cca76bef09df661f35fbbf0b360f400d92fdd4b12aee",
+    "hash_scope": "Unchanged top-level method schemas do not include ObjectDependency fields embedded in binary payloads; this required nested field is still breaking.",
+    "wire_changes": {
+      "ObjectDependency": "Required blocks_alter bool, nullable nonempty raw subject_column_paths and nullable dependent_column_path; kind retains requires/owned DROP semantics."
+    },
+    "test_evidence": [
+      {
+        "check": "Python initial broad regression",
+        "result": "1689 passed;8 opt-in SDK checks skipped without VGI_METADATA_WORKERS.",
+        "log": "alter-python.log"
+      },
+      {
+        "check": "Python final broad regression",
+        "result": "1710 passed;8 opt-in skips. A new fixture omitted required TableInfo comment/tags; corrected and covered in the final targeted regression below.",
+        "log": "alter-python-final.log"
+      },
+      {
+        "check": "Python final semantic ALTER, negotiation, constraint and corpus regression",
+        "result": "157 passed; no skips.",
+        "log": "alter-python-verified.log"
+      },
+      {
+        "check": "Ruff and mypy",
+        "result": "Passed;223 production source files checked.",
+        "log": "alter-python-final.log"
+      },
+      {
+        "check": "Native1.5 shell/loadable extension and codec guards",
+        "result": "26 cases;401 assertions passed.",
+        "log": "alter-native.log"
+      },
+      {
+        "check": "Native HTTP single-attempt and interrupt regression",
+        "result": "5 cases;241 assertions passed, including all four semantic ALTER RPCs after HTTP errors, codec fallback errors and lost replies.",
+        "log": "alter-native.log"
+      },
+      {
+        "check": "Native semantic ALTER SQL lifecycle",
+        "result": "6 scenarios passed: raw names/cache refresh/reconnect, view blockers, view CASCADE, DDL transactions, no-effect TYPE conversion rejection and generated-metadata rejection.",
+        "log": "alter-native-verified.log"
+      },
+      {
+        "check": "Native constraint/index regression",
+        "result": "5 constraint scenarios and7 typed-index scenarios passed.",
+        "log": "alter-native-verified.log"
+      },
+      {
+        "check": "Go full suite and example-worker build",
+        "result": "Passed.",
+        "log": "alter-go.log"
+      },
+      {
+        "check": "Rust protocol/client/worker suites",
+        "result": "494 passed;4 documentation examples ignored.",
+        "log": "alter-rust.log"
+      },
+      {
+        "check": "TypeScript both Arrow backends, package/types/browser builds",
+        "result": "186 passed and62 opt-in skips per backend; all package entries import and browser build passes.",
+        "log": "alter-typescript.log"
+      },
+      {
+        "check": "Java core and example-worker suites",
+        "result": "652 core tests passed,2 live storage skips;42 example tests passed.",
+        "log": "alter-java.log"
+      },
+      {
+        "check": "C# full suite",
+        "result": "652 passed;0 skips.",
+        "log": "alter-csharp.log"
+      },
+      {
+        "check": "C++ build and suite",
+        "result": "69 passed.",
+        "log": "alter-cpp.log"
+      },
+      {
+        "check": "Live independently built SDK workers",
+        "result": "39 passed across all six SDK workers, including dependency discovery refusal.",
+        "log": "alter-public-final.log"
+      },
+      {
+        "check": "Browser/HTTP discovery and serving",
+        "result": "75 passed.",
+        "log": "alter-public-final.log"
+      },
+      {
+        "check": "All-SDK generation and manifest inventory",
+        "result": "Exact generated matches;151 audit rows/20 areas/84 pending review decisions.",
+        "log": "alter-python-verified.log"
+      }
+    ],
+    "review_fixes": [
+      "Separate table column computations from whole-object lifetime edges so valid object cycles do not become false generated-column cycles; retain view-definition and ownership-cycle checks.",
+      "Deduplicate resolved generated references after provider case-insensitive binding, preserving canonical raw names.",
+      "Reject trailing Arrow schema bytes before table publication.",
+      "Require selected/current expression profiles for canonical field metadata, and selected/current DDL guarantees for dependency-provider transactional mutations even if the client omits dependency read."
+    ],
+    "browser_client": {
+      "sha256": "953a7f009d166155418a29dbffa1490540d002fe46771013e65a199e441fdc25",
+      "build": "bun run build:landing-client",
+      "vendored_into": [
+        "Python",
+        "Go",
+        "TypeScript",
+        "C#",
+        "C++"
+      ]
+    },
+    "implementation_limits": [
+      "Reference tables are metadata-only. No row conversion, physical generated values, DML or constraint/index enforcement is claimed by this dependency reference.",
+      "Generated expressions are bounded top-level primitive virtual expressions with default explicit context; views are single-relation SELECT*. Unsupported grammar/contexts/storage semantics reject before effects.",
+      "Rename/type with dependents reject rather than rewriting SQL definitions. Ordinary nested raw-column paths are supported in the Python reference, not qualified in native2.",
+      "Native1.5 TYPE receives a parser-generated conversion expression even without USING and rejects in this metadata provider. Canonical generated metadata is rejected by native capability negotiation/materialization.",
+      "Constraint/backing-index/FK ownership and exact referenced-column closure have core planner proof only; production cross-object enforcement and trigger integration remain pending.",
+      "Other SDKs preserve wire fields but do not implement/advertise the dependency authority. The generic planner is advisory; providers must validate authoritative schemas and authorize/publish closures atomically.",
+      "Single-attempt coverage now includes table rename and column rename/type/drop; this does not qualify every legacy mutation or supply durable replay.",
+      "No engine pin, release version, route, publication or broad DuckDB2 qualification changes."
+    ],
+    "next": "Write requirements and statement lifecycle, then triggers and durable mutation replay.",
+    "remote_workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+    "logs_directory": "logs/"
   }
 }

@@ -1036,13 +1036,17 @@ reference and native SQL lifecycle checks provide that separate evidence.
 
 ### Dependencies for semantic ALTER
 
-Keep `ObjectDependency.kind = requires|owned` for DROP behavior. Add required
-`blocks_alter: bool` and nullable, nonempty `subject_column_paths` to specify
+`ObjectDependency.kind = requires|owned` controls DROP behavior. Required
+`blocks_alter: bool` and nullable, nonempty `subject_column_paths` specify
 semantic ALTER protection; NULL protects the whole subject. Harmless comments
 or label changes do not count as semantic ALTER. Edge identity is the dependent
 ref, nullable dependent column path, and subject ref. Merge subject paths only
-within that identity; reject conflicting edge kinds or ALTER flags. Protecting a parent path also protects
-its nested descendants, and changing a parent invalidates dependent child paths.
+within that identity; reject conflicting edge kinds or ALTER flags. A NULL path
+set dominates narrower protection. Explicit parent and child paths remain in the
+merged set so authoritative schema validation checks every claimed field.
+Protecting a parent path also protects its nested descendants, and changing a
+parent invalidates dependent child paths. DROP follows dependencies regardless
+of `blocks_alter`; clearing the flag cannot permit dangling column references.
 
 Constraint, trigger and index refs participate in the same graph. A constraint
 is owned by its table; an FK requires the exact referenced key and referenced
@@ -1052,16 +1056,45 @@ remain invalid. A shared index is independently owned and required by each user.
 DROP INDEX RESTRICT cannot disable enforcement. A supported CASCADE or replacement
 must authorize and atomically resolve the complete closure, including FKs.
 
-Generated-column dependency ordering also needs a nullable
+Generated-column dependency ordering uses nullable
 `dependent_column_path`. This identifies the column within a dependent table;
 it is NULL for object-level dependents. Same-table column edges become legal
 only with distinct, valid column targets. Build cycle nodes from full object
 and column identity; multiple generated columns in one table do not collapse
 into a single self edge. Their column dependency graph must be acyclic.
-A new field does not make the current object-only planner column-aware: extend
-validation, rename/type/drop planning and cross-SDK fixtures before qualification.
-The current dependency reference remains evidence only for its existing schema,
-table and simple-view scope.
+The Python planner validates column existence against authoritative schemas and
+returns separate object and column deletion sets. A generated-column edge cannot
+turn a column deletion into deletion of its owning table. Providers must authorize
+the complete closure and recheck it in the same transaction that publishes the
+change; a client-side graph read is advisory. Whole-object requires cycles and
+the backing-index mixed cycle above remain legal, while evaluation cycles
+involving a dependent column are invalid. Table-column references traverse
+column computations rather than unrelated whole-table lifetime dependencies;
+view-column references also traverse the whole view definition. Ownership cycle
+checks retain the complete lifetime graph.
+
+The durable metadata reference implements table/column rename, column type/drop,
+comments, generated-column chains and simple-view blockers. It derives generated
+dependencies by binding canonical row expressions and handles bounded generated
+column/view CASCADE atomically. Rename/type changes with dependents reject; SQL
+definitions are not rewritten. Supported generated expressions are virtual,
+top-level primitive scalar expressions with the default explicit context. This
+metadata reference does not convert stored rows or enforce physical generated
+values, constraints or indexes. Native 1.5 type conversion and canonical
+generated-column materialization remain separately limited. All seven SDK wire
+surfaces preserve these fields; unported providers reject dependency discovery.
+
+The added required field is part of the unpublished breaking protocol package.
+The top-level method inventory stays at 84, and its schema hash is unchanged:
+that hash does not cover the dependency records embedded in binary payloads.
+Neither the hash nor generated codecs establish provider semantic support.
+
+Canonical column-expression metadata requires its selected and currently
+available expression profile on CREATE, ADD and every table discovery path.
+For providers that offer dependency discovery, transactional metadata mutation
+also requires selected/current `vgi.transaction.ddl.v1`; omitting dependency
+read from the client offer cannot bypass that requirement. Existing providers
+without the dependency profile retain their legacy transaction behavior.
 
 ### Transaction guarantees and composite writes
 

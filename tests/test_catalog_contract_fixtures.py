@@ -11,6 +11,7 @@ import pyarrow as pa
 
 from vgi.catalog.capabilities import SCHEMA_OPTIONS_CREATE, SCHEMA_OPTIONS_READ, CatalogCapabilities
 from vgi.catalog.catalog_interface import MacroInfo, TableInfo, ViewInfo
+from vgi.catalog.dependencies import DependencySnapshot, ObjectDependency
 from vgi.catalog.indexes import IndexDefinition, IndexKey
 from vgi.catalog.layout import LayoutChangeMode, SortKey, SqlExpression, TableLayout, TableLayoutChange
 from vgi.catalog.macros import MacroOverload, MacroParameter
@@ -41,6 +42,31 @@ def test_index_vectors_preserve_keys_typed_options_and_association() -> None:
     primary = IndexDefinition.deserialize_from_bytes(fixtures["index_definition_primary"])
     assert primary.associated_constraint is not None
     assert primary.associated_constraint.owner_table == definition.table.name
+
+
+def test_dependency_vectors_preserve_alter_flags_and_column_identity() -> None:
+    fixtures = {name: base64.b64decode(value) for name, value in json.loads(render())["records"].items()}
+    membership = ObjectDependency.deserialize_from_bytes(fixtures["dependency_membership"])
+    assert membership.blocks_alter is False
+    assert membership.subject_column_paths is None and membership.dependent_column_path is None
+    literal = ObjectDependency.deserialize_from_bytes(fixtures["dependency_column_literal"])
+    nested = ObjectDependency.deserialize_from_bytes(fixtures["dependency_column_nested"])
+    assert literal.blocks_alter is True and literal.subject_column_paths == [["a.b"]]
+    assert nested.subject_column_paths == [["record", "a.b"]]
+    generated = ObjectDependency.deserialize_from_bytes(fixtures["dependency_generated"])
+    assert generated.dependent == generated.subject
+    assert generated.dependent_column_path == ["generated"]
+    assert generated.subject_column_paths == [["a.b"], ["record", "a.b"]]
+    chain = ObjectDependency.deserialize_from_bytes(fixtures["dependency_generated_chain"])
+    assert chain.dependent_column_path == ["second.generated"]
+    assert chain.subject_column_paths == [["generated"]]
+    snapshot = DependencySnapshot.deserialize_from_bytes(fixtures["dependency_column_snapshot"])
+    assert snapshot.dependencies == [
+        fixtures["dependency_column_literal"],
+        fixtures["dependency_generated"],
+        fixtures["dependency_generated_chain"],
+    ]
+    assert snapshot.serialize_to_bytes() == fixtures["dependency_column_snapshot"]
 
 
 def test_query_parameter_corpus_preserves_mapping_types_metadata_and_empty_row() -> None:
