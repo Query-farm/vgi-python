@@ -8,7 +8,6 @@ to `process()` either emits a batch via `out.emit()` or signals completion via `
 
 from __future__ import annotations
 
-import inspect
 import uuid
 from abc import abstractmethod
 from collections.abc import Mapping
@@ -195,6 +194,38 @@ class TableCardinality(ArrowSerializableDataclass):
 
     estimate: int | None
     max: int | None
+
+
+def _has_abstract_attribute(cls: type) -> bool:
+    """Whether any attribute of ``cls`` is still abstract.
+
+    ``ABCMeta`` only fills in ``__abstractmethods__`` after ``__init_subclass__``
+    returns, so a class under construction has to be inspected by hand.
+
+    Each attribute is read raw, from the ``__dict__`` of the first class in the MRO
+    that defines it, without invoking descriptors. A plain ``getattr()`` resolved
+    the inherited ``Function.storage`` descriptor, whose first access builds the
+    default SQLite store on disk. Because vgi defines subclasses of its own, that
+    made ``import vgi`` alone create a database under the user's state directory,
+    and fail outright where that directory is not writable (a container's non-root
+    user, say). The raw attribute answers the same question: classmethod,
+    staticmethod and property objects all expose the ``__isabstractmethod__`` of
+    what they wrap.
+
+    This used to call ``inspect.getattr_static`` for every name in ``dir(cls)``.
+    That walks the MRO once per name; one walk for all names gives the same answer
+    and is ~20x cheaper, which matters to a worker that defines thousands of
+    function classes at startup.
+    """
+    seen: set[str] = set()
+    for klass in cls.__mro__:
+        for name, value in vars(klass).items():
+            if name in seen:
+                continue
+            seen.add(name)
+            if getattr(value, "__isabstractmethod__", False):
+                return True
+    return False
 
 
 def _batch_to_scalar_dict(batch: pa.RecordBatch | None) -> dict[str, pa.Scalar[Any]]:
@@ -839,20 +870,8 @@ class TableFunctionBase[TArgs](vgi.function.Function):
                             cls.FunctionArguments = type_args[0]
                         break
 
-        # Skip validation for abstract base classes. Each attribute is read with
-        # getattr_static, which returns the raw class attribute without invoking
-        # descriptors: a plain getattr() here resolved the inherited
-        # `Function.storage` descriptor, whose first access builds the default
-        # SQLite store on disk. Because vgi defines subclasses of its own, that
-        # made `import vgi` alone create a database under the user's state
-        # directory, and fail outright where that directory is not writable (a
-        # container's non-root user, say). The raw attribute answers the same
-        # question: classmethod, staticmethod and property objects all expose
-        # the `__isabstractmethod__` of what they wrap.
-        is_abstract = any(
-            getattr(inspect.getattr_static(cls, name, None), "__isabstractmethod__", False) for name in dir(cls)
-        )
-        if is_abstract:
+        # Skip validation for abstract base classes.
+        if _has_abstract_attribute(cls):
             cls._setting_params = {}
             cls._secret_params = {}
             return
