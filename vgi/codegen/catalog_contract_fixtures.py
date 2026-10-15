@@ -20,7 +20,7 @@ from vgi_rpc import ArrowSerializableDataclass
 from vgi_rpc.rpc._types import rpc_methods
 
 from vgi.catalog.capabilities import SCHEMA_OPTIONS_CREATE, SCHEMA_OPTIONS_READ, CatalogCapabilities
-from vgi.catalog.catalog_interface import MacroInfo, MacroType, OnConflict, TableInfo, ViewInfo
+from vgi.catalog.catalog_interface import IndexInfo, MacroInfo, MacroType, OnConflict, TableInfo, ViewInfo
 from vgi.catalog.constraints import (
     ConstraintChange,
     ConstraintDefinition,
@@ -34,6 +34,7 @@ from vgi.catalog.constraints import (
     ForeignKeyDefinition,
 )
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot, ObjectDependency
+from vgi.catalog.indexes import IndexConstraintType, IndexDefinition, IndexKey
 from vgi.catalog.layout import (
     LayoutChangeMode,
     NullOrder,
@@ -60,7 +61,7 @@ from vgi.catalog.query import (
 from vgi.catalog.sql import ColumnExpressions, SqlStatement, with_column_expressions
 from vgi.column_path import RequiredFilterPaths
 from vgi.logical_types import tuple_field, variant_field
-from vgi.protocol import MacroCreateRequest, TableCreateRequest, VgiProtocol
+from vgi.protocol import IndexCreateRequest, MacroCreateRequest, TableCreateRequest, VgiProtocol
 from vgi.query_parameters import QueryParameters
 from vgi.typed_values import TypedValueBatch
 
@@ -288,6 +289,67 @@ def constraint_records() -> dict[str, ArrowSerializableDataclass]:
     }
 
 
+def index_records(values: TypedValueBatch) -> dict[str, ArrowSerializableDataclass]:
+    """Typed index keys and options preserve complete raw object identities."""
+    scope = ["one.two", "nested"]
+    table = CatalogObjectRef(kind="table", schema_path=scope, name='table."name')
+    column = IndexKey(column_path=["a.b"])
+    nested = IndexKey(column_path=["record", "a.b"])
+    expression = IndexKey(
+        expression=SqlExpression(
+            sql='"a.b" + 1',
+            profile="vgi.expression.duckdb.scalar.v1",
+            schema_path=scope,
+            evaluation_context=QueryEvaluationContext(),
+        )
+    )
+    definition = IndexDefinition(
+        table=table,
+        algorithm="fixture.typed-index.v1",
+        keys=[column.serialize_to_bytes(), expression.serialize_to_bytes()],
+        options=values,
+        constraint_type=IndexConstraintType.NONE,
+    )
+    state = OptionState(values=values, explicit_names=["optional"])
+    primary = replace(
+        definition,
+        keys=[column.serialize_to_bytes()],
+        constraint_type=IndexConstraintType.PRIMARY,
+        associated_constraint=CatalogObjectRef(
+            kind="constraint", schema_path=scope, name="fixture.primary", owner_table=table.name
+        ),
+    )
+    return {
+        "index_key_column": column,
+        "index_key_nested": nested,
+        "index_key_expression": expression,
+        "index_definition": definition,
+        "index_definition_primary": primary,
+        "index_info": IndexInfo(
+            name='index."name',
+            schema_path=scope,
+            definition=definition,
+            options=state,
+            comment="",
+            tags={"owner": "index.fixture"},
+        ),
+        "index_create": IndexCreateRequest(
+            attach_opaque_data=b"attach",
+            schema_path=scope,
+            name='index."name',
+            definition=definition,
+            on_conflict=OnConflict.REPLACE,
+            transaction_opaque_data=b"txn\0\xff",
+        ),
+        "index_create_cross_schema": IndexCreateRequest(
+            attach_opaque_data=b"attach",
+            schema_path=["indexes"],
+            name="elsewhere",
+            definition=definition,
+        ),
+    }
+
+
 def render() -> str:
     """Return deterministic JSON with populated and empty record encodings."""
     schema = pa.schema(
@@ -440,6 +502,7 @@ def render() -> str:
     )
     records.update(logical_and_macro_records())
     records.update(constraint_records())
+    records.update(index_records(values))
     encoded = {name: record.serialize_to_bytes() for name, record in records.items()}
     parameters = QueryParameters.from_batch(values.batch, mode="named")
     context = QueryEvaluationContext()

@@ -14,7 +14,7 @@
     "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
     "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the successor schema inventory; required canonical table constraint lists replace the legacy parent arrays and revision-checked catalog_table_constraints_apply joins the public method surface",
     "version_requirement": "Retaining the raw-path migration requires a major version and matching routing name. Complete the combined diff and migration guide before freeze.",
-    "planned_diff": "Remaining combined design: typed index definitions/options; ALTER/column dependency edges; write requirement/statement lifecycle records; trigger CRUD and durable mutation replay/status. SQL/context and public canonical constraints are implemented with bounded reference/native1.5 proof; broader provider qualification and pending methods remain outside the current protocol hash."
+    "planned_diff": "Remaining combined design: ALTER/column dependency edges; write requirement/statement lifecycle records; trigger CRUD and durable mutation replay/status. SQL/context, canonical constraints and typed indexes are implemented with bounded reference/native1.5 adapters; broader provider qualification and pending methods remain outside the current protocol hash."
   },
   "sources": {
     "native_revision": "1a0a059",
@@ -372,7 +372,7 @@
     "constraints": {
       "title": "Constraints and indexes",
       "disposition": "include",
-      "status": "canonical_public_constraints_verified_on_15_bounded_adapters",
+      "status": "canonical_constraints_and_typed_indexes_verified_on_15_bounded_adapters",
       "records": [
         "ConstraintDefinition",
         "ConstraintInfo",
@@ -380,6 +380,7 @@
         "ConstraintChange",
         "ConstraintsApplyRequest",
         "ForeignKeyDefinition",
+        "IndexKey",
         "IndexDefinition",
         "IndexInfo",
         "IndexCreateRequest",
@@ -392,16 +393,15 @@
         "catalog_index_get",
         "catalog_index_drop",
         "catalog_schema_contents_indexes",
-        "catalog_table_constraints_apply"
-      ],
-      "new_methods": [
+        "catalog_table_constraints_apply",
         "catalog_index_option_definitions"
       ],
+      "new_methods": [],
       "scope": [
         "Constraint addition and supported mutation/discovery; full native integration of existing index RPCs; typed index options if string values are insufficient",
         "Worker enforcement versus metadata-only declaration, existing-data validation, logical column identity, FK target paths, dependent objects, and atomic changes. Do not promise SQL constraint forms the selected engine itself rejects."
       ],
-      "capability_contract": "Implemented read: vgi.constraint.records.read.v1; DDL: vgi.constraint.create.v1, vgi.constraint.mutate.v1; write: vgi.constraint.enforce.v1. Create requires read and enforcement; mutate requires read and a nonempty definition revision. Additional FK match/action and typed index profiles remain unimplemented.",
+      "capability_contract": "Implemented read: vgi.constraint.records.read.v1, vgi.index.definition.read.v1; DDL: vgi.constraint.create.v1, vgi.constraint.mutate.v1, vgi.index.definition.create.v1, vgi.index.drop.v1; write: vgi.constraint.enforce.v1. DDL requires corresponding readback; UNIQUE requires enforcement, REPLACE also requires index drop, associated-index mutations require constraint mutation authority. Transaction DDL needs its existing profile. Additional FK match/action profiles remain unimplemented.",
       "gates": [
         "P1",
         "P2",
@@ -429,13 +429,26 @@
             "conformance/catalog-contracts.json"
           ],
           "limits": "Direct reference API only: top-level primitive columns, ENFORCED ALL_ROWS, immediate SIMPLE foreign keys with NO_ACTION/RESTRICT. No parent constraint-array replacement, public apply RPC, capability advertisement, index migration or native enforcement. Existing FK retargeting rejects. Seven-SDK codec and metadata evidence recorded in expression_constraint_checkpoint."
+        },
+        {
+          "status": "typed_indexes_public_reference_and_native15_bounded",
+          "sources": [
+            "vgi/catalog/indexes.py",
+            "vgi/protocol.py",
+            "vgi/worker.py",
+            "tests/catalog/index_protocol_reference.py",
+            "tests/catalog/test_index_public_contract.py",
+            "tests/catalog/test_index_public_lifecycle.py",
+            "tests/catalog/test_index_example_cross_sdk.py",
+            "conformance/catalog-contracts.json"
+          ],
+          "limits": "Native/reference regular and UNIQUE raw top-level keys with binary collation and explicit SQLITE.BTREE.V1. Rich typed options, expression/nested keys and PRIMARY association have wire coverage but no provider qualification. No constraint-backing closure, CASCADE, general ALTER dependency lifecycle or DuckDB2 runtime proof."
         }
       ],
       "implementation_work": [
-        "Replace five parallel constraint arrays with canonical create/read records across all SDKs.",
-        "Implement public apply RPC, attachment capabilities, production provider and native enforcement using the proven records.",
+        "Qualify enforcement/mutation in additional production SDK providers before advertising support.",
         "Extend beyond qualified top-level primitive immediate constraints only with new conformance evidence.",
-        "Port native index integration; keep unsupported SQL forms rejected at the inspected engine pin."
+        "Qualify richer index algorithms/options, expression/nested keys, backing-constraint closure and native2 behavior."
       ]
     },
     "macros": {
@@ -3067,7 +3080,7 @@
       "area": "constraints",
       "disposition": "existing_contract",
       "target": "IndexCreateRequest identity / IndexDefinition.table",
-      "status": "specified_reference_pending",
+      "status": "implemented_wire_bounded_native15_qualification",
       "evidence": [
         {
           "status": "specified_reference_pending",
@@ -3075,6 +3088,20 @@
             "docs/protocol/shared-catalog-values.md#canonical-constraints-and-index-definitions"
           ],
           "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        },
+        {
+          "status": "typed_indexes_public_reference_and_native15_bounded",
+          "sources": [
+            "vgi/catalog/indexes.py",
+            "vgi/protocol.py",
+            "vgi/worker.py",
+            "tests/catalog/index_protocol_reference.py",
+            "tests/catalog/test_index_public_contract.py",
+            "tests/catalog/test_index_public_lifecycle.py",
+            "tests/catalog/test_index_example_cross_sdk.py",
+            "conformance/catalog-contracts.json"
+          ],
+          "limits": "Native/reference regular and UNIQUE raw top-level keys with binary collation and explicit SQLITE.BTREE.V1. Rich typed options, expression/nested keys and PRIMARY association have wire coverage but no provider qualification. No constraint-backing closure, CASCADE, general ALTER dependency lifecycle or DuckDB2 runtime proof."
         }
       ]
     },
@@ -3089,7 +3116,7 @@
       "area": "constraints",
       "disposition": "existing_contract",
       "target": "IndexDefinition.algorithm",
-      "status": "specified_reference_pending",
+      "status": "implemented_wire_bounded_native15_qualification",
       "evidence": [
         {
           "status": "specified_reference_pending",
@@ -3097,6 +3124,20 @@
             "docs/protocol/shared-catalog-values.md#canonical-constraints-and-index-definitions"
           ],
           "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        },
+        {
+          "status": "typed_indexes_public_reference_and_native15_bounded",
+          "sources": [
+            "vgi/catalog/indexes.py",
+            "vgi/protocol.py",
+            "vgi/worker.py",
+            "tests/catalog/index_protocol_reference.py",
+            "tests/catalog/test_index_public_contract.py",
+            "tests/catalog/test_index_public_lifecycle.py",
+            "tests/catalog/test_index_example_cross_sdk.py",
+            "conformance/catalog-contracts.json"
+          ],
+          "limits": "Native/reference regular and UNIQUE raw top-level keys with binary collation and explicit SQLITE.BTREE.V1. Rich typed options, expression/nested keys and PRIMARY association have wire coverage but no provider qualification. No constraint-backing closure, CASCADE, general ALTER dependency lifecycle or DuckDB2 runtime proof."
         }
       ]
     },
@@ -3111,7 +3152,7 @@
       "area": "constraints",
       "disposition": "existing_contract",
       "target": "IndexDefinition.constraint_type/associated_constraint",
-      "status": "specified_reference_pending",
+      "status": "implemented_wire_bounded_native15_qualification",
       "evidence": [
         {
           "status": "specified_reference_pending",
@@ -3119,6 +3160,20 @@
             "docs/protocol/shared-catalog-values.md#canonical-constraints-and-index-definitions"
           ],
           "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        },
+        {
+          "status": "typed_indexes_public_reference_and_native15_bounded",
+          "sources": [
+            "vgi/catalog/indexes.py",
+            "vgi/protocol.py",
+            "vgi/worker.py",
+            "tests/catalog/index_protocol_reference.py",
+            "tests/catalog/test_index_public_contract.py",
+            "tests/catalog/test_index_public_lifecycle.py",
+            "tests/catalog/test_index_example_cross_sdk.py",
+            "conformance/catalog-contracts.json"
+          ],
+          "limits": "Native/reference regular and UNIQUE raw top-level keys with binary collation and explicit SQLITE.BTREE.V1. Rich typed options, expression/nested keys and PRIMARY association have wire coverage but no provider qualification. No constraint-backing closure, CASCADE, general ALTER dependency lifecycle or DuckDB2 runtime proof."
         }
       ]
     },
@@ -3133,7 +3188,7 @@
       "area": "constraints",
       "disposition": "include",
       "target": "IndexDefinition.options: TypedValueBatch / OptionDefinitions / OptionState",
-      "status": "specified_reference_pending",
+      "status": "implemented_wire_bounded_native15_qualification",
       "evidence": [
         {
           "status": "specified_reference_pending",
@@ -3141,6 +3196,20 @@
             "docs/protocol/shared-catalog-values.md#canonical-constraints-and-index-definitions"
           ],
           "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        },
+        {
+          "status": "typed_indexes_public_reference_and_native15_bounded",
+          "sources": [
+            "vgi/catalog/indexes.py",
+            "vgi/protocol.py",
+            "vgi/worker.py",
+            "tests/catalog/index_protocol_reference.py",
+            "tests/catalog/test_index_public_contract.py",
+            "tests/catalog/test_index_public_lifecycle.py",
+            "tests/catalog/test_index_example_cross_sdk.py",
+            "conformance/catalog-contracts.json"
+          ],
+          "limits": "Native/reference regular and UNIQUE raw top-level keys with binary collation and explicit SQLITE.BTREE.V1. Rich typed options, expression/nested keys and PRIMARY association have wire coverage but no provider qualification. No constraint-backing closure, CASCADE, general ALTER dependency lifecycle or DuckDB2 runtime proof."
         }
       ]
     },
@@ -3155,7 +3224,7 @@
       "area": "constraints",
       "disposition": "existing_contract",
       "target": "IndexDefinition.keys: ColumnPath or SqlExpression",
-      "status": "specified_reference_pending",
+      "status": "implemented_wire_bounded_native15_qualification",
       "evidence": [
         {
           "status": "specified_reference_pending",
@@ -3163,6 +3232,20 @@
             "docs/protocol/shared-catalog-values.md#canonical-constraints-and-index-definitions"
           ],
           "limits": "Design mapping reviewed against pinned source; new wire fields and semantic behavior remain unimplemented/unqualified."
+        },
+        {
+          "status": "typed_indexes_public_reference_and_native15_bounded",
+          "sources": [
+            "vgi/catalog/indexes.py",
+            "vgi/protocol.py",
+            "vgi/worker.py",
+            "tests/catalog/index_protocol_reference.py",
+            "tests/catalog/test_index_public_contract.py",
+            "tests/catalog/test_index_public_lifecycle.py",
+            "tests/catalog/test_index_example_cross_sdk.py",
+            "conformance/catalog-contracts.json"
+          ],
+          "limits": "Native/reference regular and UNIQUE raw top-level keys with binary collation and explicit SQLITE.BTREE.V1. Rich typed options, expression/nested keys and PRIMARY association have wire coverage but no provider qualification. No constraint-backing closure, CASCADE, general ALTER dependency lifecycle or DuckDB2 runtime proof."
         }
       ]
     },
@@ -6230,5 +6313,132 @@
       "change": "Honor scalar DICT_INT16_UTF8 record annotations so canonical enum fields retain actual Arrow dictionary encoding; uses the existing dictionary-aware RecordCodec writer.",
       "regression": "RecordDictionaryEncodingTest checks emitted IPC indices, dictionary values, nullable fields and ordinary strings; VGI tests require exact canonical-record IPC schemas."
     }
+  },
+  "index_public_checkpoint": {
+    "date": "2026-10-14",
+    "status": "verified_on_pinned_15_bounded_adapters",
+    "engine_15": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "public_method_count": 84,
+    "public_methods_added": [
+      "catalog_index_option_definitions"
+    ],
+    "protocol_hash": "8003abf6447266f5bc59cca76bef09df661f35fbbf0b360f400d92fdd4b12aee",
+    "public_shapes": {
+      "IndexKey": "Exactly one raw column_path or SqlExpression IPC.",
+      "IndexDefinition": "Required table reference, explicit algorithm, ordered key IPC records, TypedValueBatch options and NONE/UNIQUE/PRIMARY; optional authoritative constraint reference.",
+      "IndexInfo": "Required definition and OptionState IPC replace legacy table_name/index_type/expressions/string options.",
+      "IndexCreateRequest": "Required definition replaces legacy index fields; identity/conflict/transaction retained."
+    },
+    "test_evidence": [
+      {
+        "check": "Python catalog/client/reflection/codegen suite",
+        "result": "1643 passed; 8 opt-in worker checks skipped without VGI_METADATA_WORKERS.",
+        "log": "indexes-python.log"
+      },
+      {
+        "check": "Python final targeted regression and strict all-SDK generation",
+        "result": "74 passed; all generated targets match; manifest covers151 audit rows/20 areas with84 open reviews.",
+        "log": "indexes-python-second.log"
+      },
+      {
+        "check": "ruff and mypy",
+        "result": "Passed;223 production source files type checked.",
+        "log": "indexes-python.log"
+      },
+      {
+        "check": "Native1.5 shell/loadable extension and codec/guard tests",
+        "result": "26 cases and401 assertions passed.",
+        "log": "indexes-native-second.log"
+      },
+      {
+        "check": "Native typed-index SQL lifecycle",
+        "result": "7 scenarios passed: create/discovery/reconnect/drop, transaction rollback/commit, EXPLAIN has no effects, expression/options/default ART/nonbinary collation rejection.",
+        "log": "indexes-native-second.log"
+      },
+      {
+        "check": "Native canonical-constraint regression",
+        "result": "5 SQL lifecycle scenarios passed.",
+        "log": "indexes-native-second.log"
+      },
+      {
+        "check": "Go full suite and worker build",
+        "result": "Passed.",
+        "log": "indexes-go.log"
+      },
+      {
+        "check": "Rust full protocol/client/worker suites",
+        "result": "494 passed;4 documentation examples ignored.",
+        "log": "indexes-rust.log"
+      },
+      {
+        "check": "TypeScript both Arrow backends, types and package/browser builds",
+        "result": "185 passed/62 opt-in skips on each backend; all4 package entries import and browser build passes.",
+        "log": "indexes-typescript-second.log"
+      },
+      {
+        "check": "Java core and example-worker suites",
+        "result": "652 core and42 example tests passed;2 live storage cases skipped.",
+        "log": "indexes-java-second.log"
+      },
+      {
+        "check": "C# full suite",
+        "result": "651 passed,0 skips.",
+        "log": "indexes-csharp.log"
+      },
+      {
+        "check": "C++ full build and suite",
+        "result": "69 passed.",
+        "log": "indexes-cpp.log"
+      },
+      {
+        "check": "Live built SDK workers",
+        "result": "15 passed: typed discovery, unsupported create/replace/drop/options without state changes, canonical constraint discovery, conformance setup.",
+        "log": "indexes-cross-sdk.log"
+      },
+      {
+        "check": "Native prepared query lifecycle regression",
+        "result": "18 scenarios passed; no retained query resources.",
+        "log": "indexes-native-second.log"
+      },
+      {
+        "check": "Served browser client and HTTP endpoints",
+        "result": "75 passed; rebuilt browser bundle executes discovery against the Python server.",
+        "log": "indexes-browser.log"
+      },
+      {
+        "check": "Native HTTP single-attempt mutation transport and interrupts",
+        "result": "5 cases/145 assertions passed. Protected calls sent exactly one POST after500, codec-negotiation500 or lost reply; readonly calls retain retries and cached parameters remain unchanged.",
+        "log": "indexes-http-final.log"
+      },
+      {
+        "check": "Packages rebuilt with updated vendored browser client",
+        "result": "TypeScript package/export checks, Go build, C# build and C++ build passed.",
+        "log": "indexes-packages-final.log"
+      }
+    ],
+    "browser_client": {
+      "sha256": "b33f27a730c045d591dc01906a3bbdddbac174e917592fb297b9c526c54ec6cb",
+      "build": "bun run build:landing-client",
+      "vendored_into": [
+        "Python",
+        "Go",
+        "TypeScript",
+        "C#",
+        "C++"
+      ]
+    },
+    "implementation_limits": [
+      "Native/reference regular and UNIQUE raw top-level keys with binary collation and explicit SQLITE.BTREE.V1. Rich typed options, expression/nested keys and PRIMARY association have wire coverage but no provider qualification. No constraint-backing closure, CASCADE, general ALTER dependency lifecycle or DuckDB2 runtime proof.",
+      "Reference indexes are actual SQLite physical indexes; provider-row tests prove UNIQUE failures and atomic replacement. Public scan and catalog/DDL operations are exposed; public DML is not qualified.",
+      "Other mutable SDK providers explicitly refuse index DDL and option discovery. TypeScript example indexes use fixture.metadata and NONE; other SDK examples advertise none.",
+      "TypeScript generated binary record fields now match Uint8Array codec behavior; its handwritten catalogAttach client still omits negotiated capability fields, so it does not qualify provider negotiation.",
+      "Generic wire identity permits cross-schema index/table ownership; bounded native/reference providers require the same flat schema.",
+      "Protocol version remains an unpublished development placeholder; no engine pin, release gate, publication or broad DuckDB2 qualification changes.",
+      "Single-attempt subprocess/HTTP policy covers catalog_query_prepare, catalog_table_create, catalog_table_constraints_apply, catalog_index_create and catalog_index_drop. Explicit predispatch415 codec and401 auth handling remain bounded. This is not durable replay or a guarantee for all legacy mutation methods."
+    ],
+    "next": "Semantic ALTER dependencies, then write requirements/statement lifecycle before triggers and durable replay.",
+    "remote_workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+    "logs_directory": "logs/",
+    "review": "Subagent reviews covered generated binary-field types, refusal before effects, native cache invalidation and retry boundaries. Review found the HTTP automatic-retry gap; fixed it and proved request counts on a real loopback server."
   }
 }

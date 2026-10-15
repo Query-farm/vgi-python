@@ -58,6 +58,7 @@ from vgi.catalog.constraints import (
 )
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot, ObjectDependency
 from vgi.catalog.descriptors import Catalog, ForeignKeyDef, Index, Macro, Schema, Sql, Table, View
+from vgi.catalog.indexes import IndexDefinition, IndexKey
 from vgi.catalog.macros import MacroOverload, MacroParameter
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.query import (
@@ -75,6 +76,8 @@ from vgi.catalog.storage import CatalogStorage, CatalogStorageSqlite
 from vgi.write_results import WriteOperation, WriteResultMode, write_changes_batch, write_result_schema
 
 __all__ = [
+    "IndexDefinition",
+    "IndexKey",
     "ConstraintChange",
     "ConstraintDefinition",
     "ConstraintEnforcement",

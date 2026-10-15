@@ -103,6 +103,9 @@ from vgi.catalog.capabilities import (
     CONSTRAINT_ENFORCE,
     CONSTRAINT_MUTATE,
     CONSTRAINT_RECORDS_READ,
+    INDEX_DEFINITION_CREATE,
+    INDEX_DEFINITION_READ,
+    INDEX_DROP,
     MACRO_OVERLOADS_CREATE,
     MACRO_OVERLOADS_READ,
     SCHEMA_LIFECYCLE,
@@ -126,6 +129,7 @@ from vgi.catalog.capabilities import (
 from vgi.catalog.catalog_interface import (
     AttachOpaqueData,
     CatalogAttachResult,
+    IndexInfo,
     MacroInfo,
     OnConflict,
     SchemaInfo,
@@ -149,6 +153,7 @@ from vgi.catalog.constraints import (
     validate_constraint_schema,
 )
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot
+from vgi.catalog.indexes import IndexConstraintType, IndexDefinition
 from vgi.catalog.layout import LayoutChangeMode, LayoutCoverage, TableLayout, TableLayoutChange
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions
@@ -2876,6 +2881,33 @@ class Worker:
             self._require_catalog_capability(attach, MACRO_OVERLOADS_CREATE, "mutate macro overloads", transaction)
 
     @staticmethod
+    def _index_for_capabilities(info: IndexInfo, selected: CatalogCapabilities) -> IndexInfo:
+        """Never expose typed definitions without the selected read profile."""
+        info.__post_init__()
+        selected.require(INDEX_DEFINITION_READ, available=selected, operation="read typed index")
+        definition = info.definition
+        require_logical_values(definition.options, selected_profiles=selected.read)
+        for key in definition.key_definitions():
+            if key.expression is not None:
+                selected.require(key.expression.profile, available=selected, operation="read index expression")
+        if definition.associated_constraint is not None:
+            selected.require(CONSTRAINT_RECORDS_READ, available=selected, operation="read associated index")
+        return info
+
+    def _require_index_definition_profiles(self, attach: bytes, definition: IndexDefinition) -> None:
+        """Gate expressions and enforcement before provider index construction."""
+        definition.__post_init__()
+        selected = self._effective_catalog_capabilities(attach)
+        require_logical_values(definition.options, selected_profiles=selected.read)
+        for key in definition.key_definitions():
+            if key.expression is not None:
+                self._require_catalog_capability(attach, key.expression.profile, "create index expression")
+        if definition.constraint_type != IndexConstraintType.NONE:
+            self._require_catalog_capability(attach, CONSTRAINT_ENFORCE, "create enforcing index")
+        if definition.associated_constraint is not None:
+            self._require_catalog_capability(attach, CONSTRAINT_MUTATE, "associate index with constraint")
+
+    @staticmethod
     def _table_for_capabilities(info: TableInfo, selected: CatalogCapabilities) -> TableInfo:
         schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
         require_logical_profiles(schema, selected_profiles=selected.read)
@@ -5462,7 +5494,9 @@ class Worker:
                 table_macros=items(
                     [Worker._macro_for_capabilities(m, selected or CatalogCapabilities()) for m in c.table_macros]
                 ),
-                indexes=items(c.indexes),
+                indexes=items(
+                    [Worker._index_for_capabilities(i, selected or CatalogCapabilities()) for i in c.indexes]
+                ),
             )
             for c in sorted(infos, key=lambda c: len(c.schema.path))
         ]
@@ -6438,28 +6472,74 @@ class Worker:
             schema_path=schema_path,
             name=name,
         )
-        return IndexesResponse.from_optional(info)
+        return IndexesResponse.from_optional(
+            self._index_for_capabilities(info, self._effective_catalog_capabilities(attach_opaque_data))
+            if info is not None
+            else None
+        )
+
+    def catalog_index_option_definitions(
+        self,
+        attach_opaque_data: bytes,
+        table: bytes,
+        algorithm: str,
+        transaction_opaque_data: bytes | None = None,
+    ) -> OptionDefinitions:
+        """Read complete provider option definitions for one exact algorithm."""
+        self._require_catalog_capability(attach_opaque_data, INDEX_DEFINITION_READ, "read index options")
+        ref = CatalogObjectRef.deserialize_from_bytes(table)
+        if ref.kind != "table" or not algorithm or "\0" in algorithm:
+            raise ValueError("index options require a table reference and nonempty algorithm")
+        result = self._get_catalog().index_option_definitions(
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
+            table=ref,
+            algorithm=algorithm,
+        )
+        result.__post_init__()
+        require_logical_profiles(
+            result.schema, selected_profiles=self._effective_catalog_capabilities(attach_opaque_data).read
+        )
+        return result
 
     def catalog_index_create(self, request: IndexCreateRequest) -> None:
-        """Create a new index."""
+        """Require the negotiated contract before an atomic provider mutation."""
+        request.__post_init__()
         self._enrich_catalog_span(vgi_schema_path=request.schema_path, vgi_index_name=request.name)
-        cat = self._get_catalog()
-        cat.index_create(
-            attach_opaque_data=self._unwrap_attach(request.attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(
-                request.transaction_opaque_data, request.attach_opaque_data
+        self._require_catalog_capability(
+            request.attach_opaque_data, INDEX_DEFINITION_CREATE, "create typed index", request.transaction_opaque_data
+        )
+        self._require_index_definition_profiles(request.attach_opaque_data, request.definition)
+        if request.on_conflict == OnConflict.REPLACE:
+            self._require_catalog_capability(
+                request.attach_opaque_data, INDEX_DROP, "replace typed index", request.transaction_opaque_data
             )
-            if request.transaction_opaque_data
-            else None,
+            self._check_index_drop_association(
+                request.attach_opaque_data, request.transaction_opaque_data, request.schema_path, request.name
+            )
+        self._get_catalog().index_create(
+            attach_opaque_data=self._unwrap_attach(request.attach_opaque_data),
+            transaction_opaque_data=self._unwrap_tx_opt(request.transaction_opaque_data, request.attach_opaque_data),
             schema_path=request.schema_path,
             name=request.name,
-            table_name=request.table_name,
-            index_type=request.index_type,
-            constraint_type=request.constraint_type,
-            expressions=list(request.expressions),
+            definition=request.definition,
             on_conflict=request.on_conflict,
-            options=dict(request.options) if request.options else None,
         )
+
+    def _check_index_drop_association(
+        self, attach: bytes, transaction: bytes | None, path: list[str], name: str
+    ) -> None:
+        """Gate associated-index mutations; providers authorize their atomic closure."""
+        info = self._get_catalog().index_get(
+            attach_opaque_data=self._unwrap_attach(attach),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction, attach),
+            schema_path=path,
+            name=name,
+        )
+        if info is not None:
+            self._index_for_capabilities(info, self._effective_catalog_capabilities(attach))
+            if info.definition.associated_constraint is not None:
+                self._require_catalog_capability(attach, CONSTRAINT_MUTATE, "mutate associated index", transaction)
 
     def catalog_index_drop(
         self,
@@ -6472,6 +6552,8 @@ class Worker:
     ) -> None:
         """Drop an index."""
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_index_name=name)
+        self._require_catalog_capability(attach_opaque_data, INDEX_DROP, "drop typed index", transaction_opaque_data)
+        self._check_index_drop_association(attach_opaque_data, transaction_opaque_data, schema_path, name)
         cat = self._get_catalog()
         cat.index_drop(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
@@ -6497,7 +6579,8 @@ class Worker:
             path=path,
             type=SchemaObjectType.INDEX,
         )
-        return IndexesResponse.from_infos(list(infos))
+        selected = self._effective_catalog_capabilities(attach_opaque_data)
+        return IndexesResponse.from_infos([self._index_for_capabilities(info, selected) for info in infos])
 
     # ---------------------------------------------------------------------------
     # Lifecycle

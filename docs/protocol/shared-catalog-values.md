@@ -989,6 +989,28 @@ existing `OptionDefinitions` representation. `IndexInfo` returns effective
 options through `OptionState` and the complete resolved definition. Unknown
 algorithms, options, types or expressions reject before index construction.
 
+The implemented carrier uses `IndexKey.column_path: list<string>?` and
+`IndexKey.expression: binary?`, exactly one present. `IndexDefinition.table`,
+`options`, and optional `associated_constraint` are nested IPC records;
+`keys: list<binary>` preserves key order. Enum wire values are `NONE`, `UNIQUE`,
+and `PRIMARY`. `IndexInfo.definition` and `IndexInfo.options` are required binary
+records; the effective values in `OptionState` must equal the definition options,
+including Arrow metadata. `IndexCreateRequest` keeps index identity, conflict
+mode and attachment/transaction tokens and replaces the legacy expression and
+string-option fields with the required definition. Index identity and target
+table identity may have different schema paths in the general protocol.
+
+`catalog_index_option_definitions(attach_opaque_data, table, algorithm,
+transaction_opaque_data?)` accepts a table-reference IPC record and returns the
+existing `OptionDefinitions` record. Algorithm identity is explicit: the bounded
+SQLite reference uses `SQLITE.BTREE.V1`, never `ART`. This spelling survives the
+pinned DuckDB parser's uppercasing of USING identifiers. The reference creates
+actual regular/UNIQUE SQLite indexes and declares an empty option schema. The
+native 1.5 adapter supports raw top-level keys in one flat schema with binary
+collation; expressions, nested keys, nonempty options, PRIMARY/constraint
+associations and CASCADE reject before effects. Richer typed values and keys
+have codec coverage without implying provider support.
+
 Profiles use existing `CatalogCapabilities` categories: read
 `vgi.constraint.records.read.v1` and `vgi.index.definition.read.v1`; DDL
 `vgi.constraint.create.v1`, `vgi.constraint.mutate.v1`,
@@ -998,14 +1020,19 @@ Define `vgi.constraint.fk.match_full.v1` and action-specific
 `vgi.constraint.fk.{cascade,set_null,set_default}.v1` as additional write
 profiles. All accepted requests must satisfy the profile; a provider may reject
 unsupported constraint kinds, mutation forms or algorithms before effects.
-These names are proposed and currently absent from the negotiated registry.
+Constraint read/create/mutate/enforce and index read/create/drop profiles are
+implemented. Index create/drop require index readback; REPLACE additionally
+requires drop, UNIQUE requires constraint enforcement, and associated-index
+mutations require constraint mutation authority. Transactional DDL requires its
+existing transaction profile. Additional FK match/action profiles remain pending.
 
 The inspected 2.0 pin supports CREATE-time constraint forms but accepts only
 UNIQUE/PRIMARY through general ADD CONSTRAINT; SET/DROP NOT NULL have separate
 paths. DROP CONSTRAINT is rejected by its transformer. General provider mutation
 support is still included in this protocol design. Native adapters reject forms
 the engine cannot express rather than simulate unrelated SQL. Existing native
-index RPC codecs are not evidence that native index creation is integrated.
+index codecs alone are not evidence of physical construction; the bounded
+reference and native SQL lifecycle checks provide that separate evidence.
 
 ### Dependencies for semantic ALTER
 

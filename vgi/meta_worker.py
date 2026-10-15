@@ -149,6 +149,7 @@ _ATTACH_ID_METHODS = [
     "catalog_macro_get",
     "catalog_macro_drop",
     "catalog_index_get",
+    "catalog_index_option_definitions",
     "catalog_index_drop",
     "catalog_schema_contents_indexes",
 ]

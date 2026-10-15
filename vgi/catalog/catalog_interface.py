@@ -45,6 +45,7 @@ from vgi.catalog.capabilities import (
 )
 from vgi.catalog.constraints import ConstraintInfo, ConstraintsApplyRequest, ConstraintSnapshot, constraint_infos
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot
+from vgi.catalog.indexes import IndexConstraintType, IndexDefinition
 from vgi.catalog.layout import TableLayout, TableLayoutChange
 from vgi.catalog.macros import MAX_MACRO_BYTES, MacroOverload, validate_macro_overloads
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
@@ -726,40 +727,24 @@ class MacroType(Enum):
     TABLE = "table"
 
 
-class IndexConstraintType(Enum):
-    """The constraint type of an index.
-
-    Attributes:
-        NONE: Regular index (no constraint enforcement).
-        UNIQUE: Index enforces a UNIQUE constraint.
-        PRIMARY: Index enforces a PRIMARY KEY constraint.
-    """
-
-    NONE = "none"
-    UNIQUE = "unique"
-    PRIMARY = "primary"
-
-
 @dataclass(frozen=True)
 class IndexInfo(CatalogSchemaObject, ArrowSerializableDataclass):
-    """Information about an index in a schema.
+    """Resolved typed index definition and effective options with explicit names."""
 
-    Attributes:
-        table_name: The name of the table this index is on.
-        index_type: The index type string (e.g., "ART", or empty for default).
-        constraint_type: The constraint enforcement type (NONE, UNIQUE, PRIMARY).
-        expressions: SQL expression strings defining the indexed expressions.
-            For column-based indexes, these are column references (e.g., "col_a").
-            For expression indexes, these are arbitrary SQL (e.g., "lower(col_a)").
-        options: Key-value index options (WITH clause).
+    definition: Annotated[IndexDefinition, ArrowType(pa.binary())]
+    options: Annotated[OptionState, ArrowType(pa.binary())]
 
-    """
+    def __post_init__(self) -> None:
+        """Require complete definitions and consistent effective option values."""
+        self.definition.__post_init__()
+        self.options.__post_init__()
+        if not self.definition.options.batch.equals(self.options.values.batch, check_metadata=True):
+            raise ValueError("index definition and readback options disagree")
 
-    table_name: str
-    index_type: str = ""
-    constraint_type: IndexConstraintType = IndexConstraintType.NONE
-    expressions: list[str] = field(default_factory=list)
-    options: dict[str, str] = field(default_factory=dict)
+    def serialize_to_bytes(self) -> bytes:
+        """Revalidate nested mutable collections before publication."""
+        self.__post_init__()
+        return super().serialize_to_bytes()
 
 
 class SchemaObjectType(Enum):
@@ -2915,6 +2900,17 @@ class CatalogInterface(ABC):
         """
         return None
 
+    def index_option_definitions(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        table: CatalogObjectRef,
+        algorithm: str,
+    ) -> OptionDefinitions:
+        """Return supported typed options for the exact table and algorithm."""
+        raise NotImplementedError("Index option definitions not implemented.")
+
     def index_create(
         self,
         *,
@@ -2922,14 +2918,10 @@ class CatalogInterface(ABC):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: SchemaPath,
         name: str,
-        table_name: str,
-        index_type: str,
-        constraint_type: IndexConstraintType,
-        expressions: list[str],
+        definition: IndexDefinition,
         on_conflict: OnConflict,
-        options: dict[str, str] | None = None,
     ) -> None:
-        """Create a new index on the specified table."""
+        """Bind and atomically construct a physical index before publishing it."""
         raise NotImplementedError("Index create not implemented.")
 
     def index_drop(

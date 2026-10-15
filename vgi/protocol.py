@@ -55,7 +55,6 @@ from vgi.catalog.catalog_interface import (
     CatalogInfo,
     CopyFromFormatInfo,
     FunctionInfo,
-    IndexConstraintType,
     IndexInfo,
     MacroInfo,
     MacroType,
@@ -68,6 +67,7 @@ from vgi.catalog.catalog_interface import (
 )
 from vgi.catalog.constraints import ConstraintsApplyRequest, ConstraintSnapshot, constraint_definitions
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot
+from vgi.catalog.indexes import IndexDefinition
 from vgi.catalog.layout import TableLayout
 from vgi.catalog.macros import MAX_MACRO_BYTES, MacroOverload, validate_macro_overloads
 from vgi.catalog.options import OptionDefinitions
@@ -1161,36 +1161,26 @@ class CatalogContentsResponse(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class IndexCreateRequest(ArrowSerializableDataclass):
-    """Request for catalog_index_create.
-
-    Attributes:
-        attach_opaque_data: Opaque per-attach catalog session token (bytes) echoed
-            back so the worker can scope catalog state to the attachment.
-        schema_path: Raw identifier components of the schema containing the object.
-        name: Name of the target object/function.
-        table_name: The name of the table this index is on.
-        index_type: The index type string (e.g., "ART", or empty for default).
-        constraint_type: The constraint enforcement type (NONE, UNIQUE, PRIMARY).
-        expressions: SQL expression strings defining the indexed expressions. For
-            column-based indexes these are column references (e.g., "col_a"); for
-            expression indexes, arbitrary SQL (e.g., "lower(col_a)").
-        on_conflict: Behavior when the object already exists ([`OnConflict`][]:
-            ERROR/IGNORE/REPLACE).
-        options: Key-value index options (WITH clause).
-        transaction_opaque_data: Opaque DuckDB transaction handle (bytes); ``None``
-            when not inside a transaction.
-    """
+    """Create a typed index under a negotiated provider algorithm profile."""
 
     attach_opaque_data: bytes
     schema_path: SchemaPath
     name: str
-    table_name: str
-    index_type: str = ""
-    constraint_type: IndexConstraintType = IndexConstraintType.NONE
-    expressions: list[str] = field(default_factory=list)
+    definition: Annotated[IndexDefinition, ArrowType(pa.binary())]
     on_conflict: OnConflict = OnConflict.ERROR
-    options: dict[str, str] = field(default_factory=dict)
     transaction_opaque_data: bytes | None = None
+
+    def __post_init__(self) -> None:
+        """Require the complete definition and a consistent owning schema."""
+        self.definition.__post_init__()
+        OnConflict(self.on_conflict)
+        if not self.name or "\0" in self.name:
+            raise ValueError("index name must be a nonempty raw identifier")
+
+    def serialize_to_bytes(self) -> bytes:
+        """Revalidate mutable nested records before dispatch."""
+        self.__post_init__()
+        return super().serialize_to_bytes()
 
 
 # ---------------------------------------------------------------------------
@@ -4078,6 +4068,16 @@ class VgiProtocol(Protocol):
         transaction_opaque_data: bytes | None = None,
     ) -> IndexesResponse:
         """Get information about an index. Returns 0 or 1 items."""
+        ...
+
+    def catalog_index_option_definitions(
+        self,
+        attach_opaque_data: bytes,
+        table: bytes,
+        algorithm: str,
+        transaction_opaque_data: bytes | None = None,
+    ) -> OptionDefinitions:
+        """Discover typed option definitions for an exact table and algorithm."""
         ...
 
     def catalog_index_create(self, request: IndexCreateRequest) -> None:

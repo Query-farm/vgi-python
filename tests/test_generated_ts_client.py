@@ -79,6 +79,17 @@ def test_nullable_list_elements_keep_array_precedence() -> None:
     assert "argument_names?: (string | null)[] | null;" in buf.getvalue()
 
 
+def test_binary_records_match_the_nonrecursive_codec() -> None:
+    """Nested IPC stays bytes until a caller explicitly decodes its record."""
+    buf = io.StringIO()
+    emit(buf)
+    generated = buf.getvalue()
+    assert "definition: /** @ipc-record IndexDefinition */ Uint8Array;" in generated
+    assert "options: /** @ipc-record OptionState */ Uint8Array;" in generated
+    assert "expression?: /** @ipc-record SqlExpression */ Uint8Array | null;" in generated
+    assert "export interface IndexDefinition {" in generated
+
+
 def test_checked_in_client_matches_generator() -> None:
     """Checked-in vgi-client.ts matches what the generator would emit right now."""
     path = _vgi_ts_client_path()

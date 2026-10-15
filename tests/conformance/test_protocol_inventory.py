@@ -117,6 +117,9 @@ _RPC_ALLOWLIST: dict[str, tuple[str, ...] | NotExposed] = {
     "catalog_create": ("catalog_create",),
     "catalog_drop": ("catalog_drop",),
     "catalog_version": ("catalog_version",),
+    "catalog_dependencies": ("catalog_dependencies",),
+    "catalog_query_prepare": ("catalog_query_prepare",),
+    "catalog_query_release": ("catalog_query_release",),
     "catalog_transaction_begin": ("catalog_transaction_begin",),
     "catalog_transaction_commit": ("catalog_transaction_commit",),
     "catalog_transaction_rollback": ("catalog_transaction_rollback",),
@@ -127,25 +130,21 @@ _RPC_ALLOWLIST: dict[str, tuple[str, ...] | NotExposed] = {
     "catalog_schema_create": ("schema_create",),
     "catalog_schema_option_definitions": ("schema_option_definitions",),
     "catalog_schema_alter_options": ("schema_alter_options",),
+    "catalog_schema_alter_metadata": ("schema_alter_metadata",),
     "catalog_schema_drop": ("schema_drop",),
     "catalog_schema_contents_tables": ("schema_contents",),
     "catalog_schema_contents_views": ("schema_contents",),
     "catalog_schema_contents_functions": ("schema_contents",),
     "catalog_schema_contents_macros": ("schema_contents",),
     "catalog_copy_from_formats": ("copy_formats",),
-    "catalog_schema_contents_indexes": NotExposed(
-        reason=(
-            "DuckDB-only metadata path. Indexes are catalog-planner territory; "
-            "non-DuckDB clients don't surface index listings. Covered by C++ "
-            "integration tests."
-        )
-    ),
+    "catalog_schema_contents_indexes": ("schema_contents",),
     # ---------- Catalog tables ----------
     "catalog_table_option_definitions": ("table_option_definitions",),
     "catalog_table_alter_options": ("table_alter_options",),
     "catalog_table_alter_layout": ("table_alter_layout",),
     "catalog_table_get": ("table_get",),
     "catalog_table_create": ("table_create",),
+    "catalog_table_constraints_apply": ("table_constraints_apply",),
     "catalog_table_drop": ("table_drop",),
     "catalog_table_scan_function_get": ("table_scan_function_get",),
     "catalog_table_scan_branches_get": NotExposed(
@@ -200,20 +199,16 @@ _RPC_ALLOWLIST: dict[str, tuple[str, ...] | NotExposed] = {
     "catalog_view_drop": ("view_drop",),
     "catalog_view_rename": ("view_rename",),
     "catalog_view_comment_set": ("view_comment_set",),
+    "catalog_view_column_comment_set": ("view_column_comment_set",),
     # ---------- Catalog macros ----------
     "catalog_macro_get": ("macro_get",),
     "catalog_macro_create": ("macro_create",),
     "catalog_macro_drop": ("macro_drop",),
     # ---------- Catalog indexes ----------
-    "catalog_index_get": NotExposed(
-        reason=("DuckDB-only metadata path. Indexes are catalog-planner territory. Covered by C++ integration tests.")
-    ),
-    "catalog_index_create": NotExposed(
-        reason=("DuckDB-only metadata path. Indexes are catalog-planner territory. Covered by C++ integration tests.")
-    ),
-    "catalog_index_drop": NotExposed(
-        reason=("DuckDB-only metadata path. Indexes are catalog-planner territory. Covered by C++ integration tests.")
-    ),
+    "catalog_index_get": ("index_get",),
+    "catalog_index_option_definitions": ("index_option_definitions",),
+    "catalog_index_create": ("index_create",),
+    "catalog_index_drop": ("index_drop",),
 }
 
 

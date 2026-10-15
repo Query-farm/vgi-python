@@ -76,7 +76,8 @@ from vgi.catalog import (
 )
 from vgi.catalog.catalog_interface import deserialize_column_statistics
 from vgi.catalog.constraints import ConstraintsApplyRequest, ConstraintSnapshot
-from vgi.catalog.dependencies import DependencySnapshot
+from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot
+from vgi.catalog.indexes import IndexDefinition
 from vgi.catalog.layout import TableLayout, TableLayoutChange
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions
@@ -85,6 +86,7 @@ from vgi.protocol import (
     CatalogAttachRequest,
     CatalogCreateRequest,
     ClientCapabilities,
+    IndexCreateRequest,
     MacroCreateRequest,
     SchemaContents,
     TableCreateRequest,
@@ -1136,6 +1138,87 @@ class CatalogClientMixin:
         if result.table != request.table:
             raise ValueError("constraint mutation returned a different table")
         return result
+
+    def index_get(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        schema_path: list[str],
+        name: str,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+    ) -> IndexInfo | None:
+        """Read one resolved typed index definition."""
+        with self._catalog_connect() as proxy:
+            infos = proxy.catalog_index_get(
+                attach_opaque_data=attach_opaque_data,
+                schema_path=schema_path,
+                name=name,
+                transaction_opaque_data=transaction_opaque_data,
+            ).to_infos()
+        if len(infos) > 1:
+            raise ValueError("index lookup returned more than one definition")
+        return infos[0] if infos else None
+
+    def index_option_definitions(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        table: CatalogObjectRef,
+        algorithm: str,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+    ) -> OptionDefinitions:
+        """Discover typed options for an exact provider algorithm and table."""
+        with self._catalog_connect() as proxy:
+            return proxy.catalog_index_option_definitions(
+                attach_opaque_data=attach_opaque_data,
+                table=table.serialize_to_bytes(),
+                algorithm=algorithm,
+                transaction_opaque_data=transaction_opaque_data,
+            )
+
+    def index_create(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        schema_path: list[str],
+        name: str,
+        definition: IndexDefinition,
+        on_conflict: OnConflict = OnConflict.ERROR,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+    ) -> None:
+        """Create one complete typed index without retrying an ambiguous mutation."""
+        with self._catalog_connect() as proxy:
+            proxy.catalog_index_create(
+                request=IndexCreateRequest(
+                    attach_opaque_data=attach_opaque_data,
+                    schema_path=schema_path,
+                    name=name,
+                    definition=definition,
+                    on_conflict=on_conflict,
+                    transaction_opaque_data=transaction_opaque_data,
+                )
+            )
+
+    def index_drop(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        schema_path: list[str],
+        name: str,
+        ignore_not_found: bool = False,
+        cascade: bool = False,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+    ) -> None:
+        """Drop an index under the provider's atomic dependency-closure checks."""
+        with self._catalog_connect() as proxy:
+            proxy.catalog_index_drop(
+                attach_opaque_data=attach_opaque_data,
+                schema_path=schema_path,
+                name=name,
+                ignore_not_found=ignore_not_found,
+                cascade=cascade,
+                transaction_opaque_data=transaction_opaque_data,
+            )
 
     def table_option_definitions(
         self,

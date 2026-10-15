@@ -11,6 +11,7 @@ import pyarrow as pa
 
 from vgi.catalog.capabilities import SCHEMA_OPTIONS_CREATE, SCHEMA_OPTIONS_READ, CatalogCapabilities
 from vgi.catalog.catalog_interface import MacroInfo, TableInfo, ViewInfo
+from vgi.catalog.indexes import IndexDefinition, IndexKey
 from vgi.catalog.layout import LayoutChangeMode, SortKey, SqlExpression, TableLayout, TableLayoutChange
 from vgi.catalog.macros import MacroOverload, MacroParameter
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
@@ -28,6 +29,18 @@ def test_canonical_constraint_vectors_preserve_every_field() -> None:
         decoded = type(source).deserialize_from_bytes(fixtures[name])
         assert decoded == source
         assert decoded.serialize_to_bytes() == fixtures[name]
+
+
+def test_index_vectors_preserve_keys_typed_options_and_association() -> None:
+    fixtures = {name: base64.b64decode(value) for name, value in json.loads(render())["records"].items()}
+    definition = IndexDefinition.deserialize_from_bytes(fixtures["index_definition"])
+    assert definition.keys == [fixtures["index_key_column"], fixtures["index_key_expression"]]
+    assert definition.options.serialize_to_bytes() == fixtures["values"]
+    assert IndexKey.deserialize_from_bytes(fixtures["index_key_column"]).column_path == ["a.b"]
+    assert IndexKey.deserialize_from_bytes(fixtures["index_key_nested"]).column_path == ["record", "a.b"]
+    primary = IndexDefinition.deserialize_from_bytes(fixtures["index_definition_primary"])
+    assert primary.associated_constraint is not None
+    assert primary.associated_constraint.owner_table == definition.table.name
 
 
 def test_query_parameter_corpus_preserves_mapping_types_metadata_and_empty_row() -> None:

@@ -48,6 +48,7 @@ from vgi.catalog.constraints import (
     ForeignKeyDefinition,
 )
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot, ObjectDependency
+from vgi.catalog.indexes import IndexDefinition, IndexKey
 from vgi.catalog.layout import SortKey, SqlExpression, TableLayout, TableLayoutChange
 from vgi.catalog.macros import MacroOverload, MacroParameter
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
@@ -138,6 +139,8 @@ SHARED_CONTRACT_TYPES: tuple[type, ...] = (
     ConstraintChange,
     ConstraintSnapshot,
     ConstraintsApplyRequest,
+    IndexKey,
+    IndexDefinition,
     SortKey,
     TableLayout,
     TableLayoutChange,
