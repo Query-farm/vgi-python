@@ -14,7 +14,7 @@
     "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
     "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the successor schema inventory; required canonical table constraint lists replace the legacy parent arrays and revision-checked catalog_table_constraints_apply joins the public method surface; typed index definitions/options replace legacy index fields and add catalog_index_option_definitions; required semantic ALTER flags and raw subject/dependent column paths extend embedded dependency records",
     "version_requirement": "Retaining the raw-path migration requires a major version and matching routing name. Complete the combined diff and migration guide before freeze.",
-    "planned_diff": "Remaining combined design: minimal trigger metadata/discovery, one execution owner and stale-bind requirements under review after an existing-write-path gap audit. Reuse current transaction and streamed-write lifecycles. Durable mutation replay/status, savepoints/statement rollback and general statement tickets/receipts are excluded by the 2026-10-15 user scope decision. SQL/context, canonical constraints, typed indexes and semantic ALTER dependencies retain their bounded reference/native1.5 evidence; no release freeze is implied."
+    "planned_diff": "Remaining combined design: minimal persistent trigger metadata/discovery and exclusive execution ownership. The 2026-10-15 source audit supports existing transactions, engine scheduling and streamed-write lifecycles; native hooks, OLD/NEW adaptation and focused error-handling fixes remain. Qualify provider snapshots/current definitions before selecting additional fields. Durable mutation replay/status, savepoints/statement rollback and general statement tickets/receipts are excluded. SQL/context, canonical constraints, typed indexes and semantic ALTER dependencies retain their bounded reference/native1.5 evidence; no release freeze is implied."
   },
   "sources": {
     "native_revision": "1a0a059",
@@ -579,7 +579,7 @@
     "transactions": {
       "title": "Transactions and write execution",
       "disposition": "existing_contract",
-      "status": "existing_lifecycle_gap_audit_pending",
+      "status": "source_audited_existing_lifecycle_fixes_and_qualification_pending",
       "records": [
         "CatalogCapabilities"
       ],
@@ -608,10 +608,23 @@
             "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership"
           ],
           "limits": "This scope correction adds no runtime guarantee. Existing transaction, mutation no-retry and reference checkpoint evidence remains valid within its tested limits. Unsupported composite writes remain disabled until existing paths prove atomic completion and full rollback on failure."
+        },
+        {
+          "date": "2026-10-15",
+          "status": "existing_write_path_source_audit_complete_runtime_pending",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#transaction-guarantees-and-composite-writes",
+            "native:src/storage/vgi_transaction.cpp",
+            "native:src/storage/vgi_physical_write.cpp",
+            "native:src/vgi_function_connection.cpp",
+            "native:src/include/vgi_unary_retry.hpp"
+          ],
+          "limits": "Source-only findings and exact engine/worker anchors are in write_path_source_audit_2026_10_15. EC2 unavailable; no new runtime qualification, wire change or gate closure. Raw-drain and signed-HTTP token findings require reproduction."
         }
       ],
       "implementation_work": [
-        "Map CTAS, expanded ALTER, multi-DML CTEs and trigger execution onto the current transaction and init/exchange/finalize paths; identify concrete missing behavior before proposing fields or RPCs.",
+        "First fix existing transaction single-attempt dispatch and exception-safe local cleanup; reproduce raw pre-FINALIZE drain and signed-HTTP fixture token candidates, and qualify selected-mode final output.",
+        "Qualify existing transaction propagation for CTAS, expanded ALTER and multi-DML CTEs; keep multi-DML opt-in disabled until supported writes and failure behavior are proved.",
         "Prove admitted writes and trigger effects commit together and failed writes require full transaction rollback; retain one execution owner and reject stale or incapable writers before effects.",
         "Retain no automatic retry after ambiguous mutation dispatch and audit uncovered legacy mutation paths. Do not add durable outcomes/status, savepoints or a generic statement ticket/receipt framework."
       ]
@@ -619,7 +632,7 @@
     "triggers": {
       "title": "Triggers \u2014 contract specified; reference pending",
       "disposition": "include",
-      "status": "minimal_contract_and_existing_execution_gap_review_pending",
+      "status": "source_audited_minimal_contract_and_native_integration_pending",
       "records": [
         "CatalogObjectRef",
         "ObjectDependency",
@@ -656,10 +669,23 @@
             "docs/protocol/shared-catalog-values.md#dependencies-for-semantic-alter"
           ],
           "limits": "Pinned grammar still establishes singular events and one-component UPDATE OF. Minimal persistent metadata, execution ownership and stale-bind protection remain necessary review subjects; prior generic statement ticket/receipt proposals are superseded. No trigger execution is qualified."
+        },
+        {
+          "date": "2026-10-15",
+          "status": "engine_scheduling_and_existing_changes_carrier_source_audited",
+          "sources": [
+            "docs/protocol/shared-catalog-values.md#trigger-definitions-and-statement-ownership",
+            "native:src/include/storage/vgi_table_entry.hpp",
+            "native:src/storage/vgi_physical_write.cpp",
+            "vgi/write_results.py",
+            "vgi/_test_fixtures/writable/generic.py"
+          ],
+          "limits": "Start with ENGINE execution and provider-persisted definitions. Engine ScanTriggers currently conflates discovery/executable selection; backend-owned native discovery needs filtering. Statement expansion needs rows; UPDATE OLD capture needs existing changes adaptation and duplicate-target handling. No native2 execution proof."
         }
       ],
       "implementation_work": [
-        "Audit current write binding, init/exchange/finalize and OLD/NEW results against pinned trigger hooks before finalizing candidate metadata or CRUD records.",
+        "Implement provider-persisted trigger CRUD/readback and native Create/Scan/Get/DropTrigger hooks for ENGINE execution, preserving case-insensitive alphabetical order; qualify BACKEND discovery/execution separately.",
+        "Adapt existing rows/changes to pinned statement-trigger RETURNING and UPDATE NEW-then-OLD output; honor duplicate-target policy and mode-aware finalization without a new OLD/NEW wire record.",
         "Determine the minimum table-owned trigger metadata, dependency and current-definition checks needed to select exactly one execution owner and reject stale/incapable writes before effects.",
         "Qualify supported BEFORE/base/AFTER ordering, row/statement firing, transition data and full transaction rollback using the existing write path; leave unsupported forms disabled."
       ],
@@ -6604,7 +6630,129 @@
       "Prove supported CTAS, expanded ALTER, multi-DML CTE and trigger behavior with current transaction/write phases; reject unsupported forms."
     ],
     "preserved_evidence": "All tested runtime checkpoints, protocol hashes/method counts, engine pins and audit source rows remain intact. Historical design proposals are explicitly marked superseded; unrelated prepared-read query recovery and persisted provider event replay are unchanged.",
-    "next": "Audit concrete DuckDB2 write/trigger gaps against existing transactions, init/exchange/finalize and OLD/NEW results; propose only necessary metadata, execution-owner and stale-bind checks. No new general statement lifecycle or recovery service.",
+    "next": "Source audit completed in write_path_source_audit_2026_10_15; implement focused 1.5-compatible transaction dispatch/cleanup and finalization checks before native2 trigger integration.",
     "validation": "Manifest content updated locally only; no new runtime tests, protocol changes or release-gate completion are claimed."
+  },
+  "write_path_source_audit_2026_10_15": {
+    "date": "2026-10-15",
+    "status": "source_audit_complete_runtime_qualification_pending",
+    "revisions": {
+      "haybarn_20": "e1784fa4231072d7152b8aaa20977bdb8ff4ace3",
+      "active_engine_15": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+      "native": "02c876af3b7509761046dd8c5703462a3a246a9a",
+      "python": "4e2fd83240fe9d871652eaffc2544420c37e1433"
+    },
+    "conclusion": "Reuse existing transactions, write bind/init/exchange/finalize, engine scheduling and OLD/NEW changes. No demonstrated need for a new statement coordinator, savepoints, replay/status RPCs, receipts or mandatory per-write requirements revision.",
+    "engine_findings": [
+      {
+        "finding": "Statement triggers expand into BEFORE/base/AFTER CTEs with side-effect ordering; base DML forces RETURNING *. Row triggers lower to dependent joins preserving duplicate multiplicity, with unspecified row order, all rows for A before B, and no visibility of earlier individual firings' writes. Engine scheduling can coordinate ordinary VGI writes in the provider transaction.",
+        "sources": [
+          "src/planner/binder/query_node/bind_trigger_expansion.cpp:361",
+          "src/execution/operator/set/physical_cte.cpp:409",
+          "src/planner/planner.cpp:80",
+          "src/include/duckdb/planner/operator/logical_trigger.hpp:25"
+        ]
+      },
+      {
+        "finding": "Expanded ALTER uses the existing transaction preprocessor and rollback/invalidation machinery. Transaction grammar offers begin/commit/rollback, not savepoints. Multi-DML CTEs require a catalog opt-in that VGI has not enabled.",
+        "sources": [
+          "src/planner/statement_preprocessor.cpp:32",
+          "src/main/client_context_execution.cpp:82",
+          "src/main/client_context.cpp:1084",
+          "src/parser/peg/grammar/statements/transaction.gram:1",
+          "src/include/duckdb/parser/parsed_data/transaction_info.hpp:15",
+          "src/planner/binder/query_node/bind_cte_node.cpp:92"
+        ]
+      },
+      {
+        "finding": "VGI has no GetCatalogVersion override; the absent engine version causes conservative prepared-statement rebind. This does not prove provider cache/snapshot concurrency, but removes stale native plans alone as justification for a new requirements revision.",
+        "sources": [
+          "src/include/duckdb/catalog/catalog.hpp:146",
+          "src/main/prepared_statement_data.cpp:28"
+        ]
+      },
+      {
+        "finding": "External table Create/Scan/Get/DropTrigger hooks are available. ScanTriggers supplies both native discovery and executable selection without ownership filtering, and must preserve case-insensitive alphabetical order. Start with ENGINE-owned execution and provider-persisted definitions; native BACKEND-only discovery needs an engine filter.",
+        "sources": [
+          "src/include/duckdb/catalog/catalog_entry/table_catalog_entry.hpp:160",
+          "src/catalog/catalog_entry/table_catalog_entry.cpp:388",
+          "src/function/table/system/duckdb_triggers.cpp:83"
+        ]
+      },
+      {
+        "finding": "UPDATE OLD capture expects NEW then OLD columns, and duplicate-target policy matters for UPDATE FROM. The native adapter must bridge existing paired changes and honor the engine policy; it cannot zip returned rows to input OLD values without proven correspondence.",
+        "sources": [
+          "src/planner/operator/logical_update.cpp:27",
+          "src/execution/operator/persistent/physical_update.cpp:124"
+        ]
+      }
+    ],
+    "existing_vgi_paths": [
+      "native:src/storage/vgi_physical_write.cpp:448 creates CTAS during execution; write setup at :140 passes the provider transaction and :262 runs optional finalization.",
+      "vgi/write_results.py:39 already defines paired nullable OLD/NEW changes. Native writes currently request count/rows; final output is always parsed as count.",
+      "vgi/table_function.py:1269 and native:src/vgi_function_connection.cpp:1040 preserve per-physical-write execution identity across INPUT/FINALIZE, not a global statement identifier. Engine scheduling does not require adding one.",
+      "vgi/_test_fixtures/writable/generic.py:177 and vgi/transactor/server.py:628 execute backend SQL per input batch. This alone does not qualify whole-statement BACKEND trigger semantics."
+    ],
+    "first_15_compatible_checkpoint": [
+      {
+        "status": "source_confirmed_dispatch_gap",
+        "finding": "Transaction begin/commit/rollback use generic retry-capable unary dispatch but are absent from the single-attempt method policy. Cover them with existing policy; prove one dispatch after failure without adding recovery endpoints.",
+        "sources": [
+          "native:src/include/vgi_unary_retry.hpp:9",
+          "native:src/vgi_catalog_api.cpp:1235",
+          "native:src/vgi_unary_rpc.cpp:397"
+        ]
+      },
+      {
+        "status": "source_confirmed_exception_path",
+        "finding": "Commit/rollback exceptions bypass native transaction-map erasure; commit also skips subsequent cache clearing. Make local cleanup exception-safe and test definite provider refusal. An ambiguous remote commit must still report unknown outcome rather than claim it was undone.",
+        "sources": [
+          "native:src/storage/vgi_transaction.cpp:118",
+          "haybarn2:src/transaction/meta_transaction.cpp:149",
+          "haybarn2:src/transaction/transaction_context.cpp:62"
+        ]
+      },
+      {
+        "status": "candidate_requires_reproduction",
+        "finding": "Pre-FINALIZE INPUT drain reads raw batches without handling error metadata and breaks on some non-Iroh read failures. Reproduce response-then-error, missing response and premature EOS; surface any lost errors through current rollback machinery.",
+        "sources": [
+          "native:src/vgi_function_connection.cpp:1007",
+          "native:src/vgi_function_connection.cpp:1297",
+          "native:src/storage/vgi_physical_write.cpp:553"
+        ]
+      },
+      {
+        "status": "candidate_requires_reproduction",
+        "finding": "Signed HTTP writable fixture reads the raw sealed bind transaction token and forwards it to the transactor, whose lookup expects its original token. Reproduce authenticated begin/write/commit/rollback; if confirmed, unwrap only at the authorized provider boundary while preserving sealed wire/storage state.",
+        "sources": [
+          "vgi/worker.py:5145",
+          "vgi/_test_fixtures/writable/table.py:74",
+          "vgi/_test_fixtures/writable/generic.py:177",
+          "vgi/transactor/server.py:88"
+        ]
+      },
+      {
+        "status": "source_confirmed_mode_gap",
+        "finding": "FinalizeWriteConnection interprets all nonempty final output as count. Handle final rows/changes according to the existing negotiated mode, with zero-row and multi-batch tests.",
+        "sources": [
+          "native:src/storage/vgi_physical_write.cpp:262"
+        ]
+      }
+    ],
+    "qualification_cases": [
+      "Autocommit and explicit transactions: init, later-batch and finalize failures cannot partially commit; include prior successful writes, zero rows, response-then-error, missing response and premature EOS.",
+      "CTAS insert/finalize failure removes both table and rows; expanded ALTER follow-up failure rolls back the full change.",
+      "Before enabling multi-DML or triggers, prove BEFORE/base/AFTER ordering and rollback across all admitted effects; return results only after successful operation completion.",
+      "OLD/NEW and cardinality: UPDATE FROM duplicate matches, DELETE, generated columns, identical rows, zero rows and multiple batches.",
+      "PREPARE before trigger creation/change then EXECUTE: verify rebind, transaction-visible metadata, ordering and exclusive execution owner.",
+      "Commit/rollback refusal clears native bookkeeping; ambiguous transport failure issues one request and remains unknown outcome.",
+      "Signed HTTP begin/write/commit/rollback uses the authenticated provider transaction; reject wrong-attachment tokens."
+    ],
+    "validation_limits": [
+      "Source inspection only. EC2 32.192.49.19 was unreachable; no new builds/tests or remote synchronization.",
+      "native:test_deferred/writable contains deferred SQL cases. tests/transactor/test_transactor.py is module-skipped; tests/conformance/test_writable.py is a skip stub. General finalization and core-engine trigger tests are not external VGI write/trigger qualification.",
+      "No runtime implementation, schema/method inventory change, engine-pin change, release-gate completion or publication. All earlier bounded runtime evidence remains unchanged."
+    ],
+    "next": "Implement the focused 1.5-compatible transaction dispatch/cleanup and finalization checkpoint with EC2 regression tests; then persistent trigger CRUD, native2 ENGINE hooks and existing changes adaptation. Keep unsupported forms and multi-DML opt-in disabled until qualified."
   }
 }

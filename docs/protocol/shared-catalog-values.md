@@ -1129,6 +1129,26 @@ an error with unknown outcome; do not automatically replay a possibly dispatched
 mutation. Keep and complete the existing single-attempt transport safeguards.
 No distributed atomicity across independent attachments is promised.
 
+The 2026-10-15 source audit confirms that pinned Haybarn2 already sequences
+statement triggers through BEFORE/base/AFTER CTEs and wraps expanded ALTER in
+its existing transaction/error machinery. VGI already passes the provider
+transaction through CTAS and write finalization. Its absent engine catalog
+version also makes native prepared statements conservatively rebind. These
+paths do not demonstrate a need for another coordinator or a new per-write
+requirements revision. Provider snapshot/concurrent-metadata behavior still
+needs qualification.
+
+The first implementation checkpoint is 1.5-compatible: cover transaction RPCs
+with existing single-attempt dispatch, make local transaction cleanup
+exception-safe, and test failure propagation through the current write phases.
+The audit identified two candidates requiring reproduction: the raw INPUT drain
+before FINALIZE may discard late error metadata, and the signed HTTP writable
+fixture may pass a sealed transaction token directly to its transactor. These
+are not yet confirmed runtime failures. Also make deferred output handling
+respect the existing selected count/rows/changes mode. Exact source anchors and
+test cases are recorded in the manifest's `write_path_source_audit_2026_10_15`.
+This is source evidence only; EC2 was unavailable and no new tests were run.
+
 ### Trigger definitions and statement ownership
 
 Reuse `CatalogObjectRef(kind="trigger", schema_path, owner_table, name)`.
@@ -1148,11 +1168,11 @@ actually changed. No WHEN clause or arbitrary SQL script is introduced.
 Use `catalog_table_triggers`, `catalog_trigger_get`, `catalog_trigger_create`,
 `catalog_trigger_drop`, and `catalog_trigger_alter_metadata`. They take existing
 attachment/transaction context and raw object identity. CREATE takes a complete
-definition plus ERROR/IGNORE/REPLACE; REPLACE atomically changes definition,
-dependencies and write requirements. Metadata alteration takes
+definition plus ERROR/IGNORE/REPLACE; REPLACE atomically changes definition and
+dependencies. Metadata alteration takes
 `CatalogMetadataChanges` plus an expected revision. DROP has explicit
 ignore-missing/CASCADE semantics. GET returns optional `TriggerInfo`; listing
-returns complete infos, catalog version and table requirements revision from
+returns complete infos and the existing catalog version from
 one authorized snapshot. CREATE/ALTER return canonical readback. Incomplete
 permission-filtered listing cannot be used as an executable trigger plan.
 
@@ -1172,15 +1192,36 @@ cycles. Statement INSERT ON CONFLICT DO UPDATE with AFTER NEW transition tables
 is also rejected by the pin. Do not silently turn a row trigger into a statement
 trigger.
 
+The pinned ROW implementation is set-based and decorrelated: row order is
+unspecified, all rows for trigger A execute before trigger B, and an individual
+firing does not see writes made by earlier individual firings. A row profile
+must preserve these limits rather than promise sequential per-row visibility.
+
 Execution ownership is exclusive for the complete table trigger plan in the
 initial profile. ENGINE means the qualified client expands definitions once and
 the backend does not also fire them. BACKEND means the provider owns all trigger
 execution; clients never install those definitions as executable engine entries.
 The initial profile rejects mixed owners rather than leave relative ordering
-undefined. Ordering is an explicit provider-resolved list of ref/revision pairs
-within each event/timing/granularity phase. The DuckDB profile must match the
-pinned engine's case-insensitive alphabetical order and validate that order;
-list order is not incidental hash-map order.
+undefined. Listing order within each event/timing/granularity phase must match
+the pinned engine's case-insensitive alphabetical order. Its `ScanTriggers`
+consumer preserves the supplied order rather than sorting it; do not use
+incidental hash-map order or add a separate ordering record.
+
+Start with ENGINE-owned execution and worker-persisted definitions. Native
+`ScanTriggers` currently serves both discovery and executable trigger selection;
+it cannot safely expose BACKEND-owned definitions as ordinary engine entries.
+Native discovery of those definitions needs an engine filtering hook before
+exposing them through `duckdb_triggers()`. RPC-only discovery can avoid that
+engine change. The current transactor's per-batch SQL still does not establish
+whole-statement backend trigger semantics.
+
+Pinned statement-trigger expansion forces base DML `RETURNING *`, including
+when no transition alias is declared, so this path needs the existing rows
+mode. UPDATE with OLD capture additionally needs native adaptation of the
+existing paired OLD/NEW `changes` result into the engine's NEW-then-OLD columns
+and its duplicate-target policy. Returned rows must not be zipped to input OLD
+values without guaranteed correspondence. The existing carrier is sufficient;
+no additional OLD/NEW wire record has been justified.
 
 For execution, audit the existing table/write discovery, sealed bind state,
 transaction context, init/exchange/finalize and OLD/NEW `changes` results first.
@@ -1235,14 +1276,15 @@ read/query result replay functionality is unaffected by this scope decision.
 2. Implement canonical constraint read/create/apply and typed index records in
    a durable reference. Prove real enforcement, existing-data failure rollback,
    FK NULL/action semantics, primary-key nullability and backing-index closure.
-3. Audit existing transaction propagation, write finalization and failure handling
-   for CTAS, expanded ALTER, multi-DML and trigger execution. Add focused tests for
-   concrete gaps; fix the current paths before proposing new protocol machinery.
+3. Implement the source audit's focused transaction dispatch/cleanup and write
+   finalization fixes, reproducing candidate failures first. Qualify CTAS,
+   expanded ALTER and multi-DML through the existing transaction paths.
    No savepoints or general statement-ticket/receipt lifecycle is required.
-4. Implement persistent trigger CRUD/readback plus supported BACKEND and ENGINE
-   paths using existing transactions and streams. Test exclusivity, order,
+4. Implement persistent trigger CRUD/readback and ENGINE execution first, using
+   existing transactions and streams. Test exclusivity, order,
    zero/multiple batches, exact OLD/NEW, stale binds and failure rollback. Select
-   additional metadata only when those paths demonstrate a missing contract.
+   additional metadata only when those paths demonstrate a missing contract;
+   qualify BACKEND execution separately after resolving discovery and batching.
 5. Extend dependency planning to constraints and column/ALTER blockers. Test
    rename/replacement, inaccessible dependents, cross-schema identity and no
    cross-attachment authority assumption.
