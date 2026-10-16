@@ -30,7 +30,7 @@
     "values": "TypedValueBatch preserving original Arrow metadata and typed NULLs. Option RESET differs from NULL and omission.",
     "expressions": "Implemented: SqlExpression and SqlStatement with required QueryEvaluationContext, required matching macro context, canonical bounded base64-IPC column metadata. Finite scalar and durable CHECK proof on 1.5; general statement execution and new persistent DEFAULT/generated semantics remain unqualified.",
     "capabilities": "Agreement scoped to sealed attachment state; validate per-object requirements and current write eligibility at execution.",
-    "mutation": "Reuse existing begin/commit/rollback, write init/exchange/finalize and OLD/NEW changes. A failed write requires full transaction rollback and cannot partially commit. Ambiguous dispatch is an error without automatic retry. New generic statement lifecycle, durable mutation replay/status and savepoint machinery are outside this package; audit concrete gaps before proposing wire additions.",
+    "mutation": "Reuse existing begin/commit/rollback, write init/exchange/finalize and OLD/NEW changes. A failed write requires full transaction rollback and cannot partially commit. Do not automatically retry non-idempotent mutations after ambiguous dispatch; commit/rollback retain existing transaction-ID-based idempotency and retry semantics. Review BEGIN allocation/cleanup separately. New generic statement lifecycle, durable mutation replay/status and savepoint machinery are outside this package; audit concrete gaps before proposing wire additions.",
     "rollout": "Use versioned endpoints/processes with draining; prove transaction/reconnect and downgrade behavior. The existing dispatcher cannot host two versions under one protocol name.",
     "column_paths": "Nine existing column RPCs use raw component paths, with per-operation nested DDL profiles and one-component 1.5 adapter targets. TableInfo.required_filters now uses AND-of-OR raw component paths across SDKs and the native 1.5 optimizer; native 2.0 integration remains open.",
     "metadata_changes": "CatalogMetadataChanges: explicit comment presence plus literal string tag SET/REMOVE, atomic whole-patch validation, effect-sensitive versions/etags. Shared record; first negotiated operation is catalog_schema_alter_metadata.",
@@ -591,9 +591,9 @@
       "new_methods": [],
       "scope": [
         "Reuse existing transaction handles, begin/commit/rollback, write init/exchange/finalize and OLD/NEW results; audit concrete DuckDB2 gaps before adding wire fields",
-        "Keep supported DDL, DML and trigger effects in the existing provider transaction; failed writes cannot partially commit. No savepoints, durable replay/status service or general statement ticket/receipt framework in this package. Ambiguous dispatch remains an error without automatic retry."
+        "Keep supported DDL, DML and trigger effects in the existing provider transaction; failed writes cannot partially commit. No savepoints, durable replay/status service or general statement ticket/receipt framework in this package. No automatic retry of non-idempotent mutations after ambiguous dispatch; commit/rollback retain existing transaction-ID-based idempotency."
       ],
-      "capability_contract": "Reuse existing vgi.transaction.ddl.v1 and current begin/commit/rollback plus streamed-write execution. Qualify existing behavior for each admitted DuckDB2 form before enabling it; no new statement, replay or savepoint profile is approved. A failed write requires full transaction rollback; ambiguous dispatch must not trigger automatic retry.",
+      "capability_contract": "Reuse existing vgi.transaction.ddl.v1 and current begin/commit/rollback plus streamed-write execution. Qualify existing behavior for each admitted DuckDB2 form before enabling it; no new statement, replay or savepoint profile is approved. A failed write requires full transaction rollback. Preserve existing idempotent commit/rollback retry semantics; do not automatically retry non-idempotent mutations after ambiguous dispatch.",
       "gates": [
         "P1",
         "P2",
@@ -623,10 +623,10 @@
         }
       ],
       "implementation_work": [
-        "First fix existing transaction single-attempt dispatch and exception-safe local cleanup; reproduce raw pre-FINALIZE drain and signed-HTTP fixture token candidates, and qualify selected-mode final output.",
+        "First fix exception-safe local transaction cleanup and test existing transaction-ID-based duplicate completion; review BEGIN allocation/cleanup separately. Reproduce raw pre-FINALIZE drain and signed-HTTP fixture token candidates, and qualify selected-mode final output.",
         "Qualify existing transaction propagation for CTAS, expanded ALTER and multi-DML CTEs; keep multi-DML opt-in disabled until supported writes and failure behavior are proved.",
         "Prove admitted writes and trigger effects commit together and failed writes require full transaction rollback; retain one execution owner and reject stale or incapable writers before effects.",
-        "Retain no automatic retry after ambiguous mutation dispatch and audit uncovered legacy mutation paths. Do not add durable outcomes/status, savepoints or a generic statement ticket/receipt framework."
+        "Retain no automatic retry after ambiguous non-idempotent mutation dispatch and audit uncovered legacy paths, preserving the existing idempotent commit/rollback contract. Do not add durable outcomes/status, savepoints or a generic statement ticket/receipt framework."
       ]
     },
     "triggers": {
@@ -6630,7 +6630,7 @@
       "Prove supported CTAS, expanded ALTER, multi-DML CTE and trigger behavior with current transaction/write phases; reject unsupported forms."
     ],
     "preserved_evidence": "All tested runtime checkpoints, protocol hashes/method counts, engine pins and audit source rows remain intact. Historical design proposals are explicitly marked superseded; unrelated prepared-read query recovery and persisted provider event replay are unchanged.",
-    "next": "Source audit completed in write_path_source_audit_2026_10_15; implement focused 1.5-compatible transaction dispatch/cleanup and finalization checks before native2 trigger integration.",
+    "next": "Source audit completed in write_path_source_audit_2026_10_15; implement focused 1.5-compatible transaction cleanup, duplicate-completion and finalization checks before native2 trigger integration.",
     "validation": "Manifest content updated locally only; no new runtime tests, protocol changes or release-gate completion are claimed."
   },
   "write_path_source_audit_2026_10_15": {
@@ -6695,9 +6695,13 @@
     ],
     "first_15_compatible_checkpoint": [
       {
-        "status": "source_confirmed_dispatch_gap",
-        "finding": "Transaction begin/commit/rollback use generic retry-capable unary dispatch but are absent from the single-attempt method policy. Cover them with existing policy; prove one dispatch after failure without adding recovery endpoints.",
+        "status": "corrected_existing_completion_idempotency_begin_review_separate",
+        "finding": "The earlier blanket single-attempt recommendation overlooked the existing commit/rollback idempotency contract. These requests already carry the transaction identifier; the transactor removes a completed transaction and rejects repeats as inactive. Preserve completion retry behavior and test no repeated effects, without requiring a recovery service or successful duplicate response. BEGIN returns the newly allocated identifier, so inspect abandoned-allocation cleanup before deciding whether its retry policy needs changing.",
         "sources": [
+          "vgi/catalog/catalog_interface.py:1930",
+          "vgi/transactor/server.py:88",
+          "vgi/transactor/server.py:142",
+          "vgi/transactor/server.py:155",
           "native:src/include/vgi_unary_retry.hpp:9",
           "native:src/vgi_catalog_api.cpp:1235",
           "native:src/vgi_unary_rpc.cpp:397"
@@ -6745,7 +6749,7 @@
       "Before enabling multi-DML or triggers, prove BEFORE/base/AFTER ordering and rollback across all admitted effects; return results only after successful operation completion.",
       "OLD/NEW and cardinality: UPDATE FROM duplicate matches, DELETE, generated columns, identical rows, zero rows and multiple batches.",
       "PREPARE before trigger creation/change then EXECUTE: verify rebind, transaction-visible metadata, ordering and exclusive execution owner.",
-      "Commit/rollback refusal clears native bookkeeping; ambiguous transport failure issues one request and remains unknown outcome.",
+      "Commit/rollback refusal clears native bookkeeping; repeated completion reuses the same transaction identifier without repeating effects. An inactive-transaction error alone does not establish the earlier outcome. Review BEGIN allocation/cleanup separately.",
       "Signed HTTP begin/write/commit/rollback uses the authenticated provider transaction; reject wrong-attachment tokens."
     ],
     "validation_limits": [
@@ -6753,6 +6757,6 @@
       "native:test_deferred/writable contains deferred SQL cases. tests/transactor/test_transactor.py is module-skipped; tests/conformance/test_writable.py is a skip stub. General finalization and core-engine trigger tests are not external VGI write/trigger qualification.",
       "No runtime implementation, schema/method inventory change, engine-pin change, release-gate completion or publication. All earlier bounded runtime evidence remains unchanged."
     ],
-    "next": "Implement the focused 1.5-compatible transaction dispatch/cleanup and finalization checkpoint with EC2 regression tests; then persistent trigger CRUD, native2 ENGINE hooks and existing changes adaptation. Keep unsupported forms and multi-DML opt-in disabled until qualified."
+    "next": "Implement the focused 1.5-compatible transaction cleanup, duplicate-completion and finalization checkpoint with EC2 regression tests; then persistent trigger CRUD, native2 ENGINE hooks and existing changes adaptation. Keep unsupported forms and multi-DML opt-in disabled until qualified."
   }
 }

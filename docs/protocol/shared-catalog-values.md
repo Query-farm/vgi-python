@@ -1123,11 +1123,20 @@ previous statements after a partially applied write fails. Preserve existing
 provider-specific handling of errors that occur before effects.
 
 Reuse existing commit/rollback semantics, including the interface's existing
-idempotency requirement. No retained-outcome journal, recovery endpoint or new
-retention window is introduced. Report an ambiguous mutation/COMMIT response as
-an error with unknown outcome; do not automatically replay a possibly dispatched
-mutation. Keep and complete the existing single-attempt transport safeguards.
-No distributed atomicity across independent attachments is promised.
+idempotency requirement. Retrying completion with the same transaction identifier
+must not apply effects twice; retain normal provider results/errors. The current
+transactor removes completed transactions and rejects subsequent completion calls
+as inactive. That error does not establish whether an earlier COMMIT succeeded,
+but it does not require a new recovery mechanism. No retained-outcome journal,
+recovery endpoint or retention window is introduced.
+
+The earlier blanket single-attempt recommendation for transaction RPCs was too
+broad. Preserve commit/rollback retry behavior; the single-attempt safeguards
+apply to non-idempotent mutations. BEGIN deserves separate review because its
+identifier arrives in the response: retrying a lost response can allocate a
+second transaction, leaving the first for existing cleanup. Check that behavior
+before deciding whether BEGIN needs a policy change. No distributed atomicity
+across independent attachments is promised.
 
 The 2026-10-15 source audit confirms that pinned Haybarn2 already sequences
 statement triggers through BEFORE/base/AFTER CTEs and wraps expanded ALTER in
@@ -1138,9 +1147,9 @@ paths do not demonstrate a need for another coordinator or a new per-write
 requirements revision. Provider snapshot/concurrent-metadata behavior still
 needs qualification.
 
-The first implementation checkpoint is 1.5-compatible: cover transaction RPCs
-with existing single-attempt dispatch, make local transaction cleanup
-exception-safe, and test failure propagation through the current write phases.
+The first implementation checkpoint is 1.5-compatible: make local transaction
+cleanup exception-safe, test repeated completion with the same transaction
+identifier, and test failure propagation through the current write phases.
 The audit identified two candidates requiring reproduction: the raw INPUT drain
 before FINALIZE may discard late error metadata, and the signed HTTP writable
 fixture may pass a sealed transaction token directly to its transactor. These
@@ -1276,7 +1285,7 @@ read/query result replay functionality is unaffected by this scope decision.
 2. Implement canonical constraint read/create/apply and typed index records in
    a durable reference. Prove real enforcement, existing-data failure rollback,
    FK NULL/action semantics, primary-key nullability and backing-index closure.
-3. Implement the source audit's focused transaction dispatch/cleanup and write
+3. Implement the source audit's focused transaction cleanup and write
    finalization fixes, reproducing candidate failures first. Qualify CTAS,
    expanded ALTER and multi-DML through the existing transaction paths.
    No savepoints or general statement-ticket/receipt lifecycle is required.
