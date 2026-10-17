@@ -91,23 +91,6 @@ CPP_NAMES: dict[str, str] = {
 }
 
 
-#: Extra wire spellings the C++ client accepts for an enum (C++ enum name -> {spelling: member
-#: NAME}). Only spellings peers really send, which the hand-written client always accepted:
-#: vgi-go, vgi-rust and vgi-java send ``function_type`` / ``macro_type`` in lower case, and
-#: ``table_in_out`` is the legacy name of TABLE. Encoding always writes the canonical name.
-ENUM_WIRE_ALIASES: dict[str, dict[str, str]] = {
-    "FunctionType": {
-        "scalar": "SCALAR",
-        "table": "TABLE",
-        "table_in_out": "TABLE",
-        "table_buffering": "TABLE_BUFFERING",
-        "aggregate": "AGGREGATE",
-    },
-    # vgi-go, vgi-rust and vgi-java send macro_type in lower case too.
-    "MacroType": {"scalar": "SCALAR", "table": "TABLE"},
-}
-
-
 def cpp_name(py_name: str) -> str:
     """The C++ type name for a protocol type's Python name."""
     return CPP_NAMES.get(py_name) or cs.csharp_name(py_name)
@@ -504,16 +487,6 @@ def _render_source(model: _Model, namespace: list[str]) -> str:
         out.write(f"std::optional<{e.name}> {e.name}FromWire(const std::string &wire) {{\n")
         out.write(f"\tfor (int16_t i = 0; i < k{e.name}Count; i++) {{\n")
         out.write(f"\t\tif (wire == k{e.name}Wire[i]) {{\n\t\t\treturn static_cast<{e.name}>(i);\n\t\t}}\n\t}}\n")
-        aliases = ENUM_WIRE_ALIASES.get(e.name, {})
-        if aliases:
-            member_ident = {m.wire_name: m.ident for m in e.members}
-            out.write(
-                "\t// Accepted spellings beyond the canonical names (vgi.codegen.cpp_records.ENUM_WIRE_ALIASES).\n"
-            )
-            for alias, member in sorted(aliases.items()):
-                if member not in member_ident:
-                    raise GeneratorError(f"{e.name}: alias {alias!r} names unknown member {member!r}")
-                out.write(f'\tif (wire == "{alias}") {{\n\t\treturn {e.name}::{member_ident[member]};\n\t}}\n')
         out.write("\treturn std::nullopt;\n}\n\n")
         out.write(f"void ReadValue(const arrow::Array &array, int64_t i, {e.name} &out, const wire::Ctx &ctx) {{\n")
         out.write("\tstd::string s;\n\twire::ReadValue(array, i, s, ctx);\n")
