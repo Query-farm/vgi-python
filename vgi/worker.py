@@ -1540,7 +1540,7 @@ class Worker:
         Each protocol needs a distinct wire name (``protocol_name:
         ClassVar[str]``). Names may not repeat, may not equal the worker's own
         protocol, and may not use the reserved ``vgi_rpc.`` prefix: reflection
-        is hosted automatically and ``vgi_rpc.Identity.v1`` is enabled by
+        is hosted automatically and ``vgi_rpc.Identity.v2`` is enabled by
         overriding [`resolve_token`][vgi.worker.Worker.resolve_token] /
         [`mint_grant`][vgi.worker.Worker.mint_grant]. Violations are a startup
         error naming this method.
@@ -1558,7 +1558,7 @@ class Worker:
     def resolve_token(cls, token: str) -> TokenIdentity | None:
         """Resolve an opaque bearer credential to the identity it authenticates as.
 
-        Override to host ``vgi_rpc.Identity.v1``'s ``introspect_token``,
+        Override to host ``vgi_rpc.Identity.v2``'s ``introspect_token``,
         which a reverse proxy calls when it terminates the only public
         listener and must know *which principal* a credential is before it can
         authorize anything. Until it is overridden the protocol is not hosted
@@ -1625,7 +1625,7 @@ class Worker:
     def mint_grant(cls, principal: str, purpose: str, scopes: list[str], ttl_seconds: int) -> IssuedGrant:
         """Mint a standing delegation credential for *principal*.
 
-        Override to host ``vgi_rpc.Identity.v1``'s ``issue_grant``. Like
+        Override to host ``vgi_rpc.Identity.v2``'s ``issue_grant``. Like
         ``resolve_token``, the method is absent until it is overridden rather
         than hosted-and-refusing, so no worker grows a credential *issuer* by
         upgrading a dependency.
@@ -1668,7 +1668,9 @@ class Worker:
                 never issue a longer one.
 
         Returns:
-            The minted ``IssuedGrant``. ``expires_at`` is a declaration rather
+            The minted ``IssuedGrant``. ``expires_at`` is a timezone-aware UTC
+            ``datetime`` (``timestamp[us, tz="UTC"]`` on the wire, under
+            ``vgi_rpc.Identity.v2``), and a declaration rather
             than an enforcement: the real lifetime lives inside the opaque
             token, so a worker that states one has thought about one.
 

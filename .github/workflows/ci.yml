@@ -129,7 +129,7 @@ jobs:
   hosted-protocols:
     # vgi-rpc's cross-SDK hosted-protocols group: the fixture workers must host
     # vgi.v2 then conformance.Secondary.v1 on stdio, unix and HTTP, and pass the
-    # Identity.v1 groups over HTTP (vgi-fixture-http --identity).
+    # Identity.v2 groups over HTTP (vgi-fixture-http --identity).
     name: Hosted-protocols conformance
     runs-on: ubuntu-latest
     steps:

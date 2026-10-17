@@ -1,6 +1,6 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
-"""Opt the HTTP fixture into ``vgi_rpc.Identity.v1`` with the conformance policy.
+"""Opt the HTTP fixture into ``vgi_rpc.Identity.v2`` with the conformance policy.
 
 Enabled by ``vgi-fixture-http --identity`` (or ``VGI_FIXTURE_IDENTITY=1``) so
 the cross-SDK hosted-protocols group can run its identity cases with

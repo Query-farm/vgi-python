@@ -3,7 +3,7 @@
 r"""Attach tickets: a user's ATTACH, sealed so a runner can replay it later as that user.
 
 A ticket is the *what* half of an unattended session; a sealed grant
-(``vgi_rpc.Identity.v1`` ``issue_grant``) is the *who*. While the user is
+(``vgi_rpc.Identity.v2`` ``issue_grant``) is the *who*. While the user is
 attached and logged in, the client asks the worker to seal the options it
 attached with -- secret ones included -- into a ticket only this worker can
 open. Later any runner holding the user's grant attaches with the single option
@@ -43,7 +43,6 @@ from __future__ import annotations
 
 import base64
 import dataclasses
-import math
 import os
 import re
 import secrets
@@ -51,6 +50,7 @@ import struct
 import sys
 import time
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Protocol
 
 import pyarrow as pa
@@ -553,13 +553,20 @@ class AttachTicket(ArrowSerializableDataclass):
 
     Attributes:
         ticket: ``vgia1.`` text. Not a credential, but never logged.
-        expires_at: Unix seconds after which the worker refuses it; ``+inf``
-            when the worker sets no maximum lifetime.
+        expires_at: The UTC instant after which the worker refuses it, carried
+            as ``timestamp[us, tz="UTC"]``; ``None`` (null on the wire) when
+            the worker sets no maximum lifetime. Protocol ``1.0.0`` carried a
+            float64 of unix seconds with ``+inf`` for "no expiry".
 
     """
 
     ticket: str
-    expires_at: float
+    expires_at: Annotated[datetime | None, ArrowType(pa.timestamp("us", tz="UTC"))]
+
+    def __post_init__(self) -> None:
+        """Refuse a naive ``expires_at``, which has no defined instant."""
+        if self.expires_at is not None and (self.expires_at.tzinfo is None or self.expires_at.utcoffset() is None):
+            raise ValueError("AttachTicket.expires_at must be timezone-aware (UTC) or None")
 
 
 class AttachTickets(Protocol):
@@ -571,7 +578,7 @@ class AttachTickets(Protocol):
     """
 
     protocol_name: ClassVar[str] = ATTACH_TICKETS_PROTOCOL_NAME
-    protocol_version: ClassVar[str] = "1.0.0"
+    protocol_version: ClassVar[str] = "2.0.0"
 
     def seal_attach(self, request: SealAttachRequest) -> AttachTicket:
         """Seal the caller's attach of ``request.catalog_name`` into a ticket.
@@ -730,4 +737,6 @@ class AttachTicketsImpl:
             )
         except ValueError as exc:
             raise _invalid_request("seal_attach request is invalid", [("request", str(exc))]) from exc
-        return AttachTicket(ticket=token, expires_at=math.inf if expires_at == 0 else float(expires_at))
+        return AttachTicket(
+            ticket=token, expires_at=None if expires_at == 0 else datetime.fromtimestamp(expires_at, tz=UTC)
+        )
