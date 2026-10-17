@@ -84,6 +84,17 @@ _RESERVED = frozenset(
 # Model
 # ---------------------------------------------------------------------------
 
+#: C++ names beyond csharp_types.CSHARP_NAMES: method results are named after their
+#: method, matching their vgi_protocol_schemas / vgi_secret_protocol_schemas factory.
+CPP_NAMES: dict[str, str] = {
+    "SecretLookupResponse": "SecretLookupResult",
+}
+
+
+def cpp_name(py_name: str) -> str:
+    """The C++ type name for a protocol type's Python name."""
+    return CPP_NAMES.get(py_name) or cs.csharp_name(py_name)
+
 
 class Presence(enum.Enum):
     """How a column's absence or null is decoded."""
@@ -171,7 +182,7 @@ _SCALARS: list[tuple[pa.DataType, str]] = [
 
 
 def _register_enum(cls: type[enum.Enum], model: _Model) -> str:
-    name = cs.csharp_name(cls.__name__)
+    name = cpp_name(cls.__name__)
     existing = model.enums.get(name)
     if existing is not None:
         if existing.origin != cls.__qualname__:
@@ -223,7 +234,7 @@ def _map(dtype: pa.DataType, annotation: object, *, model: _Model, origin: str) 
         if not isinstance(base, type):
             raise GeneratorError(f"{origin}: a struct needs an annotated class to name its C++ type.")
         model.pending.append((base, [dtype.field(i) for i in range(dtype.num_fields)], origin))
-        return cs.csharp_name(base.__name__)
+        return cpp_name(base.__name__)
 
     raise GeneratorError(
         f"vgi.codegen.cpp_records: unsupported Arrow type {dtype} at {origin}.\n"
@@ -253,7 +264,7 @@ def _literal(value: object, cpp_type: str, model: _Model, origin: str) -> str | 
 
 
 def _layout(cls: type, arrow_fields: list[pa.Field[Any]], origin: str, model: _Model) -> _Record:
-    name = cs.csharp_name(cls.__name__)
+    name = cpp_name(cls.__name__)
     hints = cs._hints(cls)
     dc_fields = cs._dataclass_fields(cls)
     summary, attr_docs = cs._parse_docstring(cls)
@@ -280,10 +291,28 @@ def _layout(cls: type, arrow_fields: list[pa.Field[Any]], origin: str, model: _M
     return _Record(name, [origin], pa.schema(arrow_fields), members, cs._MERGED_DOCS.get(name, summary))
 
 
+def _secret_protocol_roots() -> list[tuple[type, str]]:
+    """Unary results of :class:`vgi.secret_protocol.VgiSecretProtocol` (the C++ client reads them too)."""
+    from vgi_rpc.rpc._types import MethodType, rpc_methods  # type: ignore[attr-defined]
+
+    from vgi.secret_protocol import VgiSecretProtocol
+
+    roots: list[tuple[type, str]] = []
+    methods = rpc_methods(VgiSecretProtocol)
+    for method_name in sorted(methods):
+        info = methods[method_name]
+        if info.method_type != MethodType.UNARY or not info.has_return:
+            continue
+        result, _ = cs._base(info.result_type)
+        if isinstance(getattr(result, "ARROW_SCHEMA", None), pa.Schema):
+            roots.append((result, f"secret method '{method_name}' result"))  # type: ignore[arg-type]
+    return roots
+
+
 def build_model() -> _Model:
     """Lay out every record and enum the protocol defines, as C++ sees them."""
     model = _Model()
-    for cls, origin in cs._root_types():
+    for cls, origin in (*cs._root_types(), *_secret_protocol_roots()):
         model.pending.append((cls, list(cls.ARROW_SCHEMA), origin))  # type: ignore[attr-defined]
     while model.pending:
         cls, arrow_fields, origin = model.pending.pop(0)
@@ -429,6 +458,7 @@ def _render_source(model: _Model, namespace: list[str]) -> str:
     out = io.StringIO()
     out.write(f'#include "{HEADER_NAME}"\n\n')
     out.write('#include "vgi_protocol_schemas.hpp"\n')
+    out.write('#include "vgi_secret_protocol_schemas.hpp"\n')
     out.write('#include "vgi_wire_codec.hpp"\n\n')
     out.write("#include <arrow/api.h>\n\n")
     out.write(open_namespace(namespace))
@@ -527,7 +557,13 @@ def _factory_names() -> set[str]:
     """Stems of the schema factories vgi_protocol_schemas.hpp emits (see cpp_schemas.emit)."""
     from vgi.codegen._common import EXTRA_RESPONSE_TYPES, REQUEST_TYPES, collect_schemas
 
-    return {s.name for s in collect_schemas(extra_response_types=(*EXTRA_RESPONSE_TYPES, *REQUEST_TYPES))}
+    from vgi.secret_protocol import VgiSecretProtocol
+
+    names = {s.name for s in collect_schemas(extra_response_types=(*EXTRA_RESPONSE_TYPES, *REQUEST_TYPES))}
+    secret = collect_schemas(
+        VgiSecretProtocol, info_types=(), extra_response_types=(), check_info_subclasses=False
+    )
+    return names | {s.name for s in secret}
 
 
 _REGEN = ["uv run --project ~/Development/vgi-python python scripts/regen_generated.py"]
