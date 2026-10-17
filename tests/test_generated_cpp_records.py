@@ -65,10 +65,19 @@ def test_checked_in_files_are_current(which: str, relative: str) -> None:
 
 
 def test_header_is_arrow_free() -> None:
-    """The records header only forward-declares Arrow, so it is cheap to include anywhere."""
+    """The records header needs only vgi_arrow.hpp, so it is cheap to include anywhere."""
     header = _emitted("hpp")
+    assert "arrow::" not in header
     assert "#include <arrow" not in header
-    assert "class RecordBatch;" in header
+    assert '#include "nanoarrow' not in header
+    assert '#include "vgi_arrow.hpp"' in header
+
+
+def test_source_has_no_arrow_cpp() -> None:
+    """The codecs are written against the nanoarrow-backed vgi types only."""
+    source = _emitted("cpp")
+    assert "arrow::" not in source
+    assert "#include <arrow" not in source
 
 
 def test_members_follow_arrow_schema_order_and_nullability() -> None:

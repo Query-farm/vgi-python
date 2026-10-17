@@ -32,8 +32,8 @@ from pathlib import Path
 #: ``vgi-java`` lives at ``~/vgi-java`` for some checkouts and beside the other
 #: SDKs for others; both are probed.
 _TARGETS: list[tuple[str, str, str]] = [
-    ("vgi.codegen.cpp_schemas", "src/generated/vgi_protocol_schemas.hpp", "vgi"),
-    ("vgi.codegen.cpp_request_builders", "src/generated/vgi_request_builders.hpp", "vgi"),
+    ("vgi.codegen.cpp_schemas:nanoarrow", "src/generated/vgi_protocol_schemas.hpp", "vgi"),
+    ("vgi.codegen.cpp_request_builders:nanoarrow", "src/generated/vgi_request_builders.hpp", "vgi"),
     ("vgi.codegen.cpp_constants", "src/generated/vgi_protocol_constants.hpp", "vgi"),
     ("vgi.codegen.cpp_protocol_version", "src/generated/vgi_protocol_version.hpp", "vgi"),
     ("vgi.codegen.cpp_protocol_name", "src/generated/vgi_protocol_names.hpp", "vgi"),
@@ -48,9 +48,9 @@ _TARGETS: list[tuple[str, str, str]] = [
         "src/generated/vgi_secret_protocol_version.hpp",
         "vgi",
     ),
-    ("vgi.codegen.cpp_secret_schemas", "src/generated/vgi_secret_protocol_schemas.hpp", "vgi"),
+    ("vgi.codegen.cpp_secret_schemas:nanoarrow", "src/generated/vgi_secret_protocol_schemas.hpp", "vgi"),
     (
-        "vgi.codegen.cpp_secret_request_builders",
+        "vgi.codegen.cpp_secret_request_builders:nanoarrow",
         "src/generated/vgi_secret_request_builders.hpp",
         "vgi",
     ),

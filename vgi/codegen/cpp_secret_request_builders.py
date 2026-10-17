@@ -28,8 +28,8 @@ if TYPE_CHECKING:
     from typing import TextIO
 
 
-def emit(out: TextIO, namespace: list[str] | None = None) -> None:
-    """Emit the generated C++ secret request-builder header to *out*."""
+def emit(out: TextIO, namespace: list[str] | None = None, record: str | None = None) -> None:
+    """Emit the generated C++ secret request-builder header to *out* (``record="nanoarrow"``: nanoarrow)."""
     schemas = collect_schemas(
         VgiSecretProtocol,
         info_types=(),
@@ -46,6 +46,8 @@ def emit(out: TextIO, namespace: list[str] | None = None) -> None:
             "  > ~/Development/vgi/src/generated/vgi_secret_request_builders.hpp",
         ],
         schemas_include="vgi_secret_protocol_schemas.hpp",
+        namespace=namespace,
+        backend=record or "arrow",
     )
 
 

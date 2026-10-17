@@ -58,7 +58,7 @@ def test_checked_in_generated_hpp_matches_generator() -> None:
         pytest.skip(f"{path} not found; set VGI_REQUEST_BUILDERS_HPP or check out vgi repo next to vgi-python")
 
     expected = io.StringIO()
-    emit(expected)
+    emit(expected, record="nanoarrow")  # the DuckDB extension uses the nanoarrow backend
     actual = path.read_text()
 
     if expected.getvalue() != actual:

@@ -283,6 +283,7 @@ def _emit_builder(
     *,
     method_name: str,
     exception_type: str = "IOException",
+    backend: str = "arrow",
 ) -> str:
     """Render one ``Build<Name>Params(...)`` function as an inline C++ definition."""
     schema = es.schema
@@ -313,12 +314,16 @@ def _emit_builder(
 
     out = io.StringIO()
     out.write(f"// Origin: {es.origin}\n")
-    out.write(f"inline std::shared_ptr<arrow::RecordBatch> {func_name}(\n")
+    batch_type = "std::shared_ptr<arrow::RecordBatch>" if backend == "arrow" else "VgiBatchPtr"
+    out.write(f"inline {batch_type} {func_name}(\n")
     out.write(params_str)
     out.write(") {\n")
     out.write(f"\tconst auto &schema = {name}Schema();\n")
     out.write('\tstatic_assert(true, "compile-time anchor — runtime field-count assert below");\n')
-    out.write("\tstd::vector<std::shared_ptr<arrow::Array>> arrays;\n")
+    if backend == "arrow":
+        out.write("\tstd::vector<std::shared_ptr<arrow::Array>> arrays;\n")
+    else:
+        out.write("\tstd::vector<ArrowArray> arrays;\n")
     out.write(f"\tarrays.reserve({len(schema)});\n")
     out.write(body + "\n")
     out.write("\tif (arrays.size() != static_cast<size_t>(schema->num_fields())) {\n")
@@ -328,7 +333,10 @@ def _emit_builder(
         f'+ std::to_string(schema->num_fields()) + " fields");\n'
     )
     out.write("\t}\n")
-    out.write("\treturn arrow::RecordBatch::Make(schema, 1, arrays);\n")
+    if backend == "arrow":
+        out.write("\treturn arrow::RecordBatch::Make(schema, 1, arrays);\n")
+    else:
+        out.write("\treturn VgiBatch::FromColumns(schema, 1, std::move(arrays));\n")
     out.write("}\n")
     return out.getvalue()
 
@@ -365,6 +373,7 @@ def emit_builders(
     exception_include: str = '"duckdb/common/exception.hpp"',
     exception_type: str = "IOException",
     standalone_schemas: tuple[EmittedSchema, ...] = (),
+    backend: str = "arrow",
 ) -> None:
     """Render request-builder functions for a set of params schemas as a C++ header.
 
@@ -405,7 +414,10 @@ def emit_builders(
     body.write("#include <string>\n")
     body.write("#include <utility>\n")
     body.write("#include <vector>\n\n")
-    body.write("#include <arrow/api.h>\n\n")
+    if backend == "arrow":
+        body.write("#include <arrow/api.h>\n\n")
+    elif backend != "nanoarrow":
+        raise GeneratorError(f"unknown C++ request-builder backend {backend!r}")
     body.write(f"#include {exception_include}\n\n")
     body.write(open_namespace(namespace))
     body.write("\n")
@@ -425,7 +437,7 @@ def emit_builders(
             )
             skipped.append(method_name)
             continue
-        chunk = _emit_builder(es, method_name=method_name, exception_type=exception_type)
+        chunk = _emit_builder(es, method_name=method_name, exception_type=exception_type, backend=backend)
         body.write(chunk + "\n")
         if chunk.lstrip().startswith("// SKIPPED"):
             skipped.append(method_name)
@@ -433,7 +445,7 @@ def emit_builders(
             emitted.append(method_name)
 
     for es in standalone_schemas:
-        chunk = _emit_builder(es, method_name=es.name, exception_type=exception_type)
+        chunk = _emit_builder(es, method_name=es.name, exception_type=exception_type, backend=backend)
         body.write(chunk + "\n")
         if chunk.lstrip().startswith("// SKIPPED"):
             skipped.append(es.name)
@@ -474,8 +486,9 @@ def emit(
     helpers_include: str = "vgi_rpc_types.hpp",
     exception_include: str = '"duckdb/common/exception.hpp"',
     exception_type: str = "IOException",
+    record: str | None = None,
 ) -> None:
-    """Emit the generated C++ request-builder header to *out*."""
+    """Emit the generated C++ request-builder header to *out* (``record="nanoarrow"``: nanoarrow backend)."""
     standalone_schemas = tuple(
         EmittedSchema(name=sanitize_name(cls.__name__), schema=cls.ARROW_SCHEMA, origin=cls.__name__)
         for cls in STANDALONE_BUILDER_TYPES
@@ -495,6 +508,7 @@ def emit(
         exception_include=exception_include,
         exception_type=exception_type,
         standalone_schemas=standalone_schemas,
+        backend=record or "arrow",
     )
 
 

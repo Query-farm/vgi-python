@@ -45,9 +45,13 @@ def _generated_path(filename: str, override_var: str) -> Path:
     return Path(__file__).resolve().parents[2] / "vgi" / "src" / "generated" / filename
 
 
-def _emit(module: ModuleType) -> str:
+def _emit(module: ModuleType, *, extension: bool = False) -> str:
+    """Render a module; ``extension=True`` renders what the DuckDB extension checks in."""
     buf = io.StringIO()
-    module.emit(buf)
+    if extension and module is not cpp_secret_protocol_version:
+        module.emit(buf, record="nanoarrow")
+    else:
+        module.emit(buf)
     return buf.getvalue()
 
 
@@ -63,11 +67,10 @@ def test_checked_in_header_matches_generator(module: ModuleType, filename: str, 
     path = _generated_path(filename, override_var)
     if not path.exists():
         pytest.skip(f"{path} not found; set {override_var} or check out the vgi repo next to vgi-python")
-    expected = _emit(module)
+    expected = _emit(module, extension=True)
     actual = path.read_text()
     assert actual == expected, (
         f"{filename} is stale relative to {module.__name__}.\n"
         f"To regenerate, run:\n"
-        f"  uv run --project ~/Development/vgi-python python -m {module.__name__} \\\n"
-        f"    > ~/Development/vgi/src/generated/{filename}"
+        f"  uv run --project ~/Development/vgi-python python scripts/regen_generated.py"
     )

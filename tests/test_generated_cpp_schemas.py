@@ -197,33 +197,30 @@ def _parse_generated_hpp(text: str) -> dict[str, pa.Schema]:
 
 
 def test_checked_in_generated_hpp_matches_generator() -> None:
-    """The .hpp checked into the vgi repo must match the current generator output."""
+    """The .hpp checked into the vgi repo must match the current (nanoarrow-backend) output.
+
+    The DuckDB extension consumes the nanoarrow backend (``VgiSchemaPtr`` factories);
+    vgi-c++ and vgi-sqlite consume the Arrow C++ backend, checked by the parser
+    round-trip below.
+    """
     path = _vgi_generated_path()
     if not path.exists():
         pytest.skip(f"{path} not found; set VGI_GENERATED_HPP or check out vgi repo next to vgi-python")
+    buf = io.StringIO()
+    emit(buf, record="nanoarrow")
+    assert path.read_text() == buf.getvalue(), f"{path} is stale.\n{_REGEN_HINT}"
 
-    actual = _parse_generated_hpp(path.read_text())
-    expected = {
-        es.name: es.schema
-        for es in _collect_schemas(
-            extra_response_types=(*EXTRA_RESPONSE_TYPES, *REQUEST_TYPES),
-        )
-    }
 
-    # Extra or missing factories.
-    missing = set(expected) - set(actual)
-    extra = set(actual) - set(expected)
-    assert not missing, f"checked-in .hpp is missing schemas: {sorted(missing)}\n{_REGEN_HINT}"
-    assert not extra, f"checked-in .hpp has stale schemas no longer in the Protocol: {sorted(extra)}\n{_REGEN_HINT}"
-
-    for name, expected_schema in expected.items():
-        if not expected_schema.equals(actual[name], check_metadata=False):
-            raise AssertionError(
-                f"schema '{name}' in checked-in .hpp differs from generator output.\n"
-                f"  expected: {expected_schema}\n"
-                f"  actual:   {actual[name]}\n"
-                f"{_REGEN_HINT}",
-            )
+def test_nanoarrow_backend_covers_every_schema() -> None:
+    """The nanoarrow backend emits one factory per schema the Arrow backend emits."""
+    arrow_buf = io.StringIO()
+    emit(arrow_buf)
+    na_buf = io.StringIO()
+    emit(na_buf, record="nanoarrow")
+    arrow_names = set(re.findall(r"&(\w+)Schema\(\) \{", arrow_buf.getvalue()))
+    na_names = set(re.findall(r"inline const VgiSchemaPtr &(\w+)Schema\(\) \{", na_buf.getvalue()))
+    assert arrow_names and arrow_names == na_names
+    assert "arrow::" not in na_buf.getvalue()
 
 
 def test_parser_roundtrip_self_test() -> None:

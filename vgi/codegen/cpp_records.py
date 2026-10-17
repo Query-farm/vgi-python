@@ -55,7 +55,7 @@ from vgi.codegen._common import (
     parse_cpp_namespace,
     provenance_comment,
 )
-from vgi.codegen.cpp_schemas import _emit_field
+from vgi.codegen.cpp_schemas import _na_emit_field
 
 if TYPE_CHECKING:
     from typing import TextIO
@@ -362,15 +362,19 @@ def _render_header(model: _Model, namespace: list[str]) -> str:
     out = io.StringIO()
     out.write("#pragma once\n\n")
     out.write("// Typed VGI protocol records. Encode/decode with ToBatch()/FromBatch()\n")
-    out.write("// (vgi_protocol_records.cpp). Arrow appears only as forward declarations here.\n\n")
+    out.write("// (vgi_protocol_records.cpp), over the nanoarrow-backed types of vgi_arrow.hpp.\n\n")
+    out.write('#include "vgi_arrow.hpp"\n\n')
     for inc in ("cstdint", "map", "memory", "optional", "string", "utility", "vector"):
         out.write(f"#include <{inc}>\n")
-    out.write("\nnamespace arrow {\nclass Buffer;\nclass RecordBatch;\nclass Schema;\n} // namespace arrow\n\n")
+    out.write("\n")
     out.write(open_namespace(namespace))
     out.write("\n")
+    out.write(
+        "using ::duckdb::vgi::VgiBatchPtr;\nusing ::duckdb::vgi::VgiBufferPtr;\nusing ::duckdb::vgi::VgiSchemaPtr;\n\n"
+    )
     out.write("using Bytes = std::vector<uint8_t>;\n")
     out.write("//! A large_binary value, shared rather than copied (filter and join-key payloads can be large).\n")
-    out.write("using LargeBytes = std::shared_ptr<arrow::Buffer>;\n")
+    out.write("using LargeBytes = VgiBufferPtr;\n")
     out.write("//! timestamp[us, tz=UTC]: microseconds since the Unix epoch.\n")
     out.write("using TimestampMicros = int64_t;\n\n")
 
@@ -404,11 +408,10 @@ def _render_header(model: _Model, namespace: list[str]) -> str:
         out.write(f"bool operator==(const {r.name} &a, const {r.name} &b);\n")
         out.write(f"inline bool operator!=(const {r.name} &a, const {r.name} &b) {{\n\treturn !(a == b);\n}}\n")
         out.write(f"//! A one-row batch with {r.name}'s exact protocol schema.\n")
-        out.write(f"std::shared_ptr<arrow::RecordBatch> ToBatch(const {r.name} &value);\n")
+        out.write(f"VgiBatchPtr ToBatch(const {r.name} &value);\n")
         out.write(
             f"//! Decode row `row` of `batch` (protocol errors name `worker_path`).\n"
-            f"void FromBatch(const std::shared_ptr<arrow::RecordBatch> &batch, int64_t row, {r.name} &out,\n"
-            f"               const std::string &worker_path);\n\n"
+            f"void FromBatch(const VgiBatchPtr &batch, int64_t row, {r.name} &out, const std::string &worker_path);\n\n"
         )
 
     out.write("// " + "-" * 76 + "\n// Methods.\n// " + "-" * 76 + "\n\n")
@@ -416,10 +419,10 @@ def _render_header(model: _Model, namespace: list[str]) -> str:
     out.write("struct MethodSchemas {\n")
     out.write("\tconst char *method;\n")
     out.write("\t//! The outer request batch (`<Method>ParamsSchema`).\n")
-    out.write("\tstd::shared_ptr<arrow::Schema> params;\n")
+    out.write("\tVgiSchemaPtr params;\n")
     out.write("\t//! The record a unary result carries (`<Method>ResultSchema`); null when the method\n")
     out.write("\t//! returns nothing, raw bytes, or is a stream.\n")
-    out.write("\tstd::shared_ptr<arrow::Schema> result;\n")
+    out.write("\tVgiSchemaPtr result;\n")
     out.write("\t//! False for a unary method that returns None.\n")
     out.write("\tbool returns_value;\n")
     out.write("};\n")
@@ -427,18 +430,14 @@ def _render_header(model: _Model, namespace: list[str]) -> str:
     out.write("const std::vector<MethodSchemas> &AllMethodSchemas();\n\n")
     out.write("// Test hooks (test/cpp/test_protocol_records.cpp).\n")
     out.write("//! Every record's name with a one-row batch of a default-constructed instance.\n")
-    out.write(
-        "std::vector<std::pair<std::string, std::shared_ptr<arrow::RecordBatch>>> DefaultRecordBatchesForTesting();\n"
-    )
+    out.write("std::vector<std::pair<std::string, VgiBatchPtr>> DefaultRecordBatchesForTesting();\n")
     out.write("//! Records that have a vgi_protocol_schemas.hpp factory: name, record schema, factory schema.\n")
-    out.write("struct RecordSchemaPair {\n\tstd::string name;\n\tstd::shared_ptr<arrow::Schema> record;\n")
-    out.write("\tstd::shared_ptr<arrow::Schema> factory;\n};\n")
+    out.write("struct RecordSchemaPair {\n\tstd::string name;\n\tVgiSchemaPtr record;\n")
+    out.write("\tVgiSchemaPtr factory;\n};\n")
     out.write("std::vector<RecordSchemaPair> RecordSchemaPairsForTesting();\n\n")
     out.write("//! Decode row `row` of `batch` as a T (any record above).\n")
     out.write("template <class T>\n")
-    out.write(
-        "T Decode(const std::shared_ptr<arrow::RecordBatch> &batch, int64_t row, const std::string &worker_path) {\n"
-    )
+    out.write("T Decode(const VgiBatchPtr &batch, int64_t row, const std::string &worker_path) {\n")
     out.write("\tT out;\n\tFromBatch(batch, row, out, worker_path);\n\treturn out;\n}\n\n")
     out.write(close_namespace(namespace))
     return out.getvalue()
@@ -472,9 +471,14 @@ def _render_source(model: _Model, namespace: list[str]) -> str:
     out.write('#include "vgi_protocol_schemas.hpp"\n')
     out.write('#include "vgi_secret_protocol_schemas.hpp"\n')
     out.write('#include "vgi_wire_codec.hpp"\n\n')
-    out.write("#include <arrow/api.h>\n\n")
     out.write(open_namespace(namespace))
-    out.write("\nnamespace wire = ::duckdb::vgi::wire;\n\n")
+    out.write("\nnamespace wire = ::duckdb::vgi::wire;\n")
+    out.write(
+        "using ::duckdb::vgi::MakeSchema;\nusing ::duckdb::vgi::VgiBatchBuilder;\nusing ::duckdb::vgi::VgiColumn;\n"
+    )
+    out.write("namespace type = ::duckdb::vgi::type;\n")
+    out.write("// The codec's overloads join the generated ones (records and enums find each other by ADL).\n")
+    out.write("using wire::ReadValue;\nusing wire::WriteValue;\n\n")
 
     # Enums.
     for e in model.enums.values():
@@ -488,34 +492,28 @@ def _render_source(model: _Model, namespace: list[str]) -> str:
         out.write(f"\tfor (int16_t i = 0; i < k{e.name}Count; i++) {{\n")
         out.write(f"\t\tif (wire == k{e.name}Wire[i]) {{\n\t\t\treturn static_cast<{e.name}>(i);\n\t\t}}\n\t}}\n")
         out.write("\treturn std::nullopt;\n}\n\n")
-        out.write(f"void ReadValue(const arrow::Array &array, int64_t i, {e.name} &out, const wire::Ctx &ctx) {{\n")
-        out.write("\tstd::string s;\n\twire::ReadValue(array, i, s, ctx);\n")
+        out.write(f"void ReadValue(const VgiColumn &col, int64_t i, {e.name} &out, const wire::Ctx &ctx) {{\n")
+        out.write("\tstd::string s;\n\twire::ReadValue(col, i, s, ctx);\n")
         out.write(f"\tauto v = {e.name}FromWire(s);\n")
         out.write(f'\tif (!v) {{\n\t\twire::ThrowBadEnum(ctx, "{e.name}", s);\n\t}}\n')
         out.write("\tout = *v;\n}\n\n")
-        out.write(
-            f"std::shared_ptr<arrow::Array> BuildColumn(const std::shared_ptr<arrow::DataType> &type,\n"
-            f"                                          const std::vector<const {e.name} *> &values) {{\n"
-        )
-        out.write(f"\treturn wire::BuildEnumColumn(type, values, k{e.name}Wire, k{e.name}Count);\n}}\n\n")
+        out.write(f"void WriteValue(ArrowArray *array, {e.name} value) {{\n")
+        out.write(f"\twire::WriteEnum(array, static_cast<int16_t>(value), k{e.name}Wire, k{e.name}Count);\n}}\n\n")
 
     # Records: schema factories, nested-struct codecs (declared first so any order works), batch codecs.
     out.write("// Nested-struct codecs, declared up front so records can nest in any order.\n")
     for r in model.records.values():
-        out.write(f"void ReadValue(const arrow::Array &array, int64_t i, {r.name} &out, const wire::Ctx &ctx);\n")
-        out.write(
-            f"std::shared_ptr<arrow::Array> BuildColumn(const std::shared_ptr<arrow::DataType> &type,\n"
-            f"                                          const std::vector<const {r.name} *> &rows);\n"
-        )
+        out.write(f"void ReadValue(const VgiColumn &col, int64_t i, {r.name} &out, const wire::Ctx &ctx);\n")
+        out.write(f"void WriteValue(ArrowArray *array, const {r.name} &value);\n")
     out.write("\n")
 
     for r in model.records.values():
-        fields = ",\n\t    ".join(_emit_field(f, origin=f"{r.name}.{f.name}") for f in r.schema)
-        out.write(f"static const std::shared_ptr<arrow::Schema> &{r.name}RecordSchema() {{\n")
+        fields = ",\n\t    ".join(_na_emit_field(f, origin=f"{r.name}.{f.name}") for f in r.schema)
+        out.write(f"static const VgiSchemaPtr &{r.name}RecordSchema() {{\n")
         out.write(
-            f"\tstatic const auto schema = arrow::schema({{\n\t    {fields},\n\t}});\n"
+            f"\tstatic const auto schema = MakeSchema({{\n\t    {fields},\n\t}});\n"
             if r.members
-            else "\tstatic const auto schema = arrow::schema(arrow::FieldVector{});\n"
+            else "\tstatic const auto schema = MakeSchema({});\n"
         )
         out.write("\treturn schema;\n}\n\n")
 
@@ -533,25 +531,28 @@ def _render_source(model: _Model, namespace: list[str]) -> str:
             out.write(f'\tr.{m.presence.value}("{m.wire_name}", out.{m.ident});\n')
         out.write("}\n\n")
 
-        out.write(f"void ReadValue(const arrow::Array &array, int64_t i, {r.name} &out, const wire::Ctx &ctx) {{\n")
-        out.write(f'\twire::StructReader r(array, i, ctx, "{r.name}");\n\tRead{r.name}(r, out);\n}}\n\n')
-        out.write(
-            f"std::shared_ptr<arrow::Array> BuildColumn(const std::shared_ptr<arrow::DataType> &type,\n"
-            f"                                          const std::vector<const {r.name} *> &rows) {{\n"
-        )
-        out.write("\twire::StructColumn<" + r.name + "> c(type, rows);\n")
+        out.write(f"void ReadValue(const VgiColumn &col, int64_t i, {r.name} &out, const wire::Ctx &ctx) {{\n")
+        out.write(f'\twire::StructReader r(col, i, ctx, "{r.name}");\n\tRead{r.name}(r, out);\n}}\n\n')
+        out.write(f"void WriteValue(ArrowArray *array, const {r.name} &value) {{\n")
+        if not r.members:
+            out.write("\t(void)value;\n")
         for idx, m in enumerate(r.members):
-            out.write(f"\tc.Put({idx}, &{r.name}::{m.ident});\n")
-        out.write("\treturn c.Finish();\n}\n\n")
+            out.write(f"\tWriteValue(array->children[{idx}], value.{m.ident});\n")
+        out.write("\t::duckdb::vgi::append::FinishElement(array);\n}\n\n")
 
-        out.write(f"std::shared_ptr<arrow::RecordBatch> ToBatch(const {r.name} &value) {{\n")
-        out.write(f"\tconst auto &schema = {r.name}RecordSchema();\n")
-        out.write("\treturn wire::BatchFromStruct(schema, BuildColumn(wire::StructTypeOf(schema), {&value}));\n}\n\n")
+        out.write(f"VgiBatchPtr ToBatch(const {r.name} &value) {{\n")
+        out.write(f"\tVgiBatchBuilder b({r.name}RecordSchema());\n")
+        if not r.members:
+            out.write("\t(void)value;\n")
+        for idx, m in enumerate(r.members):
+            out.write(f"\tWriteValue(b.column({idx}), value.{m.ident});\n")
+        out.write("\tb.FinishRow();\n\treturn b.Finish();\n}\n\n")
         out.write(
-            f"void FromBatch(const std::shared_ptr<arrow::RecordBatch> &batch, int64_t row, {r.name} &out,\n"
-            f"               const std::string &worker_path) {{\n"
+            f"void FromBatch(const VgiBatchPtr &batch, int64_t row, {r.name} &out, const std::string &worker_path) {{\n"
         )
-        out.write(f'\twire::RowReader r(batch, row, "{r.name}", worker_path);\n\tRead{r.name}(r, out);\n}}\n\n')
+        out.write(f'\twire::RowReader r(batch, row, "{r.name}", worker_path);\n')
+        out.write("\twire::CurrentBatchScope scope(batch.get());\n")
+        out.write(f"\tRead{r.name}(r, out);\n}}\n\n")
 
     out.write("const std::vector<MethodSchemas> &AllMethodSchemas() {\n")
     out.write("\tstatic const std::vector<MethodSchemas> methods = {\n")
@@ -561,9 +562,7 @@ def _render_source(model: _Model, namespace: list[str]) -> str:
     out.write("\t};\n\treturn methods;\n}\n\n")
 
     factories = _factory_names()
-    out.write(
-        "std::vector<std::pair<std::string, std::shared_ptr<arrow::RecordBatch>>> DefaultRecordBatchesForTesting() {\n"
-    )
+    out.write("std::vector<std::pair<std::string, VgiBatchPtr>> DefaultRecordBatchesForTesting() {\n")
     out.write("\treturn {\n")
     for r in model.records.values():
         out.write(f'\t    {{"{r.name}", ToBatch({r.name} {{}})}},\n')
