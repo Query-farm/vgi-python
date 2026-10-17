@@ -378,8 +378,8 @@ def _render_header(model: _Model, namespace: list[str]) -> str:
     for e in model.enums.values():
         out.write("\n".join(_doc(e.doc, "")) + ("\n" if e.doc else ""))
         out.write(f"enum class {e.name} : int16_t {{\n")
-        for m in e.members:
-            out.write(f"\t{m.ident},\n")
+        for em in e.members:
+            out.write(f"\t{em.ident},\n")
         out.write("};\n")
         out.write(f"//! The wire name of a {e.name} value.\n")
         out.write(f"const char *ToWire({e.name} value);\n")
@@ -402,9 +402,7 @@ def _render_header(model: _Model, namespace: list[str]) -> str:
             out.write(f"\t{m.declared_type} {m.ident}{init};\n")
         out.write("};\n")
         out.write(f"bool operator==(const {r.name} &a, const {r.name} &b);\n")
-        out.write(
-            f"inline bool operator!=(const {r.name} &a, const {r.name} &b) {{\n\treturn !(a == b);\n}}\n"
-        )
+        out.write(f"inline bool operator!=(const {r.name} &a, const {r.name} &b) {{\n\treturn !(a == b);\n}}\n")
         out.write(f"//! A one-row batch with {r.name}'s exact protocol schema.\n")
         out.write(f"std::shared_ptr<arrow::RecordBatch> ToBatch(const {r.name} &value);\n")
         out.write(
@@ -470,7 +468,7 @@ def _render_source(model: _Model, namespace: list[str]) -> str:
         out.write(f"static const char *const k{e.name}Wire[] = {{{wires}}};\n")
         out.write(f"static constexpr int16_t k{e.name}Count = {len(e.members)};\n\n")
         out.write(f"const char *ToWire({e.name} value) {{\n")
-        out.write(f"\tauto i = static_cast<int16_t>(value);\n")
+        out.write("\tauto i = static_cast<int16_t>(value);\n")
         out.write(f'\treturn i >= 0 && i < k{e.name}Count ? k{e.name}Wire[i] : "";\n}}\n\n')
         out.write(f"std::optional<{e.name}> {e.name}FromWire(const std::string &wire) {{\n")
         out.write(f"\tfor (int16_t i = 0; i < k{e.name}Count; i++) {{\n")
@@ -500,8 +498,11 @@ def _render_source(model: _Model, namespace: list[str]) -> str:
     for r in model.records.values():
         fields = ",\n\t    ".join(_emit_field(f, origin=f"{r.name}.{f.name}") for f in r.schema)
         out.write(f"static const std::shared_ptr<arrow::Schema> &{r.name}RecordSchema() {{\n")
-        out.write(f"\tstatic const auto schema = arrow::schema({{\n\t    {fields},\n\t}});\n" if r.members else
-                  "\tstatic const auto schema = arrow::schema(arrow::FieldVector{});\n")
+        out.write(
+            f"\tstatic const auto schema = arrow::schema({{\n\t    {fields},\n\t}});\n"
+            if r.members
+            else "\tstatic const auto schema = arrow::schema(arrow::FieldVector{});\n"
+        )
         out.write("\treturn schema;\n}\n\n")
 
         out.write(f"bool operator==(const {r.name} &a, const {r.name} &b) {{\n")
@@ -531,7 +532,7 @@ def _render_source(model: _Model, namespace: list[str]) -> str:
 
         out.write(f"std::shared_ptr<arrow::RecordBatch> ToBatch(const {r.name} &value) {{\n")
         out.write(f"\tconst auto &schema = {r.name}RecordSchema();\n")
-        out.write(f"\treturn wire::BatchFromStruct(schema, BuildColumn(wire::StructTypeOf(schema), {{&value}}));\n}}\n\n")
+        out.write("\treturn wire::BatchFromStruct(schema, BuildColumn(wire::StructTypeOf(schema), {&value}));\n}\n\n")
         out.write(
             f"void FromBatch(const std::shared_ptr<arrow::RecordBatch> &batch, int64_t row, {r.name} &out,\n"
             f"               const std::string &worker_path) {{\n"
@@ -539,7 +540,9 @@ def _render_source(model: _Model, namespace: list[str]) -> str:
         out.write(f'\twire::RowReader r(batch, row, "{r.name}", worker_path);\n\tRead{r.name}(r, out);\n}}\n\n')
 
     factories = _factory_names()
-    out.write("std::vector<std::pair<std::string, std::shared_ptr<arrow::RecordBatch>>> DefaultRecordBatchesForTesting() {\n")
+    out.write(
+        "std::vector<std::pair<std::string, std::shared_ptr<arrow::RecordBatch>>> DefaultRecordBatchesForTesting() {\n"
+    )
     out.write("\treturn {\n")
     for r in model.records.values():
         out.write(f'\t    {{"{r.name}", ToBatch({r.name} {{}})}},\n')
@@ -556,13 +559,10 @@ def _render_source(model: _Model, namespace: list[str]) -> str:
 def _factory_names() -> set[str]:
     """Stems of the schema factories vgi_protocol_schemas.hpp emits (see cpp_schemas.emit)."""
     from vgi.codegen._common import EXTRA_RESPONSE_TYPES, REQUEST_TYPES, collect_schemas
-
     from vgi.secret_protocol import VgiSecretProtocol
 
     names = {s.name for s in collect_schemas(extra_response_types=(*EXTRA_RESPONSE_TYPES, *REQUEST_TYPES))}
-    secret = collect_schemas(
-        VgiSecretProtocol, info_types=(), extra_response_types=(), check_info_subclasses=False
-    )
+    secret = collect_schemas(VgiSecretProtocol, info_types=(), extra_response_types=(), check_info_subclasses=False)
     return names | {s.name for s in secret}
 
 
@@ -604,4 +604,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
