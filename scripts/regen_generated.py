@@ -37,6 +37,8 @@ _TARGETS: list[tuple[str, str, str]] = [
     ("vgi.codegen.cpp_constants", "src/generated/vgi_protocol_constants.hpp", "vgi"),
     ("vgi.codegen.cpp_protocol_version", "src/generated/vgi_protocol_version.hpp", "vgi"),
     ("vgi.codegen.cpp_protocol_name", "src/generated/vgi_protocol_names.hpp", "vgi"),
+    ("vgi.codegen.cpp_records:hpp", "src/generated/vgi_protocol_records.hpp", "vgi"),
+    ("vgi.codegen.cpp_records:cpp", "src/generated/vgi_protocol_records.cpp", "vgi"),
     # The secret protocol's three artifacts were checked in but never listed here,
     # so `--check` reported "no drift" over a stale secret header. Listed now: a
     # regen script that silently skips an artifact is worse than no script, because
@@ -90,6 +92,8 @@ _TARGETS += [(b.module, b.target, b.repo) for b in _REGISTRY_BACKENDS]
 
 #: Environment overrides for a checkout's location (``VGI_TYPESCRIPT_ROOT=...``).
 _ROOT_ENV: dict[str, str] = {b.repo: b.root_env for b in _REGISTRY_BACKENDS}
+# The DuckDB extension checkout (e.g. a worktree of it).
+_ROOT_ENV.setdefault("vgi", "VGI_EXTENSION_ROOT")
 
 
 def _repo_root(name: str) -> Path | None:
