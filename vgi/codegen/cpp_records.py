@@ -91,6 +91,21 @@ CPP_NAMES: dict[str, str] = {
 }
 
 
+#: Extra wire spellings the C++ client accepts for an enum (C++ enum name -> {spelling: member
+#: NAME}). Only spellings peers really send, which the hand-written client always accepted:
+#: vgi-go sends ``function_type`` in lower case, and ``table_in_out`` is the legacy name of
+#: TABLE. Encoding always writes the canonical member name.
+ENUM_WIRE_ALIASES: dict[str, dict[str, str]] = {
+    "FunctionType": {
+        "scalar": "SCALAR",
+        "table": "TABLE",
+        "table_in_out": "TABLE",
+        "table_buffering": "TABLE_BUFFERING",
+        "aggregate": "AGGREGATE",
+    },
+}
+
+
 def cpp_name(py_name: str) -> str:
     """The C++ type name for a protocol type's Python name."""
     return CPP_NAMES.get(py_name) or cs.csharp_name(py_name)
@@ -411,6 +426,20 @@ def _render_header(model: _Model, namespace: list[str]) -> str:
             f"               const std::string &worker_path);\n\n"
         )
 
+    out.write("// " + "-" * 76 + "\n// Methods.\n// " + "-" * 76 + "\n\n")
+    out.write("//! One VgiProtocol method's wire schemas (vgi_protocol_schemas.hpp factories).\n")
+    out.write("struct MethodSchemas {\n")
+    out.write("\tconst char *method;\n")
+    out.write("\t//! The outer request batch (`<Method>ParamsSchema`).\n")
+    out.write("\tstd::shared_ptr<arrow::Schema> params;\n")
+    out.write("\t//! The record a unary result carries (`<Method>ResultSchema`); null when the method\n")
+    out.write("\t//! returns nothing, raw bytes, or is a stream.\n")
+    out.write("\tstd::shared_ptr<arrow::Schema> result;\n")
+    out.write("\t//! False for a unary method that returns None.\n")
+    out.write("\tbool returns_value;\n")
+    out.write("};\n")
+    out.write("//! Every VgiProtocol method, by name order.\n")
+    out.write("const std::vector<MethodSchemas> &AllMethodSchemas();\n\n")
     out.write("// Test hooks (test/cpp/test_protocol_records.cpp).\n")
     out.write("//! Every record's name with a one-row batch of a default-constructed instance.\n")
     out.write(
@@ -473,6 +502,16 @@ def _render_source(model: _Model, namespace: list[str]) -> str:
         out.write(f"std::optional<{e.name}> {e.name}FromWire(const std::string &wire) {{\n")
         out.write(f"\tfor (int16_t i = 0; i < k{e.name}Count; i++) {{\n")
         out.write(f"\t\tif (wire == k{e.name}Wire[i]) {{\n\t\t\treturn static_cast<{e.name}>(i);\n\t\t}}\n\t}}\n")
+        aliases = ENUM_WIRE_ALIASES.get(e.name, {})
+        if aliases:
+            member_ident = {m.wire_name: m.ident for m in e.members}
+            out.write(
+                "\t// Accepted spellings beyond the canonical names (vgi.codegen.cpp_records.ENUM_WIRE_ALIASES).\n"
+            )
+            for alias, member in sorted(aliases.items()):
+                if member not in member_ident:
+                    raise GeneratorError(f"{e.name}: alias {alias!r} names unknown member {member!r}")
+                out.write(f'\tif (wire == "{alias}") {{\n\t\treturn {e.name}::{member_ident[member]};\n\t}}\n')
         out.write("\treturn std::nullopt;\n}\n\n")
         out.write(f"void ReadValue(const arrow::Array &array, int64_t i, {e.name} &out, const wire::Ctx &ctx) {{\n")
         out.write("\tstd::string s;\n\twire::ReadValue(array, i, s, ctx);\n")
@@ -539,6 +578,13 @@ def _render_source(model: _Model, namespace: list[str]) -> str:
         )
         out.write(f'\twire::RowReader r(batch, row, "{r.name}", worker_path);\n\tRead{r.name}(r, out);\n}}\n\n')
 
+    out.write("const std::vector<MethodSchemas> &AllMethodSchemas() {\n")
+    out.write("\tstatic const std::vector<MethodSchemas> methods = {\n")
+    for method, params, result, returns in _method_rows():
+        result_expr = f"{result}()" if result else "nullptr"
+        out.write(f'\t    {{"{method}", {params}(), {result_expr}, {"true" if returns else "false"}}},\n')
+    out.write("\t};\n\treturn methods;\n}\n\n")
+
     factories = _factory_names()
     out.write(
         "std::vector<std::pair<std::string, std::shared_ptr<arrow::RecordBatch>>> DefaultRecordBatchesForTesting() {\n"
@@ -554,6 +600,29 @@ def _render_source(model: _Model, namespace: list[str]) -> str:
     out.write("\t};\n}\n\n")
     out.write(close_namespace(namespace))
     return out.getvalue()
+
+
+def _method_rows() -> list[tuple[str, str, str | None, bool]]:
+    """(method, params factory, result factory or None, returns a value) for every VgiProtocol method."""
+    from vgi_rpc.rpc._types import MethodType, rpc_methods  # type: ignore[attr-defined]
+
+    from vgi.codegen._common import _resolve_inner_schema, sanitize_name
+    from vgi.protocol import VgiProtocol
+
+    rows: list[tuple[str, str, str | None, bool]] = []
+    methods = rpc_methods(VgiProtocol)
+    for name in sorted(methods):
+        info = methods[name]
+        stem = sanitize_name(name)
+        result = None
+        if (
+            info.method_type == MethodType.UNARY
+            and info.has_return
+            and _resolve_inner_schema(info.result_type, name) is not None
+        ):
+            result = f"{stem}ResultSchema"
+        rows.append((name, f"{stem}ParamsSchema", result, bool(info.has_return)))
+    return rows
 
 
 def _factory_names() -> set[str]:
