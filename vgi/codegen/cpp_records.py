@@ -93,8 +93,8 @@ CPP_NAMES: dict[str, str] = {
 
 #: Extra wire spellings the C++ client accepts for an enum (C++ enum name -> {spelling: member
 #: NAME}). Only spellings peers really send, which the hand-written client always accepted:
-#: vgi-go sends ``function_type`` in lower case, and ``table_in_out`` is the legacy name of
-#: TABLE. Encoding always writes the canonical member name.
+#: vgi-go, vgi-rust and vgi-java send ``function_type`` / ``macro_type`` in lower case, and
+#: ``table_in_out`` is the legacy name of TABLE. Encoding always writes the canonical name.
 ENUM_WIRE_ALIASES: dict[str, dict[str, str]] = {
     "FunctionType": {
         "scalar": "SCALAR",
@@ -103,6 +103,8 @@ ENUM_WIRE_ALIASES: dict[str, dict[str, str]] = {
         "table_buffering": "TABLE_BUFFERING",
         "aggregate": "AGGREGATE",
     },
+    # vgi-go, vgi-rust and vgi-java send macro_type in lower case too.
+    "MacroType": {"scalar": "SCALAR", "table": "TABLE"},
 }
 
 
