@@ -109,7 +109,7 @@ def test_known_shapes() -> None:
 
 def test_enum_wire_values_are_member_names_in_order() -> None:
     """Enumerator order is the wire dictionary order; the wire value is the member name."""
-    from vgi.protocol import TableInOutFunctionInitPhase
+    from vgi.table_function import TableInOutFunctionInitPhase
 
     phase = cpp_records.build_model().enums["VgiInitPhase"]
     assert [m.wire_name for m in phase.members] == [m.name for m in TableInOutFunctionInitPhase]
