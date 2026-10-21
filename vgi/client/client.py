@@ -1589,7 +1589,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 _logger.warning("stderr_thread_did_not_terminate")
         self._stderr_threads = []
 
-        if self._external_location_owned:
+        if self._external_location_owned and self._external_location is not None:
             self._external_location.fetch_config.close()
 
         # Close the shared httpx2.Client if we created it ourselves.

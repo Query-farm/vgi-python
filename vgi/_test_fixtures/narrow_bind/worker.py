@@ -168,7 +168,6 @@ class NarrowBindCatalog(ReadOnlyCatalogInterface):
         for i, info in enumerate(infos):
             if info.path == ["main"]:
                 infos[i] = SchemaInfo(
-                    attach_opaque_data=info.attach_opaque_data,
                     path=list(info.path),
                     comment=info.comment,
                     tags=info.tags,

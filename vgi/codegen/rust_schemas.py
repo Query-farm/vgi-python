@@ -272,7 +272,7 @@ def emit(out: TextIO) -> None:
     body.write("\n")
     body.write(
         "/// Canonical fingerprint of the nested catalog wire schemas.\n"
-        f'pub const VGI_CATALOG_CONTRACT_HASH: &str = "{catalog_contract_hash()}";\n\n'
+        f'pub const VGI_CATALOG_CONTRACT_HASH: &str =\n    "{catalog_contract_hash()}";\n\n'
     )
     body.write("\n".join(_emit_fn(es) for es in schemas))
     body.write("\n")

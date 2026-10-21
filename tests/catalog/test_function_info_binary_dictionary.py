@@ -1,6 +1,9 @@
 """Binary metadata dictionaries preserve bytes, typed defaults and batch boundaries."""
 
+from __future__ import annotations
+
 from dataclasses import replace
+from typing import Any
 
 import pyarrow as pa
 import pytest
@@ -12,6 +15,12 @@ from vgi.schema_path import SchemaPath
 
 _FIELDS = ("arguments", "output_schema", "parameter_default_values")
 _BINARY_DICTIONARY = pa.dictionary(pa.int32(), pa.binary())
+
+
+def _dictionary_column(batch: pa.RecordBatch, name: str) -> pa.DictionaryArray[Any, Any]:
+    column = batch.column(name)
+    assert isinstance(column, pa.DictionaryArray)
+    return column
 
 
 def _function(name: str, arguments: bytes, defaults: pa.RecordBatch | None = None) -> FunctionInfo:
@@ -56,7 +65,7 @@ def test_collection_dictionary_replacements_preserve_values_and_nulls() -> None:
     assert encoded is not None
     batches = list(pa.ipc.open_stream(encoded))
     assert len(batches) == 3
-    assert [batch.column("arguments").dictionary.to_pylist() for batch in batches] == [
+    assert [_dictionary_column(batch, "arguments").dictionary.to_pylist() for batch in batches] == [
         [b"a"],
         [b"\xff"],
         [b"a", b""],
@@ -73,7 +82,7 @@ def test_binary_dictionary_deduplicates_equal_content() -> None:
     assert encoded is not None
     batch = pa.ipc.open_stream(encoded).read_next_batch()
     for name in _FIELDS:
-        column = batch.column(name)
+        column = _dictionary_column(batch, name)
         assert len(column.dictionary) == 1
         assert column.indices.to_pylist() == [0] * 20
     plain_schema = pa.schema(
@@ -81,8 +90,8 @@ def test_binary_dictionary_deduplicates_equal_content() -> None:
     )
     plain = pa.RecordBatch.from_arrays(
         [
-            column.dictionary_decode() if field.name in _FIELDS else column
-            for column, field in zip(batch, batch.schema, strict=True)
+            column.cast(pa.binary()) if field.name in _FIELDS else column
+            for column, field in zip(batch.columns, batch.schema, strict=True)
         ],
         schema=plain_schema,
     )

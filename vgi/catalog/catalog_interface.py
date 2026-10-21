@@ -363,6 +363,9 @@ class SchemaInfo(CatalogObject, ArrowSerializableDataclass):
 
     Attributes:
         path: Raw identifier components from the outermost schema to this schema.
+        attach_opaque_data: Deprecated constructor-only compatibility argument.
+            Discarded and never serialized; attachment state belongs to
+            ``CatalogAttachResult`` and subsequent request envelopes.
         estimated_object_count: Approximate population per object kind, keyed by
             the same names the C++ extension uses for its set-cache
             instrumentation: ``"table"``, ``"view"``, ``"scalar_function"``,
@@ -805,9 +808,7 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
 
     output_schema: Annotated[SerializedSchema, ArrowType(pa.dictionary(pa.int32(), pa.binary()))]
 
-    parameter_default_values: Annotated[
-        pa.RecordBatch | None, ArrowType(pa.dictionary(pa.int32(), pa.binary()))
-    ] = None
+    parameter_default_values: Annotated[pa.RecordBatch | None, ArrowType(pa.dictionary(pa.int32(), pa.binary()))] = None
 
     stability: FunctionStability | None = None
     null_handling: NullHandling | None = None
