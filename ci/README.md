@@ -4,19 +4,18 @@
 runs the canonical [Query-farm/vgi](https://github.com/Query-farm/vgi)
 integration sqllogictest suite against this repo's Python example worker on
 every push / PR. The same `.test` files run against the Python, Java, and Go
-ports, so a green run here is real wire-compatibility evidence — it exercises
-the worker through the *published* DuckDB extension, not a mock, and not the
-pure-Python in-process `Client` that the conformance tests in `ci.yml` use.
+ports, so a green run here verifies the worker through the native DuckDB
+extension over the wire. The native runner and test suite come from the same
+VGI commit. Public package releases remain separate from this development check.
 
 (The separate [`ci.yml`](../.github/workflows/ci.yml) covers lint / mypy / unit
 + conformance tests / docs / LocalStack S3 offload.)
 
 ## How it works (no C++ build)
 
-Rather than building the vgi DuckDB extension from source (which needs the
-Haybarn vcpkg pipeline), CI drives a **prebuilt** standalone `haybarn-unittest`
-(the DuckDB/Haybarn sqllogictest runner, published in Haybarn's releases) and
-installs the **signed** vgi extension from the Haybarn community channel:
+CI downloads the native integration runner built by Query-farm/vgi Actions.
+It links vgi, httpfs, json and parquet, so the worker's wire contract is checked
+against the matching client without waiting for a community extension release.
 
 1. **Install the workers** — `uv sync --all-extras` installs the `vgi-fixtures`
    workspace member, which puts the fixture console scripts
@@ -27,17 +26,27 @@ installs the **signed** vgi extension from the Haybarn community channel:
    `--http`, and the launcher's `--unix`, so one install covers every lane.
 2. **Checkout the test suite** — `Query-farm/vgi` at a pinned commit; its
    `test/sql/integration/*.test` files are the suite.
-3. **Download the runner** — `haybarn_unittest-linux-amd64.zip` from the pinned
-   Haybarn release.
-4. **Preprocess** — the standalone runner links none of the extensions the tests
-   gate on, so [`preprocess-require.awk`](preprocess-require.awk) rewrites each
-   `require <ext>` into an explicit signed `INSTALL <ext> FROM {community,core};
-   LOAD <ext>;`. `require-env` and everything else pass through.
-5. **Run** — [`run-integration.sh`](run-integration.sh) stages the preprocessed
-   tree, wires the `VGI_*_WORKER` env vars at the `.venv/bin` scripts for the
-   selected transport, `FORCE INSTALL`s the vgi extension (so the run uses what
-   users can install today), then runs the suite in a single `haybarn-unittest`
-   invocation. Any failed assertion exits non-zero and fails the job.
+3. **Download the runner** — the pinned checkout's `ci_fetch_native_runner.py`
+   retrieves its Actions artifact and checks its provenance against that exact
+   source commit. It exports `HAYBARN_UNITTEST`, `HAYBARN_CLI` and
+   `RUNNER_LINKS_EXTENSIONS=1` for the next step.
+4. **Stage** — [`run-integration.sh`](run-integration.sh) copies the selected
+   tests unchanged when extensions are linked into the runner. Their normal
+   `require` gates load linked extensions; unavailable optional extensions keep
+   their normal skip behavior.
+5. **Run** — the harness wires the `VGI_*_WORKER` environment variables to the
+   `.venv/bin` scripts for the selected transport and executes the suite, with
+   `simple_writable` in its own process. Native mode passes `--test-dir` so the
+   runner discovers the staged tree instead of its compiled source directory.
+   Failed assertions, empty runs, fatal signals and dead shared HTTP workers
+   fail the job. The no-error-skip configuration keeps HTTP errors from silently
+   skipping tests.
+
+For local checks against the published extension, leave
+`RUNNER_LINKS_EXTENSIONS` unset or set it to `0`. This preserves the standalone
+runner path: [`preprocess-require.awk`](preprocess-require.awk) converts
+`require` gates to signed `INSTALL` and `LOAD` statements, and the harness
+warms the community/core extension cache before running.
 
 The env wiring mirrors the vgi repo's Makefile `test_subprocess` / `test_shm` /
 `test_launcher` / `test_http` targets — the canonical local way to run this
@@ -77,9 +86,9 @@ matrix; `stdio` remains available for local compatibility testing:
   `test_launcher`), so those tests skip here; run the local stdio lane to cover
   them. One deliberate divergence from `test_launcher`: see
   `filter_echo_partitioned.test` below.
-- **`http`** — the whole suite over the stateless HTTP transport. Staging
-  injects `LOAD httpfs` before each worker ATTACH (the prebuilt binary doesn't
-  statically link httpfs).
+- **`http`** — the whole suite over the stateless HTTP transport. The native
+  runner links httpfs; standalone mode injects `LOAD httpfs` before worker
+  attachments.
 
 The `simple_writable/*.test` write-path tests (INSERT/UPDATE/DELETE/RETURNING)
 run on **every** lane against `VGI_SIMPLE_WRITABLE_WORKER`
@@ -147,36 +156,32 @@ even though the fixture (`vgi-fixture-bad-enum-worker`) is installed.
 ```bash
 uv sync --all-extras
 VGI_SRC=~/Development/vgi \
-HAYBARN_UNITTEST=/path/to/haybarn-unittest \
+HAYBARN_UNITTEST=~/Development/vgi/build/release/test/unittest \
+RUNNER_LINKS_EXTENSIONS=1 \
 TRANSPORT=stdio \
   ci/run-integration.sh
 ```
 
-Download `haybarn-unittest` for your platform from the pinned Haybarn release:
+To check the published extension instead, download `haybarn-unittest` for your
+platform from a compatible Haybarn release and leave `RUNNER_LINKS_EXTENSIONS=0`:
 
 ```bash
 gh release download "$HAYBARN_RELEASE" --repo Query-farm-haybarn/haybarn \
   --pattern 'haybarn_unittest-*.zip'
 ```
 
-For day-to-day local work against a hand-built C++ extension, prefer the vgi
-repo's own targets (`make test_subprocess`, `make test_http`, …) /
-`scripts/run_all_tests.sh` as described in `CLAUDE.md`; this harness exists for
-CI, where building the extension from source is impractical.
+The vgi repo's own targets (`make test_subprocess`, `make test_http`, …) and
+`scripts/run_all_tests.sh` remain available as described in `CLAUDE.md`.
 
 ## Version pins (and their coupling)
 
-Two pins live in the workflow's `env:` block:
+The workflow's `VGI_REF` pins the test suite and the native Actions artifact:
 
 | Pin | What | Why |
 |-----|------|-----|
-| `VGI_REF` | the `Query-farm/vgi` ref supplying the `.test` files | **for now tracks `main`** (latest at checkout time) so the port is always validated against the newest suite; switch to a commit SHA for reproducible, deliberate bumps |
-| `HAYBARN_RELEASE` | the Haybarn release supplying `haybarn-unittest` | must be ABI-compatible with the community vgi extension |
+| `VGI_REF` | the `Query-farm/vgi` commit supplying the tests and native runner | the downloader requires an artifact built from that exact commit |
 
-**The coupling to know about:** the vgi extension is pulled live from the
-community channel (`FORCE INSTALL vgi FROM community`), which always serves the
-*currently published* build — it is not version-pinned here. So CI verifies the
-worker against what users can install today. If `VGI_REF` points at a commit
-whose tests exercise a protocol feature the published extension doesn't yet ship
-(or vice-versa), that test can fail or skip — bump `VGI_REF` deliberately and
-re-validate against the current community extension.
+The optional standalone mode still installs the currently published community
+extension. Use a compatible test suite and worker when checking that release;
+an unreleased minor wire revision requires the matching native development
+runner. Changing the CI pin does not publish an extension or an SDK package.
