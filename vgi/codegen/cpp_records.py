@@ -203,7 +203,9 @@ def _map(dtype: pa.DataType, annotation: object, *, model: _Model, origin: str) 
         if dtype.equals(pa.dictionary(pa.int32(), pa.binary())):
             return "Bytes"
         if not (dtype.index_type.equals(pa.int16()) and dtype.value_type.equals(pa.string()) and not dtype.ordered):
-            raise GeneratorError(f"{origin}: only dictionary<int16, utf8> and dictionary<int32, binary> are supported, got {dtype}.")
+            raise GeneratorError(
+                f"{origin}: only dictionary<int16, utf8> and dictionary<int32, binary> are supported, got {dtype}."
+            )
         if isinstance(base, type) and issubclass(base, enum.Enum):
             return _register_enum(base, model)
         return "std::string"
