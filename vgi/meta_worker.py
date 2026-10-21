@@ -768,7 +768,7 @@ class MetaWorker:
         if len(impls) > 1:
             owners = ", ".join(sorted(owner for _, owner in impls.values()))
             raise ValueError(
-                f"MetaWorker children {owners} each implement {hook}(). vgi_rpc.Identity.v1 is "
+                f"MetaWorker children {owners} each implement {hook}(). vgi_rpc.Identity.v2 is "
                 f"hosted once per process, so at most one child may implement it."
             )
         return next(iter(impls.values()))[0] if impls else None

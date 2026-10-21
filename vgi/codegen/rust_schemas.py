@@ -59,6 +59,7 @@ from typing import TYPE_CHECKING, Any
 import pyarrow as pa
 from vgi_rpc.rpc._types import rpc_methods
 
+from vgi.catalog.contract import catalog_contract_hash
 from vgi.codegen._common import (
     EXTRA_RESPONSE_TYPES,
     REQUEST_TYPES,
@@ -269,6 +270,10 @@ def emit(out: TextIO) -> None:
     body.write("\n")
     body.write("use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef, TimeUnit};\n")
     body.write("\n")
+    body.write(
+        "/// Canonical fingerprint of the nested catalog wire schemas.\n"
+        f'pub const VGI_CATALOG_CONTRACT_HASH: &str = "{catalog_contract_hash()}";\n\n'
+    )
     body.write("\n".join(_emit_fn(es) for es in schemas))
     body.write("\n")
     body.write(_emit_params_dispatch(schemas))

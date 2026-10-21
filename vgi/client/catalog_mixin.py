@@ -74,11 +74,11 @@ from vgi.catalog import (
     ViewInfo,
 )
 from vgi.catalog.catalog_interface import deserialize_column_statistics
+from vgi.catalog.contents_codec import decode_inventory
 from vgi.protocol import (
     CatalogAttachRequest,
     CatalogCreateRequest,
     MacroCreateRequest,
-    SchemaContents,
     TableCreateRequest,
     VgiProtocol,
 )
@@ -89,25 +89,6 @@ from vgi.protocol import (
 _catalog_pool = WorkerPool(max_idle=4, idle_timeout=30.0)
 
 
-def _decode_schema_contents(entry: SchemaContents) -> SchemaContentsInfo:
-    """Decode one ``catalog_contents`` schema struct into Python catalog objects."""
-    schema = SchemaInfo.deserialize_from_bytes(entry.schema)
-    if list(schema.path) != list(entry.path):
-        raise CatalogClientError(
-            f"catalog_contents schema path {list(entry.path)!r} does not match "
-            f"its SchemaInfo path {list(schema.path)!r}"
-        )
-    return SchemaContentsInfo(
-        schema=schema,
-        tables=[TableInfo.deserialize_from_bytes(b) for b in entry.tables],
-        views=[ViewInfo.deserialize_from_bytes(b) for b in entry.views],
-        scalar_functions=[FunctionInfo.deserialize_from_bytes(b) for b in entry.scalar_functions],
-        aggregate_functions=[FunctionInfo.deserialize_from_bytes(b) for b in entry.aggregate_functions],
-        table_functions=[FunctionInfo.deserialize_from_bytes(b) for b in entry.table_functions],
-        scalar_macros=[MacroInfo.deserialize_from_bytes(b) for b in entry.scalar_macros],
-        table_macros=[MacroInfo.deserialize_from_bytes(b) for b in entry.table_macros],
-        indexes=[IndexInfo.deserialize_from_bytes(b) for b in entry.indexes],
-    )
 
 
 @dataclass(frozen=True)
@@ -326,7 +307,9 @@ class CatalogClientMixin:
                     yield proxy
             else:
                 cmd = self._worker_argv()
-                with _catalog_pool.connect(VgiProtocol, cmd) as proxy:  # type: ignore[type-abstract]
+                with _catalog_pool.connect(
+                    VgiProtocol, cmd, external_location=getattr(self, "_external_location", None)
+                ) as proxy:  # type: ignore[type-abstract]
                     yield proxy
         except RpcError as e:
             raise CatalogClientError(str(e)) from e
@@ -550,7 +533,7 @@ class CatalogClientMixin:
                 catalog_version=response.catalog_version,
                 etag=response.etag,
                 not_modified=response.not_modified,
-                schemas=[_decode_schema_contents(entry) for entry in response.schemas],
+                schemas=decode_inventory(response, if_none_match=if_none_match),
             )
 
     def load_catalog(

@@ -22,9 +22,9 @@ from __future__ import annotations
 import base64
 import importlib.util
 import json
-import math
 import time
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -68,7 +68,7 @@ _DEFAULTS = _VECTORS["defaults"]
 
 _GRANT_KEY_B64 = base64.b64encode(bytes(range(32))).decode()
 _SIGNING_KEY = b"attach-ticket-test-signing-key-1"
-_IDENTITY = "vgi_rpc.Identity.v1"
+_IDENTITY = "vgi_rpc.Identity.v2"
 
 
 @pytest.fixture(autouse=True)
@@ -293,7 +293,7 @@ class _MintingWorker(TicketProbeWorker):
     @classmethod
     def mint_grant(cls, principal: str, purpose: str, scopes: list[str], ttl_seconds: int) -> IssuedGrant:
         """Mint grant."""
-        return IssuedGrant(token=f"own-{principal}", expires_at=time.time() + ttl_seconds)
+        return IssuedGrant(token=f"own-{principal}", expires_at=datetime.now(UTC) + timedelta(seconds=ttl_seconds))
 
 
 def _server(worker: Any, *, transport: str = "http", configured: bool = True, keys: bool = True) -> Any:
@@ -469,15 +469,15 @@ class TestSealAttach:
         [(0, 3600, 3600), (60, 3600, 60), (99999, 3600, 3600), (0, None, None), (60, None, 60)],
     )
     def test_lifetime(self, ttl: int, ceiling: int | None, expected: int | None) -> None:
-        """expires_at = min(requested, grant maximum); 0 asks for the maximum; no maximum is +inf."""
+        """expires_at = min(requested, grant maximum); 0 asks for the maximum; no maximum is null."""
         before = int(time.time())
         ticket = _seal(_impl(ceiling), ttl_seconds=ttl)
         claims = open_attach_ticket(_SIGNING_KEY, ticket.ticket, principal="alice")
         if expected is None:
-            assert claims.expires_at == 0 and math.isinf(ticket.expires_at)
+            assert claims.expires_at == 0 and ticket.expires_at is None
         else:
             assert before + expected <= claims.expires_at <= int(time.time()) + expected
-            assert ticket.expires_at == claims.expires_at
+            assert ticket.expires_at == datetime.fromtimestamp(claims.expires_at, tz=UTC)
 
     def test_max_ttl_from_grant_keys_and_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Max ttl from grant keys and env."""
@@ -666,7 +666,8 @@ class TestEndToEnd:
         with http_connect(Identity, client=user) as identity:  # type: ignore[type-abstract]
             grant = identity.issue_grant(purpose="vgi.unattended", scopes=[], ttl_seconds=600)
         assert sealed.ticket.startswith("vgia1.") and "sk-live-secret" not in sealed.ticket
-        assert sealed.expires_at <= time.time() + 7 * 24 * 3600 + 5
+        assert sealed.expires_at is not None
+        assert sealed.expires_at <= datetime.now(UTC) + timedelta(days=7, seconds=5)
 
         runner = _SyncTestClient(app, default_headers={"Authorization": f"Bearer {grant.token}"})
         reattached = _attach_over_http(runner, {"vgi_attach_ticket": sealed.ticket})
@@ -738,3 +739,28 @@ def test_fixture_http_server_hosts_attach_tickets_when_keyed(http_worker: Any) -
     with http_connect(Reflection, base_url) as reflection:  # type: ignore[type-abstract]
         hosted = {p.protocol for p in reflection.list_protocols().protocols}
     assert ATTACH_TICKETS_PROTOCOL_NAME in hosted
+
+
+class TestAttachTicketWireShape:
+    """Protocol ``2.0.0``: ``expires_at`` is a nullable UTC microsecond timestamp."""
+
+    def test_protocol_version(self) -> None:
+        """The exact major.minor check rejects a ``1.0.0`` (float64 ``expires_at``) peer."""
+        assert AttachTickets.protocol_version == "2.0.0"
+
+    def test_expires_at_is_a_nullable_utc_timestamp(self) -> None:
+        """``timestamp[us, tz="UTC"]``, nullable; null replaces ``+inf``."""
+        field = AttachTicket.ARROW_SCHEMA.field("expires_at")
+        assert field.type == pa.timestamp("us", tz="UTC")
+        assert field.nullable
+
+    @pytest.mark.parametrize("when", [None, datetime(2026, 9, 21, 12, 0, 0, 123456, tzinfo=UTC)])
+    def test_round_trip(self, when: datetime | None) -> None:
+        """Null and a microsecond-precision instant both survive the wire."""
+        got = AttachTicket.deserialize_from_bytes(AttachTicket(ticket="vgia1.x", expires_at=when).serialize_to_bytes())
+        assert got.expires_at == when
+
+    def test_a_naive_datetime_is_refused(self) -> None:
+        """Arrow would read a naive value as UTC, silently shifting local time."""
+        with pytest.raises(ValueError, match="timezone-aware"):
+            AttachTicket(ticket="vgia1.x", expires_at=datetime(2026, 1, 1))

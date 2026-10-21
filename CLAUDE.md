@@ -302,7 +302,7 @@ vgi-client --input data.parquet --function sum_all_columns --worker vgi-fixture-
 | `VGI_OAUTH_DEVICE_CODE_CLIENT_SECRET` | Client secret for device-code flow (optional, URL-safe chars only) |
 | `VGI_OAUTH_USE_ID_TOKEN` | When `1`/`true`/`yes`, clients use OIDC `id_token` as Bearer instead of `access_token` |
 | `VGI_RPC_GRANT_KEYS` | Comma-separated base64 32-byte sealed-grant keys (first mints, all verify); enables grants as HTTP bearers. Also `VGI_RPC_GRANT_AUDIENCE`, `VGI_RPC_GRANT_MAX_TTL_SECONDS` |
-| `VGI_INTROSPECT_PRINCIPALS` | Comma-separated principals permitted to call `vgi_rpc.Identity.v1`'s `introspect_token`. Required — no permissive default — whenever the worker implements `resolve_token()` (see below) |
+| `VGI_INTROSPECT_PRINCIPALS` | Comma-separated principals permitted to call `vgi_rpc.Identity.v2`'s `introspect_token`. Required — no permissive default — whenever the worker implements `resolve_token()` (see below) |
 | `VGI_WORKER_ACCESS_LOG_SAMPLE` | Fraction of *successful* calls to keep in the access log, `0.0`–`1.0`. Errors are always kept; the decision is per call, so every record of one stream shares a fate |
 | `VGI_WORKER_ACCESS_LOG_ASYNC` | When `1`/`true`/`yes`, emit access-log records from a listener thread. Bounded queue; full means drop, and a crash loses whatever is queued |
 | `VGI_WORKER_ACCESS_LOG_QUEUE_SIZE` | Bound on the async access-log queue (default 10000) |
@@ -426,7 +426,7 @@ Also available on `Worker.main --http` and the fixture server. Under
 
 ### Token Introspection (`resolve_token`)
 
-A worker may optionally host the `vgi_rpc.Identity.v1` protocol, whose
+A worker may optionally host the `vgi_rpc.Identity.v2` protocol, whose
 `introspect_token` method resolves an opaque bearer credential to a principal —
 for a reverse proxy that terminates the only public listener and must know the
 caller's identity before it can authorize anything.
@@ -509,7 +509,9 @@ one. Allowlist rules are unchanged. See `docs/authentication.md` and
 
 ### Attach Tickets (`vgi.attach_tickets.v1`)
 
-`seal_attach` seals a user's ATTACH (catalog name, options incl. secrets,
+Protocol version `2.0.0`: `AttachTicket.expires_at` is nullable
+`timestamp[us, tz="UTC"]` (`datetime | None`, null = no expiry); `1.0.0` was a
+float64 with `+inf`. `seal_attach` seals a user's ATTACH (catalog name, options incl. secrets,
 version specs) into a `vgia1.` ticket under `VGI_SIGNING_KEY`, AAD
 `"vgi.attach_ticket.v1\0" + principal` (principal only, not domain). A runner
 holding the user's grant reattaches with the single option `vgi_attach_ticket`;

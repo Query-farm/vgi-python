@@ -50,6 +50,7 @@ from typing import Any
 
 import pyarrow as pa
 from vgi_rpc.rpc import RpcError
+from vgi_rpc.utils import empty_batch
 
 from vgi.aggregate_function import GROUP_COLUMN_NAME
 from vgi.arguments import Arguments
@@ -783,12 +784,9 @@ class AggregateClientMixin:
                 batch = next(batches, None)
 
             if not group_keys:
-                results = [
-                    pa.RecordBatch.from_arrays(
-                        [pa.array([], type=field.type) for field in session.output_schema],
-                        schema=session.output_schema,
-                    )
-                ]
+                # empty_batch, not pa.array([], type=...): that has no builder
+                # for union or extension types.
+                results = [empty_batch(session.output_schema)]
             else:
                 results = [
                     session.finalize(range(start, min(start + finalize_chunk_size, len(group_keys))))

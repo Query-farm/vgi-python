@@ -10,6 +10,7 @@ import subprocess
 import sys
 import textwrap
 import time
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated, Any
 
 import pyarrow as pa
@@ -499,7 +500,7 @@ class _MintingWorker(Worker):
         ttl = min(ttl_seconds, 3600)
         return IssuedGrant(
             token=f"sealed:{principal}:{':'.join(scopes)}:{purpose}",
-            expires_at=1_000_000.0 + ttl,
+            expires_at=datetime.fromtimestamp(1_000_000, tz=UTC) + timedelta(seconds=ttl),
             grant_id="grant-1",
         )
 
@@ -509,7 +510,9 @@ class _BothWorker(_IntrospectingWorker):
 
     @classmethod
     def mint_grant(cls, principal: str, purpose: str, scopes: list[str], ttl_seconds: int) -> IssuedGrant:
-        return IssuedGrant(token=f"sealed:{principal}", expires_at=1_000_000.0, grant_id="g")
+        return IssuedGrant(
+            token=f"sealed:{principal}", expires_at=datetime.fromtimestamp(1_000_000, tz=UTC), grant_id="g"
+        )
 
 
 class TestIntrospectResolverDetection:
@@ -582,7 +585,7 @@ def _hosted_protocols(worker_cls: type[Worker]) -> frozenset[str]:
 
 
 class TestTokenIntrospection:
-    """``vgi_rpc.Identity.v1`` — unhosted unless a worker implements the hook.
+    """``vgi_rpc.Identity.v2`` — unhosted unless a worker implements the hook.
 
     Identity was an HTTP JSON route (``POST {prefix}/__introspect_token__``)
     through vgi-rpc 0.45.x. As of 0.46.0 it is an RPC-layer protocol hosted on
@@ -615,7 +618,7 @@ class TestTokenIntrospection:
 
     def test_protocol_not_hosted_without_hook(self) -> None:
         """The server built for such a worker hosts no identity protocol."""
-        assert "vgi_rpc.Identity.v1" not in _hosted_protocols(_SingleWorker)
+        assert "vgi_rpc.Identity.v2" not in _hosted_protocols(_SingleWorker)
 
     def test_identity_built_with_hook(self) -> None:
         """Implementing the hook is what builds the implementation."""
@@ -638,7 +641,7 @@ class TestTokenIntrospection:
         with pytest.MonkeyPatch.context() as mp:
             mp.setenv("VGI_INTROSPECT_PRINCIPALS", "proxy-a")
             hosted = _hosted_protocols(_IntrospectingWorker)
-        assert "vgi_rpc.Identity.v1" in hosted
+        assert "vgi_rpc.Identity.v2" in hosted
 
     def test_resolver_answers_through_the_implementation(self) -> None:
         """The worker's own lookup is what the hosted protocol calls."""
@@ -697,7 +700,7 @@ class TestTokenIntrospection:
 
 
 class TestGrantMinting:
-    """``issue_grant`` — the other half of ``vgi_rpc.Identity.v1``.
+    """``issue_grant`` — the other half of ``vgi_rpc.Identity.v2``.
 
     Guarded very differently from ``introspect_token``, and deliberately so.
     Introspection answers a question about *somebody else's* credential, so it
@@ -729,7 +732,7 @@ class TestGrantMinting:
 
     def test_minting_alone_hosts_the_protocol(self) -> None:
         """A worker may mint without resolving — the two are independent."""
-        assert "vgi_rpc.Identity.v1" in _hosted_protocols(_MintingWorker)
+        assert "vgi_rpc.Identity.v2" in _hosted_protocols(_MintingWorker)
 
     def test_minting_alone_offers_only_issue_grant(self) -> None:
         """The protocol describes what the worker does, not what it could do."""
@@ -774,7 +777,7 @@ class TestGrantMinting:
         grant = identity.issue_grant(  # type: ignore[attr-defined]
             "long", [], 86_400, _minting_ctx("alice")
         )
-        assert grant.expires_at == 1_000_000.0 + 3600
+        assert grant.expires_at == datetime.fromtimestamp(1_000_000 + 3600, tz=UTC)
 
     def test_stale_authentication_cannot_mint(self) -> None:
         """Minting while the user is present is enforced, not just documented."""

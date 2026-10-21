@@ -193,7 +193,7 @@ def main() -> None:
             "--identity",
             envvar="VGI_FIXTURE_IDENTITY",
             help=(
-                "Host vgi_rpc.Identity.v1 with the vgi-rpc conformance fixture policy and its "
+                "Host vgi_rpc.Identity.v2 with the vgi-rpc conformance fixture policy and its "
                 "spoofable X-Conformance-Principal header authentication. Test-only; for "
                 "vgi-rpc-test-hosted --identity."
             ),

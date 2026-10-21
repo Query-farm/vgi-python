@@ -16,6 +16,7 @@ from typing import Any
 from typing import Literal as TypingLiteral
 
 import pyarrow as pa
+from vgi_rpc.utils import empty_batch
 
 FILTER_ENCODING = "vgi.filters.v2"
 FILTER_VERSION = "2"
@@ -765,10 +766,9 @@ class _Parser:
             and not isinstance(expression, RuntimeFilter)
             and not _REPLAYING_ACCEPTED_STATE.get()
         ):
-            empty = pa.RecordBatch.from_arrays(
-                [pa.array([], type=field.type) for field in self.output_schema],
-                schema=self.output_schema,
-            )
+            # empty_batch, not pa.array([], type=...): that has no builder
+            # for union or extension types.
+            empty = empty_batch(self.output_schema)
             try:
                 _evaluate_expression(expression, empty, self.context)
             except Exception as exc:

@@ -16,7 +16,7 @@ What a server hosts, in reflection order:
    the order returned — on **every** transport.
 3. ``vgi_rpc.Reflection.v1`` — on every transport unless ``describe=False``
    (an HTTP operator choice, ``--no-describe``).
-4. ``vgi_rpc.Identity.v1`` — HTTP only, and only when the worker overrides
+4. ``vgi_rpc.Identity.v2`` — HTTP only, and only when the worker overrides
    ``resolve_token`` and/or ``mint_grant`` (or grant keys are configured).
 5. ``vgi.attach_tickets.v1`` — HTTP only, and only when ``VGI_SIGNING_KEY`` is
    configured explicitly *and* the worker can issue grants. See
@@ -57,7 +57,7 @@ here rather than at each call site.
 _TRANSPORTS: frozenset[str] = frozenset({"pipe", "unix", "tcp", "iroh", "http"})
 
 #: Transports that authenticate their callers, and so may host
-#: ``vgi_rpc.Identity.v1``. Identity answers questions about *other*
+#: ``vgi_rpc.Identity.v2``. Identity answers questions about *other*
 #: callers' credentials; on a transport with no caller identity there is no
 #: allowlist to enforce, so it is not hosted there.
 _IDENTITY_TRANSPORTS: frozenset[str] = frozenset({"http"})
@@ -188,7 +188,7 @@ def _validated_hosted_protocols(worker: Worker | MetaWorker, primary: type) -> t
             raise ValueError(
                 f"{owner} entry {index} ({proto.__name__}) is named {name!r}, which claims the reserved "
                 f"{RESERVED_PROTOCOL_PREFIX!r} prefix. Framework protocols are not supplied through this "
-                f"hook: reflection is hosted automatically, and vgi_rpc.Identity.v1 is enabled by "
+                f"hook: reflection is hosted automatically, and vgi_rpc.Identity.v2 is enabled by "
                 f"overriding resolve_token() and/or mint_grant()."
             )
         try:
@@ -216,7 +216,7 @@ def _build_identity(
     introspect_principals: Iterable[str] | None,
     grant_keys: GrantKeys | None = None,
 ) -> IdentityImpl | None:
-    """Build the ``vgi_rpc.Identity.v1`` implementation, or ``None``.
+    """Build the ``vgi_rpc.Identity.v2`` implementation, or ``None``.
 
     ``None`` unless the worker class implements at least one of the two
     methods, and that is the point: ``RpcServer`` then does not host the
@@ -256,7 +256,7 @@ def _build_identity(
         return None
 
     # Not re-exported by ``vgi_rpc.rpc``, so the private module is the only
-    # import path for the ``vgi_rpc.Identity.v1`` implementation helper.
+    # import path for the ``vgi_rpc.Identity.v2`` implementation helper.
     from vgi_rpc.rpc._token_identity import IdentityImpl
 
     return IdentityImpl(
@@ -326,7 +326,7 @@ def _resolve_introspect_principals(explicit: Iterable[str] | None) -> list[str]:
     if not principals:
         sys.stderr.write(
             "Error: this worker implements resolve_token(), which hosts the\n"
-            "  vgi_rpc.Identity.v1 protocol, but no introspector allowlist was\n"
+            "  vgi_rpc.Identity.v2 protocol, but no introspector allowlist was\n"
             "  configured. Set VGI_INTROSPECT_PRINCIPALS (comma-separated) or\n"
             "  pass --introspect-principals.\n"
             "\n"

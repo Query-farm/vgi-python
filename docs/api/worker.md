@@ -72,7 +72,7 @@ overriding the same hook stop it at startup.
 
 Reflection (`list_protocols`) reports protocols in this order:
 
-| Transport | `vgi.v2` | `hosted_protocols()` | `vgi_rpc.Reflection.v1` | `vgi_rpc.Identity.v1` |
+| Transport | `vgi.v2` | `hosted_protocols()` | `vgi_rpc.Reflection.v1` | `vgi_rpc.Identity.v2` |
 | --- | --- | --- | --- | --- |
 | stdin/stdout | yes | yes | yes | no |
 | AF_UNIX / named pipe | yes | yes | yes | no |

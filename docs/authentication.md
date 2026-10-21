@@ -41,7 +41,7 @@ lookup.
 
 ## Grants and resolved tokens as bearer credentials
 
-`vgi_rpc.Identity.v1`'s `issue_grant` mints a standing credential that
+`vgi_rpc.Identity.v2`'s `issue_grant` mints a standing credential that
 unattended automation later presents as an ordinary bearer. Over HTTP the
 worker accepts two kinds of identity credential after the deployment's own
 authenticator:

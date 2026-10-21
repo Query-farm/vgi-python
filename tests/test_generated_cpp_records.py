@@ -109,6 +109,9 @@ def test_known_shapes() -> None:
     assert types["CatalogInfo"]["releases"] == "std::vector<CatalogRelease>"
     assert types["CatalogRelease"]["released_at"] == "std::optional<TimestampMicros>"
     assert types["FunctionInfo"]["function_type"] == "FunctionType"
+    assert types["FunctionInfo"]["arguments"] == "Bytes"
+    assert types["FunctionInfo"]["output_schema"] == "Bytes"
+    assert types["FunctionInfo"]["parameter_default_values"] == "std::optional<Bytes>"
     # A wire name that is a C++ keyword gets a trailing underscore.
     assert "namespace_" in {m.ident for m in model.records["FilterFunctionCapability"].members}
     assert "max_" in {m.ident for m in model.records["TableFunctionCardinalityResult"].members}
@@ -118,7 +121,7 @@ def test_known_shapes() -> None:
 
 def test_enum_wire_values_are_member_names_in_order() -> None:
     """Enumerator order is the wire dictionary order; the wire value is the member name."""
-    from vgi.protocol import TableInOutFunctionInitPhase
+    from vgi.table_function import TableInOutFunctionInitPhase
 
     phase = cpp_records.build_model().enums["VgiInitPhase"]
     assert [m.wire_name for m in phase.members] == [m.name for m in TableInOutFunctionInitPhase]

@@ -2,7 +2,7 @@
 
 """Identity credentials accepted as HTTP bearers: sealed grants and ``resolve_token``.
 
-vgi-rpc's ``Identity.v1`` mints grants "presented later by unattended
+vgi-rpc's ``Identity.v2`` mints grants "presented later by unattended
 automation as an ordinary bearer". These tests close that loop through
 vgi-python's own HTTP surface (``create_app``), not vgi-rpc in isolation:
 
@@ -42,7 +42,7 @@ from vgi.serve import create_app
 _KEY_B64 = base64.b64encode(bytes(range(32))).decode()
 _OTHER_KEY_B64 = base64.b64encode(bytes(range(32, 64))).decode()
 _SIGNING_KEY = b"grant-auth-test-signing-key-0001"
-_IDENTITY = "vgi_rpc.Identity.v1"
+_IDENTITY = "vgi_rpc.Identity.v2"
 _GRANT_ENV = (GRANT_KEYS_ENV, "VGI_RPC_GRANT_AUDIENCE", "VGI_RPC_GRANT_MAX_TTL_SECONDS")
 
 _VECTORS = json.loads(files("vgi_rpc.conformance").joinpath("grant_token_vectors.json").read_text(encoding="utf-8"))

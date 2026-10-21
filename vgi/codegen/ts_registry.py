@@ -254,7 +254,7 @@ export const VGI_PROTOCOL_NAME = "{name}";
 export const VGI_PROTOCOL_VERSION = "{version}";
 
 /** What a unary handler returns: the result row, now or later. */
-export type VgiReply<T> = T | Promise<T>;
+export type VgiReply<T> = T | ExternalRef | Promise<T | ExternalRef>;
 
 /** The result of a unary method with no `result` column. */
 export type NoResult = Record<string, never>;
@@ -398,6 +398,7 @@ def _render_body(model: Sequence[RegistryMethod]) -> str:
     lines += [
         "  type CallContext,",
         "  type ExchangeFn,",
+        "  type ExternalRef,",
         "  type ExchangeInit,",
         "  type HeaderInit,",
         "  MethodNotImplementedError,",
