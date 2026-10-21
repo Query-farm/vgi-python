@@ -154,6 +154,8 @@ def _component(f: pa.Field[Any], origin: str) -> _Component:
 
     if dtype.equals(_DICT_UTF8):
         return _Component(f.name, "String", (*nullable, "@ArrowField(ArrowFieldType.DICT_INT16_UTF8)"))
+    if dtype.equals(pa.dictionary(pa.int32(), pa.binary())):
+        return _Component(f.name, "byte[]", (*nullable, "@ArrowField(ArrowFieldType.DICT_INT32_BINARY)"))
 
     for proto, plain, boxed, override in _SCALARS:
         if dtype.equals(proto):

@@ -100,6 +100,9 @@ def test_known_shapes() -> None:
     assert types["CatalogInfo"]["releases"] == "std::vector<CatalogRelease>"
     assert types["CatalogRelease"]["released_at"] == "std::optional<TimestampMicros>"
     assert types["FunctionInfo"]["function_type"] == "FunctionType"
+    assert types["FunctionInfo"]["arguments"] == "Bytes"
+    assert types["FunctionInfo"]["output_schema"] == "Bytes"
+    assert types["FunctionInfo"]["parameter_default_values"] == "std::optional<Bytes>"
     # A wire name that is a C++ keyword gets a trailing underscore.
     assert "namespace_" in {m.ident for m in model.records["FilterFunctionCapability"].members}
     assert "max_" in {m.ident for m in model.records["TableFunctionCardinalityResult"].members}

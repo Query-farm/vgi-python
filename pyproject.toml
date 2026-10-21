@@ -58,6 +58,9 @@ dependencies = [
 haybarn = ["haybarn==1.5.5rc1"]
 duckdb = ["duckdb==1.5.5"]
 http = ["vgi-rpc[http]"]
+# Publishing and resolving immutable external catalog results needs the RPC
+# download/compression dependencies on every transport, including subprocess.
+external = ["vgi-rpc[external]"]
 iroh = ["vgi-rpc[http,iroh]"]
 # transport="launch": vgi_rpc.launcher imports filelock unconditionally at
 # module level, which lives behind vgi-rpc's own `cli` extra (alongside

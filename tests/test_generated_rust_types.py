@@ -81,7 +81,7 @@ def test_known_shapes() -> None:
         "catalog_version": "i64",
         "etag": "Option<String>",
         "not_modified": "bool",
-        "schemas": "Vec<SchemaContents>",
+        **{kind: "Option<Bytes>" for kind in ("schemas", "tables", "views", "functions", "macros", "indexes")},
     }
     assert by_name["SchemaContents"]["path"] == "Vec<String>"
     assert by_name["SchemaContents"]["schema"] == "Bytes"

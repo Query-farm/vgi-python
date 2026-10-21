@@ -44,6 +44,7 @@ from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
 
+from vgi.catalog.contract import catalog_contract_hash
 from vgi.codegen._common import (
     EXTRA_RESPONSE_TYPES,
     REQUEST_TYPES,
@@ -247,6 +248,10 @@ def emit(out: TextIO) -> None:
         body.write(f"  {sym},\n")
     body.write('} from "../arrow/index.js";\n\n')
 
+    body.write(
+        "/** Canonical fingerprint of the nested catalog wire schemas. */\n"
+        f'export const VGI_CATALOG_CONTRACT_HASH = "{catalog_contract_hash()}";\n\n'
+    )
     for block in body_blocks:
         body.write(block)
         body.write("\n")

@@ -880,9 +880,8 @@ def _with_sorted_maps(info: Any) -> Any:
     Arrow writes a map column in the dict's iteration order, so two equal
     items whose ``tags`` (or ``estimated_object_count``, ``column_comments``,
     ...) were filled in different orders would encode to different bytes.
-    Catalog items must encode deterministically: ``catalog_contents`` promises
-    items byte-identical to the per-schema RPCs, its content-hash etag hashes
-    them, and every other VGI SDK sorts map keys the same way.
+    Catalog items must encode deterministically: catalog content hashes depend
+    on stable bytes, and every VGI SDK sorts map keys the same way.
 
     Args:
         info: The catalog item (a frozen dataclass).
@@ -1095,25 +1094,22 @@ class SchemaContents(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CatalogContentsResponse(ArrowSerializableDataclass):
-    """Response for `catalog_contents()`: the whole catalog in one result.
+    """Whole catalog as six nullable, typed Arrow IPC collection streams.
 
-    Attributes:
-        catalog_version: The catalog version the snapshot was taken at. Worker-defined
-            and only meaningful within the session that requested it.
-        etag: Opaque validator for this snapshot, to send back as
-            ``if_none_match``. Null means the worker does not revalidate (and
-            ignores ``if_none_match``).
-        not_modified: ``True`` when the request's ``if_none_match`` equals the
-            current ``etag``: ``schemas`` is then empty and the client keeps the
-            contents it has.
-        schemas: One [`SchemaContents`][] struct per schema, parents before
-            children. Empty when ``not_modified``.
+    Each non-null category contains every object of that type across schemas,
+    potentially in multiple record batches. Null means empty. A not-modified
+    answer has six null categories and an ETag matching the request.
     """
 
     catalog_version: int
     etag: str | None = None
     not_modified: bool = False
-    schemas: list[SchemaContents] = field(default_factory=list)
+    schemas: bytes | None = None
+    tables: bytes | None = None
+    views: bytes | None = None
+    functions: bytes | None = None
+    macros: bytes | None = None
+    indexes: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -3264,17 +3260,15 @@ class VgiProtocol(Protocol):
 
     Bump rules:
 
-    - **Major** — any backwards-incompatible change: removing a method,
-      renaming a method/parameter, changing a parameter or return type,
-      adding a required parameter.
-    - **Minor** — additive: a new method, a new optional parameter, or a new
-      optional response column.
-    - **Patch** — worker-side bug fixes that do not touch the surface.
+    - **Major** — a new routing namespace and migration boundary.
+    - **Minor** — a coordinated wire-contract revision, including additive or
+      breaking method and schema changes. Exact major/minor matching protects
+      incompatible consumers; clients and workers must be upgraded together.
+    - **Patch** — fixes that do not change the wire contract.
 
-    Because Arrow's column-count check in the C++ consumer rejects
-    return-schema drift today, even "minor" additive bumps force clients to
-    rebuild in practice. Bump major when the surface changes and you want all
-    deployed clients to refuse to talk to the new server until rebuilt.
+    Never publish different wire contracts under the same major/minor pair.
+    A minor revision retains the protocol route; separate deployment URLs are
+    needed to serve incompatible minor revisions during migration.
 
     Cross-language consumers (Rust / Go workers) read ``vgi/protocol_version.txt``
     (generated, committed). The C++ DuckDB extension reads
@@ -3303,7 +3297,7 @@ class VgiProtocol(Protocol):
     # ``VgiProtocol``, Java and C# ``VgiService``, Go the framework default
     # ``Service``, TypeScript ``vgi`` -- so no client could address them all.
     protocol_name: ClassVar[str] = "vgi.v2"
-    protocol_version: ClassVar[str] = "2.1.0"
+    protocol_version: ClassVar[str] = "2.2.0"
 
     def bind(self, request: BindRequest) -> BindResponse:
         """Resolve output schema and validate arguments."""

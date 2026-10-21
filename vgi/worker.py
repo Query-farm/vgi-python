@@ -138,7 +138,6 @@ from vgi.protocol import (
     ProcessState,
     ScalarExchangeState,
     ScanSplit,
-    SchemaContents,
     SchemasResponse,
     TableBufferingFinalizeState,
     TableCreateRequest,
@@ -154,7 +153,6 @@ from vgi.protocol import (
     VgiCallState,
     VgiProtocol,
     ViewsResponse,
-    _item_ipc_bytes,
 )
 from vgi.rpc_server import build_rpc_server
 from vgi.scalar_function import ScalarFunctionGenerator
@@ -1106,47 +1104,11 @@ def _transaction_aad(auth: AuthContext | None, attach_envelope: bytes) -> bytes:
     return _TRANSACTION_AAD_PREFIX + _identity_tail(auth) + b"\x00" + attach_envelope
 
 
-def catalog_contents_digest(schemas: Sequence[SchemaContents]) -> str:
-    """Hex SHA-256 over a ``catalog_contents`` snapshot: the ``content-hash`` etag.
+def catalog_contents_digest(response: CatalogContentsResponse) -> str:
+    """Content ETag over the six catalog-wide collection streams."""
+    from vgi.catalog.contents_codec import CATEGORY_TYPES, contents_digest
 
-    Covers every schema's path and the exact item bytes of every kind, in
-    order, each length-prefixed so no two different snapshots share an input.
-    Deterministic because the items' encoding is (map columns are written in
-    sorted key order), so two builds of the same catalog hash alike.
-
-    Args:
-        schemas: The snapshot, in wire order.
-
-    Returns:
-        The lowercase hex digest.
-    """
-    digest = hashlib.sha256()
-
-    def chunk(data: bytes) -> None:
-        digest.update(len(data).to_bytes(8, "little"))
-        digest.update(data)
-
-    def chunks(values: Sequence[bytes]) -> None:
-        digest.update(len(values).to_bytes(8, "little"))
-        for value in values:
-            chunk(value)
-
-    digest.update(len(schemas).to_bytes(8, "little"))
-    for entry in schemas:
-        chunks([part.encode() for part in entry.path])
-        chunk(entry.schema)
-        for kind in (
-            entry.tables,
-            entry.views,
-            entry.scalar_functions,
-            entry.aggregate_functions,
-            entry.table_functions,
-            entry.scalar_macros,
-            entry.table_macros,
-            entry.indexes,
-        ):
-            chunks(kind)
-    return digest.hexdigest()
+    return contents_digest({kind: getattr(response, kind) for kind in CATEGORY_TYPES})
 
 
 class _PreserializedContentsResponse(CatalogContentsResponse):
@@ -1176,6 +1138,11 @@ class _PreserializedContentsResponse(CatalogContentsResponse):
             etag=response.etag,
             not_modified=response.not_modified,
             schemas=response.schemas,
+            tables=response.tables,
+            views=response.views,
+            functions=response.functions,
+            macros=response.macros,
+            indexes=response.indexes,
         )
         object.__setattr__(out, "_wire", response.serialize_to_bytes())
         return out
@@ -4974,6 +4941,40 @@ class Worker:
         # Open the envelope first even on a cache hit: it is the auth check.
         attach = self._unwrap_attach(attach_opaque_data)
         version = cat.catalog_version(attach_opaque_data=attach, transaction_opaque_data=None)
+        policy = cat.catalog_snapshot_policy
+        if policy is not None and policy.delivery == "published":
+            from vgi.catalog.contents_codec import decode_inventory
+            from vgi.catalog.snapshot import SnapshotRequest
+
+            manager = self._catalog_snapshot_manager(policy)
+            request = SnapshotRequest(catalog=cat, attach_opaque_data=attach,
+                attachment_scope=hashlib.sha256(attach_opaque_data).hexdigest(), catalog_version=version)
+            built: CatalogContentsResponse | None = None
+
+            def build() -> CatalogContentsResponse:
+                nonlocal built
+                if built is None:
+                    candidate = self._catalog_contents_response(cat, attach, version, None)
+                    decode_inventory(candidate)
+                    after_version = cat.catalog_version(attach_opaque_data=attach, transaction_opaque_data=None)
+                    if after_version != version:
+                        raise ValueError("catalog changed while building its publication")
+                    built = candidate
+                return built
+
+            try:
+                return cast(CatalogContentsResponse, manager.resolve(request, build, if_none_match))
+            except Exception:
+                if policy.on_publication_failure != "ordinary":
+                    raise
+                fallback_key = manager.cache_key(request)
+                built = None
+                response = build()
+                if manager.cache_key(request) != fallback_key:
+                    raise ValueError("catalog generation changed while building publication fallback")
+                if response.etag is not None and response.etag == if_none_match:
+                    return CatalogContentsResponse(catalog_version=version, etag=response.etag, not_modified=True)
+                return response
         if type(cat).catalog_contents_attach_independent and getattr(type(cat), "catalog_version_frozen", False):
             snapshot = self._contents_cache
             if snapshot is None or snapshot.catalog is not cat or snapshot.catalog_version != version:
@@ -4992,6 +4993,53 @@ class Worker:
                 return CatalogContentsResponse(catalog_version=version, etag=snapshot.etag, not_modified=True)
             return snapshot.response
         return self._catalog_contents_response(cat, attach, version, if_none_match)
+
+    _publication_manager: Any = None
+
+    def _catalog_snapshot_manager(self, policy: Any) -> Any:
+        from vgi.catalog.snapshot import CatalogSnapshotManager
+
+        if self._publication_manager is None or self._publication_manager.policy is not policy:
+            with _CONTENTS_CACHE_LOCK:
+                if self._publication_manager is None or self._publication_manager.policy is not policy:
+                    self._publication_manager = CatalogSnapshotManager(policy)
+        return self._publication_manager
+
+    def warm_catalog_contents(self, attach_opaque_data: bytes) -> Any:
+        """Authorize and warm the configured publication using a normal full request."""
+        policy = self._get_catalog().catalog_snapshot_policy
+        if policy is None or policy.delivery != "published":
+            raise ValueError("catalog has no published snapshot policy")
+        return self.catalog_contents(attach_opaque_data)
+
+    def import_catalog_publication(self, attach_opaque_data: bytes, manifest: Any) -> Any:
+        """Authorize, fetch and validate an existing publication before importing it."""
+        from vgi.catalog.snapshot import SnapshotRequest
+
+        cat = self._get_catalog()
+        attach = self._unwrap_attach(attach_opaque_data)
+        policy = cat.catalog_snapshot_policy
+        if policy is None or policy.delivery != "published":
+            raise ValueError("catalog has no published snapshot policy")
+        version = cat.catalog_version(attach_opaque_data=attach, transaction_opaque_data=None)
+        request = SnapshotRequest(catalog=cat, attach_opaque_data=attach,
+            attachment_scope=hashlib.sha256(attach_opaque_data).hexdigest(), catalog_version=version)
+        return self._catalog_snapshot_manager(policy).import_publication(request, manifest)
+
+    def invalidate_catalog_publication(self, attach_opaque_data: bytes, manifest_id: str) -> bool:
+        """Authorize and conditionally invalidate this attachment's current publication."""
+        from vgi.catalog.snapshot import SnapshotRequest
+
+        cat = self._get_catalog()
+        attach = self._unwrap_attach(attach_opaque_data)
+        policy = cat.catalog_snapshot_policy
+        if policy is None or policy.delivery != "published":
+            raise ValueError("catalog has no published snapshot policy")
+        version = cat.catalog_version(attach_opaque_data=attach, transaction_opaque_data=None)
+        request = SnapshotRequest(catalog=cat, attach_opaque_data=attach,
+            attachment_scope=hashlib.sha256(attach_opaque_data).hexdigest(), catalog_version=version)
+        manager = self._catalog_snapshot_manager(policy)
+        return bool(manager.invalidate(manager.cache_key(request), manifest_id))
 
     _contents_cache: _ContentsSnapshot | None = None
 
@@ -5020,40 +5068,24 @@ class Worker:
                 raise ValueError("catalog_contents returned not_modified with schemas; it must return none")
             return CatalogContentsResponse(catalog_version=version, etag=result.etag, not_modified=True)
 
-        infos = list(result.schemas)
-        path_keys = [schema_path_key(c.schema.path) for c in infos]
-        path_key_set = set(path_keys)
-        if len(path_keys) != len(path_key_set):
-            raise ValueError("catalog_contents returned duplicate schema paths")
-        for path_key in path_keys:
-            if len(path_key) > 1 and path_key[:-1] not in path_key_set:
-                raise ValueError(f"catalog_contents returned schema path {list(path_key)!r} without its parent")
+        from vgi.catalog.contents_codec import contents_digest, encode_inventory
 
-        def items(objs: Sequence[object]) -> list[bytes]:
-            return [_item_ipc_bytes(obj) for obj in objs]
-
-        # Same parent-before-child order catalog_schemas guarantees.
-        schemas = [
-            SchemaContents(
-                path=list(c.schema.path),
-                schema=_item_ipc_bytes(c.schema),
-                tables=items(c.tables),
-                views=items(c.views),
-                scalar_functions=items(c.scalar_functions),
-                aggregate_functions=items(c.aggregate_functions),
-                table_functions=items(c.table_functions),
-                scalar_macros=items(c.scalar_macros),
-                table_macros=items(c.table_macros),
-                indexes=items(c.indexes),
-            )
-            for c in sorted(infos, key=lambda c: len(c.schema.path))
-        ]
+        categories = encode_inventory(list(result.schemas))
         etag = result.etag
         if etag is None and type(cat).catalog_contents_etag == "content-hash":
-            etag = catalog_contents_digest(schemas)
+            etag = contents_digest(categories)
         if etag is not None and if_none_match is not None and etag == if_none_match:
             return CatalogContentsResponse(catalog_version=version, etag=etag, not_modified=True)
-        return CatalogContentsResponse(catalog_version=version, etag=etag, schemas=schemas)
+        return CatalogContentsResponse(
+            catalog_version=version,
+            etag=etag,
+            schemas=categories["schemas"],
+            tables=categories["tables"],
+            views=categories["views"],
+            functions=categories["functions"],
+            macros=categories["macros"],
+            indexes=categories["indexes"],
+        )
 
     def catalog_copy_from_formats(
         self,
