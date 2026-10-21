@@ -9,10 +9,10 @@ Behavior and worker policy are documented in docs/design/reporting-protocols/.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Annotated, ClassVar, Protocol
+from typing import Annotated, ClassVar, Literal, Protocol
 
 import pyarrow as pa
-from vgi_rpc import ArrowSerializableDataclass
+from vgi_rpc import ArrowSerializableDataclass, ArrowType
 from vgi_rpc.rpc import ProducerState, Stream
 
 from vgi.reporting._arrow import Instant, Json, RowIpc, non_null_list
@@ -21,22 +21,26 @@ from vgi.reporting._metadata import sql_read
 from vgi.reporting.common import (
     Ack,
     CredentialStatus,
-    DataSource,
     Destination,
     DestinationResult,
     ExecutionIdentity,
     ExecutionInput,
     Notification,
+    OwnerKey,
     Ownership,
+    OwnershipCapabilities,
     OwnershipInput,
-    ParameterSpec,
+    OwnershipScope,
     ParamValue,
+    PreviewJob,
     PrincipalRef,
     ResourceMeta,
     RetryPolicy,
     RunError,
     ServiceInfo,
+    ValidationResult,
 )
+from vgi.reporting.sources import QuerySource, ResolvedSource
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -56,13 +60,8 @@ class AlertRule(ArrowSerializableDataclass):
     title: str
     description: str = ""
     severity: Severity = "warning"
-    data_sources: Annotated[list[DataSource], non_null_list(pa.struct(DataSource.ARROW_SCHEMA))]
-    setup_sql: str = ""
-    sql: str
+    source: QuerySource
     key_columns: Annotated[list[str], non_null_list(pa.string())] = field(default_factory=list)
-    parameters: Annotated[list[ParameterSpec], non_null_list(pa.struct(ParameterSpec.ARROW_SCHEMA))] = field(
-        default_factory=list
-    )
     parameter_values: Annotated[list[ParamValue], non_null_list(pa.struct(ParamValue.ARROW_SCHEMA))] = field(
         default_factory=list
     )
@@ -87,6 +86,7 @@ class RuleRecord(ResourceMeta):
     definition: AlertRule
     execution_identity: ExecutionIdentity
     key_generation: int
+    evaluated_source: ResolvedSource | None = None
     state: AlertRuleState
     state_since: Instant
     last_evaluated_at: Instant | None
@@ -102,13 +102,32 @@ class RuleRecord(ResourceMeta):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class Instance(ArrowSerializableDataclass):
-    """Fixed outer alert schema with typed one-row Arrow detail batches."""
+class RuleSummary(ResourceMeta):
+    """Rule state for browsing without query definitions or destinations."""
+
+    rule_id: str
+    title: str
+    enabled: bool
+    severity: Severity
+    execution_identity: ExecutionIdentity
+    state: AlertRuleState
+    last_evaluated_at: Instant | None
+    next_evaluation_at: Instant | None
+    pending_count: int
+    firing_count: int
+    resolving_count: int
+    last_error: RunError | None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class InstanceSummary(ArrowSerializableDataclass):
+    """Alert state, key and acknowledgement metadata without detail IPC."""
 
     instance_id: str
     rule_id: str
     version: int
     key_generation: int
+    evaluated_source: ResolvedSource | None = None
     canonical_key: Json
     state: AlertInstanceState
     severity: Severity
@@ -117,13 +136,19 @@ class Instance(ArrowSerializableDataclass):
     fired_at: Instant | None
     resolved_at: Instant | None
     updated_at: Instant
-    latest_details: RowIpc | None
-    fired_details: RowIpc | None
     acknowledged: bool
     acknowledged_at: Instant | None
     acknowledged_by: PrincipalRef | None
     acknowledgement_note: str | None
     allowed_actions: Annotated[list[str], non_null_list(pa.string())]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Instance(InstanceSummary):
+    """Authorized detail fields; inaccessible details are null, never empty rows."""
+
+    latest_details: RowIpc | None
+    fired_details: RowIpc | None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -139,6 +164,14 @@ class Snooze(ArrowSerializableDataclass):
     reason: str
     created_at: Instant
     created_by: PrincipalRef
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SnoozeRecord(Snooze):
+    """Recoverable silence state and version for another authorized client."""
+
+    state: Annotated[Literal["active", "expired", "cancelled", "resolved"], ArrowType(pa.string())]
+    ended_at: Instant | None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -162,6 +195,7 @@ class AlertEvent(ArrowSerializableDataclass):
     rule_id: str
     instance_id: str | None
     key_generation: int
+    evaluated_source: ResolvedSource | None = None
     occurred_at: Instant
     kind: AlertEventKind
     actor: PrincipalRef | None
@@ -169,7 +203,8 @@ class AlertEvent(ArrowSerializableDataclass):
     from_state: str | None
     to_state: str | None
     error: RunError | None
-    destination_results: Annotated[list[DestinationResult], non_null_list(pa.struct(DestinationResult.ARROW_SCHEMA))]
+    snooze_id: str | None = None
+    destination_count: int = 0
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -191,16 +226,30 @@ class AlertTest(ArrowSerializableDataclass):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class AlertPreviewJob(PreviewJob):
+    """Typed bounded rule preview; populated exactly on success."""
+
+    result: AlertTest | None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class AlertsInfo(ServiceInfo):
     """Alert limits, relative parameters, clock version and retry policy."""
 
+    ownership: OwnershipCapabilities
     relative_tokens: Annotated[list[str], non_null_list(pa.string())]
     tzdb_version: str
     retry_policy: RetryPolicy
 
 
 class AlertsProtocol(Protocol):
-    """Proposed vgi.alerts.v1 records and RPC interface; implementations supply all methods."""
+    """Proposed vgi.alerts.v1 records and RPC interface; implementations supply all methods.
+
+    OwnershipCapabilities defines all list/scan scope semantics. Exact owner
+    cannot be combined with a non-all ownership_scope. parent_owner matches
+    only the recorded direct management parent; folder recursion never expands
+    directory ancestry. Filters select authorized resources and never grant access.
+    """
 
     protocol_name: ClassVar[str] = "vgi.alerts.v1"
     protocol_version: ClassVar[str] = "1.0.0"
@@ -210,9 +259,39 @@ class AlertsProtocol(Protocol):
         """Minimum evaluation interval, max_instances ceiling, maximum snooze, limits."""
         ...
 
-    @sql_read(row_type=RuleRecord, table="rules")
-    def list_rules(self, query: str = "", owned_by_me: bool = False, state: str = "") -> Stream[ProducerState]:
-        """Rules with their state (ok, firing, error, disabled) and instance counts."""
+    @sql_read(row_type=RuleSummary, table="rules")
+    def list_rules(
+        self,
+        query: str = "",
+        ownership_scope: OwnershipScope = "all",
+        state: str = "",
+        owner: OwnerKey | None = None,
+        parent_owner: OwnerKey | None = None,
+        execution_principal_id: str | None = None,
+        enabled: bool | None = None,
+        limit: int | None = None,
+        order_by: str = "id",
+    ) -> Stream[ProducerState]:
+        """AND-filtered summaries; query is title substring, orders id/title/updated_desc with rule_id ties.
+
+        a non-all ownership_scope cannot be combined with owner. limit counts the entire snapshot stream.
+        """
+        ...
+
+    @sql_read(row_type=RuleRecord)
+    def scan_rules(
+        self,
+        query: str = "",
+        ownership_scope: OwnershipScope = "all",
+        state: str = "",
+        owner: OwnerKey | None = None,
+        parent_owner: OwnerKey | None = None,
+        execution_principal_id: str | None = None,
+        enabled: bool | None = None,
+        limit: int | None = None,
+        order_by: str = "id",
+    ) -> Stream[ProducerState]:
+        """Full rule definitions using the same authorization, filters and ordering as list_rules."""
         ...
 
     @sql_read()
@@ -234,10 +313,14 @@ class AlertsProtocol(Protocol):
         """
         ...
 
-    def update_rule(self, rule_id: str, expected_version: int, request_id: str, rule: AlertRule) -> RuleRecord:
+    def update_rule(
+        self, rule_id: str, expected_version: int, request_id: str, rule: AlertRule, reset_keys: bool = False
+    ) -> RuleRecord:
         """Includes pausing via enabled.
 
-        Changing ordered key columns increments key_generation; old instances close as superseded atomically.
+        Changing ordered key columns or explicitly setting reset_keys increments key_generation; old instances
+        close as superseded atomically. A followed source cannot change key types within a generation.
+        Source edits alone never clear acknowledgements or snoozes.
         """
         ...
 
@@ -245,16 +328,35 @@ class AlertsProtocol(Protocol):
         """Instances close as superseded."""
         ...
 
-    def test_rule(self, rule: AlertRule, *, execution: ExecutionInput | None = None, as_of: Instant) -> AlertTest:
-        """Evaluate an unsaved rule once: the instances it would create, rendered messages, template errors.
-
-        Sends nothing.
-        """
+    def validate_rule(self, rule: AlertRule, execution: ExecutionInput | None = None) -> ValidationResult:
+        """Check structure and policy without evaluating user SQL; incomplete checks cannot return valid."""
         ...
 
-    @sql_read(row_type=Instance, table="instances")
-    def list_instances(self, rule_id: str = "", state: str = "", since: Instant | None = None) -> Stream[ProducerState]:
-        """Instances with state and times; detail values only for callers who may see them."""
+    def start_test_rule(
+        self, request_id: str, rule: AlertRule, *, execution: ExecutionInput | None = None, as_of: Instant
+    ) -> AlertPreviewJob:
+        """Admit a bounded read-only preview without adopting sources, changing instances or sending messages."""
+        ...
+
+    @sql_read()
+    def get_test_rule(self, job_id: str) -> AlertPreviewJob:
+        """Read caller-authorized preview status/results until expiry."""
+        ...
+
+    def cancel_test_rule(self, job_id: str, expected_version: int, request_id: str) -> AlertPreviewJob:
+        """Request cancellation; nonterminal status does not confirm cessation."""
+        ...
+
+    @sql_read(row_type=InstanceSummary, table="instances")
+    def list_instances(
+        self,
+        rule_id: str = "",
+        state: str = "",
+        since: Instant | None = None,
+        before: Instant | None = None,
+        limit: int | None = None,
+    ) -> Stream[ProducerState]:
+        """Summaries without detail IPC; updated_at range is [since, before), ordered by instance_id."""
         ...
 
     @sql_read()
@@ -278,12 +380,12 @@ class AlertsProtocol(Protocol):
         until: Instant,
         until_resolved: bool = False,
         reason: str = "",
-    ) -> Snooze:
+    ) -> SnoozeRecord:
         """Null instance_id snoozes the rule."""
         ...
 
     def unsnooze(self, snooze_id: str, expected_version: int, request_id: str) -> Ack:
-        """Null instance_id snoozes the rule."""
+        """Cancel the identified snooze using the version returned by get_snooze or list_snoozes."""
         ...
 
     def subscribe(
@@ -300,15 +402,20 @@ class AlertsProtocol(Protocol):
         ...
 
     @sql_read(row_type=Subscription)
-    def list_subscriptions(self, rule_id: str) -> Stream[ProducerState]:
+    def list_subscriptions(self, rule_id: str, limit: int | None = None) -> Stream[ProducerState]:
         """List subscriptions."""
         ...
 
     @sql_read(row_type=AlertEvent, table="events")
     def list_events(
-        self, rule_id: str = "", instance_id: str = "", since: Instant | None = None
+        self,
+        rule_id: str = "",
+        instance_id: str = "",
+        since: Instant | None = None,
+        before: Instant | None = None,
+        limit: int | None = None,
     ) -> Stream[ProducerState]:
-        """Timeline: transitions, notifications, acknowledgements, snoozes, errors."""
+        """Timeline ordered by (occurred_at, event_id), with [since, before) time bounds and total limit."""
         ...
 
     def set_ownership(self, rule_id: str, expected_version: int, request_id: str, ownership: Ownership) -> RuleRecord:
@@ -319,4 +426,29 @@ class AlertsProtocol(Protocol):
         self, rule_id: str, expected_version: int, request_id: str, principal_id: str
     ) -> RuleRecord:
         """Select a separately authorized execution identity for future work."""
+        ...
+
+    @sql_read()
+    def get_snooze(self, snooze_id: str) -> SnoozeRecord:
+        """Authorize the parent and return the current ID/version, scope, end condition and state."""
+        ...
+
+    @sql_read(row_type=SnoozeRecord)
+    def list_snoozes(
+        self,
+        rule_id: str,
+        instance_id: str | None = None,
+        active_only: bool = True,
+        limit: int | None = None,
+    ) -> Stream[ProducerState]:
+        """Without an instance filter return rule and instance snoozes; otherwise include rule-wide and that instance.
+
+        Validate instance membership and parent access; order by snooze_id and
+        recheck authorization on continuation. Returned versions permit unsnooze.
+        """
+        ...
+
+    @sql_read(row_type=DestinationResult)
+    def list_event_destinations(self, event_id: str, limit: int | None = None) -> Stream[ProducerState]:
+        """Authorized event delivery outcomes in original dispatch order."""
         ...

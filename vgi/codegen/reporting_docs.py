@@ -22,6 +22,12 @@ from vgi.reporting._metadata import read_annotation
 
 _TITLES = {
     "common": "Shared records",
+    "sources": "Portable sources",
+    "discovery": "Bounded discovery",
+    "resource_identity": "Resource identity checks",
+    "objects": "Objects",
+    "resource_ownership": "Resource ownership discovery",
+    "schedules_v2": "Object schedules",
     "reports": "Reports",
     "ownership": "Report ownership discovery (optional)",
     "render": "Rendering",
@@ -122,7 +128,7 @@ def render(record: str = "index") -> str:
         "[All protocols](../python-contracts.md) · [Wire behavior](../wire-contracts.md)\n",
         f"Source: `vgi/reporting/{record}.py`. Edit the Python module and regenerate this page.\n",
     ]
-    if record == "common":
+    if not any(p.__module__ == module.__name__ for p in PROTOCOLS):
         parts.extend(
             [
                 "## Arrow aliases and string choices\n",
@@ -131,7 +137,12 @@ def render(record: str = "index") -> str:
             ]
         )
     else:
-        spec = "credentials" if record == "delegations" else record
+        spec = {
+            "delegations": "credentials",
+            "ownership": "reports",
+            "resource_ownership": "objects",
+            "schedules_v2": "schedules",
+        }.get(record, record)
         parts.append(f"[Behavior specification](../{spec}.md) · [Shared records](common.md)\n")
         protocol = next(p for p in PROTOCOLS if p.__module__ == module.__name__)
         parts.append(f"Protocol `{protocol.protocol_name}`, version `{protocol.protocol_version}`.\n")

@@ -1,0 +1,249 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
+"""Bounded discovery and collection admission shared by reporting workers.
+
+Search limits count rows across the entire producer stream, not per batch or
+continuation. Exact checks do not require search or directory enumeration.
+Workers translate validation failures to INVALID_ARGUMENT before admission;
+unsupported capabilities use UNIMPLEMENTED and quota refusals RESOURCE_EXHAUSTED.
+
+Collection reads use a positive total limit, or None for the complete authorized
+result. Continuations preserve filters, ordering and the admitted snapshot while
+rechecking current access. Quota or snapshot expiry must fail explicitly, never
+silently truncate a successful stream. Snapshots need not materialize all rows.
+"""
+
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Annotated, ClassVar, Literal
+
+import pyarrow as pa
+from vgi_rpc import ArrowSerializableDataclass, ArrowType
+from vgi_rpc.errors import Code
+
+from vgi.reporting._arrow import non_null_list
+from vgi.reporting.common import STANDARD_OWNER_KINDS, Limit, OwnerKey, Ownership, OwnershipCapabilities, OwnershipScope
+
+CheckState = Annotated[Literal["allowed", "denied", "unknown"], ArrowType(pa.string())]
+
+# Required limit names for the corresponding input collections. A worker may
+# choose a smaller finite value, but must advertise it before accepting batches.
+BATCH_LIMIT_NAMES = (
+    "max_check_destinations",
+    "max_send_destinations",
+    "max_delegation_writes",
+    "max_source_checks",
+    "max_parameter_options",
+)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class DiscoveryCapabilities(ArrowSerializableDataclass):
+    """Caller-specific search policy; exact checks remain independently available.
+
+    Empty input is suggestions only, never implicit enumeration. Identifier
+    schemes apply to exact checks; search matching follows query_hint.
+    """
+
+    search_supported: bool = False
+    suggestions_supported: bool = False
+    enumeration_supported: bool = False
+    min_query_length: int = 1
+    max_results: int = 20
+    query_hint: str = "Supply an exact identifier"
+    identifier_schemes: Annotated[list[str], non_null_list(pa.string())] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class OwnerDiscoveryCapabilities(DiscoveryCapabilities):
+    """Exact/search policy plus owner kinds accepted in the authorized resource context.
+
+    Membership filters are independent of search, suggestions and enumeration.
+    policy narrows service-info ownership capabilities for this context; it
+    never authorizes querying another tenant or acting as an owner.
+    """
+
+    policy: OwnershipCapabilities
+
+
+class MembershipUnavailableError(RuntimeError):
+    """Authoritative membership is indeterminate; never a negative membership result."""
+
+    error_code: ClassVar[Code] = Code.UNAVAILABLE
+    error_kind: ClassVar[str] = "membership_unavailable"
+
+
+def validate_owner_key(key: OwnerKey) -> None:
+    """Validate key syntax; the host must resolve the opaque ID within the authorized tenant."""
+    vendor, separator, name = key.kind.partition(".")
+    if not key.id.strip() or (
+        key.kind not in STANDARD_OWNER_KINDS
+        and not (
+            separator and vendor and name and all(key.kind.split(".")) and not any(char.isspace() for char in key.kind)
+        )
+    ):
+        raise ValueError("Owner keys require a canonical kind and nonempty ID")
+
+
+def validate_ownership_capabilities(capabilities: OwnershipCapabilities) -> None:
+    """Reject contradictory or incomplete ownership-filter advertisements."""
+    for kinds in (capabilities.owner_kinds, capabilities.parent_owner_kinds, capabilities.membership_owner_kinds):
+        if len(kinds) != len(set(kinds)):
+            raise ValueError("Ownership kinds must be unique")
+        for kind in kinds:
+            validate_owner_key(OwnerKey(kind=kind, id="capability"))
+    if not capabilities.owner_kinds or "principal" in capabilities.parent_owner_kinds:
+        raise ValueError("Ownership requires owner kinds and non-principal parent kinds")
+    if "principal" in capabilities.owner_kinds and not capabilities.parent_owner_kinds:
+        raise ValueError("Principal ownership requires a durable parent kind")
+    scopes = set(capabilities.scopes)
+    if len(scopes) != len(capabilities.scopes) or scopes not in (
+        {"all", "self"},
+        {"all", "self", "member", "self_or_member"},
+    ):
+        raise ValueError("Advertise all/self, optionally with both membership scopes")
+    membership_kinds = set(capabilities.membership_owner_kinds)
+    if not membership_kinds <= set(capabilities.owner_kinds) or "principal" in membership_kinds:
+        raise ValueError("Membership kinds must be supported non-principal owner kinds")
+    if bool(membership_kinds) != ("member" in scopes):
+        raise ValueError("Membership scopes require explicit membership owner kinds")
+
+
+def validate_ownership_assignment(ownership: Ownership, capabilities: OwnershipCapabilities) -> None:
+    """Validate a resolved ownership shape; tenant checks and authorization remain worker obligations."""
+    validate_ownership_capabilities(capabilities)
+    owner, parent = ownership.owner_ref, ownership.parent_owner_ref
+    validate_owner_key(owner)
+    if owner.kind not in capabilities.owner_kinds:
+        raise ValueError("Unsupported owner kind")
+    if parent is None:
+        if owner.kind == "principal":
+            raise ValueError("Principal ownership requires a durable parent")
+    else:
+        validate_owner_key(parent)
+        if parent.kind not in capabilities.parent_owner_kinds or (owner.kind, owner.id) == (parent.kind, parent.id):
+            raise ValueError("Ownership requires a distinct supported durable parent")
+
+
+def matches_ownership_scope(
+    ownership: Ownership,
+    *,
+    principal_id: str,
+    scope: OwnershipScope,
+    capabilities: OwnershipCapabilities,
+    membership_lookup: Callable[[OwnerKey], bool | None] | None = None,
+) -> bool:
+    """Evaluate only an ownership predicate, never resource access or execution authority.
+
+    principal_id must come from the authenticated host context. The callback
+    must use that same caller/tenant and authoritative effective membership for
+    one direct owner, without directory enumeration. None means indeterminate;
+    callback failures propagate. Workers may implement equivalent indexed/set
+    queries for scale and must separately enforce current authorization.
+    """
+    validate_ownership_capabilities(capabilities)
+    if not principal_id.strip() or scope not in {"all", "self", "member", "self_or_member"}:
+        raise ValueError("A canonical authenticated principal and known scope are required")
+    if scope not in capabilities.scopes:
+        raise NotImplementedError("Ownership scope is unsupported")
+    if scope == "all":
+        return True
+    owner = ownership.owner_ref
+    is_self = owner.kind == "principal" and owner.id == principal_id
+    if scope == "self":
+        return is_self
+    if scope == "self_or_member" and is_self:
+        return True
+    if owner.kind not in capabilities.membership_owner_kinds:
+        return False
+    if membership_lookup is None:
+        raise MembershipUnavailableError("An authoritative membership decision is required")
+    decision = membership_lookup(OwnerKey(kind=owner.kind, id=owner.id))
+    if type(decision) is not bool:
+        raise MembershipUnavailableError("Membership could not be determined")
+    return decision
+
+
+def validate_search(query: str, limit: int, capabilities: DiscoveryCapabilities) -> None:
+    """Validate a bounded search, distinguishing unsupported search from no matches."""
+    if capabilities.min_query_length < 0 or capabilities.max_results < 1:
+        raise ValueError("Invalid discovery capabilities")
+    validate_batch_size(limit, maximum=capabilities.max_results, minimum=1)
+    if not query.strip():
+        if not capabilities.suggestions_supported:
+            raise NotImplementedError("Suggestions are unavailable; supply an exact identifier or search query")
+    else:
+        if not capabilities.search_supported:
+            raise NotImplementedError("Search is unavailable; use an exact identifier check")
+        if len(query.strip()) < capabilities.min_query_length:
+            raise ValueError("Search query is too short")
+
+
+def validate_batch_size(size: int, *, maximum: int, minimum: int = 0) -> None:
+    """Reject invalid sizes; a finite advertised ceiling bounds input materialization."""
+    if (
+        any(isinstance(value, bool) or not isinstance(value, int) for value in (size, minimum, maximum))
+        or minimum < 0
+        or maximum < minimum
+        or not minimum <= size <= maximum
+    ):
+        raise ValueError(f"Expected between {minimum} and {maximum} items")
+
+
+def batch_limit(limits: list[Limit], name: str) -> int:
+    """Read one advertised finite count limit; absence never implies unlimited."""
+    matches = [limit for limit in limits if limit.name == name]
+    if len(matches) != 1:
+        raise ValueError(f"Expected exactly one advertised {name} limit")
+    limit = matches[0]
+    if limit.unit != "count" or isinstance(limit.value, bool) or not isinstance(limit.value, int) or limit.value < 0:
+        raise ValueError(f"{name} must be a finite nonnegative count")
+    return limit.value
+
+
+def validate_list_request(
+    *,
+    limit: int | None,
+    order_by: str,
+    supported_orders: tuple[str, ...],
+    ownership_scope: OwnershipScope = "all",
+    owner: OwnerKey | None = None,
+    parent_owner: OwnerKey | None = None,
+    ownership_capabilities: OwnershipCapabilities | None = None,
+) -> None:
+    """Validate explicit total limits, ordering and mutually exclusive owner filters.
+
+    None means a complete scan subject to explicit quota errors. Filters combine
+    with AND. Workers retain filters, order and the remaining total limit in
+    continuation state, bound to the authenticated tenant/caller. Ownership
+    scopes select among authorized rows, never grant access. Exact owner and
+    non-all scope are mutually exclusive. parent_owner ANDs with either and
+    matches only the recorded direct parent, never organizational descendants.
+
+    Workers preserve admitted membership selection without materializing the
+    directory and recheck current membership and access on each continuation.
+    Membership revocations may remove pending rows; newly gained membership
+    cannot add rows to an admitted stream. If selection cannot be preserved,
+    fail explicitly; never restart with a widened scope.
+    """
+    if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1):
+        raise ValueError("limit must be a positive integer or None")
+    if order_by not in supported_orders:
+        raise ValueError("Unsupported ordering")
+    if ownership_scope not in {"all", "self", "member", "self_or_member"}:
+        raise ValueError("Unknown ownership scope")
+    if ownership_scope != "all" and owner is not None:
+        raise ValueError("Exact owner and non-all ownership_scope are mutually exclusive")
+    for key in (owner, parent_owner):
+        if key is not None:
+            validate_owner_key(key)
+    if ownership_capabilities is not None:
+        validate_ownership_capabilities(ownership_capabilities)
+        if ownership_scope not in ownership_capabilities.scopes:
+            raise NotImplementedError("Ownership scope is unsupported")
+        if owner is not None and owner.kind not in ownership_capabilities.owner_kinds:
+            raise ValueError("Unsupported owner kind")
+        if parent_owner is not None and parent_owner.kind not in ownership_capabilities.parent_owner_kinds:
+            raise ValueError("Unsupported parent owner kind")
+    elif ownership_scope in {"member", "self_or_member"}:
+        raise NotImplementedError("Membership filtering requires advertised support")

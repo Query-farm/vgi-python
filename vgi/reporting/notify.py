@@ -8,36 +8,44 @@ Behavior and worker policy are documented in docs/design/reporting-protocols/.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Annotated, ClassVar, Protocol
+from dataclasses import dataclass, field
+from typing import Annotated, ClassVar, Literal, Protocol
 
 import pyarrow as pa
-from vgi_rpc import ArrowSerializableDataclass
+from vgi_rpc import ArrowSerializableDataclass, ArrowType
 from vgi_rpc.rpc import ProducerState, Stream
 
-from vgi.reporting._arrow import non_null_list
+from vgi.reporting._arrow import Instant, non_null_list
 from vgi.reporting._metadata import sql_read
 from vgi.reporting.common import (
     Destination,
-    DestinationResult,
     Limit,
     Notification,
+    RunError,
     ServiceInfo,
 )
+from vgi.reporting.discovery import CheckState, DiscoveryCapabilities
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class DestinationRecord(Destination):
     """Discoverable destination metadata."""
 
-    display_name: str
+    display_name: str | None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class DestinationCheck(DestinationRecord):
-    """Advisory authorization check for a destination."""
+    """Independent advisory result correlated to its zero-based input index.
 
-    allowed: bool
+    Allowed means policy permits sending, not that a mailbox exists. Unknown
+    never counts as allowed. Every input gets exactly one row on successful EOS;
+    workers may emit completion order. Partial streams are incomplete checks.
+    """
+
+    input_index: int
+    state: CheckState
+    reason_code: str | None
     reason: str | None
 
 
@@ -50,29 +58,60 @@ class ChannelInfo(ArrowSerializableDataclass):
     images: bool
     threads: bool
     limits: Annotated[list[Limit], non_null_list(pa.struct(Limit.ARROW_SCHEMA))]
+    html_body: bool = False
+    discovery: DiscoveryCapabilities = field(default_factory=DiscoveryCapabilities)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class NotifyInfo(ServiceInfo):
-    """Supported channels and destination policy summary."""
+    """Supported channels and destination policy summary.
+
+    Top-level limits require finite max_check_destinations and
+    max_send_destinations counts across all channels in a request. Channel limits
+    describe per-channel content restrictions, not separate batch allowances.
+    """
 
     channels: Annotated[list[ChannelInfo], non_null_list(pa.struct(ChannelInfo.ARROW_SCHEMA))]
     destination_policy_summary: str
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class SendResult(ArrowSerializableDataclass):
-    """Admitted notification identity and one outcome per destination."""
+class NotificationReceipt(ArrowSerializableDataclass):
+    """Compact service admission and current counts; destination outcomes are streamed.
+
+    send replays the original admission snapshot; get_notification returns current
+    progress. Counts partition all destinations. Provider acceptance, not service
+    admission, contributes to a schedule's last_delivery_at. Retention expiry
+    never authorizes resending a request with an unknown outcome.
+    """
 
     notification_id: str
-    results: Annotated[list[DestinationResult], non_null_list(pa.struct(DestinationResult.ARROW_SCHEMA))]
+    version: int
+    admitted_at: Instant
+    updated_at: Instant
+    retained_until: Instant
+    poll_after_seconds: int
+    queued_count: int
+    provider_accepted_count: int
+    refused_count: int
+    failed_count: int
+    unknown_count: int
+    last_provider_accepted_at: Instant | None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class DestinationChecks(ArrowSerializableDataclass):
-    """Destination checks in input order."""
+class NotificationDelivery(DestinationRecord):
+    """Current outcome for one original destination, never proof of inbox delivery.
 
-    results: Annotated[list[DestinationCheck], non_null_list(pa.struct(DestinationCheck.ARROW_SCHEMA))]
+    Unknown requires provider reconciliation/deduplication before dispatch.
+    Confirmed destinations are never resent to recover another destination.
+    """
+
+    input_index: int
+    state: Annotated[Literal["queued", "provider_accepted", "refused", "failed", "unknown"], ArrowType(pa.string())]
+    provider_accepted_at: Instant | None
+    provider_reference: str | None
+    error: RunError | None
 
 
 class NotifyProtocol(Protocol):
@@ -89,16 +128,29 @@ class NotifyProtocol(Protocol):
         """
         ...
 
-    @sql_read(row_type=DestinationRecord, table="destinations")
-    def list_destinations(self, kind: str = "", query: str = "") -> Stream[ProducerState]:
-        """Registered and discoverable destinations with display_name; also address autocomplete."""
+    @sql_read(row_type=DestinationRecord)
+    def list_destinations(self, kind: str, limit: int | None = None) -> Stream[ProducerState]:
+        """Optional enumeration for one channel; require enumeration_supported.
+
+        Unsupported channels return UNIMPLEMENTED. This is not an automatic SQL
+        table. limit bounds the total rows, and continuations recheck authorization.
+        """
         ...
 
-    @sql_read()
+    @sql_read(row_type=DestinationRecord)
+    def find_destinations(self, kind: str, query: str, limit: int = 20) -> Stream[ProducerState]:
+        """Bounded search/suggestions under channel discovery policy, with no implicit enumeration.
+
+        limit applies across every continuation. Reaching it invites refinement;
+        continuation means unfinished delivery, not additional directory matches.
+        """
+        ...
+
+    @sql_read(row_type=DestinationCheck)
     def check_destinations(
         self, destinations: Annotated[list[Destination], non_null_list(pa.struct(Destination.ARROW_SCHEMA))]
-    ) -> DestinationChecks:
-        """Per destination: allowed, display_name, or why it is refused."""
+    ) -> Stream[ProducerState]:
+        """Exact checks independent of discovery; enforce max_check_destinations before admission."""
         ...
 
     def send(
@@ -106,9 +158,21 @@ class NotifyProtocol(Protocol):
         request_id: str,
         destinations: Annotated[list[Destination], non_null_list(pa.struct(Destination.ARROW_SCHEMA))],
         notification: Notification,
-    ) -> SendResult:
-        """notification_id and one result per destination: accepted, refused (with reason, e.g.
+    ) -> NotificationReceipt:
+        """Durably admit a bounded send and return its original receipt on request replay.
 
-        policy, unsubscribed), failed (known not accepted), or unknown (provider outcome ambiguous).
+        Enforce max_send_destinations and byte limits before admission. Store
+        each dispatch state before provider calls. Current authorization is
+        required for admission and replay; check_destinations is advisory only.
         """
+        ...
+
+    @sql_read()
+    def get_notification(self, notification_id: str) -> NotificationReceipt:
+        """Current progress for the admitting caller or authorized administrator; NOT_FOUND after retention."""
+        ...
+
+    @sql_read(row_type=NotificationDelivery)
+    def list_notification_results(self, notification_id: str, limit: int | None = None) -> Stream[ProducerState]:
+        """Authorized snapshot of outcomes in original input-index order; no implicit resend."""
         ...

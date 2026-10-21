@@ -22,6 +22,7 @@ from vgi.reporting.common import (
     DelegationKey,
     DelegationRecord,
     DelegationWrite,
+    Limit,
 )
 
 
@@ -32,11 +33,23 @@ class DelegationPutResult(ArrowSerializableDataclass):
     delegations: Annotated[list[DelegationRecord], non_null_list(pa.struct(DelegationRecord.ARROW_SCHEMA))]
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class DelegationLimits(ArrowSerializableDataclass):
+    """Finite max_delegation_writes count and any additional worker limits."""
+
+    limits: Annotated[list[Limit], non_null_list(pa.struct(Limit.ARROW_SCHEMA))]
+
+
 class DelegationsProtocol(Protocol):
     """Proposed vgi.delegations.v1 records and RPC interface; implementations supply all methods."""
 
     protocol_name: ClassVar[str] = "vgi.delegations.v1"
     protocol_version: ClassVar[str] = "1.0.0"
+
+    @sql_read()
+    def get_delegation_limits(self) -> DelegationLimits:
+        """Advertise the atomic write batch ceiling before credentials are submitted."""
+        ...
 
     def put_delegations(
         self,
@@ -46,13 +59,18 @@ class DelegationsProtocol(Protocol):
         """Put delegations.
 
         Store or replace the caller's delegations, keyed by (kind, location, catalog_name, attachment_id); duplicate
-        keys in one request are invalid_request.
+        keys in one request are invalid_request. Enforce max_delegation_writes before any write; the batch is atomic.
         """
         ...
 
     @sql_read(row_type=DelegationRecord, table="delegations")
-    def list_delegations(self) -> Stream[ProducerState]:
+    def list_delegations(self, limit: int | None = None) -> Stream[ProducerState]:
         """The caller's delegations with expires_at and updated_at. Never grants or tickets."""
+        ...
+
+    @sql_read()
+    def get_delegation(self, key: DelegationKey) -> DelegationRecord:
+        """Caller-scoped exact metadata/version lookup; NOT_FOUND for an absent key, never secrets."""
         ...
 
     def revoke_delegation(self, key: DelegationKey, expected_version: int, request_id: str) -> Ack:

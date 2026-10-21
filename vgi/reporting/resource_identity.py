@@ -1,0 +1,186 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
+"""Resource-scoped identity resolution without a required directory listing.
+
+Exact checks are required for each advertised purpose; searches are optional.
+Workers authorize the context before contacting a directory and revalidate at
+mutation time. Missing and hidden identities may share a denial, but directory
+outages must yield unknown or UNAVAILABLE, never a successful empty lookup.
+"""
+
+from dataclasses import dataclass
+from typing import Annotated, ClassVar, Literal, Protocol
+
+import pyarrow as pa
+from vgi_rpc import ArrowSerializableDataclass, ArrowType
+from vgi_rpc.rpc import ProducerState, Stream
+
+from vgi.reporting._metadata import sql_read
+from vgi.reporting.common import Ownership, PrincipalRef
+from vgi.reporting.discovery import (
+    CheckState,
+    DiscoveryCapabilities,
+    OwnerDiscoveryCapabilities,
+    validate_ownership_capabilities,
+)
+from vgi.reporting.ownership import OwnershipCandidate
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ResourceContext(ArrowSerializableDataclass):
+    """Creation scope or an existing resource whose identity may be changed.
+
+    Creation has no resource_id. Changes require one. parent_folder_id selects
+    an authorized creation folder, otherwise root; it is forbidden on changes
+    and for resource kinds without folders. Null object IDs are never wildcards.
+    The host binds this context to the authenticated tenant before resolution;
+    IDs, parent selections and identifier schemes cannot change that tenant.
+    """
+
+    protocol: str
+    resource_kind: str
+    operation: Annotated[Literal["create", "transfer_ownership", "change_execution"], ArrowType(pa.string())]
+    resource_id: str | None = None
+    parent_folder_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Identifier(ArrowSerializableDataclass):
+    """Exact advertised scheme/value resolved only within the authorized tenant.
+
+    Schemes must distinguish principal, group/team and organizational identifiers
+    when their provider-local values can collide. Ambiguous input is refused;
+    email domains, labels and client-supplied issuer hints never select a tenant.
+    """
+
+    scheme: str
+    value: str
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class IdentityCapabilities(ArrowSerializableDataclass):
+    """Per-context purposes; None means that identity purpose is unsupported."""
+
+    ownership: OwnerDiscoveryCapabilities | None
+    execution: DiscoveryCapabilities | None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class OwnershipCheck(ArrowSerializableDataclass):
+    """Allowed checks return complete canonical ownership; others return None."""
+
+    state: CheckState
+    ownership: Ownership | None
+    reason_code: str | None
+    message: str | None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ExecutionCandidate(ArrowSerializableDataclass):
+    """Eligible canonical principal; workload credential readiness is checked separately."""
+
+    principal: PrincipalRef
+    description: str
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ExecutionPrincipalCheck(ArrowSerializableDataclass):
+    """Allowed checks return the canonical principal, without granting impersonation."""
+
+    state: CheckState
+    principal: PrincipalRef | None
+    reason_code: str | None
+    message: str | None
+
+
+def validate_resource_context(context: ResourceContext, *, supports_folders: bool) -> None:
+    """Reject ambiguous creation/change contexts before resolving identity."""
+    if not context.protocol or not context.resource_kind:
+        raise ValueError("Context requires protocol and resource kind")
+    if context.operation == "create":
+        if context.resource_id is not None:
+            raise ValueError("Creation cannot name an existing resource")
+    elif context.operation in {"transfer_ownership", "change_execution"}:
+        if not context.resource_id or context.parent_folder_id is not None:
+            raise ValueError("Changes require a resource ID and use its existing context")
+    else:
+        raise ValueError("Unsupported identity operation")
+    if context.parent_folder_id is not None and (not supports_folders or not context.parent_folder_id):
+        raise ValueError("A nonempty folder ID requires folder support")
+
+
+def validate_identity_request(
+    context: ResourceContext,
+    *,
+    purpose: Literal["ownership", "execution"],
+    identifier: Identifier | None,
+    capabilities: IdentityCapabilities,
+    supports_folders: bool,
+) -> None:
+    """Validate exact lookup shape, purpose and advertised schemes before contacting a directory.
+
+    Workers must separately authorize the context, resolve canonical identities,
+    check consent/eligibility, and repeat those checks at mutation time.
+    """
+    validate_resource_context(context, supports_folders=supports_folders)
+    if purpose not in {"ownership", "execution"}:
+        raise ValueError("Unknown identity purpose")
+    discovery = capabilities.ownership if purpose == "ownership" else capabilities.execution
+    if discovery is None:
+        raise NotImplementedError("Identity purpose is unsupported")
+    if purpose == "ownership" and capabilities.ownership is not None:
+        validate_ownership_capabilities(capabilities.ownership.policy)
+    operation = "transfer_ownership" if purpose == "ownership" else "change_execution"
+    if context.operation not in {"create", operation}:
+        raise ValueError("Context operation does not match the identity purpose")
+    if identifier is None:
+        if context.operation != "create":
+            raise ValueError("Identity changes require an explicit identifier")
+    elif identifier.scheme not in discovery.identifier_schemes or not identifier.value.strip():
+        raise ValueError("Supply a nonempty identifier using an advertised scheme")
+
+
+class ResourceIdentityProtocol(Protocol):
+    """Optional companion for canonical identity selection within authorized resources."""
+
+    protocol_name: ClassVar[str] = "vgi.resource_identity.v1"
+    protocol_version: ClassVar[str] = "1.0.0"
+
+    @sql_read()
+    def get_identity_capabilities(self, context: ResourceContext) -> IdentityCapabilities:
+        """Authorize context and advertise exact schemes and optional search per purpose."""
+        ...
+
+    @sql_read()
+    def check_ownership(
+        self, context: ResourceContext, owner: Identifier | None = None, parent: Identifier | None = None
+    ) -> OwnershipCheck:
+        """Resolve a complete assignment; null requests the worker's default/safe parent.
+
+        Valid only for create/transfer_ownership. Transfers require an explicit
+        owner; null parent allows the worker to preserve or resolve a safe parent.
+        Authorize owner eligibility and the direct durable-parent relationship
+        separately; membership alone does not permit assigning either authority.
+        """
+        ...
+
+    @sql_read(row_type=OwnershipCandidate)
+    def find_owners(self, context: ResourceContext, query: str, limit: int = 20) -> Stream[ProducerState]:
+        """Bounded candidates for create/transfer_ownership; use advertised search policy."""
+        ...
+
+    @sql_read()
+    def check_execution_principal(
+        self, context: ResourceContext, principal: Identifier | None = None
+    ) -> ExecutionPrincipalCheck:
+        """Check selection eligibility for create/change_execution, including consent.
+
+        Null selects the caller only for creation. Changes require an explicit
+        identifier. Readiness for particular sources belongs to workload validation.
+        """
+        ...
+
+    @sql_read(row_type=ExecutionCandidate)
+    def find_execution_principals(self, context: ResourceContext, query: str, limit: int = 20) -> Stream[ProducerState]:
+        """Bounded eligible principals for create/change_execution; enumeration is unnecessary."""
+        ...
