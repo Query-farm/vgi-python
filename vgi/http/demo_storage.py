@@ -118,8 +118,9 @@ class BlobResource:
         resp.content_type = "application/octet-stream"
         resp.set_header("Accept-Ranges", "none")
         if content_encoding:
+            # HTTP clients decode this standard header automatically. Sending
+            # the custom VGI header too makes clients try to decode it again.
             resp.set_header("Content-Encoding", content_encoding)
-            resp.set_header("X-VGI-Content-Encoding", content_encoding)
 
     def on_head(self, req: Any, resp: Any, blob_id: str) -> None:  # noqa: D102
         # Mirror on_get headers (Content-Length/-Type/-Encoding) without a body.
@@ -137,7 +138,6 @@ class BlobResource:
         resp.set_header("Accept-Ranges", "none")
         if content_encoding:
             resp.set_header("Content-Encoding", content_encoding)
-            resp.set_header("X-VGI-Content-Encoding", content_encoding)
 
     def on_put(self, req: Any, resp: Any, blob_id: str) -> None:  # noqa: D102
         # vgi_rpc's _CompressionMiddleware drains ``req.bounded_stream`` when

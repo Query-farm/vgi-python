@@ -294,6 +294,12 @@ def test_demo_output_offload_large_response(compression: str, expected_extension
         assert source.decode().endswith(expected_extension)
         assert fetch_ms is not None
 
+        # Advertising both headers causes clients that decode standard HTTP
+        # compression to try to decompress the same external result twice.
+        blob_headers = httpx2.head(source.decode(), timeout=30.0).headers
+        assert "X-VGI-Content-Encoding" not in blob_headers
+        assert blob_headers.get("Content-Encoding") == (None if compression == "none" else compression)
+
 
 @pytest.mark.parametrize("compression", ["none", "zstd", "gzip"])
 def test_demo_input_upload_url_then_exchange(compression: str) -> None:
