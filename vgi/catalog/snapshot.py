@@ -216,7 +216,7 @@ class S3CatalogPublicationRepository:
             raise ValueError("retention must exceed a positive URL lifetime")
         self.client, self.bucket, self.prefix = client, bucket, prefix.rstrip("/") + "/"
         self.profile, self.url_ttl_seconds, self.retention_seconds = profile, url_ttl_seconds, retention_seconds
-        self.storage = self
+        self.storage: ExternalStorage = self
         self._locations: dict[str, PublicationLocation] = {}
         self._lock = threading.Lock()
 

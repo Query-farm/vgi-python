@@ -4947,8 +4947,12 @@ class Worker:
             from vgi.catalog.snapshot import SnapshotRequest
 
             manager = self._catalog_snapshot_manager(policy)
-            request = SnapshotRequest(catalog=cat, attach_opaque_data=attach,
-                attachment_scope=hashlib.sha256(attach_opaque_data).hexdigest(), catalog_version=version)
+            request = SnapshotRequest(
+                catalog=cat,
+                attach_opaque_data=attach,
+                attachment_scope=hashlib.sha256(attach_opaque_data).hexdigest(),
+                catalog_version=version,
+            )
             built: CatalogContentsResponse | None = None
 
             def build() -> CatalogContentsResponse:
@@ -4971,7 +4975,7 @@ class Worker:
                 built = None
                 response = build()
                 if manager.cache_key(request) != fallback_key:
-                    raise ValueError("catalog generation changed while building publication fallback")
+                    raise ValueError("catalog generation changed while building publication fallback") from None
                 if response.etag is not None and response.etag == if_none_match:
                     return CatalogContentsResponse(catalog_version=version, etag=response.etag, not_modified=True)
                 return response
@@ -5022,8 +5026,12 @@ class Worker:
         if policy is None or policy.delivery != "published":
             raise ValueError("catalog has no published snapshot policy")
         version = cat.catalog_version(attach_opaque_data=attach, transaction_opaque_data=None)
-        request = SnapshotRequest(catalog=cat, attach_opaque_data=attach,
-            attachment_scope=hashlib.sha256(attach_opaque_data).hexdigest(), catalog_version=version)
+        request = SnapshotRequest(
+            catalog=cat,
+            attach_opaque_data=attach,
+            attachment_scope=hashlib.sha256(attach_opaque_data).hexdigest(),
+            catalog_version=version,
+        )
         return self._catalog_snapshot_manager(policy).import_publication(request, manifest)
 
     def invalidate_catalog_publication(self, attach_opaque_data: bytes, manifest_id: str) -> bool:
@@ -5036,8 +5044,12 @@ class Worker:
         if policy is None or policy.delivery != "published":
             raise ValueError("catalog has no published snapshot policy")
         version = cat.catalog_version(attach_opaque_data=attach, transaction_opaque_data=None)
-        request = SnapshotRequest(catalog=cat, attach_opaque_data=attach,
-            attachment_scope=hashlib.sha256(attach_opaque_data).hexdigest(), catalog_version=version)
+        request = SnapshotRequest(
+            catalog=cat,
+            attach_opaque_data=attach,
+            attachment_scope=hashlib.sha256(attach_opaque_data).hexdigest(),
+            catalog_version=version,
+        )
         manager = self._catalog_snapshot_manager(policy)
         return bool(manager.invalidate(manager.cache_key(request), manifest_id))
 

@@ -899,6 +899,9 @@ class Schema:
     def to_schema_info(self, attach_opaque_data: AttachOpaqueData) -> SchemaInfo:
         """Convert to [`SchemaInfo`][] for catalog response.
 
+        ``attach_opaque_data`` is accepted for compatibility and discarded;
+        schema metadata does not contain attachment state.
+
         Populates ``estimated_object_count`` from the declared population so
         the C++ extension's eager-load gate can choose between bulk
         ``LoadEntries`` and per-name single-entry RPCs without an extra round
@@ -923,7 +926,6 @@ class Schema:
         for func in self.functions:
             function_counts[func.get_metadata().function_type] += 1
         return SchemaInfo(
-            attach_opaque_data=attach_opaque_data,
             path=list(self.path),
             comment=self.comment,
             tags=dict(self.tags),

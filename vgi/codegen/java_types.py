@@ -307,6 +307,23 @@ def _render_record(cls: type) -> str:
         sep = "," if i < len(components) - 1 else ") implements ArrowSerializableRecord {"
         decl = " ".join((*c.annotations, c.java_type, c.name))
         lines.append(f"        {decl}{sep}")
+    nonnull_collections = [
+        c for c in components if "@Nullable" not in c.annotations and c.java_type.startswith(("List<", "Map<"))
+    ]
+    if nonnull_collections:
+        lines += [
+            "",
+            "    /**",
+            "     * Reads a {@code null} list/map component as empty: those columns are",
+            "     * non-nullable on the wire, and the record codec would otherwise write a",
+            "     * null into them, which a strict client rejects.",
+            "     */",
+            f"    public {name} {{",
+        ]
+        for c in nonnull_collections:
+            collection_type = c.java_type.split("<", 1)[0]
+            lines.append(f"        {c.name} = {c.name} == null ? {collection_type}.of() : {c.name};")
+        lines += ["    }", ""]
     lines.append("}")
     return "\n".join(lines) + "\n"
 

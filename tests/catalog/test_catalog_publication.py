@@ -18,7 +18,7 @@ from vgi_rpc import ArrowSerializableDataclass, ArrowType
 from vgi_rpc.external import ClientExternalConfig, Compression, ExternalRef
 
 from vgi._test_fixtures.catalog_contents import CATALOG_PROBE, ContentsProbeCatalog, ContentsProbeWorker
-from vgi.catalog import SchemaInfo
+from vgi.catalog import AttachOpaqueData, SchemaInfo
 from vgi.catalog.contents_codec import decode_collection, decode_inventory, encode_collection
 from vgi.catalog.snapshot import (
     CatalogSnapshotManager,
@@ -103,6 +103,11 @@ def _policy(repository: Any, **kwargs: Any) -> CatalogSnapshotPolicy:
     )
 
 
+def _close_policy(policy: CatalogSnapshotPolicy) -> None:
+    assert policy.fetch_config is not None
+    policy.fetch_config.fetch_config.close()
+
+
 @pytest.mark.parametrize("compression", [None, Compression(algorithm="gzip"), Compression()])
 def test_recovery_and_warm_hits_skip_inventory_and_upload(storage: _Storage, compression: Compression | None) -> None:
     """Restart recovery does one validated GET; subsequent hits do no catalog work."""
@@ -116,7 +121,8 @@ def test_recovery_and_warm_hits_skip_inventory_and_upload(storage: _Storage, com
         assert isinstance(ref, ExternalRef)
         assert first.statistics == {"builds": 1, "uploads": 1, "fetches": 1}
         assert first.resolve(request, lambda: pytest.fail("warm build")) == ref
-        assert first.resolve(request, lambda: pytest.fail("conditional build"), "generation-1").not_modified
+        unchanged = first.resolve(request, lambda: pytest.fail("conditional build"), "generation-1")
+        assert isinstance(unchanged, CatalogContentsResponse) and unchanged.not_modified
         assert storage.uploads == 1 and storage.gets == 1
         recovered = CatalogSnapshotManager(policy)
         assert recovered.resolve(request, lambda: pytest.fail("recovery build")) == ref
@@ -124,7 +130,7 @@ def test_recovery_and_warm_hits_skip_inventory_and_upload(storage: _Storage, com
         assert recovered.resolve(request, lambda: pytest.fail("second recovery build")) == ref
         assert storage.uploads == 1 and storage.gets == 2
     finally:
-        policy.fetch_config.fetch_config.close()
+        _close_policy(policy)
 
 
 def test_scopes_singleflight_and_conditional_invalidation(storage: _Storage) -> None:
@@ -150,7 +156,7 @@ def test_scopes_singleflight_and_conditional_invalidation(storage: _Storage) -> 
         manager.resolve(request, lambda: response)
         assert storage.uploads == 3
     finally:
-        policy.fetch_config.fetch_config.close()
+        _close_policy(policy)
 
 
 def test_singleflight_allows_independent_keys_to_build_concurrently(storage: _Storage) -> None:
@@ -174,7 +180,7 @@ def test_singleflight_allows_independent_keys_to_build_concurrently(storage: _St
             assert all(isinstance(future.result(), ExternalRef) for future in futures)
         assert manager.statistics == {"builds": 2, "uploads": 2, "fetches": 2}
     finally:
-        policy.fetch_config.fetch_config.close()
+        _close_policy(policy)
 
 
 def test_failed_readback_never_commits_and_caps_prevent_upload(storage: _Storage) -> None:
@@ -195,7 +201,7 @@ def test_failed_readback_never_commits_and_caps_prevent_upload(storage: _Storage
             limited.resolve(request, lambda: response)
         assert storage.uploads == 1
     finally:
-        policy.fetch_config.fetch_config.close()
+        _close_policy(policy)
 
 
 def test_import_validates_nested_catalog_and_contract(storage: _Storage) -> None:
@@ -217,7 +223,7 @@ def test_import_validates_nested_catalog_and_contract(storage: _Storage) -> None
             manager.resolve(other, lambda: malformed)
         assert storage.uploads == 1
     finally:
-        policy.fetch_config.fetch_config.close()
+        _close_policy(policy)
 
 
 def test_cheap_validator_avoids_all_publication_work(storage: _Storage) -> None:
@@ -227,10 +233,10 @@ def test_cheap_validator_avoids_all_publication_work(storage: _Storage) -> None:
     manager = CatalogSnapshotManager(policy)
     try:
         result = manager.resolve(_request(), lambda: pytest.fail("build"), "fresh")
-        assert result.not_modified
+        assert isinstance(result, CatalogContentsResponse) and result.not_modified
         assert manager.statistics == {"builds": 0, "uploads": 0, "fetches": 0}
     finally:
-        policy.fetch_config.fetch_config.close()
+        _close_policy(policy)
 
 
 def test_worker_auth_precedes_cache_and_fallback_is_explicit(
@@ -263,7 +269,7 @@ def test_worker_auth_precedes_cache_and_fallback_is_explicit(
         assert isinstance(response, CatalogContentsResponse)
         assert decode_inventory(response)
     finally:
-        policy.fetch_config.fetch_config.close()
+        _close_policy(policy)
 
 
 def test_worker_fallback_rejects_generation_change(storage: _Storage, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -294,15 +300,17 @@ def test_worker_fallback_rejects_generation_change(storage: _Storage, monkeypatc
             worker.catalog_contents(attach.attach_opaque_data)
         assert storage.uploads == 0
     finally:
-        policy.fetch_config.fetch_config.close()
+        _close_policy(policy)
 
 
 def test_collections_consume_multiple_batches_and_reject_wrong_schema() -> None:
     """Later rows and batches survive; legacy schema attachment bytes disappear."""
     records = [
-        SchemaInfo(path=[str(i)], comment=None, tags={"x": str(i)}, attach_opaque_data=b"secret") for i in range(7)
+        SchemaInfo(path=[str(i)], comment=None, tags={"x": str(i)}, attach_opaque_data=AttachOpaqueData(b"secret"))
+        for i in range(7)
     ]
     encoded = encode_collection(SchemaInfo, records, batch_size=2)
+    assert encoded is not None
     assert decode_collection(SchemaInfo, encoded) == records
     assert len(list(pa.ipc.open_stream(encoded))) == 4
     assert b"secret" not in encoded
@@ -337,7 +345,7 @@ class _S3:
         self.store.objects["/" + Key] = (Body, kwargs.get("ContentEncoding"))
         self.etags[Key] = str(int(self.etags.get(Key, "0")) + 1)
 
-    def generate_presigned_url(self, operation: str, *, Params: Any, ExpiresIn: int) -> str:
+    def generate_presigned_url(self, operation: str, *, Params: dict[str, str], ExpiresIn: int) -> str:
         del operation, ExpiresIn
         return self.store.base + "/" + Params["Key"]
 
@@ -364,7 +372,7 @@ def test_durable_s3_recovery_and_conditional_manifest_tombstone(storage: _Storag
         assert second.commit_if_absent(manifest) == manifest
         assert second.lookup(key) == manifest
     finally:
-        policy.fetch_config.fetch_config.close()
+        _close_policy(policy)
 
 
 def test_s3_renewal_is_persisted_and_preserves_a_concurrent_replacement(
@@ -415,7 +423,7 @@ def test_s3_renewal_is_persisted_and_preserves_a_concurrent_replacement(
         assert repository.renew(renewed) is None
         assert restarted.lookup(key) == replacement
     finally:
-        policy.fetch_config.fetch_config.close()
+        _close_policy(policy)
 
 
 def test_subprocess_client_resolves_published_catalog() -> None:
@@ -441,6 +449,7 @@ def test_collection_rejects_concatenated_streams_and_dictionary_nulls() -> None:
         value: Annotated[str, ArrowType(pa.dictionary(pa.int16(), pa.string()))]
 
     encoded = encode_collection(Entry, [Entry("a"), Entry("b"), Entry("c")], batch_size=1)
+    assert encoded is not None
     assert decode_collection(Entry, encoded) == [Entry("a"), Entry("b"), Entry("c")]
     with pytest.raises(ValueError, match="trailing bytes"):
         decode_collection(Entry, encoded + encoded)
@@ -469,7 +478,7 @@ def test_import_clamps_supplied_fetch_limits(storage: _Storage) -> None:
         with pytest.raises((ValueError, RuntimeError), match="decompress|bytes|limit"):
             limited.import_publication(request, replace(manifest, raw_size=999))
     finally:
-        policy.fetch_config.fetch_config.close()
+        _close_policy(policy)
 
 
 def test_import_checks_actual_outer_size_digest_and_stream_end(storage: _Storage) -> None:
@@ -503,7 +512,7 @@ def test_import_checks_actual_outer_size_digest_and_stream_end(storage: _Storage
         with pytest.raises(ValueError, match="trailing bytes"):
             CatalogSnapshotManager(policy).import_publication(request, invalid)
     finally:
-        policy.fetch_config.fetch_config.close()
+        _close_policy(policy)
 
 
 def test_warm_renewal_rejects_changed_immutable_metadata(storage: _Storage) -> None:
@@ -527,7 +536,7 @@ def test_warm_renewal_rejects_changed_immutable_metadata(storage: _Storage) -> N
         with pytest.raises(ValueError, match="immutable"):
             manager.resolve(request, lambda: pytest.fail("renewal must not rebuild"))
     finally:
-        policy.fetch_config.fetch_config.close()
+        _close_policy(policy)
 
 
 def test_generation_change_does_not_commit(storage: _Storage) -> None:
@@ -555,7 +564,7 @@ def test_generation_change_does_not_commit(storage: _Storage) -> None:
         assert storage.uploads == 0
         assert repository.lookup(key) is None
     finally:
-        policy.fetch_config.fetch_config.close()
+        _close_policy(policy)
 
 
 @pytest.mark.parametrize("phase", ["lookup", "readback", "commit"])
@@ -593,7 +602,7 @@ def test_resolve_rejects_generation_changes_during_repository_io(
         with pytest.raises(ValueError, match="generation changed"):
             manager.resolve(request, lambda: response, if_none_match=response.etag)
     finally:
-        policy.fetch_config.fetch_config.close()
+        _close_policy(policy)
 
 
 @pytest.mark.parametrize("phase", ["readback", "commit"])
@@ -631,4 +640,4 @@ def test_import_rejects_generation_changes_during_repository_io(
         if phase == "readback":
             assert repository.lookup(manifest.cache_key) is None
     finally:
-        policy.fetch_config.fetch_config.close()
+        _close_policy(policy)

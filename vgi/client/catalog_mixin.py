@@ -89,8 +89,6 @@ from vgi.protocol import (
 _catalog_pool = WorkerPool(max_idle=4, idle_timeout=30.0)
 
 
-
-
 @dataclass(frozen=True)
 class CatalogContents:
     """A decoded ``catalog_contents`` answer.
@@ -308,8 +306,10 @@ class CatalogClientMixin:
             else:
                 cmd = self._worker_argv()
                 with _catalog_pool.connect(
-                    VgiProtocol, cmd, external_location=getattr(self, "_external_location", None)
-                ) as proxy:  # type: ignore[type-abstract]
+                    VgiProtocol,  # type: ignore[type-abstract]
+                    cmd,
+                    external_location=getattr(self, "_external_location", None),
+                ) as proxy:
                     yield proxy
         except RpcError as e:
             raise CatalogClientError(str(e)) from e
