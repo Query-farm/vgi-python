@@ -2706,6 +2706,9 @@ dev = [
 duckdb = [
     { name = "duckdb" },
 ]
+external = [
+    { name = "vgi-rpc", extra = ["external"] },
+]
 fixtures = [
     { name = "vgi-fixtures" },
 ]
@@ -2793,6 +2796,7 @@ requires-dist = [
     { name = "vgi-rpc", specifier = ">=0.50.0" },
     { name = "vgi-rpc", extras = ["cli"], marker = "extra == 'launch'" },
     { name = "vgi-rpc", extras = ["cli", "conformance", "external", "http", "oauth", "otel", "sentry"], marker = "extra == 'dev'" },
+    { name = "vgi-rpc", extras = ["external"], marker = "extra == 'external'" },
     { name = "vgi-rpc", extras = ["http"], marker = "extra == 'granian'" },
     { name = "vgi-rpc", extras = ["http"], marker = "extra == 'http'" },
     { name = "vgi-rpc", extras = ["http", "iroh"], marker = "extra == 'iroh'" },
@@ -2800,7 +2804,7 @@ requires-dist = [
     { name = "vgi-rpc", extras = ["otel"], marker = "extra == 'otel'" },
     { name = "vgi-rpc", extras = ["sentry"], marker = "extra == 'sentry'" },
 ]
-provides-extras = ["haybarn", "duckdb", "http", "iroh", "launch", "granian", "oauth", "otel", "sentry", "azure", "test-fixtures", "transactor", "fixtures", "test-fixtures-writable", "dev"]
+provides-extras = ["haybarn", "duckdb", "http", "external", "iroh", "launch", "granian", "oauth", "otel", "sentry", "azure", "test-fixtures", "transactor", "fixtures", "test-fixtures-writable", "dev"]
 
 [package.metadata.requires-dev]
 dev = [

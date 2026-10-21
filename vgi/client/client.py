@@ -630,14 +630,9 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 ``bearer_token``/``oauth``/``oauth_refresh_token`` and is
                 used verbatim; supply this when you need mTLS or a custom
                 auth scheme. Not the canonical path.
-            external_location: HTTP-only. ``ExternalLocationConfig`` that
-                controls how the client fetches pointer batches (workers
-                that externalize large outputs via demo storage / S3 return
-                empty batches carrying ``vgi_rpc.location`` metadata).
-                Defaults to a vanilla ``ExternalLocationConfig()`` for HTTP
-                transport so pointer batches are resolved automatically.
-                Subprocess transport ignores this — subprocess workers
-                don't return pointer batches.
+            external_location: ``ClientExternalConfig`` controlling published
+                result downloads on every transport, including subprocess.
+                Defaults to the standard HTTPS-only download policy.
             accepted_max_response_bytes: HTTP-only hard limit for decoded
                 response bodies, advertised to the worker on every RPC request.
                 Defaults to 256 MiB. Pass ``None`` to omit the negotiation
@@ -772,14 +767,12 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         # is therefore responsible for closing it on ``stop()``. False when
         # the caller passed ``httpx_client=`` — ownership stays with them.
         self._httpx_client_owned = False
-        # Auto-enable pointer-batch resolution for HTTP/TCP/launch unless the
-        # caller asked for something different — all three are ordinary RPC
-        # transports a worker can externalize batches over, unlike subprocess
-        # (which never returns pointer batches). See ``external_location`` docs above.
-        if transport in ("http", "tcp", "iroh", "httpi", "launch") and external_location is None:
-            from vgi_rpc.external import ExternalLocationConfig
+        # Pre-published results can arrive on every transport, including stdio.
+        self._external_location_owned = external_location is None
+        if external_location is None:
+            from vgi_rpc.external import ClientExternalConfig
 
-            external_location = ExternalLocationConfig()
+            external_location = ClientExternalConfig()
         self._external_location = external_location
         # HTTP server capabilities cache. Populated lazily by
         # ``_get_http_capabilities`` — a single round-trip per Client that
@@ -1288,6 +1281,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 VgiProtocol,  # type: ignore[type-abstract]
                 cmd,
                 on_log=self._on_worker_log,
+                external_location=self._external_location,
             )
             proxy = ctx.__enter__()
             _logger.debug("worker_borrowed worker_index=%s", worker_index)
@@ -1331,6 +1325,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             VgiProtocol,  # type: ignore[type-abstract]
             transport,
             on_log=self._on_worker_log,
+            external_location=self._external_location,
         )
         proxy = connection.__enter__()
 
@@ -1593,6 +1588,9 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             if stderr_thread.is_alive():
                 _logger.warning("stderr_thread_did_not_terminate")
         self._stderr_threads = []
+
+        if self._external_location_owned:
+            self._external_location.fetch_config.close()
 
         # Close the shared httpx2.Client if we created it ourselves.
         if self._httpx_client_owned and self._httpx_client is not None:

@@ -135,14 +135,17 @@ class _Ctx:
 def _unwrap(t: typing.Any) -> tuple[typing.Any, typing.Any]:
     """Strip NewType.__supertype__ and Annotated wrappers. Return (T, ArrowType-or-None)."""
     arrow_meta = None
-    while hasattr(t, "__supertype__"):
-        t = t.__supertype__
-    if typing.get_origin(t) is typing.Annotated:
-        args = typing.get_args(t)
-        t = args[0]
-        for m in args[1:]:
-            if type(m).__name__ == "ArrowType":
-                arrow_meta = m
+    while True:
+        if hasattr(t, "__supertype__"):
+            t = t.__supertype__
+        elif typing.get_origin(t) is typing.Annotated:
+            args = typing.get_args(t)
+            t = args[0]
+            for m in args[1:]:
+                if type(m).__name__ == "ArrowType":
+                    arrow_meta = m
+        else:
+            break
     return t, arrow_meta
 
 

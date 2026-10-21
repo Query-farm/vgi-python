@@ -5,8 +5,10 @@
 from __future__ import annotations
 
 import re
+from dataclasses import asdict
 from typing import Any
 
+import pyarrow as pa
 import pytest
 
 from vgi._test_fixtures.catalog import InMemoryCatalog, SchemaData
@@ -32,8 +34,9 @@ from vgi.catalog import (
     SchemaInfo,
     SchemaObjectType,
 )
+from vgi.catalog.contents_codec import CATEGORY_TYPES, decode_inventory
 from vgi.meta_worker import MetaWorker
-from vgi.protocol import CatalogAttachRequest, CatalogContentsResponse, SchemaContents
+from vgi.protocol import CatalogAttachRequest, CatalogContentsResponse, SchemaContents, _item_ipc_bytes
 from vgi.worker import Worker, catalog_contents_digest
 
 _KINDS = (
@@ -74,6 +77,17 @@ def _roundtrip(response: CatalogContentsResponse) -> CatalogContentsResponse:
     return CatalogContentsResponse.deserialize_from_bytes(response.serialize_to_bytes())
 
 
+def _entries(response: CatalogContentsResponse) -> list[SchemaContents]:
+    return [
+        SchemaContents(
+            path=list(info.schema.path),
+            schema=_item_ipc_bytes(info.schema),
+            **{kind: [_item_ipc_bytes(item) for item in getattr(info, kind)] for kind in _KINDS},
+        )
+        for info in decode_inventory(response)
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Wire shape
 # ---------------------------------------------------------------------------
@@ -82,12 +96,18 @@ def _roundtrip(response: CatalogContentsResponse) -> CatalogContentsResponse:
 class TestShape:
     """The typed response: a struct per schema, items byte-identical to the per-schema RPCs."""
 
-    def test_schemas_is_a_list_of_structs(self) -> None:
-        """``schemas`` is ``list<struct>`` with ``path`` first, not a list of IPC blobs."""
-        field = CatalogContentsResponse.ARROW_SCHEMA.field("schemas")
-        assert field.type.value_type.num_fields == 10
-        assert [f.name for f in field.type.value_type] == ["path", "schema", *_KINDS]
-        assert CatalogContentsResponse.ARROW_SCHEMA.names == ["catalog_version", "etag", "not_modified", "schemas"]
+    def test_categories_are_nullable_binary_streams(self) -> None:
+        """Every category is one nullable typed collection stream."""
+        assert CatalogContentsResponse.ARROW_SCHEMA.names == [
+            "catalog_version",
+            "etag",
+            "not_modified",
+            *CATEGORY_TYPES,
+        ]
+        for category in CATEGORY_TYPES:
+            field = CatalogContentsResponse.ARROW_SCHEMA.field(category)
+            assert field.nullable and field.type == pa.binary()
+        assert "attach_opaque_data" not in SchemaInfo.ARROW_SCHEMA.names
 
     def test_items_match_the_per_schema_rpcs(self) -> None:
         """Every kind of every schema is byte-identical to its per-schema RPC answer."""
@@ -96,15 +116,15 @@ class TestShape:
         response = _roundtrip(worker.catalog_contents(attach))
         assert response.etag is None
         assert not response.not_modified
-        assert [entry.path for entry in response.schemas] == [["main"], ["extra"]]
+        assert [entry.path for entry in _entries(response)] == [["main"], ["extra"]]
         schema_items = worker.catalog_schemas(attach).items
-        assert [entry.schema for entry in response.schemas] == schema_items
-        for entry in response.schemas:
+        assert [entry.schema for entry in _entries(response)] == schema_items
+        for entry in _entries(response):
             assert SchemaInfo.deserialize_from_bytes(entry.schema).path == entry.path
             expected = _per_schema_items(worker, attach, entry.path)
             for kind in _KINDS:
                 assert getattr(entry, kind) == expected[kind], (entry.path, kind)
-        main = response.schemas[0]
+        main = _entries(response)[0]
         # Every seeded kind is present in the fixture.
         for kind in _KINDS[:-1]:
             assert getattr(main, kind), kind
@@ -126,8 +146,8 @@ class TestShape:
 
         worker = NestedWorker()
         response = _roundtrip(worker.catalog_contents(_attach(worker, CATALOG_PROBE)))
-        assert [entry.path for entry in response.schemas] == [["a"], ["a", "b"], ["a", "b", "c"]]
-        for entry in response.schemas:
+        assert [entry.path for entry in _entries(response)] == [["a"], ["a", "b"], ["a", "b", "c"]]
+        for entry in _entries(response):
             assert SchemaInfo.deserialize_from_bytes(entry.schema).path == entry.path
 
     @pytest.mark.parametrize(
@@ -186,14 +206,14 @@ class TestRevalidation:
         full = worker.catalog_contents(attach)
         assert full.etag == "gen-1"
         assert not full.not_modified
-        assert [entry.path for entry in full.schemas] == [["main"]]
+        assert [entry.path for entry in _entries(full)] == [["main"]]
 
         with monkeypatch.context() as m:
             _forbid_build(m)
             hit = _roundtrip(worker.catalog_contents(attach, if_none_match="gen-1"))
         assert hit.not_modified
         assert hit.etag == "gen-1"
-        assert hit.schemas == []
+        assert hit.schemas is None
         assert hit.catalog_version == 1
 
         # A different etag gets the full contents.
@@ -215,7 +235,7 @@ class TestRevalidation:
         assert not response.not_modified
         assert response.etag == "gen-2"
         assert response.catalog_version == 2
-        assert [entry.path for entry in response.schemas] == [["main"], ["other"]]
+        assert [entry.path for entry in _entries(response)] == [["main"], ["other"]]
 
     def test_no_etag_ignores_if_none_match(self) -> None:
         """A catalog without an etag always answers in full, with etag null."""
@@ -224,7 +244,7 @@ class TestRevalidation:
         response = worker.catalog_contents(attach, if_none_match="anything")
         assert response.etag is None
         assert not response.not_modified
-        assert [entry.path for entry in response.schemas] == [["main"]]
+        assert [entry.path for entry in _entries(response)] == [["main"]]
         # contents_memory reports version 0: exercises the client's version-0 rule.
         assert response.catalog_version == 0
 
@@ -245,7 +265,7 @@ class TestRevalidation:
         attach = _attach(worker, CATALOG_PROBE)
         response = worker.catalog_contents(attach, if_none_match="v7")
         assert response.not_modified
-        assert response.schemas == []
+        assert response.schemas is None
         assert response.etag == "v7"
 
     @pytest.mark.parametrize(
@@ -317,11 +337,11 @@ class TestContentHash:
         second = worker.catalog_contents(attach)
         assert second.etag == first.etag
         assert second.schemas == first.schemas
-        assert catalog_contents_digest(first.schemas) == first.etag
+        assert catalog_contents_digest(first) == first.etag
 
         hit = worker.catalog_contents(attach, if_none_match=first.etag)
         assert hit.not_modified
-        assert hit.schemas == []
+        assert hit.schemas is None
         assert hit.etag == first.etag
 
         cat = worker._get_catalog()
@@ -330,7 +350,7 @@ class TestContentHash:
         changed = worker.catalog_contents(attach, if_none_match=first.etag)
         assert not changed.not_modified
         assert changed.etag != first.etag
-        assert [entry.path for entry in changed.schemas] == [["main"], ["other"]]
+        assert [entry.path for entry in _entries(changed)] == [["main"], ["other"]]
 
     def test_off_by_default(self) -> None:
         """Without the opt-in a catalog gets no etag."""
@@ -357,9 +377,9 @@ class TestContentHash:
 
     def test_digest_separates_fields(self) -> None:
         """Moving bytes between fields changes the digest."""
-        a = [SchemaContents(path=["s"], schema=b"x", tables=[b"ab"])]
-        b = [SchemaContents(path=["s"], schema=b"x", tables=[b"a", b"b"])]
-        c = [SchemaContents(path=["s"], schema=b"x", views=[b"ab"])]
+        a = CatalogContentsResponse(catalog_version=1, schemas=b"x", tables=b"ab")
+        b = CatalogContentsResponse(catalog_version=1, schemas=b"xa", tables=b"b")
+        c = CatalogContentsResponse(catalog_version=1, schemas=b"x", views=b"ab")
         assert len({catalog_contents_digest(a), catalog_contents_digest(b), catalog_contents_digest(c)}) == 3
 
 
@@ -397,12 +417,7 @@ class TestCache:
         """The pre-serialized response is byte-identical to encoding it normally."""
         worker = ContentsProbeWorker()
         cached = worker.catalog_contents(_attach(worker, CATALOG_PROBE))
-        fresh = CatalogContentsResponse(
-            catalog_version=cached.catalog_version,
-            etag=cached.etag,
-            not_modified=cached.not_modified,
-            schemas=list(cached.schemas),
-        )
+        fresh = CatalogContentsResponse(**asdict(cached))
         assert cached.serialize_to_bytes() == fresh.serialize_to_bytes()
         assert _roundtrip(cached) == fresh
 
@@ -436,7 +451,7 @@ class TestCache:
         assert full.etag is not None
         hit = worker.catalog_contents(attach, if_none_match=full.etag)
         assert hit.not_modified
-        assert hit.schemas == []
+        assert hit.schemas is None
         assert worker.catalog_contents(attach, if_none_match="stale") is full
         assert len(calls) == 1
 

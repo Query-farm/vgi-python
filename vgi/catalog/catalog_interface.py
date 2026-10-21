@@ -10,7 +10,7 @@ import dataclasses
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import (
@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from vgi.catalog.descriptors import Catalog, Index, Macro, Schema, Table, View
     from vgi.catalog.secret_type import SecretTypeSpec
     from vgi.catalog.setting import SettingSpec
+    from vgi.catalog.snapshot import CatalogSnapshotPolicy
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass, ArrowType
@@ -361,7 +362,6 @@ class SchemaInfo(CatalogObject, ArrowSerializableDataclass):
     """Information about a schema in a catalog.
 
     Attributes:
-        attach_opaque_data: The unique id for the attached catalog.
         path: Raw identifier components from the outermost schema to this schema.
         estimated_object_count: Approximate population per object kind, keyed by
             the same names the C++ extension uses for its set-cache
@@ -388,8 +388,9 @@ class SchemaInfo(CatalogObject, ArrowSerializableDataclass):
             current view does not.
     """
 
-    attach_opaque_data: AttachOpaqueData
     path: SchemaPath
+    # Constructor-only compatibility for existing catalog authors; never metadata.
+    attach_opaque_data: InitVar[AttachOpaqueData | None] = field(default=None, kw_only=True)
     estimated_object_count: dict[str, int] | None = None
 
 
@@ -800,11 +801,13 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
 
     function_type: FunctionType
 
-    arguments: SerializedSchema
+    arguments: Annotated[SerializedSchema, ArrowType(pa.dictionary(pa.int32(), pa.binary()))]
 
-    output_schema: SerializedSchema
+    output_schema: Annotated[SerializedSchema, ArrowType(pa.dictionary(pa.int32(), pa.binary()))]
 
-    parameter_default_values: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
+    parameter_default_values: Annotated[
+        pa.RecordBatch | None, ArrowType(pa.dictionary(pa.int32(), pa.binary()))
+    ] = None
 
     stability: FunctionStability | None = None
     null_handling: NullHandling | None = None
@@ -1753,6 +1756,9 @@ class CatalogInterface(ABC):
     #: sets it; a subclass whose contents vary per caller must set it back to
     #: ``False``.
     catalog_contents_attach_independent: ClassVar[bool] = False
+
+    #: Optional framework publication policy; ordinary delivery when unset.
+    catalog_snapshot_policy: ClassVar["CatalogSnapshotPolicy | None"] = None
 
     @property
     def interface_feature_flags(self) -> set[str]:

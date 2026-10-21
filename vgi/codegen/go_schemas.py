@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
 
+from vgi.catalog.contract import catalog_contract_hash
 from vgi.codegen._common import (
     EXTRA_RESPONSE_TYPES,
     REQUEST_TYPES,
@@ -207,6 +208,10 @@ def emit(out: TextIO) -> None:
     body.write("\n")
     body.write("var _ = arrow.BinaryTypes.String // keep import live when no schemas reference it\n")
     body.write("\n")
+    body.write(
+        "// CatalogContractHash fingerprints the nested catalog wire schemas.\n"
+        f'const CatalogContractHash = "{catalog_contract_hash()}"\n\n'
+    )
     # Blank line BETWEEN blocks, but no trailing blank line at EOF (gofmt rejects
     # it; vgi-go CI runs `gofmt -l`). Each block already ends in "\n".
     body.write("\n".join(_emit_var(es) for es in schemas))

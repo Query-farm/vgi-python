@@ -29,6 +29,7 @@ import io
 import sys
 from typing import TYPE_CHECKING
 
+from vgi.catalog.contract import catalog_contract_hash
 from vgi.codegen._common import (
     DEFAULT_CPP_NAMESPACE,
     GeneratorError,
@@ -56,6 +57,7 @@ def emit_version_header(
     generator_command: str,
     regen_command_lines: list[str],
     namespace: list[str] | None = None,
+    extra_constants: dict[str, str] | None = None,
 ) -> None:
     """Render a one-constant ``std::string_view`` protocol-version header.
 
@@ -79,6 +81,8 @@ def emit_version_header(
     body.write("// enforce an exact major+minor match at the dispatch boundary.\n")
     body.write(f"// Sourced from {source_description}.protocol_version (vgi-python).\n")
     body.write(f'inline constexpr std::string_view {constant_name} = "{proto_version}";\n\n')
+    for name, value in (extra_constants or {}).items():
+        body.write(f'inline constexpr std::string_view {name} = "{value}";\n\n')
     body.write(close_namespace(namespace))
 
     out.write("// ============================================================================\n")
@@ -102,6 +106,7 @@ def emit(out: TextIO, namespace: list[str] | None = None) -> None:
         out,
         current_protocol_version(),
         constant_name="VGI_PROTOCOL_VERSION",
+        extra_constants={"VGI_CATALOG_CONTRACT_HASH": catalog_contract_hash()},
         source_description="VgiProtocol",
         generator_module="vgi.codegen.cpp_protocol_version",
         generator_command="python -m vgi.codegen.cpp_protocol_version",
