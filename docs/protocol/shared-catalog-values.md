@@ -1150,13 +1150,22 @@ needs qualification.
 The first implementation checkpoint is 1.5-compatible: make local transaction
 cleanup exception-safe, test repeated completion with the same transaction
 identifier, and test failure propagation through the current write phases.
-The audit identified two candidates requiring reproduction: the raw INPUT drain
-before FINALIZE may discard late error metadata, and the signed HTTP writable
-fixture may pass a sealed transaction token directly to its transactor. These
-are not yet confirmed runtime failures. Also make deferred output handling
-respect the existing selected count/rows/changes mode. Exact source anchors and
-test cases are recorded in the manifest's `write_path_source_audit_2026_10_15`.
-This is source evidence only; EC2 was unavailable and no new tests were run.
+The signed HTTP writable fixture may pass a sealed transaction token directly
+to its transactor; this still requires reproduction. The 2026-10-22 follow-up
+narrows the finalization findings: current generic/simple writable fixtures
+have no provider finalize callback and return results per input batch. Locked
+`vgi-rpc` 0.50.0 buffers `out.emit` until `process` succeeds, so an ordinary
+emit-then-raise does not send a success response followed by an error. Raw
+pre-FINALIZE drain robustness is not a demonstrated current-provider failure.
+
+Optional final output is allowed by the table-in-out API, but native writable
+finalization currently interprets it as count output; deferred RETURNING is
+an adapter support gap. Add final-row handling with a concrete provider/test
+before enabling that form, using the existing schema and lifecycle. Native
+OLD/NEW changes adaptation belongs to the DuckDB2 lane. Exact source anchors
+are in the manifest's `write_path_source_audit_2026_10_15` and
+`write_finalization_source_audit_2026_10_22`. These are source findings only;
+EC2 was unavailable and no new tests were run.
 
 ### Trigger definitions and statement ownership
 

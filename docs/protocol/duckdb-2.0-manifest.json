@@ -623,7 +623,7 @@
         }
       ],
       "implementation_work": [
-        "First fix exception-safe local transaction cleanup and test existing transaction-ID-based duplicate completion; review BEGIN allocation/cleanup separately. Reproduce raw pre-FINALIZE drain and signed-HTTP fixture token candidates, and qualify selected-mode final output.",
+        "First fix exception-safe local transaction cleanup and test existing transaction-ID-based duplicate completion; review BEGIN allocation/cleanup separately. Reproduce the signed-HTTP fixture token candidate. The finalization follow-up rules out ordinary Python emit-then-raise response loss; deferred RETURNING is an optional adapter gap requiring a concrete provider/test before enablement.",
         "Qualify existing transaction propagation for CTAS, expanded ALTER and multi-DML CTEs; keep multi-DML opt-in disabled until supported writes and failure behavior are proved.",
         "Prove admitted writes and trigger effects commit together and failed writes require full transaction rollback; retain one execution owner and reject stale or incapable writers before effects.",
         "Retain no automatic retry after ambiguous non-idempotent mutation dispatch and audit uncovered legacy paths, preserving the existing idempotent commit/rollback contract. Do not add durable outcomes/status, savepoints or a generic statement ticket/receipt framework."
@@ -6717,8 +6717,8 @@
         ]
       },
       {
-        "status": "candidate_requires_reproduction",
-        "finding": "Pre-FINALIZE INPUT drain reads raw batches without handling error metadata and breaks on some non-Iroh read failures. Reproduce response-then-error, missing response and premature EOS; surface any lost errors through current rollback machinery.",
+        "status": "followup_narrowed_no_current_provider_failure_demonstrated",
+        "finding": "Pre-FINALIZE INPUT drain reads raw batches without handling error metadata and breaks on some non-Iroh read failures. However, the 2026-10-22 audit rules out ordinary Python emit-then-raise as a response followed by an error: locked RPC 0.50.0 buffers until process succeeds. Current writable fixtures do not enable FINALIZE. Require a concrete reachable failure before promoting this robustness observation to a fix.",
         "sources": [
           "native:src/vgi_function_connection.cpp:1007",
           "native:src/vgi_function_connection.cpp:1297",
@@ -6736,15 +6736,15 @@
         ]
       },
       {
-        "status": "source_confirmed_mode_gap",
-        "finding": "FinalizeWriteConnection interprets all nonempty final output as count. Handle final rows/changes according to the existing negotiated mode, with zero-row and multi-batch tests.",
+        "status": "optional_deferred_returning_adapter_gap",
+        "finding": "FinalizeWriteConnection interprets all nonempty final output as count. The API permits opt-in final output, but current generic/simple writable fixtures return results during INPUT and do not enable FINALIZE. Before enabling deferred RETURNING, add final-row handling with a concrete provider/test. This is not a reproduced current-fixture regression; native changes adaptation belongs to the DuckDB2 lane.",
         "sources": [
           "native:src/storage/vgi_physical_write.cpp:262"
         ]
       }
     ],
     "qualification_cases": [
-      "Autocommit and explicit transactions: init, later-batch and finalize failures cannot partially commit; include prior successful writes, zero rows, response-then-error, missing response and premature EOS.",
+      "Autocommit and explicit transactions: init, later-batch and opted-in finalize failures cannot partially commit; include prior successful writes, zero rows, process errors, missing response and premature EOS. Ordinary Python emit-then-raise does not put the emitted response on the wire first.",
       "CTAS insert/finalize failure removes both table and rows; expanded ALTER follow-up failure rolls back the full change.",
       "Before enabling multi-DML or triggers, prove BEFORE/base/AFTER ordering and rollback across all admitted effects; return results only after successful operation completion.",
       "OLD/NEW and cardinality: UPDATE FROM duplicate matches, DELETE, generated columns, identical rows, zero rows and multiple batches.",
@@ -6757,6 +6757,56 @@
       "native:test_deferred/writable contains deferred SQL cases. tests/transactor/test_transactor.py is module-skipped; tests/conformance/test_writable.py is a skip stub. General finalization and core-engine trigger tests are not external VGI write/trigger qualification.",
       "No runtime implementation, schema/method inventory change, engine-pin change, release-gate completion or publication. All earlier bounded runtime evidence remains unchanged."
     ],
-    "next": "Implement the focused 1.5-compatible transaction cleanup, duplicate-completion and finalization checkpoint with EC2 regression tests; then persistent trigger CRUD, native2 ENGINE hooks and existing changes adaptation. Keep unsupported forms and multi-DML opt-in disabled until qualified."
+    "next": "Implement focused 1.5-compatible transaction cleanup and duplicate-completion tests, then reproduce the signed-HTTP token candidate. Scope finalization work using the 2026-10-22 follow-up before persistent trigger CRUD, native2 ENGINE hooks and existing changes adaptation. Keep unsupported forms and multi-DML opt-in disabled until qualified."
+  },
+  "write_finalization_source_audit_2026_10_22": {
+    "date": "2026-10-22",
+    "status": "source_audit_complete_runtime_not_run",
+    "revisions": {
+      "native": "a4d46e2",
+      "python": "7827a6d",
+      "python_rpc": "0.50.0, matching uv.lock and installed package"
+    },
+    "findings": [
+      {
+        "finding": "Current generic and simple writable handlers have no finalize/finish override or explicit has_finalize; metadata inference is false. Native physical finalization closes/drains the current stream without a provider FINALIZE callback. Results are produced per INPUT batch.",
+        "sources": [
+          "vgi/_test_fixtures/writable/generic.py:139",
+          "vgi/_test_fixtures/simple_writable.py:354",
+          "vgi/table_in_out_function.py:118",
+          "vgi/metadata.py:1450",
+          "native:src/storage/vgi_physical_write.cpp:271"
+        ]
+      },
+      {
+        "finding": "Ordinary Python out.emit(response); raise does not send success then error. OutputCollector buffers; subprocess and HTTP flush only after process returns and output validates. A process exception takes the error path without flushing the collected success response; INPUT EOS has no user callback. Errors from an opted-in finalizer occur in FINALIZE init/read. This corrects the earlier proposed reproducer; serialization/transport failures are separate, unproven cases.",
+        "rpc_0_50_0_sources": [
+          "vgi_rpc/rpc/_types.py:288",
+          "vgi_rpc/rpc/_server.py:1815",
+          "vgi_rpc/rpc/_server.py:1880",
+          "vgi_rpc/http/server/_app_stream.py:823"
+        ],
+        "native_sources": [
+          "src/vgi_function_connection.cpp:1297",
+          "src/vgi_http_function_connection.cpp:1088"
+        ]
+      },
+      {
+        "finding": "A custom table-in-out writer may opt into final output; worker finalization calls its callback and streams the returned batches. Native writable finalization only reads counts and does not collect deferred RETURNING rows; no explicit write-specific guarantee supporting that form was found. Current fixtures do not exercise this optional adapter gap. Qualify opted-in count finalization and zero-input behavior first. Use existing count/rows schemas if expanding support; do not add a finalization protocol or move native2 OLD/NEW work into the 1.5 baseline.",
+        "sources": [
+          "vgi/table_in_out_function.py:238",
+          "vgi/worker.py:4824",
+          "native:src/storage/vgi_physical_write.cpp:232",
+          "native:src/storage/vgi_physical_write.cpp:289",
+          "native:src/storage/vgi_physical_write.cpp:588"
+        ]
+      }
+    ],
+    "existing_test_cases": [
+      "native:test/sql/integration/simple_writable/returning_validation.test covers ordinary per-batch RETURNING/schema rejection, not writable FINALIZE.",
+      "native:test/sql/integration/table_in_out/exceptions.test and multi_batch_finalize.test cover generic finalize errors/multiple batches, not writable FINALIZE."
+    ],
+    "validation_limits": "EC2 SSH timed out on 2026-10-22. No local or remote tests/builds, runtime fixes, protocol changes or release-gate completion. Existing test cases were inspected, not rerun. Generic finalization SQL tests do not establish writable RETURNING support; simple SQLite writable fixture has no transaction support and cannot prove rollback.",
+    "next": "Transaction exception cleanup remains the first concrete fix. Reproduce the signed-HTTP token candidate separately. Treat deferred RETURNING as opt-in adapter work and require a reachable failure before changing the raw pre-FINALIZE drain."
   }
 }
