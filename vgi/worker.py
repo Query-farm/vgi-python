@@ -3171,6 +3171,13 @@ class Worker:
         """
         return self._unwrap_transaction(envelope, attach_envelope) if envelope else None
 
+    def _unwrap_transaction_for(self, request: Any) -> TransactionOpaqueData | None:
+        """Open a function request's transaction without changing its sealed wire state."""
+        bind = getattr(request, "bind_call", request)
+        return self._unwrap_tx_opt(
+            getattr(bind, "transaction_opaque_data", None), getattr(bind, "attach_opaque_data", None) or b""
+        )
+
     def _get_catalog(self) -> CatalogInterface:
         """Get the [`CatalogInterface`][] instance for this worker.
 
@@ -3234,6 +3241,13 @@ class Worker:
         self._validate_required_settings(func_cls, request)
         self._validate_bind_shape(func_cls, request)
         instance = func_cls(logger=_logger)
+        if isinstance(instance, TableFunctionBase):
+            return instance.bind(
+                request,
+                ctx=ctx,
+                attach_plaintext=attach_plaintext,
+                transaction_plaintext=self._unwrap_transaction_for(request),
+            )
         return instance.bind(request, ctx=ctx, attach_plaintext=attach_plaintext)  # type: ignore[attr-defined, no-any-return]
 
     def _validate_bind_shape(self, func_cls: type[Function], request: BindRequest) -> None:
@@ -3300,7 +3314,12 @@ class Worker:
                 f" functions, but '{func_cls.__name__}' is not a TableFunctionGenerator."
             )
         return func_cls.cardinality(
-            func_cls._make_bind_params(request.bind_call, auth_context=ctx.auth, attach_plaintext=attach_plaintext)
+            func_cls._make_bind_params(
+                request.bind_call,
+                auth_context=ctx.auth,
+                attach_plaintext=attach_plaintext,
+                transaction_plaintext=self._unwrap_transaction_for(request),
+            )
         )
 
     def _current_split_anchor(self, request: Any, ctx: CallContext | None) -> bytes | None:
@@ -3453,7 +3472,12 @@ class Worker:
                 "scan planning only applies to table functions."
             )
             raise TypeError(msg)
-        params = func_cls._make_bind_params(request.bind_call, auth_context=ctx.auth, attach_plaintext=attach_plaintext)
+        params = func_cls._make_bind_params(
+            request.bind_call,
+            auth_context=ctx.auth,
+            attach_plaintext=attach_plaintext,
+            transaction_plaintext=self._unwrap_transaction_for(request),
+        )
         response = on_plan(params, request)
         if isinstance(response, PlanResponse):
             response = self._stamp_split_tokens(response, request, ctx)
@@ -3473,7 +3497,12 @@ class Worker:
         if not issubclass(func_cls, TableFunctionGenerator):
             return None
         stats = func_cls.statistics(
-            func_cls._make_bind_params(request.bind_call, auth_context=ctx.auth, attach_plaintext=attach_plaintext)
+            func_cls._make_bind_params(
+                request.bind_call,
+                auth_context=ctx.auth,
+                attach_plaintext=attach_plaintext,
+                transaction_plaintext=self._unwrap_transaction_for(request),
+            )
         )
         if not stats:
             return None
@@ -3504,6 +3533,7 @@ class Worker:
                 auth_context=ctx.auth,
                 execution_id=request.global_execution_id,
                 attach_plaintext=attach_plaintext,
+                transaction_plaintext=self._unwrap_transaction_for(request),
             )
             mapping = func_cls.dynamic_to_string(params, request.global_execution_id)
         except Exception:
@@ -3972,6 +4002,7 @@ class Worker:
             storage=cold_storage,
             auth_context=ctx.auth,
             attach_opaque_data=catalog_bytes,
+            transaction_opaque_data=self._unwrap_transaction_for(init_call),
             execution_id=request.execution_id,
             attach_id=attach_id,
             transaction_id=transaction_id,
@@ -4631,6 +4662,9 @@ class Worker:
             check_init(request)
         func_cls = self._resolve_function(request.bind_call)
         instance = func_cls(logger=_logger)
+        transaction_plaintext = (
+            self._unwrap_transaction_for(request) if isinstance(instance, TableFunctionBase) else None
+        )
 
         # A SPLIT init looks secondary — it joins an execution the planner already
         # minted — but it MUST run user code, because a split *names* work and only
@@ -4650,6 +4684,7 @@ class Worker:
                     request,
                     ctx=ctx,
                     attach_plaintext=attach_plaintext,
+                    transaction_plaintext=transaction_plaintext,
                     signing_key=self._signing_key,
                     current_anchor=(self._current_split_anchor(request, ctx) if request.split_tokens else None),
                 )
@@ -4727,6 +4762,7 @@ class Worker:
                 storage=cold_storage,
                 auth_context=ctx.auth,
                 attach_opaque_data=attach_catalog_bytes(attach_plaintext),
+                transaction_opaque_data=transaction_plaintext,
                 execution_id=init_response.execution_id,
                 attach_id=attach_id,
                 transaction_id=getattr(
@@ -4801,6 +4837,7 @@ class Worker:
                 ),
                 auth_context=ctx.auth,
                 attach_opaque_data=attach_catalog_bytes(attach_plaintext),
+                transaction_opaque_data=transaction_plaintext,
             )
             if request.pushdown_filters is not None:
                 current_filters = type(instance).pushdown_filters(
@@ -4901,6 +4938,7 @@ class Worker:
                 ),
                 auth_context=ctx.auth,
                 attach_opaque_data=attach_catalog_bytes(attach_plaintext),
+                transaction_opaque_data=transaction_plaintext,
                 # The key travels with the params because split_payloads is
                 # resolved lazily, per split, long after this frame.
                 signing_key=self._signing_key,

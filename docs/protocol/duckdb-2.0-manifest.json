@@ -6908,6 +6908,129 @@
       "BEGIN allocation/cleanup, signed HTTP token handling, deferred RETURNING and native2 adapter/trigger qualification remain separate.",
       "Existing catalog retention bound is unchanged. No protocol publication, capability enablement or release gate closure."
     ],
-    "next": "Qualify existing duplicate completion and BEGIN cleanup separately, then reproduce the signed-HTTP token candidate; continue broader write/trigger work only within the existing transaction lifecycle."
+    "next": "Duplicate completion, BEGIN retry/cleanup, signed HTTP token handling and bounded persisted INSERT/CTAS rollback are covered by the subsequent transaction_write_checkpoint_2026_10_22; continue broader qualification within the existing transaction lifecycle."
+  },
+  "transaction_write_checkpoint_2026_10_22": {
+    "status": "implemented_bounded_native15_and_python_evidence_not_release_qualification",
+    "date": "2026-10-22",
+    "scope": "Complete transaction lifecycle checks and real stored-data write rollback while retaining the pinned 1.5 engine and existing transaction/write protocol.",
+    "ec2_root": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+    "engine_pin": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "engine_version": "Haybarn 1.5.5-rc1 / DuckDB v1.5.6-dev149",
+    "baseline_heads": {
+      "native": "eba0b96b50b82788ad6ede3986e95f63734c8f51",
+      "python": "4c1e309a51c3c1003b2453007d3f6a784686396e"
+    },
+    "source_sha256": {
+      "native:src/include/vgi_attach_parameters.hpp": "0ee06bb33276176f0de20c3b5068eb5d6106da384b014706eff76f968aa73a3a",
+      "native:src/include/vgi_unary_retry.hpp": "4e6845bff6981b5f198db884227815ebaf38a01d4dbfba1c5342f368404a7a4e",
+      "native:src/include/vgi_unary_rpc.hpp": "426f4ac4d569914417ff7f131c3b9afe4fdc70db4b687fbbe4767b4647b7a3ef",
+      "native:src/storage/vgi_transaction.cpp": "78ec61db9fc713120605a7881642fee9715400620b6a501fd7830eed2461751b",
+      "native:src/vgi_catalog_api.cpp": "27e8b9a1fa52305c8536394b707292be7bbf035783db20a1f9efe2daf33e224c",
+      "native:src/vgi_http_client.cpp": "c44572ac0a4189466fac2241e25b03f8c2fbce9abe4c10deb45ac92681e5ceaa",
+      "native:src/vgi_unary_rpc.cpp": "ad1f0dbf1a1a31a17e159862931dc20a8fac933c7c2142cddced2ae417556662",
+      "native:test/run_transaction_begin_probe.py": "032ffa2b240167aec60b19ca645e626bd00615d4bb716404749a9bd00f23739e",
+      "native:test/run_transactional_write_probe.py": "6b92da25e321a5bc23154d7b46831ef905cd23287529c7296d73b4384162bfd7",
+      "vgi/table_function.py": "b3cf999dd446e9e57264be984c740aea078f5eced94ad4e9e609f3d8ee46aeda",
+      "vgi/worker.py": "950f4e7ebb9b88805b91293bb9ae3be40abb8d2983e218b46ddd3db32bc8c8f1",
+      "vgi/protocol.py": "c48fb098579869c432175232ce7696929caa2f7fd36ce42e3679677a6a5452c2",
+      "vgi/meta_worker.py": "74fc9ac98545c90cd9f5e41d5c5fdc0703663117a715e1c28348f1a47a638a04",
+      "vgi/_test_fixtures/writable/table.py": "2f11053dd0be4aa24e4b81ab6c90ba1834be22520cf79f28e14db29ec8918026",
+      "vgi/_test_fixtures/writable/generic.py": "d6cf7a0297062ef23481155d775b4023da775c2efd1887bafab70dbda81f27a1",
+      "tests/catalog/test_writable_signed_transactions.py": "9fc568c37b197ec8515a035448346cbdcf86885f250809a982d9db112159578d",
+      "tests/catalog/transaction_begin_probe.py": "05b7dd414dc656b1eb394f26e732a25a79a99b7873af8c97b6662630a1d36a2b",
+      "tests/catalog/transactional_write_reference.py": "9851ef375b95f2625d2ced2ba30b7d44794be0b0b640c2a27e6073a1c4575285",
+      "tests/transactor/test_completion_lifecycle.py": "c4c6f6b9c2c112ad0123637fda98f4e3ccd9240d3a7cd612247eaa6edf15dd3d"
+    },
+    "artifacts_sha256": {
+      "build/release/haybarn": "303230f7c9671708f6590631a2afa16c65f0520e3a3b1e8e4a77032996a24f14",
+      "build/release/extension/vgi/vgi.duckdb_extension": "d00bd4e9ae5b4690a2193e45b693027c87b132ec88f9a3f3b50ba2ef479f8dc2"
+    },
+    "changes": [
+      "Classify catalog_transaction_begin as single-attempt. Preserve healthy subprocess pool reuse and stop classified shared-container retry after dispatch; allow container readiness retry before dispatch.",
+      "ATTACH primes ordinary and single-attempt concrete HTTP provider parameter objects. Single-attempt cache stays immutable, preserves provider credentials and avoids secret-manager/MetaTransaction reentry during BEGIN.",
+      "Authenticate transaction tokens at the Python callback boundary and expose provider bytes through BindParams/InitParams/ProcessParams, including HTTP producer/exchange rehydration and MetaWorker routing. Wire requests and continuation state remain sealed.",
+      "Writable fixtures use authenticated callback transaction bytes for schema discovery and processing.",
+      "Correct abandoned-BEGIN cleanup documentation: detached transactor has no TTL reaper, and client disconnect does not reclaim a transaction. Explicit completion or provider shutdown does.",
+      "No protocol/schema/version or engine-pin change, COMMIT/ROLLBACK retry change, savepoint, automatic compensation or recovery service."
+    ],
+    "validation": {
+      "completion_lifecycle": {
+        "artifacts": "logs/transactor-lifecycle-20261022-rrDFnq",
+        "result": "9 pytest items passed, including six new lifecycle cases plus registration/autouse checks; no skips. Real DuckDB DML and DDL, repeated same/opposite completion, unrelated active transaction, disconnect and shutdown persisted readback.",
+        "limit": "Stock Python DuckDB lacks custom begin/subcursor APIs. Tests directly register real ordinary DuckDB cursors with the unchanged transactor and exercise completion over Unix RPC."
+      },
+      "begin": {
+        "baseline": "logs/transaction-begin-20261022-zb9zjk/baseline",
+        "pool_baseline": "logs/transaction-begin-pool-20261022-iPbqJ2/baseline",
+        "final": "logs/transaction-begin-pool-20261022-iPbqJ2/final",
+        "result": "Before guard: lost reply transparently succeeds after two allocations, leaving the first orphan. Final: an error, exactly one allocation, no compensating completion; three healthy autocommit queries reuse one worker PID with no orphans.",
+        "limit": "The one lost-response allocation remains provider-owned; no automatic orphan cleanup is claimed. Shared-container retry guard is compiled/source-reviewed, not runtime-qualified."
+      },
+      "signed_http": {
+        "artifacts": "logs/signed-tx-nml2v7",
+        "result": "Before: four failures. Final: seven focused pytest items pass; 124 existing regressions and 74 callback/storage items pass. Count/rows commit/rollback, wrong-attachment rejection before effects, Worker/MetaWorker callbacks, multiple INPUT turns/finalize, sealed continuation state.",
+        "limit": "Real WritableWorker/GenericTableInsert signed HTTP with a real SQLite transaction adapter replacing only the unavailable custom transactor transport boundary."
+      },
+      "persisted_native_writes": {
+        "artifacts": "logs/transactional-writes-20261022-2ke59i/verified",
+        "result": "17/17 passed: five success cases and twelve autocommit/explicit INSERT/CTAS init/second-input/finalize failures. Independent SQLite committed readback proves rollback of partially stored rows and created tables, including earlier successful writes even when COMMIT follows the error. Exact traces require one rollback and no commit for each failed transaction, and all begun transactions complete exactly once. Failed RETURNING yields no partial successful rows; recovery write succeeds.",
+        "success_cases": [
+          "count_success",
+          "rows_success",
+          "explicit_rollback",
+          "zero_finalize",
+          "ctas_success"
+        ],
+        "failure_dimensions": {
+          "transactions": [
+            "autocommit",
+            "explicit"
+          ],
+          "operations": [
+            "insert",
+            "ctas"
+          ],
+          "phases": [
+            "init",
+            "input",
+            "finalize"
+          ]
+        },
+        "limit": "Single-process loopback signed HTTP SQLite reference with 5000-row multi-batch inputs; no production backend, concurrent writer, crash recovery or full custom DuckDB transactor qualification."
+      },
+      "native_regression": {
+        "artifacts": "logs/transaction-final-20261022-KgRqSj",
+        "result": "Existing semantic ALTER ddl_transactions passes pending visibility, rollback, commit and reconnect. native-evidence.json records tested source/binary hashes."
+      },
+      "quality": {
+        "artifacts": "logs/transactional-writes-20261022-2ke59i/quality",
+        "result": "Whole Python repo Ruff check passes; mypy passes 223 source files. Format check: 507 files already formatted; one existing formatting failure in unchanged tests/catalog/write_finalize_probe.py, present in baseline commit 36892b1. Changed production files and new fixtures pass focused formatting/lint."
+      },
+      "manifest": {
+        "artifacts": "logs/transactional-writes-20261022-2ke59i/manifest.log",
+        "result": "Checker passed: 151 audit rows, 20 contract areas, 94 reviews remain. Inventory coverage is not phase completion."
+      },
+      "full_launcher_integration": {
+        "artifacts": "logs/transactional-writes-20261022-2ke59i/integration.log",
+        "status": "not_green",
+        "test_cases": 367,
+        "reported_passed_including_skips": 301,
+        "actual_passed": 242,
+        "failed": 66,
+        "skipped": 59,
+        "baseline_constraint_failures": "63 CHECK-expression negotiation failures and one missing constraint read/enforcement profile. Sources are unchanged at both baseline heads; representative tests reproduce both groups with isolated Python 4c1e309 and the final native binary.",
+        "unresolved_full_run_failures": "cursor_pagination stream-header EOF and filter_pushdown nested_sequence count 0 versus 10. Both pass focused isolated baseline and current Python reruns; current rerun: 201 assertions, two cases, no skips. Full-run interaction/root cause remains unresolved; no full native baseline rebuild/rerun is claimed.",
+        "limit": "These branch-wide failures remain open; passing focused transaction tests do not make the full branch qualified.",
+        "classification_artifacts": "logs/integration-triage-20261022-4h4Gj1/{classification.json,python-baseline.log,current-focused.log}"
+      }
+    },
+    "limits": [
+      "EC2 Python DuckDB 1.5.5 does not provide enable_suspended_queries or subcursor(). No claim that the complete custom DuckDB transactor BEGIN/write path ran.",
+      "BEGIN response loss can still leave the original unknown token at the provider; this change prevents an additional allocation and does not determine its outcome.",
+      "Ordinary HTTP parameter timeout mutation is unchanged; immutability applies to the single-attempt cache.",
+      "No new protocol fields, matched release, broad phase completion or native2 runtime qualification."
+    ],
+    "next": "Implement persistent trigger CRUD/readback and the minimal native2 ENGINE adapter using existing transactions and write results. Qualify native2 OLD/NEW, expanded ALTER and multi-DML before enabling them; qualify BACKEND triggers and deferred RETURNING separately. Complete custom DuckDB transactor qualification when a compatible Python build is available."
   }
 }

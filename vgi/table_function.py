@@ -557,6 +557,8 @@ class BindParams[TArgs]:
         auth_context: Authentication context for the caller.
         attach_opaque_data: The catalog's attach bytes, unwrapped by the
             framework (shard-UUID prefix stripped). None without an ATTACH.
+        transaction_opaque_data: The provider's transaction bytes, authenticated
+            and unwrapped by the worker. The bind request retains its sealed token.
 
     """
 
@@ -568,6 +570,7 @@ class BindParams[TArgs]:
     storage: BoundStorage | None = None
     auth_context: AuthContext = AuthContext.anonymous()
     attach_opaque_data: bytes | None = None
+    transaction_opaque_data: bytes | None = None
 
     @property
     def at_unit(self) -> str | None:
@@ -601,6 +604,8 @@ class InitParams[TArgs]:
         auth_context: Authentication context for the caller.
         attach_opaque_data: The catalog's attach bytes, unwrapped by the
             framework (uuid prefix stripped). None without an ATTACH.
+        transaction_opaque_data: The provider's transaction bytes, authenticated
+            and unwrapped by the worker. The init request retains its sealed token.
 
         split_payloads: Verified split payloads when this init redeems splits, or
             None otherwise. The framework has already opened and stripped the token
@@ -620,6 +625,7 @@ class InitParams[TArgs]:
     storage: BoundStorage
     auth_context: AuthContext = AuthContext.anonymous()
     attach_opaque_data: bytes | None = None
+    transaction_opaque_data: bytes | None = None
     split_payloads: list[bytes] | None = None
 
     @property
@@ -661,6 +667,8 @@ class ProcessParams[TArgs]:
             source order under parallel ingest. None for every other call path.
         attach_opaque_data: The catalog's attach bytes, unwrapped by the
             framework (uuid prefix stripped). None without an ATTACH.
+        transaction_opaque_data: The provider's transaction bytes, authenticated
+            and unwrapped on this turn. Never serialized into continuation state.
         if_none_match: Conditional-revalidation validator (client's stored
             ETag). Set when the client holds a stale-but-revalidatable cached
             result and asks the worker to confirm freshness cheaply; a worker
@@ -694,6 +702,7 @@ class ProcessParams[TArgs]:
     batch_index: int | None = None
 
     attach_opaque_data: bytes | None = None
+    transaction_opaque_data: bytes | None = None
 
     # Conditional-revalidation validators (client cache -> worker). Set when the
     # client holds a stale-but-revalidatable cached result and asks the worker to
@@ -1086,6 +1095,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         auth_context: AuthContext | None = None,
         execution_id: bytes | None = None,
         attach_plaintext: bytes | None = None,
+        transaction_plaintext: bytes | None = None,
     ) -> BindParams[TArgs]:
         """Construct BindParams from a BindRequest.
 
@@ -1102,6 +1112,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
                 or None on call paths without one.
             attach_plaintext: Full framework attach plaintext (uuid || catalog
                 bytes), or None without an ATTACH.
+            transaction_plaintext: Worker-verified provider transaction bytes, or None.
 
         Returns:
             The constructed BindParams.
@@ -1134,6 +1145,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             else None,
             auth_context=auth_context if auth_context is not None else AuthContext.anonymous(),
             attach_opaque_data=attach_catalog_bytes(attach_plaintext),
+            transaction_opaque_data=transaction_plaintext,
         )
 
     # ------------------------------------------------------------------
@@ -1178,6 +1190,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         *,
         ctx: CallContext | None = None,
         attach_plaintext: bytes | None = None,
+        transaction_plaintext: bytes | None = None,
     ) -> BindResponse:
         """Bind protocol entry point. Do not override; use ``on_bind()``.
 
@@ -1196,6 +1209,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             input: The bind request from the client.
             ctx: Call context carrying the caller's auth, if any.
             attach_plaintext: Full framework attach plaintext, or None.
+            transaction_plaintext: Worker-verified provider transaction bytes, or None.
 
         Returns:
             The BindResponse from ``on_bind()``, or a secret-scope request when
@@ -1203,7 +1217,9 @@ class TableFunctionBase[TArgs](vgi.function.Function):
 
         """
         auth = ctx.auth if ctx is not None else AuthContext.anonymous()
-        params = cls._make_bind_params(input, auth_context=auth, attach_plaintext=attach_plaintext)
+        params = cls._make_bind_params(
+            input, auth_context=auth, attach_plaintext=attach_plaintext, transaction_plaintext=transaction_plaintext
+        )
 
         if input.input_schema is not None:
             cls._validate_arg_type_bounds(cls.FunctionArguments, params.args, input.input_schema)
@@ -1242,6 +1258,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         *,
         ctx: CallContext | None = None,
         attach_plaintext: bytes | None = None,
+        transaction_plaintext: bytes | None = None,
         signing_key: bytes | None = None,
         current_anchor: bytes | None = None,
     ) -> GlobalInitResponse:
@@ -1251,6 +1268,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             input: The init request from the client.
             ctx: Call context carrying the caller's auth, if any.
             attach_plaintext: Full framework attach plaintext, or None.
+            transaction_plaintext: Worker-verified provider transaction bytes, or None.
             signing_key: The worker's AEAD key, passed down so a split token can
                 be opened. Owned by the worker, not by this class.
             current_anchor: The catalog version a split token must still name, or
@@ -1283,6 +1301,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             storage=BoundStorage(cls.storage, execution_id, request=input, attach_plaintext=attach_plaintext),
             auth_context=auth,
             attach_opaque_data=attach_catalog_bytes(attach_plaintext),
+            transaction_opaque_data=transaction_plaintext,
             split_payloads=cls._verify_split_tokens(input, auth, signing_key, current_anchor),
         )
 

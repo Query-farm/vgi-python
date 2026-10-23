@@ -1132,11 +1132,13 @@ recovery endpoint or retention window is introduced.
 
 The earlier blanket single-attempt recommendation for transaction RPCs was too
 broad. Preserve commit/rollback retry behavior; the single-attempt safeguards
-apply to non-idempotent mutations. BEGIN deserves separate review because its
-identifier arrives in the response: retrying a lost response can allocate a
-second transaction, leaving the first for existing cleanup. Check that behavior
-before deciding whether BEGIN needs a policy change. No distributed atomicity
-across independent attachments is promised.
+apply to non-idempotent mutations. BEGIN now also uses a single attempt because
+its identifier arrives in the response: the lost-response probe reproduced a
+second allocation and an abandoned first transaction. Healthy subprocess pool
+reuse is preserved. The original abandoned transaction remains the provider's
+responsibility; the shared transactor has no timed reaper, and a client disconnect
+does not reclaim it. Explicit completion or provider shutdown does. No distributed
+atomicity across independent attachments is promised.
 
 The 2026-10-15 source audit confirms that pinned Haybarn2 already sequences
 statement triggers through BEFORE/base/AFTER CTEs and wraps expanded ALTER in
@@ -1147,12 +1149,11 @@ paths do not demonstrate a need for another coordinator or a new per-write
 requirements revision. Provider snapshot/concurrent-metadata behavior still
 needs qualification.
 
-The initial checkpoints are 1.5-compatible: local transaction exception cleanup
-and failure propagation through the current write phases. Cleanup is now
-implemented and verified below; repeated completion with the same transaction
-identifier still needs separate qualification.
-The signed HTTP writable fixture may pass a sealed transaction token directly
-to its transactor; this still requires reproduction. The 2026-10-22 follow-up
+The initial checkpoints are 1.5-compatible: local transaction exception cleanup,
+repeated completion and failure propagation through the current write phases.
+These now have bounded runtime evidence below. The signed HTTP writable fixture's
+sealed-token bug was reproduced and fixed with authenticated callback parameters;
+the wire token remains sealed. The 2026-10-22 follow-up
 narrows the finalization findings: current generic/simple writable fixtures
 have no provider finalize callback and return results per input batch. Locked
 `vgi-rpc` 0.50.0 buffers `out.emit` until `process` succeeds, so an ordinary
@@ -1190,7 +1191,55 @@ snapshot, metadata lifetime and exact callback traces pass. The existing native
 semantic ALTER transaction test also passes rollback, commit and reconnect.
 This diagnostic does not mutate rows or simulate transport loss. It does not
 qualify duplicate completion, BEGIN allocation cleanup, signed HTTP, or broader
-write atomicity. See `transaction_cleanup_checkpoint_2026_10_22` for evidence.
+write atomicity by itself. See `transaction_cleanup_checkpoint_2026_10_22` for
+that evidence and the subsequent checkpoint below for those follow-ups.
+
+The transaction/write checkpoint completes two further bounded checks on the
+same pinned 1.5 engine:
+
+- Six lifecycle tests use real DuckDB transactions through the existing
+  transactor's Unix RPC server. Repeated and opposite completion calls reject an
+  inactive token without reapplying effects or disturbing another transaction.
+  Disconnect leaves an open transaction; explicit provider shutdown rolls back
+  its DML and DDL, verified after reopening storage.
+- The native lost-BEGIN probe now returns an error after exactly one allocation.
+  Three healthy autocommit queries reuse one worker PID. ATTACH primes separate
+  concrete HTTP provider parameters for single-attempt calls; reusing that cache
+  avoids reentering transaction initialization during HTTP BEGIN. Those
+  single-attempt parameters are immutable after publication. Shared-container
+  dispatch honors the same retry classification, with readiness retries allowed
+  before dispatch; that transport change is compiled and source-reviewed only.
+- Signed HTTP callbacks receive authenticated provider transaction bytes in
+  `BindParams`, `InitParams` and `ProcessParams`, including continuation turns.
+  Requests and serialized continuation state retain sealed tokens. Seven focused
+  pytest items cover commit/rollback, count/rows, wrong-attachment rejection and
+  Worker/MetaWorker lifecycle callbacks; 124 existing regression items and 74
+  callback/storage items pass. No wire fields or protocol version change.
+- Seventeen native signed-HTTP scenarios use a real SQLite transactional
+  reference: five successful count/RETURNING/rollback/zero-row/CTAS cases and
+  twelve INSERT/CTAS failures at initialization, the second batch and finalization
+  in autocommit and explicit transactions. The provider does not self-roll-back
+  on callback error. Native rollback removes partial writes and CTAS tables,
+  including an earlier successful statement when COMMIT follows the error.
+  Independent committed readback and exact completion traces verify the result;
+  failed RETURNING produces no partial successful rows, and a later write succeeds.
+
+The EC2 Python DuckDB 1.5.5 lacks this project's private `subcursor()` and
+`enable_suspended_queries` APIs. Lifecycle tests therefore register real DuckDB
+cursors directly, while write tests use the bounded SQLite provider. This proves
+the tested native transaction path, not the complete custom DuckDB transactor or
+every backend. No timed orphan reaper, savepoints, recovery service or changed
+COMMIT/ROLLBACK retry semantics are introduced. Deferred RETURNING, native2
+OLD/NEW, triggers, expanded ALTER and multi-DML qualification remain separate.
+Exact artifacts and source/binary hashes are recorded in
+`transaction_write_checkpoint_2026_10_22` in the manifest.
+
+The full launcher regression run remains non-green: 242 actual passes,
+66 failures and 59 skips. Baseline source and representative probes account
+for 64 constraint-negotiation failures. Two full-run scan failures pass focused
+old/current Python reruns; their cause remains unresolved. Whole-repo lint and
+mypy pass; one unchanged baseline file fails formatting. The manifest separates
+this broader status from the passing transaction/write checkpoint.
 
 ### Trigger definitions and statement ownership
 
@@ -1319,9 +1368,9 @@ read/query result replay functionality is unaffected by this scope decision.
 2. Implement canonical constraint read/create/apply and typed index records in
    a durable reference. Prove real enforcement, existing-data failure rollback,
    FK NULL/action semantics, primary-key nullability and backing-index closure.
-3. Continue transaction/write qualification after the native 1.5 cleanup fix
-   and finalization probes; reproduce remaining candidate failures first. Qualify CTAS,
-   expanded ALTER and multi-DML through the existing transaction paths.
+3. Continue from the native 1.5 cleanup, completion, signed-token and persisted
+   INSERT/CTAS rollback checkpoints. Qualify expanded ALTER, multi-DML and the
+   custom DuckDB transactor through the existing transaction paths.
    No savepoints or general statement-ticket/receipt lifecycle is required.
 4. Implement persistent trigger CRUD/readback and ENGINE execution first, using
    existing transactions and streams. Test exclusivity, order,

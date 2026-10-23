@@ -336,6 +336,14 @@ class MetaWorker:
         worker = self._maybe_worker_for_attach(envelope) or self._workers[0]
         return worker._unwrap_attach_full(envelope)
 
+    def _unwrap_transaction_for(self, request: Any) -> bytes | None:
+        """Re-open a function transaction on its owning worker during continuation."""
+        bind = getattr(request, "bind_call", request)
+        if not getattr(bind, "transaction_opaque_data", None):
+            return None
+        worker = self._maybe_worker_for_attach(getattr(bind, "attach_opaque_data", None)) or self._workers[0]
+        return worker._unwrap_transaction_for(request)
+
     def _resolve_function(self, request: BindRequest) -> Any:
         """Dispatch function-class resolution to the worker that hosts it.
 

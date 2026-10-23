@@ -2153,6 +2153,7 @@ class TableProducerState(_VgiCallStateHolder, ProducerState):
                 attach_plaintext=self._attach_pt,
             ),
             attach_opaque_data=attach_catalog_bytes(self._attach_pt),
+            transaction_opaque_data=worker._unwrap_transaction_for(self._call.init_call),
         )
         # Re-derive pushdown filters before any fallback initial_state() call so
         # manual consumers see the same required/current state after HTTP rehydrate.
@@ -2341,6 +2342,7 @@ class TableInOutExchangeState(_VgiCallStateHolder, ExchangeState):
                 attach_plaintext=self._attach_pt,
             ),
             attach_opaque_data=attach_catalog_bytes(self._attach_pt),
+            transaction_opaque_data=worker._unwrap_transaction_for(self._call.init_call),
         )
         self._auto_apply = func_cls._should_auto_apply_filters()
         if self._call.init_call.pushdown_filters is not None:
