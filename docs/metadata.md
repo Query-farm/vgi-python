@@ -80,6 +80,7 @@ info = SumValuesFunction.describe()
 | `tags` | `dict[str, str]` | `{}` | Custom key-value tags |
 | `examples` | `list` | `[]` | SQL examples (str or FunctionExample) |
 | `max_workers` | `int\|None` | `None` (unlimited) | Max parallel workers |
+| `input_rows_per_call` | `int\|None` | `None` (a whole chunk) | `RowTransformFunction` only: most input rows per worker call; the client splits each chunk into calls of at most this many rows |
 | `stability` | `FunctionStability` | `CONSISTENT` | Output determinism |
 | `null_handling` | `NullHandling` | `DEFAULT` | NULL input behavior |
 | `argument_monotonicity` | `list[ArgumentMonotonicity]\|None` | `None` | Scalar-only monotonicity claims in argument declaration order |

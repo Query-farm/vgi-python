@@ -235,6 +235,41 @@ class TableInOutGenerator[TArgs, TState = None](TableFunctionBase[TArgs]):
         out.emit(batch)
 
     @classmethod
+    def resume(
+        cls,
+        params: ProcessParams[TArgs],
+        state: TState,
+        out: OutputCollector,
+    ) -> None:
+        """Emit the next batch of output for the last input batch.
+
+        One input batch can produce several output batches: ``process()`` emits
+        the first with ``out.emit(..., more=True)``, and the framework then calls
+        ``resume()`` for each next batch until one is emitted without
+        ``more=True``. Like ``process()``, each call must emit exactly one batch;
+        ``parent_rows`` index the input batch ``process()`` received.
+
+        ``resume()`` gets no input, so ``state`` must hold everything it needs to
+        continue (which rows remain, the next page token). It survives between
+        calls on every transport -- over HTTP inside the stream's state token --
+        so keep it small: positions to resume from, never buffered output.
+        A function that overrides ``resume()`` must declare a serializable
+        ``TState``.
+
+        Args:
+            params: Process parameters (same as ``process()`` received).
+            state: The state ``process()`` (or the previous ``resume()``) left.
+            out: `OutputCollector` for emitting output and logging.
+
+        """
+        raise NotImplementedError(f"{cls.__name__} emitted more=True but does not implement resume()")
+
+    @classmethod
+    def has_resume_override(cls) -> bool:
+        """Whether a subclass implements ``resume()``."""
+        return cls.resume.__func__ is not TableInOutGenerator.resume.__func__  # type: ignore[attr-defined]
+
+    @classmethod
     def finalize(cls, params: ProcessParams[TArgs]) -> list[pa.RecordBatch]:
         """Finalize processing and produce any remaining output.
 
@@ -463,7 +498,7 @@ class TableInOutFunction[
         return cls.finish(params, states)
 
 
-class RowTransformFunction[TArgs](TableInOutGenerator[TArgs, None]):
+class RowTransformFunction[TArgs, TState = None](TableInOutGenerator[TArgs, TState]):
     r"""Blended ("UNNEST-style") table-in-out: positional args ARE per-row input columns.
 
     A ``RowTransformFunction`` collapses the classic either/or between a standard
@@ -488,6 +523,10 @@ class RowTransformFunction[TArgs](TableInOutGenerator[TArgs, None]):
       (DuckDB forbids ``FinalExecute`` under correlated LATERAL, one of the call
       shapes blended must serve). Accumulating functions use a classic
       ``TableInput`` table-in-out or a ``TableBufferingFunction``.
+    * Large output for one input batch (an upstream API paged across many
+      requests) need not be built into one batch: emit the first with
+      ``out.emit(..., more=True)`` and implement ``resume()`` to emit the rest,
+      one per call. That needs a serializable ``TState`` holding where to resume.
     * A positional ``const`` arg is rejected (in the column form DuckDB sweeps a
       constant into the input subquery; in the literal form it is
       indistinguishable from an input column). Use a named arg for optional
