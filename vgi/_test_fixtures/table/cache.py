@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import Annotated, Any, ClassVar, cast
 
 import pyarrow as pa
+import pyarrow.compute as pc
 from vgi_rpc import ArrowSerializableDataclass
 from vgi_rpc.rpc import OutputCollector
 
@@ -945,7 +946,7 @@ class CacheBenchFunction(TableFunctionGenerator[CacheBenchArgs, _CacheCountdownS
 # sequence [0..rows) so COUNT=rows and SUM=rows*(rows-1)/2 regardless of how the
 # chunks were distributed across workers. Positional Arg(0) so the direct path
 # `vgi_table_function(w, 'cache_parallel', [rows])` honors the size; a named
-# `batch_size` (default 24000) controls batch width for the 2 GB streaming guard.
+# `batch_size` (default 24000) controls batch width for the disk-streaming guard (parallel_2gb.test_slow).
 _PC_ITEM_FMT = ">QQ"  # (start, end) as two uint64
 _PC_ITEM_SIZE = struct.calcsize(_PC_ITEM_FMT)
 
@@ -1001,6 +1002,16 @@ class CacheParallelFunction(TableFunctionGenerator[CacheParallelArgs, _CachePara
 
     FunctionArguments = CacheParallelArgs
 
+    _OFFSETS: ClassVar[dict[int, pa.Int64Array]] = {}
+
+    @classmethod
+    def _offsets(cls, n: int) -> pa.Int64Array:
+        """0 .. n-1 as int64, built once per batch size per process."""
+        arr = cls._OFFSETS.get(n)
+        if arr is None:
+            arr = cls._OFFSETS[n] = pa.array(range(n), type=pa.int64())
+        return arr
+
     @classmethod
     def on_init(cls, params: InitParams[CacheParallelArgs]) -> GlobalInitResponse:
         """Primary worker enqueues (start, end) chunks covering [0, rows)."""
@@ -1032,8 +1043,11 @@ class CacheParallelFunction(TableFunctionGenerator[CacheParallelArgs, _CachePara
             state.current_idx = state.current_start
 
         batch_end = min(state.current_idx + params.args.batch_size, state.current_end or 0)
-        values = list(range(state.current_idx, batch_end))
-        batch = pa.RecordBatch.from_pydict({"v": values}, schema=params.output_schema)
+        # v = current_idx .. batch_end-1, as one vectorised add to a cached 0..n-1
+        # (a Python list costs ~1 µs a row, which the 640 MB streaming guard pays 80M times).
+        base = cls._offsets(params.args.batch_size).slice(0, batch_end - state.current_idx)
+        values = pc.add(base, pa.scalar(state.current_idx, type=pa.int64()))
+        batch = pa.RecordBatch.from_arrays([values], schema=params.output_schema)
         cache_control = CacheControl(ttl=_DEFAULT_TTL_SECONDS) if not state.advertised else None
         cast(VgiOutputCollector, out).emit(batch, cache_control=cache_control)
         state.advertised = True
