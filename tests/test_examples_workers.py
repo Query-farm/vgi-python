@@ -173,6 +173,7 @@ def test_paged_api_worker_replies_one_page_at_a_time(monkeypatch: pytest.MonkeyP
 
 
 def _all_orders(m: Any, customer_id: int) -> list[dict[str, Any]]:
+    orders: list[dict[str, Any]]
     orders, cursor = m.fetch_orders_page(customer_id, "")
     while cursor:
         page, cursor = m.fetch_orders_page(customer_id, cursor)

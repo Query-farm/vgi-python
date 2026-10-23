@@ -11,7 +11,7 @@ rows per reply.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any
 
@@ -40,14 +40,14 @@ from vgi.table_in_out_function import RowTransformFunction, TableInOutGenerator
 _INPUT_SCHEMA = make_schema([pa.field("n", pa.int64())])
 
 
-def _expected_pairs(counts: list[int | None]) -> list[tuple[int, int]]:
+def _expected_pairs(counts: Sequence[int | None]) -> list[tuple[int, int]]:
     return [(row, k) for row, n in enumerate(counts) for k in range(n or 0)]
 
 
 def _run_paged(
     client: Client,
     monkeypatch: pytest.MonkeyPatch,
-    batches: list[list[int | None]],
+    batches: Sequence[Sequence[int | None]],
     page_size: int,
 ) -> tuple[list[tuple[int, int]], list[int]]:
     """Run ``blended_paged``; return (parent_row, value) pairs and replies per input batch."""
@@ -66,12 +66,14 @@ def _run_paged(
             client.table_in_out_function(
                 function_name="blended_paged",
                 schema_path=["main"],
-                input=iter([pa.RecordBatch.from_pydict({"n": counts}, schema=_INPUT_SCHEMA) for counts in batches]),
+                input=iter(
+                    [pa.RecordBatch.from_pydict({"n": list(counts)}, schema=_INPUT_SCHEMA) for counts in batches]
+                ),
                 arguments=Arguments(named={"page_size": pa.scalar(page_size)}),
                 parent_row_callback=parent_rows_seen.extend,
             )
         )
-    values = [v for batch in results for v in batch.column("i").to_pylist()]
+    values: list[Any] = [v for batch in results for v in batch.column("i").to_pylist()]
     return list(zip(parent_rows_seen, values, strict=True)), replies
 
 
