@@ -16,7 +16,11 @@ and only then written.
 
 Targets in sibling repos that are not checked out are skipped, not failed:
 nobody has all of them. A registry backend's ``root_env`` (``VGI_JAVA_ROOT``,
-``VGI_TYPESCRIPT_ROOT``, ...) points its SDK target at another checkout.
+``VGI_TYPESCRIPT_ROOT``, ...) points its SDK target at another checkout, as does
+``--root REPO=PATH``. ``--only REPO`` (repeatable) limits the run to those repos,
+so regenerating one SDK's worktree writes nothing into any other checkout:
+
+    uv run python scripts/regen_generated.py --only vgi-go --root vgi-go=~/Development/vgi-go-feature
 """
 
 from __future__ import annotations
@@ -96,9 +100,9 @@ _ROOT_ENV: dict[str, str] = {b.repo: b.root_env for b in _REGISTRY_BACKENDS}
 _ROOT_ENV.setdefault("vgi", "VGI_EXTENSION_ROOT")
 
 
-def _repo_root(name: str) -> Path | None:
+def _repo_root(name: str, roots: dict[str, str]) -> Path | None:
     """Locate a sibling checkout, or ``None`` when it is not present."""
-    override = os.environ.get(_ROOT_ENV.get(name, ""))
+    override = roots.get(name) or os.environ.get(_ROOT_ENV.get(name, ""))
     if override:
         return Path(override) if Path(override).is_dir() else None
     siblings = Path(__file__).resolve().parents[2]
@@ -135,12 +139,38 @@ def main() -> int:
         action="store_true",
         help="report drift without writing anything (exit 1 if any file is stale)",
     )
+    parser.add_argument(
+        "--only",
+        action="append",
+        default=[],
+        metavar="REPO",
+        help="only these repos' targets (repeatable), e.g. --only vgi-go",
+    )
+    parser.add_argument(
+        "--root",
+        action="append",
+        default=[],
+        metavar="REPO=PATH",
+        help="the checkout to use for REPO (repeatable), e.g. --root vgi-go=../vgi-go-feature",
+    )
     args = parser.parse_args()
+    known = {repo for _, _, repo in _TARGETS}
+    unknown = set(args.only) - known
+    if unknown:
+        parser.error(f"--only: unknown repo(s) {sorted(unknown)}; known: {sorted(known)}")
+    roots: dict[str, str] = {}
+    for spec in args.root:
+        repo, sep, path = spec.partition("=")
+        if not sep or repo not in known:
+            parser.error(f"--root expects REPO=PATH with REPO one of {sorted(known)}, got {spec!r}")
+        roots[repo] = str(Path(path).expanduser())
 
     stale, wrote, skipped, failed = [], [], [], []
 
     for module_name, relative, repo in _TARGETS:
-        root = _repo_root(repo)
+        if args.only and repo not in args.only:
+            continue
+        root = _repo_root(repo, roots)
         if root is None:
             skipped.append(f"{repo} (not checked out)")
             continue
