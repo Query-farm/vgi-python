@@ -69,7 +69,7 @@ from vgi.catalog.constraints import ConstraintsApplyRequest, ConstraintSnapshot,
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot
 from vgi.catalog.indexes import IndexDefinition
 from vgi.catalog.layout import TableLayout
-from vgi.catalog.macros import MAX_MACRO_BYTES, MacroOverload, validate_macro_overloads
+from vgi.catalog.macros import MAX_MACRO_BYTES, MacroOverload, validate_macro_family
 from vgi.catalog.options import OptionDefinitions
 from vgi.catalog.query import CatalogQueryPrepareRequest, CatalogQueryPrepareResult, ClientQueryCapabilities
 from vgi.filter_v2 import delta_revisions, replaying_accepted_state
@@ -1030,63 +1030,25 @@ else:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class MacroCreateRequest(ArrowSerializableDataclass):
-    """Request for catalog_macro_create with `RecordBatch` for parameter defaults.
-
-    Attributes:
-        attach_opaque_data: Opaque per-attach catalog session token (bytes) echoed
-            back so the worker can scope catalog state to the attachment.
-        schema_path: Raw identifier components of the schema containing the object.
-        name: Name of the target object/function.
-        macro_type: Whether this is a scalar or table macro.
-        parameters: Ordered list of parameter names.
-        definition: The SQL expression (scalar) or query (table).
-        on_conflict: Behavior when the object already exists ([`OnConflict`][]:
-            ERROR/IGNORE/REPLACE).
-        parameter_default_values: One-row `RecordBatch` where column names are
-            parameter names and values are typed defaults; ``None`` if no defaults.
-        arguments_schema: Optional Arrow schema (serialized as IPC bytes) with one
-            nullable field per parameter, in ``parameters`` order. Each field's type
-            is the parameter's default value type when known (else null), and the
-            ``vgi_doc`` field metadata key carries the parameter's description (UTF-8,
-            presence-only — omitted when undocumented). Mirrors the per-argument doc
-            channel functions expose. ``None`` when no per-parameter docs are
-            supplied. Built with ``vgi.argument_spec.macro_arguments_schema``.
-        transaction_opaque_data: Opaque DuckDB transaction handle (bytes); ``None``
-            when not inside a transaction.
-        overloads: Complete ordered family, requiring the macro-overloads create
-            profile. Legacy fields must be empty when present. Expression
-            defaults are bound once by the owner before atomic publication.
-    """
+    """Create one complete macro family; the provider resolves expression defaults."""
 
     attach_opaque_data: bytes
     schema_path: SchemaPath
     name: str
     macro_type: MacroType
-    parameters: list[str]
-    definition: str
+    overloads: list[MacroOverload]
     on_conflict: OnConflict
-    parameter_default_values: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
-    arguments_schema: Annotated[pa.Schema | None, ArrowType(pa.binary())] = None
     transaction_opaque_data: bytes | None = None
-    overloads: list[MacroOverload] | None = None
 
     def __post_init__(self) -> None:
-        """Validate the exclusive legacy or overload-family representation."""
-        validate_macro_overloads(
-            macro_type=self.macro_type.value,
-            schema_path=self.schema_path,
-            parameters=self.parameters,
-            definition=self.definition,
-            parameter_default_values=self.parameter_default_values,
-            arguments_schema=self.arguments_schema,
-            overloads=self.overloads,
-        )
+        """Validate the mandatory complete replacement family."""
+        validate_macro_family(macro_type=self.macro_type.value, schema_path=self.schema_path, overloads=self.overloads)
 
     def serialize_to_bytes(self) -> bytes:
         """Revalidate mutable overload families before sending a create request."""
         self.__post_init__()
         result = ArrowSerializableDataclass.serialize_to_bytes(self)
-        if self.overloads is not None and len(result) > MAX_MACRO_BYTES:
+        if len(result) > MAX_MACRO_BYTES:
             raise ValueError("macro record is too large")
         return result
 

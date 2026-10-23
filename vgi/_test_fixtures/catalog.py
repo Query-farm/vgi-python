@@ -15,7 +15,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, overload
 
 if TYPE_CHECKING:
-    import pyarrow as pa
     from vgi_rpc.rpc import CallContext
 
 from vgi._redact import short_hash
@@ -37,6 +36,7 @@ from vgi.catalog import (
     ViewInfo,
 )
 from vgi.catalog.layout import TableLayout
+from vgi.catalog.macros import MacroOverload
 from vgi.protocol import ClientCapabilities
 from vgi.schema_path import SchemaKey, schema_path_key
 from vgi.typed_values import TypedValueBatch
@@ -809,11 +809,8 @@ class InMemoryCatalog(CatalogInterface):
         schema_path: list[str],
         name: str,
         macro_type: MacroType,
-        parameters: list[str],
-        definition: str,
+        overloads: list[MacroOverload],
         on_conflict: OnConflict,
-        parameter_default_values: pa.RecordBatch | None = None,
-        arguments_schema: pa.Schema | None = None,
     ) -> None:
         """Create a new macro."""
         schema_data = self._get_schema(attach_opaque_data, schema_path)
@@ -830,12 +827,9 @@ class InMemoryCatalog(CatalogInterface):
                 name=name,
                 schema_path=schema_path,
                 macro_type=macro_type,
-                parameters=parameters,
-                parameter_default_values=parameter_default_values,
-                definition=definition,
+                overloads=overloads,
                 comment=None,
                 tags={},
-                arguments_schema=arguments_schema,
             )
         )
         self._increment_version(attach_opaque_data)

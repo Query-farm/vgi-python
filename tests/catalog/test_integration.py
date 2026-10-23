@@ -19,6 +19,8 @@ from vgi_rpc import WorkerPool
 from vgi import schema
 from vgi.catalog import MacroType, OnConflict, SchemaObjectType, SerializedSchema
 from vgi.catalog.constraints import ConstraintDefinition, ConstraintKind
+from vgi.catalog.evaluation_context import QueryEvaluationContext
+from vgi.catalog.macros import legacy_macro_fields, normalize_macro_overloads
 from vgi.client import Client
 from vgi.client import catalog_mixin as _cm
 from vgi.client.catalog_mixin import CatalogClientError
@@ -596,8 +598,15 @@ class TestCatalogMacros:
             schema_path=["main"],
             name="double",
             macro_type=MacroType.SCALAR,
-            parameters=["x"],
-            definition="x * 2",
+            overloads=normalize_macro_overloads(
+                macro_type=(MacroType.SCALAR).value,
+                schema_path=["main"],
+                parameters=["x"],
+                definition="x * 2",
+                parameter_default_values=None,
+                arguments_schema=None,
+                evaluation_context=QueryEvaluationContext(),
+            ),
         )
 
         macro = client.macro_get(
@@ -610,8 +619,8 @@ class TestCatalogMacros:
         assert macro.name == "double"
         assert macro.schema_path == ["main"]
         assert macro.macro_type == MacroType.SCALAR
-        assert macro.parameters == ["x"]
-        assert macro.definition == "x * 2"
+        assert [p.name for p in macro.overloads[0].parameters] == ["x"]
+        assert macro.overloads[0].definition == "x * 2"
 
     def test_macro_drop(self) -> None:
         """Can create and drop a macro."""
@@ -623,8 +632,15 @@ class TestCatalogMacros:
             schema_path=["main"],
             name="to_drop",
             macro_type=MacroType.SCALAR,
-            parameters=["x"],
-            definition="x",
+            overloads=normalize_macro_overloads(
+                macro_type=(MacroType.SCALAR).value,
+                schema_path=["main"],
+                parameters=["x"],
+                definition="x",
+                parameter_default_values=None,
+                arguments_schema=None,
+                evaluation_context=QueryEvaluationContext(),
+            ),
         )
 
         client.macro_drop(
@@ -675,16 +691,30 @@ class TestCatalogMacros:
             schema_path=["main"],
             name="scalar_one",
             macro_type=MacroType.SCALAR,
-            parameters=["x"],
-            definition="x",
+            overloads=normalize_macro_overloads(
+                macro_type=(MacroType.SCALAR).value,
+                schema_path=["main"],
+                parameters=["x"],
+                definition="x",
+                parameter_default_values=None,
+                arguments_schema=None,
+                evaluation_context=QueryEvaluationContext(),
+            ),
         )
         client.macro_create(
             attach_opaque_data=result.attach_opaque_data,
             schema_path=["main"],
             name="table_one",
             macro_type=MacroType.TABLE,
-            parameters=["n"],
-            definition="SELECT * FROM range(n)",
+            overloads=normalize_macro_overloads(
+                macro_type=(MacroType.TABLE).value,
+                schema_path=["main"],
+                parameters=["n"],
+                definition="SELECT * FROM range(n)",
+                parameter_default_values=None,
+                arguments_schema=None,
+                evaluation_context=QueryEvaluationContext(),
+            ),
         )
 
         scalar_macros = client.schema_contents(
@@ -717,9 +747,15 @@ class TestCatalogMacros:
             schema_path=["main"],
             name="clamp",
             macro_type=MacroType.SCALAR,
-            parameters=["val", "lo", "hi"],
-            definition="GREATEST(lo, LEAST(hi, val))",
-            parameter_default_values=defaults,
+            overloads=normalize_macro_overloads(
+                macro_type=(MacroType.SCALAR).value,
+                schema_path=["main"],
+                parameters=["val", "lo", "hi"],
+                definition="GREATEST(lo, LEAST(hi, val))",
+                parameter_default_values=defaults,
+                arguments_schema=None,
+                evaluation_context=QueryEvaluationContext(),
+            ),
         )
 
         macro = client.macro_get(
@@ -729,8 +765,15 @@ class TestCatalogMacros:
         )
 
         assert macro is not None
-        assert macro.parameter_default_values is not None
-        restored = macro.parameter_default_values
+        assert (
+            legacy_macro_fields(macro.overloads, evaluation_context=QueryEvaluationContext())[
+                "parameter_default_values"
+            ]
+            is not None
+        )
+        restored = legacy_macro_fields(macro.overloads, evaluation_context=QueryEvaluationContext())[
+            "parameter_default_values"
+        ]
         assert restored.num_rows == 1
         assert set(restored.schema.names) == {"lo", "hi"}
         assert restored.column("lo").type == pa.int64()

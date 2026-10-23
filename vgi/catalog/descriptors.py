@@ -38,7 +38,9 @@ from vgi.catalog.catalog_interface import (
     serialize_column_statistics,
 )
 from vgi.catalog.constraints import ConstraintInfo
+from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.indexes import IndexDefinition
+from vgi.catalog.macros import normalize_macro_overloads
 from vgi.catalog.options import OptionState
 from vgi.column_path import RequiredFilterPaths, column_path_key
 from vgi.invocation import BindResponse, FunctionType
@@ -753,11 +755,10 @@ class Macro:
             names and values are typed defaults. None if no defaults.
             Example: pa.RecordBatch.from_pydict({"b": [5]}) for b := 5.
         parameter_docs: Optional mapping of parameter name to a human/agent-facing
-            description. Keys must appear in ``parameters``. Descriptions flow over
-            the wire via the macro ``arguments_schema``'s ``vgi_doc`` field metadata
-            (the same channel functions use), so the DuckDB extension's
-            ``vgi_function_arguments()`` can surface them. Empty/default = no docs.
+            description. Keys must appear in ``parameters``. Descriptions become
+            canonical MacroParameter documentation. Empty/default = no docs.
         definition: SQL expression (scalar) or query (table).
+        evaluation_context: Explicit owner context used by the local single-definition adapter.
         comment: Optional macro comment.
         tags: Optional metadata tags.
 
@@ -771,6 +772,8 @@ class Macro:
     definition: str = ""
     comment: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
+
+    evaluation_context: QueryEvaluationContext = field(default_factory=QueryEvaluationContext)
 
     def __post_init__(self) -> None:
         """Validate macro configuration."""
@@ -797,21 +800,24 @@ class Macro:
                 )
 
     def to_macro_info(self, schema_path: SchemaPath) -> MacroInfo:
-        """Convert to [`MacroInfo`][] for catalog response."""
+        """Normalize the local single declaration into its sole wire representation."""
         return MacroInfo(
             name=self.name,
             schema_path=schema_path,
             macro_type=self.macro_type,
-            parameters=list(self.parameters),
-            parameter_default_values=self.parameter_default_values,
-            definition=self.definition,
+            overloads=normalize_macro_overloads(
+                macro_type=self.macro_type.value,
+                schema_path=schema_path,
+                parameters=list(self.parameters),
+                parameter_default_values=self.parameter_default_values,
+                definition=self.definition,
+                arguments_schema=macro_arguments_schema(
+                    self.parameters, self.parameter_default_values, self.parameter_docs
+                ),
+                evaluation_context=self.evaluation_context,
+            ),
             comment=self.comment,
             tags=dict(self.tags),
-            arguments_schema=macro_arguments_schema(
-                self.parameters,
-                self.parameter_default_values,
-                self.parameter_docs,
-            ),
         )
 
 

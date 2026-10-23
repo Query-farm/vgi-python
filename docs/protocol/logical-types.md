@@ -20,7 +20,7 @@ parameter batches, and literal defaults. Annotation alone does not negotiate
 support. A provider may select a profile only for operations whose semantic
 mapping it can implement. Standalone operations need an equivalent explicit
 agreement before consuming these values. Unqualified native DuckDB 1.5 adapters
-reject them before interpreting Arrow storage, including legacy macro defaults.
+reject them before interpreting Arrow storage, including canonical macro defaults.
 
 Opaque transport must preserve field and schema metadata, child names/order,
 nullability, bytes and validity. Copying a carrier does not authorize executing,

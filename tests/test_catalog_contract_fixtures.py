@@ -237,7 +237,7 @@ def test_logical_type_vectors_preserve_tuple_null_and_absence() -> None:
         }
 
 
-def test_macro_vectors_preserve_full_family_and_legacy_absence() -> None:
+def test_macro_vectors_preserve_single_and_multiple_overload_families() -> None:
     fixtures = {name: base64.b64decode(value) for name, value in json.loads(render())["records"].items()}
     parameter = MacroParameter.deserialize_from_bytes(fixtures["macro_parameter"])
     assert parameter.declared_type is not None and parameter.declared_type.field(0).type == pa.int64()
@@ -249,10 +249,18 @@ def test_macro_vectors_preserve_full_family_and_legacy_absence() -> None:
     assert [parameter.name for parameter in overload.parameters] == ["x", "fallback", "scale"]
     create = MacroCreateRequest.deserialize_from_bytes(fixtures["macro_create"])
     info = MacroInfo.deserialize_from_bytes(fixtures["macro_info"])
-    assert create.overloads is not None and len(create.overloads) == 2
-    assert info.overloads is not None and len(info.overloads) == 2
+    assert len(create.overloads) == 2
+    assert len(info.overloads) == 2
     resolved = info.overloads[0].parameters[2]
     assert resolved.default_expression is None
     assert resolved.default_value is not None and resolved.default_value.batch.column(0)[0].as_py() == 5
-    assert MacroCreateRequest.deserialize_from_bytes(fixtures["macro_create_legacy"]).overloads is None
-    assert MacroInfo.deserialize_from_bytes(fixtures["macro_info_legacy"]).overloads is None
+    single_create = MacroCreateRequest.deserialize_from_bytes(fixtures["macro_create_single"])
+    single_info = MacroInfo.deserialize_from_bytes(fixtures["macro_info_single"])
+    assert single_create.overloads == single_info.overloads
+    assert len(single_info.overloads) == 1
+    assert single_info.overloads[0].definition == "x + 1"
+    for record_type in (MacroCreateRequest, MacroInfo):
+        assert not record_type.ARROW_SCHEMA.field("overloads").nullable
+        assert not {"parameters", "definition", "parameter_default_values", "arguments_schema"}.intersection(
+            record_type.ARROW_SCHEMA.names
+        )

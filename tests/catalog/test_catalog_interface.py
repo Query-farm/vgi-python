@@ -37,6 +37,8 @@ from vgi.catalog.catalog_interface import (
     OrderPreservation,
     ReadOnlyCatalogInterface,
 )
+from vgi.catalog.evaluation_context import QueryEvaluationContext
+from vgi.catalog.macros import normalize_macro_overloads
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.exceptions import CatalogReadOnlyError
 from vgi.protocol import ClientCapabilities
@@ -305,9 +307,16 @@ def _not_implemented_test_cases() -> list[tuple[str, str, Callable[[MinimalCatal
                 schema_path=["main"],
                 name="my_macro",
                 macro_type=MacroType.SCALAR,
-                parameters=["x"],
-                definition="x * 2",
                 on_conflict=OnConflict.ERROR,
+                overloads=normalize_macro_overloads(
+                    macro_type=(MacroType.SCALAR).value,
+                    schema_path=["main"],
+                    parameters=["x"],
+                    definition="x * 2",
+                    parameter_default_values=None,
+                    arguments_schema=None,
+                    evaluation_context=QueryEvaluationContext(),
+                ),
             ),
         ),
         (
@@ -534,9 +543,16 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
                 schema_path=["main"],
                 name="my_macro",
                 macro_type=MacroType.SCALAR,
-                parameters=["x"],
-                definition="x * 2",
                 on_conflict=OnConflict.ERROR,
+                overloads=normalize_macro_overloads(
+                    macro_type=(MacroType.SCALAR).value,
+                    schema_path=["main"],
+                    parameters=["x"],
+                    definition="x * 2",
+                    parameter_default_values=None,
+                    arguments_schema=None,
+                    evaluation_context=QueryEvaluationContext(),
+                ),
             ),
         ),
         (

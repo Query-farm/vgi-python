@@ -11,9 +11,9 @@
       "Overload collections replacing single macro definitions"
     ],
     "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
-    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the successor schema inventory; required canonical table constraint lists replace the legacy parent arrays and revision-checked catalog_table_constraints_apply joins the public method surface; typed index definitions/options replace legacy index fields and add catalog_index_option_definitions; required semantic ALTER flags and raw subject/dependent column paths extend embedded dependency records; SET DEFAULT requires binary SqlExpression IPC and USING accepts nullable binary IPC; CREATE/ADD defaults use the canonical field codec, without new capability negotiation; CatalogAttachResult.default_schema becomes nullable UTF-8, preserving no implicit default independently of an explicit raw schema name",
+    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the successor schema inventory; required canonical table constraint lists replace the legacy parent arrays and revision-checked catalog_table_constraints_apply joins the public method surface; typed index definitions/options replace legacy index fields and add catalog_index_option_definitions; required semantic ALTER flags and raw subject/dependent column paths extend embedded dependency records; SET DEFAULT requires binary SqlExpression IPC and USING accepts nullable binary IPC; CREATE/ADD defaults use the canonical field codec, without new capability negotiation; CatalogAttachResult.default_schema becomes nullable UTF-8, preserving no implicit default independently of an explicit raw schema name; MacroInfo and MacroCreateRequest require nonempty overloads and remove legacy parent parameters/definition/parameter_default_values/arguments_schema; canonical families need no overload read/create opt-in",
     "version_requirement": "The existing breaking changes already require a major version and matching routing name. Final number and complete generated diff remain P1/P2 work; the historical additive 2.2.0 candidate is superseded.",
-    "planned_diff": "Included before freeze: canonical macro-family cleanup after native support; projection-expression/result-slot and repeatability contracts with P1 proof; remaining generated/column metadata semantics. DEFAULT/USING binary payloads and nullable default_schema are implemented in their October 23 checkpoints. Retain existing transactions/writes and implemented catalog/query/type records. Trigger CRUD/execution and optional feature families remain reviewed deferrals. No protocol freeze or public version transition yet.",
+    "planned_diff": "Included before freeze: projection-expression/result-slot and repeatability contracts with P1 proof; remaining generated/column metadata semantics. DEFAULT/USING binary payloads, nullable default_schema and canonical macro families are implemented in their October 23 checkpoints. Retain existing transactions/writes and implemented catalog/query/type records. Trigger CRUD/execution and optional feature families remain reviewed deferrals. No protocol freeze or public version transition yet.",
     "historical_additive_candidate": "vgi.v2/2.2.0"
   },
   "sources": {
@@ -525,9 +525,9 @@
       "review_decision": "Retain canonical constraints and typed index wire; use the existing bounded public/reference/native1.5 checkpoints. No additional constraint or index shape is selected in this source review."
     },
     "macros": {
-      "title": "Macros \u2014 concrete contract and reference implemented; adapters pending",
+      "title": "Macros \u2014 canonical families and bounded native 1.5 support",
       "disposition": "include",
-      "status": "reference_implemented_canonical_family_migration_native_qualification_pending",
+      "status": "canonical_family_bounded_native15_implemented_and_validated",
       "records": [
         "MacroInfo",
         "MacroCreateRequest",
@@ -546,7 +546,7 @@
         "Overload collections, declared parameter types, expression/default representation, documentation, and owner-relative definitions",
         "Reconcile the existing single-definition request and typed-value defaults with engine overloads and expression defaults. Define resolution and stable round trips; do not introduce a function overload handle just to mirror DuckDB internals."
       ],
-      "capability_contract": "vgi.macro.overloads.read.v1 and vgi.macro.overloads.create.v1; create requires read; transaction DDL requires the existing transaction profile",
+      "capability_contract": "One required complete overload family for both single and overloaded macros; no family-only read/create opt-in. Existing logical-type, dependency and transaction requirements still apply. SQL profile/context identifies interpretation, not permission.",
       "gates": [
         "P1",
         "P2",
@@ -561,14 +561,18 @@
             "python:tests/catalog/test_macro_contract.py",
             "python:tests/catalog/test_macro_overload_protocol.py"
           ],
-          "limits": "Native family materialization/DDL and production owner binding remain unqualified; unsupported SDK adapters reject families."
+          "limits": "Native family materialization/DDL and production owner binding remain unqualified; unsupported SDK adapters reject families.",
+          "historical": true,
+          "superseded_by": "macro_family_checkpoint_2026_10_23"
         },
         {
           "status": "shared_expression_context_specified_reference_pending",
           "sources": [
             "docs/protocol/shared-catalog-values.md#shared-sql-definitions-and-evaluation-phases"
           ],
-          "limits": "Required context and consistent scalar/statement roles are designed. Existing bounded layout/macro/column fixtures do not qualify these additional expression roles."
+          "limits": "Required context and consistent scalar/statement roles are designed. Existing bounded layout/macro/column fixtures do not qualify these additional expression roles.",
+          "historical": true,
+          "superseded_by": "macro_family_checkpoint_2026_10_23"
         },
         {
           "status": "required_evaluation_context_implemented",
@@ -578,7 +582,9 @@
             "vgi/catalog/sql.py",
             "tests/catalog/test_expression_contract.py"
           ],
-          "limits": "Required explicit context is generated across SDKs and default contexts must match their owner. Native macro-family integration and broader provider contexts remain pending."
+          "limits": "Required explicit context is generated across SDKs and default contexts must match their owner. Native macro-family integration and broader provider contexts remain pending.",
+          "historical": true,
+          "superseded_by": "macro_family_checkpoint_2026_10_23"
         },
         {
           "status": "source_review_2026_10_23",
@@ -590,12 +596,28 @@
             "native:src/vgi_catalog_api.cpp:3003",
             "native:src/storage/vgi_schema_entry.cpp:333"
           ],
-          "limits": "Retains existing bounded runtime evidence; no new qualification."
+          "limits": "Retains existing bounded runtime evidence; no new qualification.",
+          "historical": true,
+          "superseded_by": "macro_family_checkpoint_2026_10_23"
+        },
+        {
+          "status": "canonical_family_implementation",
+          "checkpoint": "macro_family_checkpoint_2026_10_23",
+          "sources": [
+            "python:vgi/catalog/catalog_interface.py",
+            "python:vgi/protocol.py",
+            "python:vgi/catalog/descriptors.py",
+            "python:vgi/worker.py",
+            "python:tests/catalog/test_macro_overload_protocol.py",
+            "native:src/vgi_macro_contract.cpp",
+            "native:src/storage/vgi_macro_set.cpp"
+          ],
+          "limits": "Bounded native1.5 discovery/execution; no native SQL CREATE, general dependency extraction or native2 qualification."
         }
       ],
-      "review_decision": "Existing concrete contract/reference implemented, native qualification pending. No new macro RPC family or overload handle is justified. Canonicalize to a single overload-family wire representation in the successor major once native/SDK materialization is ready.",
+      "review_decision": "One canonical nonempty overload family is implemented across Python and generated SDKs. Simple authoring helpers normalize to one member. Native1.5 materializes complete scalar/table families for discovery/execution; native SQL CREATE MACRO remains unsupported. No new macro RPC, overload handle or capability flag.",
       "implementation_work": [
-        "Native1.5 family materialization and CREATE dispatch, complete owner-relative table/function/type resolution and dependency extraction, production transactional failure/rollback semantics, SDK semantic adapters, and removal of legacy wire fields only after the family adapter prerequisite. Keep finite reference execution separate from general SQL/production guarantees."
+        "Qualify broader owner contexts, nested native2 schemas, complete general body/type binding and dependency extraction, production provider transactions, and any separately authorized native SQL CREATE MACRO path. Finite durable reference and bounded native execution do not close those gates."
       ]
     },
     "dependencies": {
@@ -1333,7 +1355,7 @@
     "cleanup": {
       "title": "Existing protocol cleanup",
       "disposition": "include",
-      "status": "column_and_default_schema_migrations_implemented_macro_cleanup_pending",
+      "status": "column_default_schema_and_macro_migrations_implemented",
       "records": [
         "ColumnPath",
         "ConstraintDefinition",
@@ -1346,7 +1368,7 @@
       "scope": [
         "Review inconsistent names/types, scalar default-schema absence, duplicate operations, and weak metadata conventions together. Decide whether a clean major change is preferable to parallel legacy/new forms. Nested default search paths are not an upstream capability at the current pin."
       ],
-      "capability_contract": "Canonical field shapes belong to the successor major, not an optional legacy fallback. Preserve current macro read/create and scalar interpretation roles; reject unsupported default-schema absence. No new generic cleanup capability.",
+      "capability_contract": "Canonical shapes belong to the successor major, not an optional legacy fallback. Preserve semantic SQL profiles and existing operation requirements; no family-only macro read/create checks. Native1.5 rejects unsupported default-schema absence. No new generic cleanup capability.",
       "gates": [
         "P1",
         "P2",
@@ -1383,6 +1405,19 @@
             "native:test/run_default_schema.py"
           ],
           "limits": "Native 1.5 rejects absence before attachment publication; this prepares optional-default representation for the later native2 port, not native1.5 execution without a default. Existing omitted provider constructor defaults can remain main."
+        },
+        {
+          "status": "canonical_macro_family_implementation",
+          "checkpoint": "macro_family_checkpoint_2026_10_23",
+          "sources": [
+            "vgi/catalog/catalog_interface.py",
+            "vgi/protocol.py",
+            "vgi/catalog/macros.py",
+            "conformance/catalog-contracts.json",
+            "native:src/vgi_macro_contract.cpp",
+            "native:src/storage/vgi_macro_set.cpp"
+          ],
+          "limits": "Native SQL CREATE and native2 remain separate; no first-overload fallback."
         }
       ],
       "review_decisions": {
@@ -1394,8 +1429,8 @@
           "Canonical DEFAULT/USING payloads and nullable CatalogAttachResult.default_schema are implemented across the coordinated development snapshot without new capability flags."
         ],
         "recommended_new_wire": "Implemented nullable scalar default_schema: NULL means no implicit default; non-NULL is a nonempty raw root identifier without NUL. Explicit absence never becomes main. Native1.5 rejects absence before publication; native2 optional-return adaptation remains later work.",
-        "macro_canonicalization_decision": "Recommend one canonical overload-family representation at successor release freeze: a single legacy macro becomes a one-element family. Retain SDK conversion helpers, not two authoritative wire shapes. This is additional integration work, not a completed cleanup: the current native loader rejects every non-NULL family. Do not delete legacy fields until native/SDK family materialization and migration are implemented, or silently claim the current mutually exclusive dual representation has already been eliminated.",
-        "remaining_P1": "Settle canonical macro family transition after native consumption and regenerate all SDKs together. Continue remaining column/optimizer semantics. Audit any further inconsistency by named field, not blanket renaming or reserved metadata bags.",
+        "macro_canonicalization_decision": "Implemented one required nonempty overload-family representation; single definitions become one-element families through local authoring helpers. Legacy parent wire fields are removed together with native1.5 family materialization and SDK migration. Function argument defaults remain unchanged; no new capability flag.",
+        "remaining_P1": "Continue remaining column/optimizer semantics and macro production/general-binding qualification. Audit any further inconsistency by named field, not blanket renaming or reserved metadata bags.",
         "evidence": [
           "python:docs/protocol/shared-catalog-values.md:168,176,179,896",
           "python:docs/protocol/vgi-protocol-proposed-changes.md:43,56,184,714",
@@ -1410,7 +1445,7 @@
         "filter_encodings": "Preserve current filter_encodings capability/inventory fields in this package. The old proposal recommends removal because Filter v2 is mandatory, but no concrete consumer conflict or simplification proof is established by this review. Do not broaden cleanup into unproven removals."
       },
       "implementation_work": [
-        "Recommend one canonical overload-family representation at successor release freeze: a single legacy macro becomes a one-element family. Retain SDK conversion helpers, not two authoritative wire shapes. This is additional integration work, not a completed cleanup: the current native loader rejects every non-NULL family. Do not delete legacy fields until native/SDK family materialization and migration are implemented, or silently claim the current mutually exclusive dual representation has already been eliminated."
+        "Complete remaining column/optimizer semantics and release qualification; selected wire cleanup migrations are implemented."
       ]
     },
     "identity": {
@@ -5740,7 +5775,7 @@
       "area": "macros",
       "disposition": "include",
       "target": "MacroInfo.overloads / MacroCreateRequest.overloads",
-      "status": "reference_implemented_native_qualification_pending",
+      "status": "canonical_family_bounded_native15_implemented_and_validated",
       "evidence": [
         {
           "status": "source_review_2026_10_23",
@@ -5752,9 +5787,19 @@
             "haybarn:src/include/duckdb/parser/parsed_data/create_macro_info.hpp:19"
           ],
           "limits": "Source/reference reconciliation only; native/production qualification remains open."
+        },
+        {
+          "status": "canonical_macro_family_implementation",
+          "checkpoint": "macro_family_checkpoint_2026_10_23",
+          "sources": [
+            "python:docs/protocol/macro-contract.md",
+            "native:src/vgi_macro_contract.cpp",
+            "native:src/storage/vgi_macro_set.cpp"
+          ],
+          "limits": "Bounded owner context and native1.5 discovery/execution only; native SQL CREATE, general dependency extraction and native2 remain open."
         }
       ],
-      "decision": "The audit's one-definition-only claim is historical. Complete bounded homogeneous ordered families and exclusive legacy/new shapes already exist. Native materialization and CREATE remain unfinished; keep family identity, not overload handles."
+      "decision": "The original single-definition claim is historical. Required canonical families now replace duplicate parent wire forms, and native1.5 materializes the whole vector. Existing catalog create/get/list/drop RPCs retain family identity; native SQL CREATE remains unsupported."
     },
     {
       "id": "audit-347",
@@ -5767,7 +5812,7 @@
       "area": "macros",
       "disposition": "existing_contract_plus_engine_port",
       "target": "MacroOverload.macro_type/parameters and MacroParameter.name",
-      "status": "reference_implemented_native_qualification_pending",
+      "status": "canonical_family_bounded_native15_implemented_and_validated",
       "evidence": [
         {
           "status": "source_review_2026_10_23",
@@ -5777,9 +5822,19 @@
             "haybarn:src/include/duckdb/function/macro_function.hpp:38"
           ],
           "limits": "Source/reference reconciliation only; native/production qualification remains open."
+        },
+        {
+          "status": "canonical_macro_family_implementation",
+          "checkpoint": "macro_family_checkpoint_2026_10_23",
+          "sources": [
+            "python:docs/protocol/macro-contract.md",
+            "native:src/vgi_macro_contract.cpp",
+            "native:src/storage/vgi_macro_set.cpp"
+          ],
+          "limits": "Bounded owner context and native1.5 discovery/execution only; native SQL CREATE, general dependency extraction and native2 remain open."
         }
       ],
-      "decision": "Scalar/table distinction, ordered raw parameter names, case uniqueness, required-before-default ordering and parent/family agreement are already validated. Remaining work is engine binding and executable family materialization."
+      "decision": "Canonical scalar/table families preserve ordered raw parameters, uniqueness, required/default ordering and parent agreement. Native1.5 materializes complete vectors and delegates overload selection to the pinned engine; broader contexts remain unqualified."
     },
     {
       "id": "audit-348",
@@ -5792,7 +5847,7 @@
       "area": "macros",
       "disposition": "include",
       "target": "MacroParameter.default_expression/default_value with CREATE-time resolution",
-      "status": "reference_implemented_native_qualification_pending",
+      "status": "canonical_family_bounded_native15_implemented_and_validated",
       "evidence": [
         {
           "status": "specified_reference_pending",
@@ -5812,9 +5867,19 @@
             "haybarn:src/planner/binder/statement/bind_create.cpp:476,492,501,503"
           ],
           "limits": "Source/reference reconciliation only; native/production qualification remains open."
+        },
+        {
+          "status": "canonical_macro_family_implementation",
+          "checkpoint": "macro_family_checkpoint_2026_10_23",
+          "sources": [
+            "python:docs/protocol/macro-contract.md",
+            "native:src/vgi_macro_contract.cpp",
+            "native:src/storage/vgi_macro_set.cpp"
+          ],
+          "limits": "Bounded owner context and native1.5 discovery/execution only; native SQL CREATE, general dependency extraction and native2 remain open."
         }
       ],
-      "decision": "Replace stale unimplemented-wire evidence. Both fields and atomic candidate canonicalization are implemented; pinned binder confirms constant folding at CREATE and discovery's resolved default is correct. General owning binder, authorization and native integration remain qualification work; arbitrary invocation closures are not allowed."
+      "decision": "Defaults resolve at CREATE through the owner; discovery accepts resolved literal batches only. Native1.5 imports Arrow literals through the existing scanner, preserving typed NULL/default values instead of string fallback. Finite durable owner proof is separate from general authorization/binder qualification."
     },
     {
       "id": "audit-349",
@@ -5827,7 +5892,7 @@
       "area": "macros",
       "disposition": "existing_contract_plus_engine_port",
       "target": "MacroParameter.declared_type",
-      "status": "reference_implemented_native_qualification_pending",
+      "status": "canonical_family_bounded_native15_implemented_and_validated",
       "evidence": [
         {
           "status": "source_review_2026_10_23",
@@ -5838,6 +5903,16 @@
             "haybarn:src/planner/binder/statement/bind_create.cpp:510"
           ],
           "limits": "Source/reference reconciliation only; native/production qualification remains open."
+        },
+        {
+          "status": "canonical_macro_family_implementation",
+          "checkpoint": "macro_family_checkpoint_2026_10_23",
+          "sources": [
+            "python:docs/protocol/macro-contract.md",
+            "native:src/vgi_macro_contract.cpp",
+            "native:src/storage/vgi_macro_set.cpp"
+          ],
+          "limits": "Bounded owner context and native1.5 discovery/execution only; native SQL CREATE, general dependency extraction and native2 remain open."
         }
       ],
       "decision": "Singleton Arrow declared type is distinct from literal default type and documentation. Never infer declarations from legacy arguments_schema. Owner resolves nominal aliases and overload costs; generic codec does not. Coordinate named logical type identity with that separate area rather than adding macro-specific type IDs."
@@ -5853,7 +5928,7 @@
       "area": "macros",
       "disposition": "existing_contract_plus_engine_port",
       "target": "MacroOverload.definition/macro_type/profile/schema_path/evaluation_context plus existing dependency graph",
-      "status": "reference_implemented_native_qualification_pending",
+      "status": "canonical_family_bounded_native15_implemented_and_validated",
       "evidence": [
         {
           "status": "specified_reference_pending",
@@ -5873,9 +5948,19 @@
             "native:src/vgi_catalog_api.cpp:3003"
           ],
           "limits": "Source/reference reconciliation only; native/production qualification remains open."
+        },
+        {
+          "status": "canonical_macro_family_implementation",
+          "checkpoint": "macro_family_checkpoint_2026_10_23",
+          "sources": [
+            "python:docs/protocol/macro-contract.md",
+            "native:src/vgi_macro_contract.cpp",
+            "native:src/storage/vgi_macro_set.cpp"
+          ],
+          "limits": "Bounded owner context and native1.5 discovery/execution only; native SQL CREATE, general dependency extraction and native2 remain open."
         }
       ],
-      "decision": "Replace stale unimplemented-field evidence: SQL body, explicit owner and context are real fields. Production owner-relative body binding and dependency extraction remain unfinished. Legacy native QualifyWorkerFunctions rewrites only discovered functions and is not proof of full table/type/macro owner binding. No serialized DuckDB AST or new overload lifecycle needed."
+      "decision": "Owner/context/body fields are mandatory. Bounded native1.5 bodies are parsed and owner-qualified before family publication, then bind at invocation. Unsupported query forms, catalog qualification and contexts reject. General dependency extraction and full owner-relative body/type binding remain open; no serialized AST or new lifecycle."
     },
     {
       "id": "audit-362",
@@ -9957,7 +10042,7 @@
     "included_wire_work": [
       "Implemented: required SqlExpression IPC for catalog_table_column_default_set.expression and nullable SqlExpression IPC for catalog_table_column_type_change.expression, plus canonical CREATE/ADD default metadata. No new capability flag or second column RPC family.",
       "Implemented nullable CatalogAttachResult.default_schema with None/main/literal-dotted corpus cases and SDK consumer changes. Empty/NUL present strings reject. Native1.5 rejects absence before attachment publication; no new capability or nested search-path encoding.",
-      "Recommend one canonical overload-family representation at successor release freeze: a single legacy macro becomes a one-element family. Retain SDK conversion helpers, not two authoritative wire shapes. This is additional integration work, not a completed cleanup: the current native loader rejects every non-NULL family. Do not delete legacy fields until native/SDK family materialization and migration are implemented, or silently claim the current mutually exclusive dual representation has already been eliminated.",
+      "Implemented one required nonempty overload-family representation; single definitions become one-element families through local authoring helpers. Legacy parent wire fields are removed together with native1.5 family materialization and SDK migration. Function argument defaults remain unchanged; no new capability flag.",
       "Retain projection-expression and repeatability design in the combined package; mark P0 scope reviewed and P1 contract/implementation proof outstanding. Reuse existing transport for metrics, partition selection and parallelism unless a concrete missing datum is demonstrated."
     ],
     "planned_column_profiles": [
@@ -10324,6 +10409,112 @@
       "vgi-java": "bae44574113fa7670c98da69504fb7a58e4535aa",
       "vgi-csharp": "02d2cec4517d483c16fbdbb2369438a2a8af887b",
       "vgi-cpp": "48c41588768efc9a23371027ad35f65b74894557"
+    }
+  },
+  "macro_family_checkpoint_2026_10_23": {
+    "date": "2026-10-23",
+    "status": "implemented_and_validated_on_15",
+    "base_revisions": {
+      "native": "2e7c6ac121d5a688d48a2c777633be5a86f8974c",
+      "python": "48700b763c9903058ade0a514661ad1bb6563c74"
+    },
+    "engine_15": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "contract": {
+      "representation": "Implemented one required nonempty overload-family representation; single definitions become one-element families through local authoring helpers. Legacy parent wire fields are removed together with native1.5 family materialization and SDK migration. Function argument defaults remain unchanged; no new capability flag.",
+      "defaults": "CREATE accepts typed literals or expression defaults; owner resolves expressions once. Discovery accepts resolved literals only, preserving typed NULL separately from no default.",
+      "type_identity": "Declared Arrow types remain distinct from literal/default/documentation types.",
+      "context": "Every member has explicit matching owner and evaluation context.",
+      "publication": "Owner CREATE replaces the complete family atomically. Native installation validates wire/parse/type/context for all members before installing the full vector; body binding still happens at invocation and unresolved references can fail then. No skipped member or first-overload fallback."
+    },
+    "implementation": [
+      "Python client/provider/worker, declarative authoring conversion and complete-family read validation.",
+      "Six SDK wire schemas and corpus vectors for single/multiple members; provider helpers normalize singles.",
+      "Native1.5 strict family decoder, typed Arrow default import, scalar/table family installation and per-parameter introspection.",
+      "vgi_function_arguments adds zero-based overload_index for macros, explicit declaration types, literal-default displays and missing-versus-empty parameter documentation; macro arguments can be positional or named."
+    ],
+    "validation": {
+      "status": "passed",
+      "host": "ec2-user@98.81.121.120",
+      "workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+      "logs": "logs/macro-families-20261023-Rulov6",
+      "python_targeted": {
+        "passed": 352
+      },
+      "python_regression": {
+        "passed": 1697,
+        "skipped": 8,
+        "generation_failures": 9,
+        "generation_recheck_passed": 9,
+        "limits": "The initial nine failures were stale remote generated SDK files; all nine parity cases passed after synchronization."
+      },
+      "python_final_durable": {
+        "passed": 9,
+        "scope": "Signed HTTP creation/get/list/bulk/reconnect, atomic replacement failure, rollback/commit, scalar/table resolution, literal type mismatch, typed NULL/type metadata/empty docs."
+      },
+      "ruff": "passed",
+      "mypy": "223 source files passed",
+      "manifest": {
+        "audit_rows": 151,
+        "areas": 20,
+        "unresolved_reviews": 0,
+        "tests_passed": 11
+      },
+      "generation": "--check --require-all passed; all 17 generated artifacts/corpora current",
+      "native_build": "production/loadable/unittest/haybarn/catalog-tests targets passed",
+      "native_macro_contract": {
+        "cases": 4,
+        "assertions": 101,
+        "scope": "Strict list/bulk IPC envelopes, malformed family/default records, Arrow typed defaults, scalar/table overload execution, named calls, documentation, cached context rejection, all-member parse failure and explicit invocation-time binding limit.",
+        "log": "native-macros-final.log"
+      },
+      "native_metadata_regression": {
+        "cases": 3,
+        "assertions": 131,
+        "log": "native-metadata-configured.log"
+      },
+      "native_sql_regression": {
+        "initial": {
+          "passed": 12,
+          "failed": 1,
+          "skipped": 13
+        },
+        "corrected_introspection": {
+          "passed": 2,
+          "log": "native-introspection-final.log",
+          "change": "Function-only named-versus-positional invariant retained; macros explicitly support both calling forms and overload_index."
+        },
+        "configured_attach": {
+          "passed": 9,
+          "skipped": 5,
+          "log": "native-attach.log",
+          "skips": "Only optional HTTP versioning workers are absent."
+        },
+        "limits": "Runs cover existing macro execution, function/macro introspection, catalog bulk/fallback/revalidation, global functions and attachments. Counts overlap across reruns. This is not a claim that the previously recorded full native suite regression is fixed."
+      },
+      "native_fixture_lint": "Ruff and format check passed",
+      "sdks": {
+        "go": "628 tests/subtests passed, including real HTTP codec and hosted reflection",
+        "rust": "35 tests passed; example worker compile passed",
+        "typescript": "24 tests / 326 assertions per Arrow backend, type build and browser bundle passed",
+        "java": "133 focused tests passed",
+        "csharp": "59 focused tests passed",
+        "cpp": "397 assertions across 5 provider/codec tests passed; normal SDK build passed"
+      },
+      "sdk_logs": "sdk/",
+      "browser_client_sha256": "840df926c9b2ebbe63d6c480eed2444ec984f34d29a33f8572d92ca9d4b55479",
+      "protocol_hash": "457a2fc7c24a637480d2c34237ea0ccf826b10f4ea5e316d4623895f4a535585",
+      "protocol_hash_limits": "The outer RPC fingerprint is unchanged by embedded MacroInfo/MacroCreateRequest layout changes. Exact generated schemas and corpus/real provider tests verify the breaking family migration; fingerprint equality is not compatibility.",
+      "source_integrity": "Changed files checked local versus EC2 by SHA256; source-checkpoint.json, commits.json and artifacts.sha256 in the checkpoint log directory identify exact sources, synchronized branch heads and binaries."
+    },
+    "limits": "Native SQL CREATE MACRO remains unsupported. Broader SQL contexts/body forms, general dependency extraction, native2 engine port, P1-P3 freeze/release gates and the prior nested NOT NULL schema-reconciliation regression remain open. Native body semantic validity is not proven at load time; body binding occurs when called. Existing family comment empty-versus-NULL behavior is unchanged.",
+    "gate_effect": "Closes canonical macro-family wire migration and bounded native1.5 consumer checkpoint only. General body/dependency/provider qualification, remaining column/optimizer work, P1-P3 freeze/release and M0-M4 native2 remain open.",
+    "sdk_revisions": {
+      "vgi-go": "490e43be573288ddc4887d21e0a05860cc58c087",
+      "vgi-rust": "2cf4cac2b37352f508f689b316029420c6b964e5",
+      "vgi-typescript": "4eaafa84f6a49de5f0b6b681c091db041c8596e6",
+      "vgi-java": "3b30cb560cbc283eb6c1c9d858cded1c9cf3079d",
+      "vgi-csharp": "07057799d86274ddf5767e98aec1c190eeadeb24",
+      "vgi-cpp": "d3a5be374a75395a117f026b2ded3f1a67bb06c3"
     }
   }
 }

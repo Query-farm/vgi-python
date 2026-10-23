@@ -1,39 +1,44 @@
 # Macro overload contract
 
 Status: development contract for the combined successor protocol. The wire
-records and Python validation/reference helpers are implemented while builds
-remain on DuckDB 1.5. Native creation/loading of the new overload representation
-is a separate adapter checkpoint. Existing `vgi.v2` spelling does not declare
+records use one canonical overload-family representation while builds remain
+on DuckDB 1.5. Native SQL CREATE MACRO remains unsupported; creation through
+the catalog API and native discovery/execution are distinct paths.
+Existing `vgi.v2` spelling does not declare
 this breaking development diff compatible with released implementations.
 
 The [October 23 combined review](shared-catalog-values.md#combined-protocol-review--october-23-2026)
 selects a single overload-family representation for the successor freeze.
-The mutually exclusive legacy/family shapes below describe the current
-development implementation. Port native family materialization and migrate
-single macros to one-element families before removing legacy wire fields;
-that cleanup is still outstanding.
+Single macros are one-element families. Local authoring helpers can accept
+simple definitions, but the wire has no competing legacy definition fields.
 
 ## Representation and capabilities
 
-`MacroInfo` and `MacroCreateRequest` append nullable
+`MacroInfo` and `MacroCreateRequest` require nonempty
 `overloads: list<struct<MacroOverload>>`. The existing macro get, list, create and
 drop methods operate on the whole named family. There is no new per-overload
 RPC or opaque overload identifier. Catalog dependency references likewise name
 the complete scalar or table macro family.
 
-The read profile is `vgi.macro.overloads.read.v1`; the create profile is
-`vgi.macro.overloads.create.v1` and requires read. A worker may advertise create
-only when it can validate, atomically store, and return the complete new
-representation. Reading records or retaining their bytes does not by itself
-qualify execution. A client or worker lacking the applicable negotiated profile
-must reject a new collection, never choose its first overload or erase typing.
+The family shape is mandatory in this successor wire contract; it does not
+require the former overload read/create opt-ins. No new capability check is
+introduced. Existing dependency, transaction and logical-type requirements
+still apply to the relevant operation. A provider implementing creation must
+validate, atomically store, and return the complete family. Reading records or
+retaining their bytes does not by itself qualify execution. An implementation
+that cannot honor a family must reject it, never choose its first overload or
+erase typing.
 
 | Parent field state | Meaning |
 | --- | --- |
-| `overloads = NULL` | Existing single-definition representation. |
-| Nonempty overload list | Authoritative complete family; legacy `parameters = []`, `definition = ""`, defaults and `arguments_schema = NULL`. |
+| One-element overload list | Ordinary single-definition macro. |
+| Multiple overloads | Authoritative ordered complete family. |
 | Empty overload list | Invalid; dropping a family uses the existing drop operation. |
-| New list plus any populated legacy definition field | Invalid, even if the first overload appears equivalent. |
+| NULL or omitted overload list | Invalid. |
+
+Parent `parameters`, `definition`, `parameter_default_values` and
+`arguments_schema` fields have been removed from both records. Function argument
+defaults belong to a separate contract and are unchanged.
 
 The parent `macro_type` and `schema_path` must exactly equal every overload's
 kind and raw owner path. Scalar and table definitions cannot share one family.
@@ -127,9 +132,9 @@ any overload as a change to the family. Drop removes the family.
 
 ## Legacy migration and executable reference
 
-`validate_macro_overloads` checks the new collection, parent agreement and
-exclusive legacy/new representations. It leaves `overloads = NULL` on the
-existing legacy path.
+`validate_macro_family` checks the nonempty collection and parent agreement.
+Read records additionally reject unresolved expression defaults. The same
+representation is used by the public client, provider hook and worker dispatch.
 
 `normalize_macro_overloads` upgrades a legacy definition without inferring
 declared parameter types from `arguments_schema`; callers must supply the
@@ -155,7 +160,7 @@ binder or catalog transaction store.
 
 `tests/catalog/test_macro_contract.py` verifies actual Arrow round trips,
 recursive type metadata, typed NULL/absence, shape rejection, ownership,
-ordering, exclusive representations, safe legacy migration and failed-default
+ordering, mandatory family records, safe local migration and failed-default
 atomicity. A finite DuckDB 1.5 reference folds a whitelisted expression, stores
 and reads the resulting family, copies it without re-evaluation, and compares
 macro invocation results. Real DuckDB tests also cover typed overload selection
@@ -164,13 +169,36 @@ reference behavior; full native catalog adapters and general provider execution
 remain separate qualification work.
 
 `tests/catalog/test_macro_overload_protocol.py` exercises the normal worker and
-public HTTP client: negotiated create dispatch, legacy hook compatibility,
-get/list/bulk discovery, capability withdrawal, rejection of unresolved defaults
-on discovery, and prevention of legacy replacement/drop of an overload family
-without the create profile. Its metadata store is deliberately finite and
-in-process; it makes no durability or transaction qualification claim.
+public HTTP client: canonical create dispatch, get/list/bulk discovery and
+rejection of unresolved defaults on discovery. Its finite reference stores
+families in the existing SQLite snapshot transaction fixture, covering
+reconnect, failed replacement, rollback and commit. This does not claim general
+provider transaction or body-binding qualification.
 
-The shared corpus includes new and legacy parent records, typed/untyped
+### Native 1.5 consumer
+
+Native discovery installs the complete ordered family after validating its wire
+records, owner/context, SQL syntax, imported types and resolved signatures. It
+never skips a failing member or substitutes the first member for the family.
+Defaults pass through the existing Arrow scanner, preserving their actual
+DuckDB values and types. The engine selects overloads at invocation.
+
+Body binding also occurs at invocation. A syntactically valid body with an
+unresolved function or relation can therefore be installed and fail when called;
+this checkpoint does **not** prove every body semantically valid before native
+publication. CREATE-time validation remains the owning provider's responsibility.
+Full native body binding and dependency extraction remain separate work.
+
+The bounded adapter accepts one raw root owner schema and the default qualified
+evaluation context, checked again on cached lookups. It qualifies ordinary
+function/table references and rejects explicit client catalogs, windows,
+CTEs/set operations, unsupported type metadata and unsupported contexts. Native
+SQL CREATE MACRO remains unsupported. `vgi_function_arguments()` exposes a
+zero-based `overload_index` for macro parameters, their explicit declared types
+(`ANY` when untyped), documentation and SQL-literal default displays; function
+argument defaults are unchanged.
+
+The shared corpus includes single-member and multi-member families, typed/untyped
 parameters, expression defaults, and ordered overloads. SDK codec checks retain
 the inner schema and literal IPC bytes rather than reconstructing logical types
 from JSON or display strings.

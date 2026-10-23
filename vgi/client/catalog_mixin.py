@@ -2029,34 +2029,10 @@ class CatalogClientMixin:
         schema_path: list[str],
         name: str,
         macro_type: MacroType,
-        parameters: list[str],
-        definition: str,
+        overloads: list[MacroOverload],
         on_conflict: OnConflict = OnConflict.ERROR,
-        parameter_default_values: pa.RecordBatch | None = None,
-        arguments_schema: pa.Schema | None = None,
-        overloads: list[MacroOverload] | None = None,
     ) -> None:
-        """Create a new macro.
-
-        Args:
-            attach_opaque_data: The attachment ID from catalog_attach.
-            transaction_opaque_data: Optional transaction ID.
-            schema_path: The schema to create the macro in.
-            name: The name for the new macro.
-            macro_type: Whether this is a scalar or table macro.
-            parameters: Ordered list of parameter names.
-            definition: SQL expression (scalar) or query (table).
-            on_conflict: Behavior if macro already exists.
-            parameter_default_values: One-row `RecordBatch` with typed defaults.
-            arguments_schema: Optional Arrow schema (one nullable field per
-                parameter, in ``parameters`` order) carrying per-parameter
-                descriptions via the ``vgi_doc`` field metadata key. Build with
-                ``vgi.argument_spec.macro_arguments_schema``.
-            overloads: Complete negotiated overload family. When supplied,
-                parameters must be empty, definition must be the empty string,
-                and legacy default/documentation schemas must be absent.
-
-        """
+        """Create or replace one complete family of explicitly scoped macro definitions."""
         with self._catalog_connect() as proxy:
             proxy.catalog_macro_create(
                 request=MacroCreateRequest(
@@ -2064,13 +2040,9 @@ class CatalogClientMixin:
                     schema_path=schema_path,
                     name=name,
                     macro_type=macro_type,
-                    parameters=parameters,
-                    definition=definition,
-                    on_conflict=on_conflict,
-                    parameter_default_values=parameter_default_values,
-                    arguments_schema=arguments_schema,
-                    transaction_opaque_data=transaction_opaque_data,
                     overloads=overloads,
+                    on_conflict=on_conflict,
+                    transaction_opaque_data=transaction_opaque_data,
                 )
             )
 

@@ -270,8 +270,6 @@ def test_parent_serialization_revalidates_mutated_nested_family(kind):
         name="m",
         schema_path=member.schema_path,
         macro_type=MacroType.SCALAR,
-        parameters=[],
-        definition="",
         overloads=[member],
     )
     parent = (

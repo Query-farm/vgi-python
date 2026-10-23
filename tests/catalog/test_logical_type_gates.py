@@ -12,7 +12,6 @@ from vgi.catalog.capabilities import MACRO_OVERLOADS_READ, CatalogCapabilities
 from vgi.catalog.catalog_interface import MacroInfo, MacroType, OnConflict, TableInfo
 from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.macros import MACRO_PROFILE, MacroOverload, MacroParameter
-from vgi.exceptions import CatalogCapabilityError
 from vgi.logical_types import tuple_field, variant_field
 from vgi.protocol import CatalogAttachRequest, MacroCreateRequest, TableCreateRequest
 from vgi.query_parameters import QueryParameters
@@ -36,18 +35,15 @@ def values():
 
 
 def macro(parameter=None, *, legacy=False):
+    if legacy:
+        parameter = MacroParameter(name="x", default_value=values())
     return MacroInfo(
         comment=None,
         tags={},
         name="m",
         schema_path=["main"],
         macro_type=MacroType.SCALAR,
-        parameters=["x"] if legacy else [],
-        definition="x" if legacy else "",
-        parameter_default_values=values().batch if legacy else None,
-        overloads=None
-        if legacy
-        else [
+        overloads=[
             MacroOverload(
                 evaluation_context=QueryEvaluationContext(),
                 parameters=[parameter],
@@ -119,9 +115,6 @@ def test_macro_creation_rejects_unnegotiated_logical_parameters_before_provider(
         schema_path=info.schema_path,
         name=info.name,
         macro_type=info.macro_type,
-        parameters=info.parameters,
-        definition=info.definition,
-        parameter_default_values=info.parameter_default_values,
         overloads=info.overloads,
         on_conflict=OnConflict.ERROR,
     )
@@ -129,7 +122,6 @@ def test_macro_creation_rejects_unnegotiated_logical_parameters_before_provider(
     with pytest.raises(ValueError, match="not negotiated"):
         Worker.catalog_macro_create(worker, create)
     worker._get_catalog.return_value.macro_create.assert_not_called()
-    worker._get_catalog.return_value.macro_create_overloads.assert_not_called()
 
 
 @pytest.fixture
@@ -180,32 +172,31 @@ def test_query_preparation_rejects_unnegotiated_output_and_releases_recipe(query
 
 
 @pytest.mark.parametrize("operation", ["replace", "drop"])
-def test_unaware_client_cannot_replace_or_drop_existing_macro_family(query_backend, monkeypatch, operation):
+def test_mandatory_family_mutations_do_not_require_representation_capability(query_backend, monkeypatch, operation):
     worker, attached = query_backend
     catalog = worker._get_catalog()
-    monkeypatch.setattr(catalog, "macro_get", lambda **kwargs: macro(MacroParameter(name="x")))
+    info = macro(MacroParameter(name="x"))
+    monkeypatch.setattr(catalog, "macro_get", lambda **kwargs: info)
     mutation = Mock()
     monkeypatch.setattr(catalog, "macro_create", mutation)
     monkeypatch.setattr(catalog, "macro_drop", mutation)
-    with pytest.raises(CatalogCapabilityError):
-        if operation == "replace":
-            worker.catalog_macro_create(
-                MacroCreateRequest(
-                    attach_opaque_data=attached.attach_opaque_data,
-                    schema_path=["main"],
-                    name="m",
-                    macro_type=MacroType.SCALAR,
-                    parameters=["x"],
-                    definition="x",
-                    on_conflict=OnConflict.REPLACE,
-                )
-            )
-        else:
-            worker.catalog_macro_drop(
+    if operation == "replace":
+        worker.catalog_macro_create(
+            MacroCreateRequest(
                 attach_opaque_data=attached.attach_opaque_data,
                 schema_path=["main"],
                 name="m",
-                ignore_not_found=False,
-                transaction_opaque_data=None,
+                macro_type=MacroType.SCALAR,
+                overloads=info.overloads,
+                on_conflict=OnConflict.REPLACE,
             )
-    mutation.assert_not_called()
+        )
+    else:
+        worker.catalog_macro_drop(
+            attach_opaque_data=attached.attach_opaque_data,
+            schema_path=["main"],
+            name="m",
+            ignore_not_found=False,
+            transaction_opaque_data=None,
+        )
+    mutation.assert_called_once()

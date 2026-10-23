@@ -764,7 +764,7 @@ intact in the [manifest](duckdb-2.0-manifest.json); its
 | `catalog_table_column_default_set.expression` | Required `binary` carrying exactly one canonical `SqlExpression` IPC record, replacing raw SQL text. SQL NULL is an expression value; DROP DEFAULT stays its own existing method. |
 | `catalog_table_column_type_change.expression` | Nullable `binary` carrying the same record. NULL requests the qualified ordinary cast path; a present record defines USING against the old row. |
 | `CatalogAttachResult.default_schema` | Nullable scalar string. NULL means no implicit default; a present value is one nonempty, non-NUL raw root identifier. Existing providers can still explicitly return `main`. No empty-string coercion, dot splitting, nested search path or invented default. |
-| Macro create/read definition | One canonical overload family; represent a single macro as a one-element family. Keep local conversion helpers for legacy definitions, then remove duplicate authoritative wire fields after native family materialization works. |
+| Macro create/read definition | Required nonempty overload family; a single macro is a one-element family. Parent definition, parameters, defaults and arguments-schema fields are removed. Local convenience helpers normalize simple definitions into the canonical family. |
 
 The DEFAULT/USING payload migration is implemented in the development branch,
 including generated SDKs and canonical CREATE/ADD default metadata. Per the
@@ -789,10 +789,15 @@ coercing them to `main`. Present defaults, including literal dotted identifiers,
 retain their behavior. Native 2.0 can later map absence to its optional catalog
 API; that execution path is not qualified by the 1.5 tests.
 
-Macro-family consolidation remains an **unimplemented migration** in the same
-major transition. Current native macro discovery rejects non-NULL family
-payloads; deleting legacy fields before that adapter is ported would break
-existing functionality.
+Macro create/read now share the canonical family representation in this same
+major transition. The Python client, provider hook and worker use the existing
+catalog methods for the complete family. No overload-specific opt-in is needed
+for this mandatory wire shape. Types, documentation and ordered parameters
+remain per overload; discovery returns resolved literal defaults, including
+typed NULLs, and rejects unresolved expression defaults. Function argument
+defaults remain a separate, unchanged contract. See the
+[macro contract](macro-contract.md) for the native adapter's bounded support
+and remaining qualification work.
 
 Successor column CREATE/ADD use canonical base64 IPC field annotations for
 defaults. Native 1.5 translates its supported defaults; generated-expression
@@ -1593,9 +1598,10 @@ read/query result replay functionality is unaffected by this scope decision.
    INSERT/CTAS rollback checkpoints. Qualify expanded ALTER, multi-DML and the
    custom DuckDB transactor through the existing transaction paths.
    No savepoints or general statement-ticket/receipt lifecycle is required.
-4. Complete macro consolidation, remaining column semantics and optimizer
-   proofs from the October 23 review. DEFAULT/USING and nullable default-schema
-   wire migrations are implemented. Trigger CRUD/execution is deferred; retain
+4. Complete remaining column semantics and optimizer proofs from the October 23
+   review. Canonical macro families, DEFAULT/USING and nullable default-schema
+   wire migrations are implemented. Broader macro provider/body qualification
+   remains separate. Trigger CRUD/execution is deferred; retain
    its proof requirements above for any future scope change.
 5. Extend dependency planning to constraints and column/ALTER blockers. Test
    rename/replacement, inaccessible dependents, cross-schema identity and no

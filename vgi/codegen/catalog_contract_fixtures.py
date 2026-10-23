@@ -213,6 +213,14 @@ def logical_and_macro_records() -> dict[str, TypedValueBatch | ArrowSerializable
         ],
     )
     common: dict[str, Any] = dict(name="macro.with.dot", schema_path=scope, macro_type=MacroType.SCALAR)
+    single = MacroOverload(
+        evaluation_context=QueryEvaluationContext(),
+        parameters=[MacroParameter(name="x")],
+        definition="x + 1",
+        profile=MACRO_PROFILE,
+        schema_path=scope,
+        macro_type="scalar",
+    )
     return {
         "logical_tuple": tuple_values,
         "logical_struct": struct_values,
@@ -227,17 +235,15 @@ def logical_and_macro_records() -> dict[str, TypedValueBatch | ArrowSerializable
         "macro_create": MacroCreateRequest(
             **common,
             attach_opaque_data=b"attach",
-            parameters=[],
-            definition="",
             on_conflict=OnConflict.REPLACE,
             transaction_opaque_data=b"transaction",
             overloads=[overload, second],
         ),
-        "macro_create_legacy": MacroCreateRequest(
-            **common, attach_opaque_data=b"attach", parameters=["x"], definition="x + 1", on_conflict=OnConflict.ERROR
+        "macro_create_single": MacroCreateRequest(
+            **common, attach_opaque_data=b"attach", overloads=[single], on_conflict=OnConflict.ERROR
         ),
-        "macro_info": MacroInfo(**common, parameters=[], overloads=[published, second], comment=None, tags={}),
-        "macro_info_legacy": MacroInfo(**common, parameters=["x"], definition="x + 1", comment=None, tags={}),
+        "macro_info": MacroInfo(**common, overloads=[published, second], comment=None, tags={}),
+        "macro_info_single": MacroInfo(**common, overloads=[single], comment=None, tags={}),
     }
 
 

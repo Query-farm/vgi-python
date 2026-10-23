@@ -215,6 +215,15 @@ def validate_macro_overloads(
             raise ValueError("macro overload kind and owner must equal the parent macro")
 
 
+def validate_macro_family(*, macro_type: str, schema_path: SchemaPath, overloads: list[MacroOverload]) -> None:
+    """Validate the sole wire representation, including mandatory nonempty family."""
+    if overloads is None:
+        raise ValueError("macro overloads must be a nonempty bounded collection")
+    validate_macro_overloads(
+        macro_type=macro_type, schema_path=schema_path, parameters=[], definition="", overloads=overloads
+    )
+
+
 def normalize_macro_overloads(
     *,
     macro_type: str,

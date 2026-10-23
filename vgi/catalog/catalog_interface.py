@@ -47,7 +47,7 @@ from vgi.catalog.constraints import ConstraintInfo, ConstraintsApplyRequest, Con
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot
 from vgi.catalog.indexes import IndexConstraintType, IndexDefinition
 from vgi.catalog.layout import TableLayout, TableLayoutChange
-from vgi.catalog.macros import MAX_MACRO_BYTES, MacroOverload, validate_macro_overloads
+from vgi.catalog.macros import MAX_MACRO_BYTES, MacroOverload, validate_macro_family
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
 from vgi.catalog.query import QueryCapabilities
@@ -650,55 +650,24 @@ class ViewInfo(CatalogSchemaObject, ArrowSerializableDataclass):
 
 @dataclass(frozen=True)
 class MacroInfo(CatalogSchemaObject, ArrowSerializableDataclass):
-    """Information about a macro in a schema.
-
-    Attributes:
-        macro_type: Whether this is a scalar or table macro.
-        parameters: Ordered list of parameter names.
-        parameter_default_values: One-row `RecordBatch` where column names are parameter
-            names and values are typed defaults. None if no defaults.
-            Serialized as IPC bytes over the wire.
-        definition: The SQL expression (scalar) or query (table).
-        arguments_schema: Optional Arrow schema (serialized as IPC bytes) with one
-            nullable field per parameter, in ``parameters`` order. Each field's type
-            is the parameter's default value type when known (else null), and the
-            ``vgi_doc`` field metadata key carries the parameter's description (UTF-8,
-            presence-only — omitted when undocumented). Mirrors the per-argument doc
-            channel functions expose via ``FunctionInfo.arguments``. None means the
-            worker did not supply per-parameter docs (older workers); the extension
-            falls back to ``parameters`` for names. Built with
-            ``vgi.argument_spec.macro_arguments_schema``.
-        overloads: Complete ordered overload family under the negotiated macro
-            profile. When present, legacy parameters/definition must be empty
-            and their optional metadata absent. Discovery returns resolved
-            literal defaults; declared parameter types are independent.
-
-    """
+    """One complete macro family with resolved literal defaults on discovery."""
 
     macro_type: "MacroType"
-    parameters: list[str]
-    parameter_default_values: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
-    definition: str = ""
-    arguments_schema: Annotated[pa.Schema | None, ArrowType(pa.binary())] = None
-    overloads: list[MacroOverload] | None = None
+    overloads: list[MacroOverload]
 
     def __post_init__(self) -> None:
-        """Keep the legacy definition and the overload collection mutually exclusive."""
-        validate_macro_overloads(
-            macro_type=self.macro_type.value,
-            schema_path=self.schema_path,
-            parameters=self.parameters,
-            definition=self.definition,
-            parameter_default_values=self.parameter_default_values,
-            arguments_schema=self.arguments_schema,
-            overloads=self.overloads,
-        )
+        """Validate the mandatory complete family and reject unresolved defaults."""
+        validate_macro_family(macro_type=self.macro_type.value, schema_path=self.schema_path, overloads=self.overloads)
+        if any(
+            parameter.default_expression is not None for overload in self.overloads for parameter in overload.parameters
+        ):
+            raise ValueError("macro discovery must return defaults resolved at creation")
 
     def serialize_to_bytes(self) -> bytes:
         """Revalidate mutable overload families before catalog publication."""
         self.__post_init__()
         result = super().serialize_to_bytes()
-        if self.overloads is not None and len(result) > MAX_MACRO_BYTES:
+        if len(result) > MAX_MACRO_BYTES:
             raise ValueError("macro record is too large")
         return result
 
@@ -2831,49 +2800,15 @@ class CatalogInterface(ABC):
         schema_path: SchemaPath,
         name: str,
         macro_type: "MacroType",
-        parameters: list[str],
-        definition: str,
-        on_conflict: OnConflict,
-        parameter_default_values: pa.RecordBatch | None = None,
-        arguments_schema: pa.Schema | None = None,
-    ) -> None:
-        """Create a new macro with the given definition.
-
-        Args:
-            attach_opaque_data: Per-attach catalog session token.
-            transaction_opaque_data: Optional transaction handle.
-            schema_path: Schema to create the macro in.
-            name: Name for the new macro.
-            macro_type: Whether this is a scalar or table macro.
-            parameters: Ordered list of parameter names.
-            definition: SQL expression (scalar) or query (table).
-            on_conflict: Behavior if the macro already exists.
-            parameter_default_values: One-row ``RecordBatch`` with typed defaults.
-            arguments_schema: Optional Arrow schema (one nullable field per
-                parameter, in ``parameters`` order) carrying per-parameter
-                descriptions via the ``vgi_doc`` field metadata key. ``None`` when
-                no per-parameter docs are supplied.
-        """
-        raise NotImplementedError("Macro create not implemented.")
-
-    def macro_create_overloads(
-        self,
-        *,
-        attach_opaque_data: AttachOpaqueData,
-        transaction_opaque_data: TransactionOpaqueData | None,
-        schema_path: SchemaPath,
-        name: str,
-        macro_type: "MacroType",
         overloads: list[MacroOverload],
         on_conflict: OnConflict,
     ) -> None:
-        """Bind and atomically store a negotiated macro family.
+        """Bind and atomically store a complete macro family.
 
-        Providers resolve supported default expressions once at creation and
-        return resolved literals on discovery. Advertise the create profile
-        only when definition binding and the complete family are supported.
+        Providers resolve supported expression defaults once at creation and
+        return resolved literal defaults on discovery.
         """
-        raise NotImplementedError("Macro overload creation not implemented.")
+        raise NotImplementedError("Macro create not implemented.")
 
     def macro_drop(
         self,

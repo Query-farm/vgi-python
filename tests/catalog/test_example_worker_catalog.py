@@ -22,6 +22,8 @@ from vgi.catalog import (
     ViewInfo,
 )
 from vgi.catalog.capabilities import INDEX_DEFINITION_READ, CatalogCapabilities
+from vgi.catalog.evaluation_context import QueryEvaluationContext
+from vgi.catalog.macros import legacy_macro_fields
 from vgi.client import Client
 from vgi.protocol import ClientCapabilities
 
@@ -506,7 +508,7 @@ class TestExampleWorkerMacros:
         assert isinstance(info, MacroInfo)
         assert info.name == "vgi_multiply"
         assert info.schema_path == ["main"]
-        assert info.definition == "x * y"
+        assert info.overloads[0].definition == "x * y"
         assert info.comment == "Multiply two values"
 
     def test_macro_info_has_correct_types(self) -> None:
@@ -547,7 +549,7 @@ class TestExampleWorkerMacros:
         )
 
         assert info is not None
-        assert info.parameters == ["x", "y"]
+        assert [p.name for p in info.overloads[0].parameters] == ["x", "y"]
 
     def test_macro_info_has_parameter_default_values(self) -> None:
         """RecordBatch parameter defaults survive round-trip with types."""
@@ -563,9 +565,14 @@ class TestExampleWorkerMacros:
         )
 
         assert info is not None
-        assert info.parameters == ["val", "lo", "hi"]
-        assert info.parameter_default_values is not None
-        defaults = info.parameter_default_values
+        assert [p.name for p in info.overloads[0].parameters] == ["val", "lo", "hi"]
+        assert (
+            legacy_macro_fields(info.overloads, evaluation_context=QueryEvaluationContext())["parameter_default_values"]
+            is not None
+        )
+        defaults = legacy_macro_fields(info.overloads, evaluation_context=QueryEvaluationContext())[
+            "parameter_default_values"
+        ]
         assert defaults.num_rows == 1
         assert set(defaults.schema.names) == {"lo", "hi"}
         assert defaults.column("lo")[0].as_py() == 0

@@ -1092,9 +1092,9 @@ class TestMacroDescriptor:
         assert info.name == "add"
         assert info.schema_path == ["main"]
         assert info.macro_type == MacroType.SCALAR
-        assert info.parameters == ["x", "y"]
-        assert info.parameter_default_values is not None
-        assert info.definition == "x + y"
+        assert [p.name for p in info.overloads[0].parameters] == ["x", "y"]
+        assert info.overloads[0].parameters[1].default_value is not None
+        assert info.overloads[0].definition == "x + y"
         assert info.comment == "Add two values"
         assert info.tags == {"type": "math"}
 

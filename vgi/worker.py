@@ -106,8 +106,6 @@ from vgi.catalog.capabilities import (
     INDEX_DEFINITION_CREATE,
     INDEX_DEFINITION_READ,
     INDEX_DROP,
-    MACRO_OVERLOADS_CREATE,
-    MACRO_OVERLOADS_READ,
     ROW_SCALAR_EXPRESSION,
     SCHEMA_LIFECYCLE,
     SCHEMA_METADATA_ALTER,
@@ -2942,40 +2940,15 @@ class Worker:
 
     @staticmethod
     def _macro_for_capabilities(info: MacroInfo, selected: CatalogCapabilities) -> MacroInfo:
-        """Never expose an overload family to a reader expecting one legacy definition."""
+        """Validate mandatory macro families and their independently negotiated logical types."""
         info.__post_init__()
-        if info.arguments_schema is not None:
-            require_logical_profiles(info.arguments_schema, selected_profiles=selected.read)
-        if info.parameter_default_values is not None:
-            require_logical_values(TypedValueBatch(info.parameter_default_values), selected_profiles=selected.read)
-        if info.overloads is not None:
-            selected.require(MACRO_OVERLOADS_READ, available=selected, operation="read macro overloads")
-            for overload in info.overloads:
-                for parameter in overload.parameters:
-                    if parameter.declared_type is not None:
-                        require_logical_profiles(parameter.declared_type, selected_profiles=selected.read)
-                    if parameter.default_value is not None:
-                        require_logical_values(parameter.default_value, selected_profiles=selected.read)
-                    if parameter.default_expression is not None:
-                        raise ValueError("macro discovery must return defaults resolved at creation")
+        for member in info.overloads:
+            for parameter in member.parameters:
+                if parameter.declared_type is not None:
+                    require_logical_profiles(parameter.declared_type, selected_profiles=selected.read)
+                if parameter.default_value is not None:
+                    require_logical_values(parameter.default_value, selected_profiles=selected.read)
         return info
-
-    def _check_existing_macro_overloads(
-        self,
-        attach: bytes,
-        transaction: bytes | None,
-        path: list[str],
-        name: str,
-    ) -> None:
-        """Require family support before replacing or dropping a complete family."""
-        info = self._get_catalog().macro_get(
-            attach_opaque_data=self._unwrap_attach(attach),
-            transaction_opaque_data=self._unwrap_tx_opt(transaction, attach),
-            schema_path=path,
-            name=name,
-        )
-        if info is not None and info.overloads is not None:
-            self._require_catalog_capability(attach, MACRO_OVERLOADS_CREATE, "mutate macro overloads", transaction)
 
     @staticmethod
     def _index_for_capabilities(info: IndexInfo, selected: CatalogCapabilities) -> IndexInfo:
@@ -6521,63 +6494,27 @@ class Worker:
         return MacrosResponse.from_optional(info)
 
     def catalog_macro_create(self, request: MacroCreateRequest) -> None:
-        """Create a new macro."""
+        """Create one mandatory macro family without representation negotiation."""
         request.__post_init__()
         self._enrich_catalog_span(vgi_schema_path=request.schema_path, vgi_macro_name=request.name)
-        cat = self._get_catalog()
-        if request.on_conflict == OnConflict.REPLACE:
-            self._check_existing_macro_overloads(
-                request.attach_opaque_data,
-                request.transaction_opaque_data,
-                request.schema_path,
-                request.name,
-            )
+        self._require_dependency_transaction(
+            request.attach_opaque_data, request.transaction_opaque_data, "create macro family"
+        )
         selected = self._effective_catalog_capabilities(request.attach_opaque_data)
-        if request.arguments_schema is not None:
-            require_logical_profiles(request.arguments_schema, selected_profiles=selected.read)
-        if request.parameter_default_values is not None:
-            require_logical_values(TypedValueBatch(request.parameter_default_values), selected_profiles=selected.read)
-        if request.overloads is not None:
-            self._require_catalog_capability(
-                request.attach_opaque_data,
-                MACRO_OVERLOADS_CREATE,
-                "catalog_macro_create overloads",
-                request.transaction_opaque_data,
-            )
-            selected = self._effective_catalog_capabilities(request.attach_opaque_data)
-            for overload in request.overloads:
-                for parameter in overload.parameters:
-                    if parameter.declared_type is not None:
-                        require_logical_profiles(parameter.declared_type, selected_profiles=selected.read)
-                    if parameter.default_value is not None:
-                        require_logical_values(parameter.default_value, selected_profiles=selected.read)
-            cat.macro_create_overloads(
-                attach_opaque_data=self._unwrap_attach(request.attach_opaque_data),
-                transaction_opaque_data=self._unwrap_tx_opt(
-                    request.transaction_opaque_data, request.attach_opaque_data
-                ),
-                schema_path=request.schema_path,
-                name=request.name,
-                macro_type=request.macro_type,
-                overloads=request.overloads,
-                on_conflict=request.on_conflict,
-            )
-            return
-        cat.macro_create(
+        for member in request.overloads:
+            for parameter in member.parameters:
+                if parameter.declared_type is not None:
+                    require_logical_profiles(parameter.declared_type, selected_profiles=selected.read)
+                if parameter.default_value is not None:
+                    require_logical_values(parameter.default_value, selected_profiles=selected.read)
+        self._get_catalog().macro_create(
             attach_opaque_data=self._unwrap_attach(request.attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(
-                request.transaction_opaque_data, request.attach_opaque_data
-            )
-            if request.transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(request.transaction_opaque_data, request.attach_opaque_data),
             schema_path=request.schema_path,
             name=request.name,
             macro_type=request.macro_type,
-            parameters=request.parameters,
-            definition=request.definition,
+            overloads=request.overloads,
             on_conflict=request.on_conflict,
-            parameter_default_values=request.parameter_default_values,
-            arguments_schema=request.arguments_schema,
         )
 
     def catalog_macro_drop(
@@ -6588,11 +6525,10 @@ class Worker:
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
-        """Drop a macro."""
+        """Drop the complete family through the existing provider operation."""
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_macro_name=name)
-        self._check_existing_macro_overloads(attach_opaque_data, transaction_opaque_data, schema_path, name)
-        cat = self._get_catalog()
-        cat.macro_drop(
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "drop macro family")
+        self._get_catalog().macro_drop(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
