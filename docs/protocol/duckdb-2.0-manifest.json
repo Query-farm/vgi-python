@@ -579,7 +579,7 @@
     "transactions": {
       "title": "Transactions and write execution",
       "disposition": "existing_contract",
-      "status": "source_audited_existing_lifecycle_fixes_and_qualification_pending",
+      "status": "native15_exception_cleanup_verified_write_qualification_pending",
       "records": [
         "CatalogCapabilities"
       ],
@@ -620,10 +620,21 @@
             "native:src/include/vgi_unary_retry.hpp"
           ],
           "limits": "Source-only findings and exact engine/worker anchors are in write_path_source_audit_2026_10_15. EC2 unavailable; no new runtime qualification, wire change or gate closure. Raw-drain and signed-HTTP token findings require reproduction."
+        },
+        {
+          "date": "2026-10-22",
+          "status": "native15_transaction_exception_cleanup_verified",
+          "sources": [
+            "native:src/storage/vgi_transaction.cpp",
+            "native:test/cpp/test_transaction_cleanup.cpp",
+            "native:test/run_transaction_cleanup_probe.py",
+            "tests/catalog/transaction_cleanup_probe.py"
+          ],
+          "limits": "Native local ownership/cache retirement only: 960 assertions and six subprocess callback traces pass after reproducing 24 lifetime failures before the fix. Existing transactional semantic ALTER regression passes. Diagnostic provider has no row mutations; application error after completion is not transport loss. Duplicate completion, BEGIN cleanup, signed HTTP and broader write atomicity remain separate."
         }
       ],
       "implementation_work": [
-        "First fix exception-safe local transaction cleanup and test existing transaction-ID-based duplicate completion; review BEGIN allocation/cleanup separately. Reproduce the signed-HTTP fixture token candidate. The finalization follow-up rules out ordinary Python emit-then-raise response loss; deferred RETURNING is an optional adapter gap requiring a concrete provider/test before enablement.",
+        "Exception-safe native transaction cleanup is implemented and verified in transaction_cleanup_checkpoint_2026_10_22. Qualify existing transaction-ID-based duplicate completion and review BEGIN allocation/cleanup separately. Reproduce the signed-HTTP fixture token candidate. Deferred RETURNING remains optional adapter work requiring a concrete provider/test before enablement.",
         "Qualify existing transaction propagation for CTAS, expanded ALTER and multi-DML CTEs; keep multi-DML opt-in disabled until supported writes and failure behavior are proved.",
         "Prove admitted writes and trigger effects commit together and failed writes require full transaction rollback; retain one execution owner and reject stale or incapable writers before effects.",
         "Retain no automatic retry after ambiguous non-idempotent mutation dispatch and audit uncovered legacy paths, preserving the existing idempotent commit/rollback contract. Do not add durable outcomes/status, savepoints or a generic statement ticket/receipt framework."
@@ -6853,5 +6864,50 @@
       "No production code or wire changes, no engine-pin change, no release-gate completion."
     ],
     "next": "Reproduce and fix transaction exception cleanup as its own checkpoint; then investigate the signed HTTP transaction-token candidate. Deferred RETURNING remains optional adapter work."
+  },
+  "transaction_cleanup_checkpoint_2026_10_22": {
+    "status": "implemented_native15_verified_on_ec2",
+    "host": "ec2-user@18.234.138.19",
+    "workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+    "artifacts": "logs/transaction-cleanup-20261022-5qEOLH",
+    "baseline_commits": {
+      "native": "6c72c379717e2143a004b119ce5052359d2aa2e2",
+      "python": "36892b1d2edff7065570e1f46b27d26af4929ef5",
+      "engine": "105edd31b57fe7e6d32ee648efad562e45a9f908"
+    },
+    "source_sha256": {
+      "native:src/storage/vgi_transaction.cpp": "f3c251e691a527e0f9e49e473d78f6b9aa566253cdfba250c504ffa5a0be05a1",
+      "native:src/include/storage/vgi_transaction.hpp": "8536d31799ed0ab1de16d860b1e28b895e1eb945c59266240012305e70976fb4",
+      "native:test/cpp/test_transaction_cleanup.cpp": "9981c569e646e4ba2eae82127a53159b689b1625640ccae8ed25e057b1b029be",
+      "native:test/run_transaction_cleanup_probe.py": "543d391b523dd0f400c06556f1daa4d3083c1bedf6bb8c9ee02f5d46d2528446",
+      "tests/catalog/transaction_cleanup_probe.py": "3aae727dd571ab9e928d1ccda5f59e36a0daaddd121277e9c13d33f28f4da8c8"
+    },
+    "binary_sha256": {
+      "vgi_catalog_tests": "d55d17b2faa328606c11fa9c0762931d8612c494e46209c805e82952dfe39c9d",
+      "haybarn": "40cec10e5ef4132deb6c02cf2182ff5a2f25a7fe5f6a279eefa8a51ab38d1428",
+      "vgi.duckdb_extension": "fbebb1c6677d8a0feed0a67a83a89614de1c4c1fd8b4c4f99af4e242632d1e70"
+    },
+    "implementation": [
+      "Take manager-owned transaction under its mutex; release the mutex before completion; local unique_ptr destruction releases the object on success or exception.",
+      "Commit retires transaction-local schema roots before provider dispatch, matching Rollback and preserving the existing bounded catalog entry retention policy.",
+      "No wire, engine pin, completion retry policy or provider error changes; no compensating rollback, savepoints or remote recovery machinery."
+    ],
+    "validation": [
+      "Baseline: 960 assertions, 24 failures, all transaction lifetime checks in four provider-error scenarios; six provider trace validators passed. See before/stdout.log and before/results.json.",
+      "Fixed: all 960 native assertions pass; six scenarios, three cycles each, 42 observed transactions. See after/stdout.log and after/results.json.",
+      "Each commit/rollback success, reject-before-completion and error-after-completion case verifies object destruction, actual loaded schema-root retention until catalog teardown, fresh transactions, prepared-statement reuse and an unaffected second connection.",
+      "Provider traces prove one requested completion attempt per token, matching attachment ownership, no opposite/compensating operation, and one successful recovery rollback per tested cycle. Only deliberately rejected provider transactions remain active.",
+      "Existing run_semantic_alter.py --case ddl_transactions passes pending metadata visibility, rollback, commit and reconnect readback; see semantic-alter.log.",
+      "EC2 builds vgi_catalog_tests, shell and vgi_loadable_extension pass. Fixture and native runner Ruff checks pass. No local builds/tests."
+    ],
+    "review": "Independent read-only code review found no blocking issue in pinned1.5 lifetime, mutex scope, metadata retirement, original error propagation or regression assertions.",
+    "limits": [
+      "Diagnostic provider has no user row mutations; no new row rollback or production-provider atomicity guarantee.",
+      "Application error after completion is not transport response loss. Existing duplicate-completion/idempotency behavior was not newly qualified.",
+      "Rejected remote transactions remain provider-owned; local cleanup does not determine or change their remote outcome.",
+      "BEGIN allocation/cleanup, signed HTTP token handling, deferred RETURNING and native2 adapter/trigger qualification remain separate.",
+      "Existing catalog retention bound is unchanged. No protocol publication, capability enablement or release gate closure."
+    ],
+    "next": "Qualify existing duplicate completion and BEGIN cleanup separately, then reproduce the signed-HTTP token candidate; continue broader write/trigger work only within the existing transaction lifecycle."
   }
 }

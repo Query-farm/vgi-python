@@ -1147,9 +1147,10 @@ paths do not demonstrate a need for another coordinator or a new per-write
 requirements revision. Provider snapshot/concurrent-metadata behavior still
 needs qualification.
 
-The first implementation checkpoint is 1.5-compatible: make local transaction
-cleanup exception-safe, test repeated completion with the same transaction
-identifier, and test failure propagation through the current write phases.
+The initial checkpoints are 1.5-compatible: local transaction exception cleanup
+and failure propagation through the current write phases. Cleanup is now
+implemented and verified below; repeated completion with the same transaction
+identifier still needs separate qualification.
 The signed HTTP writable fixture may pass a sealed transaction token directly
 to its transactor; this still requires reproduction. The 2026-10-22 follow-up
 narrows the finalization findings: current generic/simple writable fixtures
@@ -1173,6 +1174,23 @@ multiple batches, zero input, finalizer error, and expected rejection of deferre
 RETURNING. All behaved as expected. This diagnostic provider has no transactions
 or stored rows; it does not qualify rollback or signed HTTP. See
 `write_finalization_runtime_checkpoint_2026_10_22` for exact evidence.
+
+The subsequent native transaction cleanup checkpoint reproduces the local leak
+on provider completion errors (24 failing lifetime assertions before the fix).
+The manager now transfers ownership before commit/rollback, and Commit retires
+its schema cache before the provider call. Scoped destruction releases the local
+transaction even when the call throws; bound catalog entries retain their
+existing bounded catalog lifetime. Errors, RPCs, transaction identifiers and
+retry policies are unchanged. No compensating rollback is introduced.
+
+On EC2, all 960 assertions pass across six scenarios: commit/rollback success,
+provider rejection, and provider error after completion, each repeated three
+times. Prepared-statement reuse, fresh transactions, a concurrent connection's
+snapshot, metadata lifetime and exact callback traces pass. The existing native
+semantic ALTER transaction test also passes rollback, commit and reconnect.
+This diagnostic does not mutate rows or simulate transport loss. It does not
+qualify duplicate completion, BEGIN allocation cleanup, signed HTTP, or broader
+write atomicity. See `transaction_cleanup_checkpoint_2026_10_22` for evidence.
 
 ### Trigger definitions and statement ownership
 
@@ -1301,8 +1319,8 @@ read/query result replay functionality is unaffected by this scope decision.
 2. Implement canonical constraint read/create/apply and typed index records in
    a durable reference. Prove real enforcement, existing-data failure rollback,
    FK NULL/action semantics, primary-key nullability and backing-index closure.
-3. Implement the source audit's focused transaction cleanup and write
-   finalization fixes, reproducing candidate failures first. Qualify CTAS,
+3. Continue transaction/write qualification after the native 1.5 cleanup fix
+   and finalization probes; reproduce remaining candidate failures first. Qualify CTAS,
    expanded ALTER and multi-DML through the existing transaction paths.
    No savepoints or general statement-ticket/receipt lifecycle is required.
 4. Implement persistent trigger CRUD/readback and ENGINE execution first, using
