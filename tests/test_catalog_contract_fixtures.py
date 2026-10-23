@@ -12,10 +12,12 @@ import pyarrow as pa
 from vgi.catalog.capabilities import SCHEMA_OPTIONS_CREATE, SCHEMA_OPTIONS_READ, CatalogCapabilities
 from vgi.catalog.catalog_interface import MacroInfo, TableInfo, ViewInfo
 from vgi.catalog.dependencies import DependencySnapshot, ObjectDependency
+from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.indexes import IndexDefinition, IndexKey
 from vgi.catalog.layout import LayoutChangeMode, SortKey, SqlExpression, TableLayout, TableLayoutChange
 from vgi.catalog.macros import MacroOverload, MacroParameter
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
+from vgi.catalog.sql import column_expressions
 from vgi.codegen.catalog_contract_fixtures import constraint_records, render
 from vgi.column_path import RequiredFilterPaths
 from vgi.logical_types import LOGICAL_TYPE_PROFILES, validate_logical_values
@@ -102,7 +104,19 @@ def test_column_requests_preserve_raw_paths_and_definitions() -> None:
             definition = pa.ipc.read_schema(pa.BufferReader(row["column_definition"]))
             assert definition.field(0).name == row["column_path"][-1]
             if name.startswith("column_add_"):
-                assert definition.field(0).metadata == {b"default": b"7"}
+                expression = column_expressions(definition.field(0)).default
+                assert expression is not None and expression.sql == "7"
+                assert expression.schema_path == row["schema_path"]
+                assert expression.evaluation_context == QueryEvaluationContext()
+                assert b"default" not in definition.field(0).metadata
+        if "expression" in row:
+            if name == "column_type_change_literal":
+                assert row["expression"] is None
+            else:
+                assert isinstance(row["expression"], bytes)
+                expression = SqlExpression.deserialize_from_bytes(row["expression"])
+                assert expression.sql == "7" and expression.schema_path == row["schema_path"]
+                assert expression.evaluation_context == QueryEvaluationContext()
         if "comment" in row:
             assert row["comment"] == ("kept" if nested else None)
 

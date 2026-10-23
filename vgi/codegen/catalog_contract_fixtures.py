@@ -19,7 +19,12 @@ import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
 from vgi_rpc.rpc._types import rpc_methods
 
-from vgi.catalog.capabilities import SCHEMA_OPTIONS_CREATE, SCHEMA_OPTIONS_READ, CatalogCapabilities
+from vgi.catalog.capabilities import (
+    ROW_SCALAR_EXPRESSION,
+    SCHEMA_OPTIONS_CREATE,
+    SCHEMA_OPTIONS_READ,
+    CatalogCapabilities,
+)
 from vgi.catalog.catalog_interface import IndexInfo, MacroInfo, MacroType, OnConflict, TableInfo, ViewInfo
 from vgi.catalog.constraints import (
     ConstraintChange,
@@ -70,6 +75,10 @@ def column_requests() -> dict[str, bytes]:
     """Encode literal and nested targets through each actual RPC parameter schema."""
     methods = rpc_methods(VgiProtocol)
     result = {}
+    scope = ["one.two", "nested"]
+    default = SqlExpression(
+        sql="7", profile=ROW_SCALAR_EXPRESSION, schema_path=scope, evaluation_context=QueryEvaluationContext()
+    )
     for operation in (
         "column_add",
         "column_drop",
@@ -84,18 +93,28 @@ def column_requests() -> dict[str, bytes]:
         schema = methods[f"catalog_table_{operation}"].params_schema
         for variant, path in (("literal", ["a.b"]), ("nested", ["a", 'b."quoted'])):
             nested = variant == "nested"
-            definition = pa.schema(
-                [pa.field(path[-1], pa.int32(), metadata={b"default": b"7"} if operation == "column_add" else None)]
-            )
+            field = pa.field(path[-1], pa.int32())
+            if operation == "column_add":
+                field = with_column_expressions(field, ColumnExpressions(default=default))
+            definition = pa.schema([field])
             values = dict(
                 attach_opaque_data=b"attach",
                 transaction_opaque_data=b"transaction" if nested else None,
-                schema_path=["one.two", "nested"],
+                schema_path=scope,
                 name="table.with.dot",
                 column_path=path,
                 column_definition=definition.serialize().to_pybytes(),
                 new_column_name='new."name',
-                expression=None if operation == "column_type_change" and not nested else "7",
+                expression=(
+                    None
+                    if operation == "column_type_change" and not nested
+                    else SqlExpression(
+                        sql="7",
+                        profile=ROW_SCALAR_EXPRESSION,
+                        schema_path=scope,
+                        evaluation_context=QueryEvaluationContext(),
+                    ).serialize_to_bytes()
+                ),
                 comment="kept" if nested else None,
                 ignore_not_found=nested,
                 if_column_exists=nested,

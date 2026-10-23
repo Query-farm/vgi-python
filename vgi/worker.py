@@ -108,6 +108,7 @@ from vgi.catalog.capabilities import (
     INDEX_DROP,
     MACRO_OVERLOADS_CREATE,
     MACRO_OVERLOADS_READ,
+    ROW_SCALAR_EXPRESSION,
     SCHEMA_LIFECYCLE,
     SCHEMA_METADATA_ALTER,
     SCHEMA_OPTIONS_ALTER,
@@ -2819,12 +2820,17 @@ class Worker:
             self._require_catalog_capability(attach, TRANSACTION_DDL, operation)
 
     @staticmethod
-    def _require_column_expression_profiles(schema: pa.Schema, selected: CatalogCapabilities, operation: str) -> bool:
+    def _require_column_expression_profiles(
+        schema: pa.Schema,
+        selected: CatalogCapabilities,
+        operation: str,
+        owner_schema_path: list[str] | None = None,
+    ) -> bool:
         """Validate canonical field expressions recursively without rewriting metadata.
 
-        Legacy text metadata retains its existing adapter path. Canonical IPC
-        definitions require their exact selected/current semantic profile even
-        when nested inside a struct, dictionary or extension storage type.
+        DEFAULT uses the mandatory owned scalar representation. Generated
+        definitions retain their existing selected-profile requirement, including
+        fields nested inside struct, dictionary or extension storage types.
         """
         pending = list(schema)
         found = False
@@ -2833,13 +2839,52 @@ class Worker:
             expressions = column_expressions(field)
             for expression in (expressions.default, expressions.generated):
                 if expression is not None:
-                    selected.require(expression.profile, available=selected, operation=operation)
+                    if owner_schema_path is not None:
+                        expression.validate_owner(owner_schema_path)
+                    if expression is expressions.default:
+                        if expression.profile != ROW_SCALAR_EXPRESSION:
+                            raise ValueError("unsupported column default expression profile")
+                    else:
+                        selected.require(expression.profile, available=selected, operation=operation)
                     found = True
             dtype = field.type
             while isinstance(dtype, pa.BaseExtensionType) or pa.types.is_dictionary(dtype):
                 dtype = dtype.storage_type if isinstance(dtype, pa.BaseExtensionType) else dtype.value_type
             pending.extend(dtype.field(index) for index in range(dtype.num_fields))
         return found
+
+    def _validate_column_definition_expressions(
+        self,
+        attach: bytes,
+        transaction: bytes | None,
+        schema: pa.Schema,
+        owner_schema_path: list[str],
+        operation: str,
+    ) -> None:
+        """Validate CREATE/ADD expression metadata before provider effects."""
+        found = self._require_column_expression_profiles(
+            schema, self._effective_catalog_capabilities(attach), operation, owner_schema_path
+        )
+        pending = list(schema)
+        while pending:
+            field = pending.pop()
+            if {b"default", b"generated_expression"}.intersection(field.metadata or {}):
+                raise ValueError("column definitions require canonical SqlExpression metadata, not legacy SQL text")
+            dtype = field.type
+            while isinstance(dtype, pa.BaseExtensionType) or pa.types.is_dictionary(dtype):
+                dtype = dtype.storage_type if isinstance(dtype, pa.BaseExtensionType) else dtype.value_type
+            pending.extend(dtype.field(index) for index in range(dtype.num_fields))
+        if found and transaction is not None:
+            self._require_catalog_capability(attach, TRANSACTION_DDL, operation)
+
+    @staticmethod
+    def _column_expression(payload: bytes, owner_schema_path: list[str]) -> SqlExpression:
+        """Decode the mandatory owned scalar representation without negotiation."""
+        expression = SqlExpression.deserialize_from_bytes(payload)
+        expression.validate_owner(owner_schema_path)
+        if expression.profile != ROW_SCALAR_EXPRESSION:
+            raise ValueError("unsupported column expression profile")
+        return expression
 
     @staticmethod
     def _schema_for_capabilities(info: SchemaInfo, selected: CatalogCapabilities) -> SchemaInfo:
@@ -2946,7 +2991,7 @@ class Worker:
     def _table_for_capabilities(info: TableInfo, selected: CatalogCapabilities) -> TableInfo:
         schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
         require_logical_profiles(schema, selected_profiles=selected.read)
-        Worker._require_column_expression_profiles(schema, selected, "read column expressions")
+        Worker._require_column_expression_profiles(schema, selected, "read column expressions", info.schema_path)
         infos = info.constraint_infos()
         validate_constraint_schema(
             schema, [item.definition for item in infos], trusted=[item.definition for item in infos if item.trusted]
@@ -5640,13 +5685,13 @@ class Worker:
                 request.attach_opaque_data, request.transaction_opaque_data, request.schema_path, request.name
             )
         schema = pa.ipc.read_schema(pa.py_buffer(request.columns))
-        if (
-            self._require_column_expression_profiles(
-                schema, self._effective_catalog_capabilities(request.attach_opaque_data), "create column expressions"
-            )
-            and request.transaction_opaque_data is not None
-        ):
-            self._require_catalog_capability(request.attach_opaque_data, TRANSACTION_DDL, "create column expressions")
+        self._validate_column_definition_expressions(
+            request.attach_opaque_data,
+            request.transaction_opaque_data,
+            schema,
+            request.schema_path,
+            "create column expressions",
+        )
         definitions = constraint_definitions(
             request.constraint_definitions,
             CatalogObjectRef(kind="table", schema_path=request.schema_path, name=request.name),
@@ -6046,13 +6091,9 @@ class Worker:
                 attach_opaque_data, COLUMN_NESTED_ADD, "catalog_table_column_add", transaction_opaque_data
             )
         field = decode_column_definition(column_definition, column_path, type_only=False)
-        if (
-            self._require_column_expression_profiles(
-                pa.schema([field]), self._effective_catalog_capabilities(attach_opaque_data), "add column expressions"
-            )
-            and transaction_opaque_data is not None
-        ):
-            self._require_catalog_capability(attach_opaque_data, TRANSACTION_DDL, "add column expressions")
+        self._validate_column_definition_expressions(
+            attach_opaque_data, transaction_opaque_data, pa.schema([field]), schema_path, "add column expressions"
+        )
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_add(
@@ -6133,11 +6174,12 @@ class Worker:
         schema_path: list[str],
         name: str,
         column_path: list[str],
-        expression: str,
+        expression: bytes,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
-        """Set the default value expression for a column."""
+        """Set the default using its mandatory owned canonical expression."""
+        definition = self._column_expression(expression, schema_path)
         self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "set column default")
         self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
         if len(column_path_key(column_path)) > 1:
@@ -6152,7 +6194,7 @@ class Worker:
             schema_path=schema_path,
             name=name,
             column_path=column_path,
-            expression=SqlExpression(expression),
+            expression=definition,
             ignore_not_found=ignore_not_found,
         )
 
@@ -6190,11 +6232,12 @@ class Worker:
         name: str,
         column_path: list[str],
         column_definition: bytes,
-        expression: str | None = None,
+        expression: bytes | None = None,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Change the type of a column."""
+        definition = self._column_expression(expression, schema_path) if expression is not None else None
         self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "change column type")
         self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
         if len(column_path_key(column_path)) > 1:
@@ -6211,7 +6254,7 @@ class Worker:
             name=name,
             column_path=column_path,
             column_definition=SerializedSchema(column_definition),
-            expression=SqlExpression(expression) if expression is not None else None,
+            expression=definition,
             ignore_not_found=ignore_not_found,
         )
 

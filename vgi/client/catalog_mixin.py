@@ -1650,13 +1650,16 @@ class CatalogClientMixin:
             ignore_not_found: If True, don't error if table doesn't exist.
 
         """
+        if not isinstance(expression, SqlExpression):
+            raise TypeError("expression must be a SqlExpression")
+        expression.validate_owner(schema_path)
         with self._catalog_connect() as proxy:
             proxy.catalog_table_column_default_set(
                 attach_opaque_data=attach_opaque_data,
                 schema_path=schema_path,
                 name=name,
                 column_path=column_path,
-                expression=expression,
+                expression=expression.serialize_to_bytes(),
                 ignore_not_found=ignore_not_found,
                 transaction_opaque_data=transaction_opaque_data,
             )
@@ -1718,6 +1721,10 @@ class CatalogClientMixin:
             ignore_not_found: If True, don't error if table doesn't exist.
 
         """
+        if expression is not None:
+            if not isinstance(expression, SqlExpression):
+                raise TypeError("expression must be a SqlExpression or None")
+            expression.validate_owner(schema_path)
         with self._catalog_connect() as proxy:
             proxy.catalog_table_column_type_change(
                 attach_opaque_data=attach_opaque_data,
@@ -1725,7 +1732,7 @@ class CatalogClientMixin:
                 name=name,
                 column_path=column_path,
                 column_definition=column_definition,
-                expression=expression,
+                expression=None if expression is None else expression.serialize_to_bytes(),
                 ignore_not_found=ignore_not_found,
                 transaction_opaque_data=transaction_opaque_data,
             )

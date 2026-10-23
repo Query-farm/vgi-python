@@ -57,6 +57,12 @@ class SqlExpression(_SqlRecord):
         """Validate the bounded carrier and required evaluation context."""
         _definition(self.sql, self.profile, self.schema_path, self.evaluation_context)
 
+    def validate_owner(self, schema_path: SchemaPath) -> None:
+        """Require the expression's raw owner path to match its operation."""
+        self.__post_init__()
+        if schema_path_key(self.schema_path) != schema_path_key(schema_path):
+            raise ValueError("SQL expression owner schema does not match the target schema")
+
 
 @dataclass(frozen=True, kw_only=True)
 class SqlStatement(_SqlRecord):

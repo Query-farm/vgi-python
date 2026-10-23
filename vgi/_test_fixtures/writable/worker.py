@@ -44,11 +44,13 @@ from vgi.catalog import (
     SchemaInfo,
     SchemaObjectType,
     SerializedSchema,
+    SqlExpression,
     TableInfo,
     TransactionOpaqueData,
     ViewInfo,
 )
 from vgi.catalog.layout import TableLayout
+from vgi.catalog.sql import column_expressions
 from vgi.column_path import column_definition as decode_column_definition
 from vgi.column_path import single_column_name
 from vgi.protocol import ClientCapabilities
@@ -270,6 +272,19 @@ class WritableCatalog(ReadOnlyCatalogInterface):
 
     # ========== DDL helpers ==========
 
+    @staticmethod
+    def _reject_unqualified_column_expressions(field: pa.Field[Any]) -> None:
+        """Reject definitions the transactor cannot preserve or evaluate faithfully."""
+        expressions = column_expressions(field)
+        if (
+            expressions.default is not None
+            or expressions.generated is not None
+            or {b"default", b"generated_expression"}.intersection(field.metadata or {})
+        ):
+            raise NotImplementedError("writable transactor does not preserve canonical column expression contexts")
+        for index in range(field.type.num_fields):
+            WritableCatalog._reject_unqualified_column_expressions(field.type.field(index))
+
     def _execute_ddl(
         self, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None, sql: str
     ) -> None:
@@ -318,10 +333,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
             if not field.nullable:
                 raise NotImplementedError("writable fixture requires canonical NOT_NULL support")
             col_def = f"{_qi(field.name)} {_arrow_type_to_sql(field.type)}"
-            # Default values are passed as Arrow field metadata with key "default"
-            if field.metadata and b"default" in field.metadata:
-                default_expr = field.metadata[b"default"].decode("utf-8")
-                col_def += f" DEFAULT {default_expr}"
+            self._reject_unqualified_column_expressions(field)
             col_defs.append(col_def)
 
         columns_sql = ",\n  ".join(col_defs)
@@ -386,10 +398,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
             raise NotImplementedError("ADD COLUMN comments, tags, and compression require a definition profile")
         if_not_exists = " IF NOT EXISTS" if if_column_not_exists else ""
         col_sql = f"{_qi(column_name)} {_arrow_type_to_sql(field.type)}"
-        if field.metadata and b"default" in field.metadata:
-            col_sql += f" DEFAULT {field.metadata[b'default'].decode('utf-8')}"
-        if field.metadata and b"generated_expression" in field.metadata:
-            raise NotImplementedError("generated column creation is not supported")
+        self._reject_unqualified_column_expressions(field)
         ddl = f"ALTER TABLE {_qn(schema_path, name)} ADD COLUMN{if_not_exists} {col_sql};"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
         logger.info("table_column_add: %s.%s", name, field.name)
@@ -471,7 +480,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         name: str,
         column_path: list[str],
         column_definition: SerializedSchema,
-        expression: str | None,
+        expression: SqlExpression | None,
         ignore_not_found: bool,
     ) -> None:
         """Change the type of a column in a table."""
@@ -479,9 +488,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         field = decode_column_definition(column_definition, [column_name])
         col_type = _arrow_type_to_sql(field.type)
         sql = f"ALTER TABLE {_qn(schema_path, name)} ALTER COLUMN {_qi(field.name)} TYPE {col_type}"
-        if expression:
-            # This is SQL text from the caller; the backend remains responsible for binding it.
-            sql += f" USING {expression}"
+        if expression is not None:
+            raise NotImplementedError("writable transactor has not qualified canonical USING evaluation contexts")
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, sql + ";")
 
     def table_column_default_set(
@@ -492,13 +500,11 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         schema_path: list[str],
         name: str,
         column_path: list[str],
-        expression: str,
+        expression: SqlExpression,
         ignore_not_found: bool,
     ) -> None:
         """Set the default expression for a column."""
-        column_name = single_column_name(column_path)
-        ddl = f"ALTER TABLE {_qn(schema_path, name)} ALTER COLUMN {_qi(column_name)} SET DEFAULT {expression};"
-        self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
+        raise NotImplementedError("writable transactor does not preserve canonical DEFAULT definitions and contexts")
 
     def table_column_default_drop(
         self,
@@ -841,6 +847,8 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         # Build TableInfo from the transactor schema.
         # The columns schema includes rowid with is_row_id metadata from the transactor.
         # Constraints are embedded in schema-level metadata as JSON.
+        for field in table_schema:
+            self._reject_unqualified_column_expressions(field)
         serialized = SerializedSchema(table_schema.serialize().to_pybytes())
 
         # The transactor has no persisted canonical identities yet. Never

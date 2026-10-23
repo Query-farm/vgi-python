@@ -286,7 +286,7 @@ class Table:
         foreign_key: Tuple of [`ForeignKeyDef`][] foreign-key constraints.
         defaults: Dict mapping column names to default values. Accepts
             Python literals (str, int, float, bool, None) which are
-            auto-converted, or `SqlExpression` for raw SQL.
+            auto-converted, or `Sql` for raw SQL.
         generated_columns: Dict mapping column names to SQL expressions
             for generated (virtual) columns. Generated columns are
             computed on read by DuckDB and are mutually exclusive with

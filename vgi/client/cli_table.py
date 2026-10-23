@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import click
 
-from vgi.catalog import OnConflict, SerializedSchema, SqlExpression
+from vgi.catalog import OnConflict, SerializedSchema
 from vgi.catalog.capabilities import ROW_SCALAR_EXPRESSION
 from vgi.catalog.constraints import ConstraintDefinition, ConstraintKind
 from vgi.catalog.evaluation_context import QueryEvaluationContext
@@ -539,7 +539,8 @@ def column_set_default(
     SCHEMA_NAME is the schema containing the table.
     TABLE_NAME is the table containing the column.
     COLUMN_NAME is the column to set the default for.
-    EXPRESSION is the SQL expression for the default value.
+    EXPRESSION is the SQL expression for the default value, evaluated in the
+    owning schema with the explicit UTC/binary default evaluation context.
 
     """
     client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
@@ -549,7 +550,12 @@ def column_set_default(
         schema_path=schema_path,
         name=table_name,
         column_path=[column_name],
-        expression=SqlExpression(expression),
+        expression=RowExpression(
+            sql=expression,
+            profile=ROW_SCALAR_EXPRESSION,
+            schema_path=schema_path,
+            evaluation_context=QueryEvaluationContext(),
+        ),
         ignore_not_found=ignore_not_found,
     )
     output_json(
@@ -642,7 +648,9 @@ def column_set_type(
     SCHEMA_NAME is the schema containing the table.
     TABLE_NAME is the table containing the column.
 
-    The --column option specifies the column name and new type.
+    The --column option specifies the column name and new type. --using is
+    evaluated against old rows in the owning schema with the explicit
+    UTC/binary default evaluation context.
 
     """
     client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
@@ -657,7 +665,16 @@ def column_set_type(
         name=table_name,
         column_path=[arrow_schema.field(0).name],
         column_definition=SerializedSchema(arrow_schema.serialize().to_pybytes()),
-        expression=SqlExpression(expression) if expression is not None else None,
+        expression=(
+            RowExpression(
+                sql=expression,
+                profile=ROW_SCALAR_EXPRESSION,
+                schema_path=schema_path,
+                evaluation_context=QueryEvaluationContext(),
+            )
+            if expression is not None
+            else None
+        ),
         ignore_not_found=ignore_not_found,
     )
     output_json(

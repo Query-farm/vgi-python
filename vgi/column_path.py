@@ -160,9 +160,32 @@ def column_definition(payload: bytes, path: Sequence[str], *, type_only: bool = 
     result = schema.field(0)
     if result.name != key[-1]:
         raise ValueError("column definition name must match the last column path component")
-    attributes = {b"default", b"generated_expression", b"comment", b"tags", b"compression"}
-    if type_only and (attributes.intersection(result.metadata or {}) or not result.nullable):
-        raise ValueError("type change field must contain only the target type and name")
+    attributes = {
+        b"default",
+        b"generated_expression",
+        b"comment",
+        b"tags",
+        b"compression",
+        b"vgi.column.default.v1",
+        b"vgi.column.generated.v1",
+        b"vgi.column.generation.v1",
+    }
+    if type_only:
+        if not result.nullable:
+            raise ValueError("type change field must contain only the target type and name")
+        pending = [result]
+        while pending:
+            field = pending.pop()
+            metadata = field.metadata or {}
+            if attributes.intersection(metadata) or any(
+                key.startswith((b"vgi.column.default.", b"vgi.column.generated.", b"vgi.column.generation."))
+                for key in metadata
+            ):
+                raise ValueError("type change field must contain only the target type and name")
+            dtype = field.type
+            while isinstance(dtype, pa.BaseExtensionType) or pa.types.is_dictionary(dtype):
+                dtype = dtype.storage_type if isinstance(dtype, pa.BaseExtensionType) else dtype.value_type
+            pending.extend(dtype.field(index) for index in range(dtype.num_fields))
     return result
 
 

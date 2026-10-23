@@ -51,6 +51,7 @@ from vgi.catalog.macros import MAX_MACRO_BYTES, MacroOverload, validate_macro_ov
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
 from vgi.catalog.query import QueryCapabilities
+from vgi.catalog.sql import SqlExpression as SqlExpression
 from vgi.exceptions import CatalogReadOnlyError
 from vgi.metadata import (
     ArgumentMonotonicity,
@@ -138,7 +139,6 @@ class CatalogExample(ArrowSerializableDataclass):
 AttachOpaqueData = NewType("AttachOpaqueData", bytes)
 TransactionOpaqueData = NewType("TransactionOpaqueData", bytes)
 SerializedSchema = NewType("SerializedSchema", bytes)
-SqlExpression = NewType("SqlExpression", str)
 
 
 @dataclass(frozen=True)

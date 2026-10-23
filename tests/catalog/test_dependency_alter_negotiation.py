@@ -80,7 +80,7 @@ def test_all_table_discovery_paths_recheck_canonical_expression_profiles(backend
     assert backend.catalog_dependencies(token) == before
 
 
-def test_default_and_nested_expression_readback_is_gated_without_dropping_metadata(backend, monkeypatch):
+def test_default_and_nested_expression_readback_is_mandatory_without_profile_negotiation(backend, monkeypatch):
     field = with_column_expressions(pa.field("child", pa.int64()), ColumnExpressions(default=expression("42")))
     columns = schema(pa.field("parent", pa.struct([field])))
     info = TableInfo(name="items", schema_path=["main"], columns=columns, constraints=[], comment=None, tags={})
@@ -89,8 +89,8 @@ def test_default_and_nested_expression_readback_is_gated_without_dropping_metada
     result = backend.catalog_table_get(full, ["main"], "items")
     assert TableInfo.deserialize_from_bytes(result.items[0]).columns == columns
     limited = limited_expression_token(backend, monkeypatch, "unselected")
-    with pytest.raises(CatalogCapabilityError, match=ROW_SCALAR_EXPRESSION):
-        backend.catalog_table_get(limited, ["main"], "items")
+    result = backend.catalog_table_get(limited, ["main"], "items")
+    assert TableInfo.deserialize_from_bytes(result.items[0]).columns == columns
 
 
 @pytest.mark.parametrize("mode", ["unselected", "omit_both", "withdrawn"])
@@ -125,7 +125,9 @@ def test_dependency_mutations_require_selected_current_transaction_ddl_before_ef
         "table_column_type_change": lambda: backend.catalog_table_column_type_change(
             **column, column_definition=schema(pa.field("id", pa.int32()))
         ),
-        "table_column_default_set": lambda: backend.catalog_table_column_default_set(**column, expression="42"),
+        "table_column_default_set": lambda: backend.catalog_table_column_default_set(
+            **column, expression=expression("42").serialize_to_bytes()
+        ),
         "table_column_default_drop": lambda: backend.catalog_table_column_default_drop(**column),
         "view_create": lambda: backend.catalog_view_create(
             **args, definition="SELECT * FROM source", on_conflict=OnConflict.ERROR
@@ -144,7 +146,7 @@ def test_dependency_mutations_require_selected_current_transaction_ddl_before_ef
     backend.catalog_transaction_rollback(token, tx)
 
 
-def test_legacy_expression_metadata_and_non_dependency_provider_transaction_behavior_remain(backend, monkeypatch):
+def test_legacy_expression_metadata_rejects_but_plain_non_dependency_transactions_remain(backend, monkeypatch):
     profiles = replace(DEPENDENCY_PROFILES, read=[], transaction=[])
     monkeypatch.setattr(DependencyCatalog, "profiles", profiles)
     token = backend.catalog_attach(request(None)).attach_opaque_data
@@ -152,8 +154,12 @@ def test_legacy_expression_metadata_and_non_dependency_provider_transaction_beha
     calls = []
     monkeypatch.setattr(backend._get_catalog(), "table_create", lambda **kwargs: calls.append(kwargs))
     legacy = schema(pa.field("id", pa.int64(), metadata={b"default": b"42"}))
-    backend.catalog_table_create(create_request(token, legacy, tx))
-    assert len(calls) == 1 and calls[0]["columns"] == legacy
+    with pytest.raises(ValueError, match="canonical SqlExpression"):
+        backend.catalog_table_create(create_request(token, legacy, tx))
+    assert calls == []
+    plain = schema(pa.field("id", pa.int64()))
+    backend.catalog_table_create(create_request(token, plain, tx))
+    assert len(calls) == 1 and calls[0]["columns"] == plain
     backend.catalog_transaction_rollback(token, tx)
 
 

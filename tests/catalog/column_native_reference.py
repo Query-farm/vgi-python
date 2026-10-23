@@ -20,6 +20,7 @@ from vgi_rpc import ArrowSerializableDataclass
 from vgi_rpc.rpc import OutputCollector
 
 from vgi.catalog import Catalog, ReadOnlyCatalogInterface, ScanFunctionResult, Schema, SchemaObjectType
+from vgi.catalog.sql import ColumnExpressions, with_column_expressions
 from vgi.invocation import BindResponse, GlobalInitResponse
 from vgi.table_function import BindParams, InitParams, ProcessParams, TableFunctionGenerator
 from vgi.table_in_out_function import TableInOutGenerator
@@ -35,7 +36,7 @@ def _args(params: Any) -> dict[str, Any]:
     target = json.loads(call.arguments.positional[0].as_py())
     return dict(
         attach_opaque_data=params.attach_opaque_data,
-        transaction_opaque_data=call.transaction_opaque_data,
+        transaction_opaque_data=params.transaction_opaque_data,
         **target,
     )
 
@@ -60,7 +61,17 @@ class ReferenceScan(TableFunctionGenerator[None, ScanState]):
         info = NativeColumnsCatalog().table_get(**_args(params))
         if info is None:
             raise ValueError("table does not exist")
-        return BindResponse(output_schema=pa.ipc.read_schema(pa.BufferReader(info.columns)))
+
+        def data_field(field: pa.Field) -> pa.Field:
+            # Column definitions live on TableInfo; the scan's data schema must
+            # not ask generic function consumers to interpret catalog defaults.
+            field = with_column_expressions(field, ColumnExpressions())
+            if pa.types.is_struct(field.type):
+                field = field.with_type(pa.struct([data_field(child) for child in field.type]))
+            return field
+
+        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))
+        return BindResponse(output_schema=pa.schema([data_field(field) for field in schema], metadata=schema.metadata))
 
     @classmethod
     def on_init(cls, params: InitParams[None]) -> GlobalInitResponse:

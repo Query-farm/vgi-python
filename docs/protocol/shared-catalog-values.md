@@ -180,11 +180,11 @@ to accept a literal column name and encodes it as one component.
 These changed parameter types and required targets make the current combined
 diff breaking; retaining them requires a major version and corresponding
 routing transition. Existing 2.1 deployments retain their published contract.
-No duplicate field-add/drop/rename RPC family is needed. Shared expression
-profiles for DEFAULT/USING, generated dependencies, full column metadata,
-and cross-object CASCADE remain part of the combined contract work. The limited
-reference is not evidence that those remaining semantics or every logical type
-are qualified.
+No duplicate field-add/drop/rename RPC family is needed. DEFAULT/USING now use
+the mandatory canonical payload described in the October 23 implementation
+checkpoint. Generated dependencies, full column metadata and complete
+cross-object CASCADE remain part of the combined contract work. The limited
+reference does not qualify those remaining semantics or every logical type.
 
 ## Cross-SDK evidence
 
@@ -766,40 +766,62 @@ intact in the [manifest](duckdb-2.0-manifest.json); its
 | `CatalogAttachResult.default_schema` | Nullable scalar string. NULL means no implicit default; a present value is one nonempty, non-NUL raw root identifier. Existing providers can still explicitly return `main`. No empty-string coercion, dot splitting, nested search path or invented default. |
 | Macro create/read definition | One canonical overload family; represent a single macro as a one-element family. Keep local conversion helpers for legacy definitions, then remove duplicate authoritative wire fields after native family materialization works. |
 
-These are **unimplemented migrations**, to be generated across all SDKs in the
-same major transition. A 1.5 adapter that cannot honor an absent default schema
+The DEFAULT/USING payload migration is implemented in the development branch,
+including generated SDKs and canonical CREATE/ADD default metadata. Per the
+October 23 implementation decision, these are **mandatory successor wire
+representations**, with no new default/USING capability negotiation. The semantic
+`profile` remains part of `SqlExpression`; it identifies the interpretation of
+the SQL, not a new permission flag. Unknown profiles, malformed records and
+owner mismatches reject before provider effects.
+
+Nullable default schema and macro-family consolidation remain **unimplemented
+migrations** in the same major transition. A 1.5 adapter that cannot honor an absent default schema
 must reject it before publishing the attachment. Current native macro discovery
 rejects non-NULL family payloads; deleting legacy fields before that adapter is
 ported would break existing functionality.
 
-Successor column CREATE/ADD will use the existing canonical base64 IPC field
-annotation codecs for defaults/generated expressions; native translation remains
-an implementation task. Comment remains `comment`;
+Successor column CREATE/ADD use canonical base64 IPC field annotations for
+defaults. Native 1.5 translates its supported defaults; generated-expression
+execution remains unsupported. Comment remains `comment`;
 tags remain `tags`, encoded as a UTF-8 JSON object with literal string keys and
 values. Reject duplicate keys, malformed JSON and non-string values. Preserve
 explicit empty comments/maps. No generic metadata RPC or new expression envelope
 is selected. Schema/table/index option values remain typed literals.
 
-The following are **planned DDL profiles, not currently registered or advertised**:
+The following remain separate **planned DDL profiles, not currently registered
+or advertised**. The previously proposed `vgi.column.default.v1` and
+`vgi.column.type.using.v1` capability flags were withdrawn: changing the wire
+does not need an additional opt-in. `vgi.column.default.v1` remains the existing
+Arrow metadata key, which is a different use of that name.
 
 | Profile | Operations and authority |
 | --- | --- |
-| `vgi.column.default.v1` | Persist defaults on CREATE/ADD and SET DEFAULT, evaluate for omitted values in the qualified default scope, and preserve context/readback. |
 | `vgi.column.generated.virtual.v1` | CREATE/ADD deterministic virtual generation with declared types, dependency ordering and cycle rejection. Stored generation and physical-to-generated replacement reject. |
-| `vgi.column.type.using.v1` | Non-NULL USING: evaluate old rows, cast to target type, validate all affected data/dependencies and publish atomically. |
 | `vgi.column.metadata.create.v1` | Preserve explicit column comments/tags on CREATE/ADD. This grants no expression execution or compression semantics. |
 
-The three expression roles additionally require selected and current
-`vgi.expression.duckdb.scalar.v1` in READ. READ alone never authorizes mutation.
-Nested operations require their existing operation-specific nested profile;
-transactional DDL requires `vgi.transaction.ddl.v1`. Drop-default remains an
-explicit operation and needs no expression evaluator. Validate the complete
-request before effects. Absent or withdrawn role profiles use the existing
-`UNIMPLEMENTED` / `catalog_capability_required` error before provider hooks.
-Malformed payloads and wrong-category agreements reject as malformed, without
-downgrading semantics.
-Durable CREATE/ADD/ALTER readback, failing-expression rollback, generated cycles,
-metadata fidelity and all-SDK preservation are P1/P2 acceptance work.
+DEFAULT/USING now use the mandatory canonical representation even with no
+catalog-capability offer. Existing nested-operation, transaction and constraint
+requirements still apply where they already applied. DROP DEFAULT remains its
+own operation. Providers validate their supported grammar/context and return
+ordinary unsupported errors for operations they cannot implement. A TYPE-only
+column definition cannot carry default/generated metadata at any nesting level.
+Generated-column execution and broader column-metadata qualification remain P1
+work, separate from this payload change.
+
+The durable column reference preserves canonical SQL/context through CREATE,
+ADD, SET/DROP DEFAULT, USING, discovery and transaction snapshots. The native
+1.5 adapter supports a bounded deterministic scalar grammar under the explicit
+default evaluation context, including numeric division. It materializes supported
+defaults as typed literals for later native binding while retaining the original
+record in authoritative table metadata. Unsupported contexts, volatile/general
+SQL and generated expressions reject. This does not claim general SQL evaluation.
+
+Existing static `Table.defaults` descriptor discovery retains its legacy read
+adapter; it is not silently interpreted as new canonical metadata. The custom
+DuckDB transactor fixture cannot preserve canonical expression contexts and now
+rejects those DEFAULT/USING operations explicitly. Its plain casts and expression-
+free CREATE/ADD remain available. The durable reference supplies the tested
+canonical mutation behavior; no transactor or native2 qualification is implied.
 
 Views keep SELECT text, owner-relative late binding and derived output schemas;
 no fixed persisted output schema or implicit caller search-path contract is
@@ -1021,9 +1043,10 @@ declared default. Removal uses the existing explicit mutation, not an empty
 payload. Generated category and expression must occur together. Reject legacy
 `default`/generated metadata alongside these authoritative keys rather than
 choosing one silently. Exact decoded IPC preservation is covered by the shared
-SDK corpus; native translation of existing UTF-8 metadata remains pending.
-Existing default/USING mutation payloads will change to `SqlExpression` IPC; no second
-column-RPC family is added. CHECK and index definitions use the same record.
+SDK corpus. Native 1.5 now translates supported CREATE/ADD defaults and reads
+canonical default metadata; existing static descriptor discovery retains its
+legacy adapter. Default/USING mutation payloads now carry `SqlExpression` IPC;
+no second column-RPC family is added. CHECK and index definitions use the same record.
 
 The `vgi.expression.duckdb.scalar.v1` reference proves only the finite subset and
 roles listed in the implementation checkpoint. It does not qualify broader SQL,

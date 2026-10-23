@@ -37,7 +37,6 @@ from vgi.catalog.capabilities import (
     CONSTRAINT_ENFORCE,
     CONSTRAINT_MUTATE,
     CONSTRAINT_RECORDS_READ,
-    ROW_SCALAR_EXPRESSION,
     CatalogCapabilities,
 )
 from vgi.catalog.constraints import (
@@ -45,13 +44,16 @@ from vgi.catalog.constraints import (
     ConstraintEnforcement,
     ConstraintInfo,
     ConstraintKind,
+    ConstraintOperation,
+    ConstraintsApplyRequest,
+    ConstraintSnapshot,
     ConstraintValidation,
     constraint_definitions,
     validate_constraint_schema,
 )
 from vgi.catalog.dependencies import CatalogObjectRef
-from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.layout import SqlExpression
+from vgi.catalog.sql import ColumnExpressions, column_expressions, with_column_expressions
 from vgi.column_path import column_definition, column_path_key, replace_column_field, resolve_column_path
 from vgi.worker import Worker
 
@@ -79,20 +81,27 @@ COLUMN_PROFILES = CatalogCapabilities(
 
 
 def _eval(
-    sql: str, path: list[str], schema: pa.Schema | None = None, rows: list[dict[str, Any]] | None = None
+    expression: SqlExpression,
+    path: list[str],
+    schema: pa.Schema | None = None,
+    rows: list[dict[str, Any]] | None = None,
 ) -> pa.Array:
+    expression.validate_owner(path)
     with duckdb.connect(config={"enable_external_access": False}) as connection:
+        connection.execute("SET TimeZone='UTC'")
+        connection.execute("SET default_collation='binary'")
+        connection.execute("SET default_order='asc'")
+        connection.execute("SET default_null_order='nulls_last'")
+        connection.execute("SET preserve_insertion_order=true")
         if schema is not None:
             connection.register("input_data", pa.Table.from_pylist(rows or [], schema=schema))
         _validate_expression(
             connection,
-            SqlExpression(
-                evaluation_context=QueryEvaluationContext(), sql=sql, profile=ROW_SCALAR_EXPRESSION, schema_path=path
-            ),
+            expression,
             path,
             role="using" if schema is not None else "default",
         )
-        query = f"SELECT ({sql}) AS v" + (" FROM input_data" if schema is not None else "")
+        query = f"SELECT ({expression.sql}) AS v" + (" FROM input_data" if schema is not None else "")
         return connection.execute(query).to_arrow_table().column(0).combine_chunks()
 
 
@@ -117,12 +126,15 @@ def _fields(fields: Any, path: list[str]) -> None:
         ):
             raise NotImplementedError("reference supports primitive JSON values and structs")
         metadata = field.metadata or {}
-        if b"generated_expression" in metadata or metadata.get(b"compression", b"auto") != b"auto":
+        expressions = column_expressions(field)
+        if expressions.generated is not None or metadata.get(b"compression", b"auto") != b"auto":
             raise NotImplementedError("generated expressions and nondefault compression are not supported")
+        if {b"default", b"generated_expression"}.intersection(metadata):
+            raise ValueError("column reference requires canonical expression metadata")
         if any(key.startswith(b"ARROW:extension:") for key in metadata):
             raise NotImplementedError("logical extensions need their own semantic qualification")
-        if b"default" in metadata:
-            pc.cast(_eval(metadata[b"default"].decode(), path), field.type, safe=True)
+        if expressions.default is not None:
+            pc.cast(_eval(expressions.default, path), field.type, safe=True)
 
 
 def _validate_values(fields: Any, value: dict[str, Any]) -> None:
@@ -140,8 +152,9 @@ def _validate_values(fields: Any, value: dict[str, Any]) -> None:
 def _defaulted(fields: Any, row: dict[str, Any], schema_path: list[str]) -> dict[str, Any]:
     result = copy.deepcopy(row)
     for field in fields:
-        if field.name not in result and b"default" in (field.metadata or {}):
-            result[field.name] = pc.cast(_eval(field.metadata[b"default"].decode(), schema_path), field.type)[0].as_py()
+        default = column_expressions(field).default
+        if field.name not in result and default is not None:
+            result[field.name] = pc.cast(_eval(default, schema_path), field.type, safe=True)[0].as_py()
         if pa.types.is_struct(field.type) and result.get(field.name) is not None:
             result[field.name] = _defaulted(field.type, result[field.name], schema_path)
     return result
@@ -227,8 +240,8 @@ class ColumnPathsCatalog(TableLayoutCatalog):
             _validate_values(schema, row)
         return super()._arrange(rows, info)
 
-    def _column_change(self, operation: str, args: dict[str, Any]) -> None:
-        path = list(column_path_key(args["column_path"]))
+    def _column_change(self, operation: str, args: dict[str, Any]) -> ConstraintSnapshot | None:
+        path = [] if "constraint_request" in args else list(column_path_key(args["column_path"]))
         key = _table_key(args["schema_path"], args["name"])
         with closing(sqlite3.connect(self.database_path)) as db, db:
             db.execute("BEGIN IMMEDIATE")
@@ -238,6 +251,22 @@ class ColumnPathsCatalog(TableLayoutCatalog):
                     return
                 raise ValueError("table does not exist")
             info = self._info(data[key])
+            request = args.get("constraint_request")
+            if request is not None:
+                if request.expected_revision != info.definition_revision:
+                    raise ValueError("stale table definition revision")
+                change = request.constraint_changes()[0]
+                if change.operation == ConstraintOperation.ADD:
+                    path = change.definition.column_paths[0]
+                    if any(item.definition.column_paths == [path] for item in info.constraint_infos()):
+                        raise ValueError("NOT_NULL constraint already exists")
+                    operation = "not_null_set"
+                else:
+                    matches = [item for item in info.constraint_infos() if item.ref.key() == change.ref.key()]
+                    if len(matches) != 1 or matches[0].definition.kind != ConstraintKind.NOT_NULL:
+                        raise ValueError("unknown NOT_NULL constraint identity")
+                    path = matches[0].definition.column_paths[0]
+                    operation = "not_null_drop"
             schema = pa.ipc.read_schema(pa.BufferReader(info.columns))
             parent_fields = schema if len(path) == 1 else resolve_column_path(schema, path[:-1]).type
             if not isinstance(parent_fields, pa.Schema) and not pa.types.is_struct(parent_fields):
@@ -267,14 +296,15 @@ class ColumnPathsCatalog(TableLayoutCatalog):
             if operation == "add":
                 replacement = column_definition(args["column_definition"], path)
                 _fields([replacement], info.schema_path)
-                default = (replacement.metadata or {}).get(b"default")
-                value = (
-                    pc.cast(_eval(default.decode(), info.schema_path), replacement.type)[0].as_py() if default else None
-                )
+                default = column_expressions(replacement).default
                 for row in rows:
                     parent = _parent(row, path)
                     if parent is not None:
-                        parent[path[-1]] = copy.deepcopy(value)
+                        parent[path[-1]] = (
+                            pc.cast(_eval(default, info.schema_path), replacement.type, safe=True)[0].as_py()
+                            if default is not None
+                            else None
+                        )
             elif operation == "drop":
                 replacement = None
                 for row in rows:
@@ -316,9 +346,11 @@ class ColumnPathsCatalog(TableLayoutCatalog):
                 metadata = dict(existing.metadata or {})
                 if operation == "default_set":
                     pc.cast(_eval(args["expression"], info.schema_path), existing.type, safe=True)
-                    metadata[b"default"] = args["expression"].encode()
+                    metadata = dict(
+                        with_column_expressions(existing, ColumnExpressions(default=args["expression"])).metadata or {}
+                    )
                 elif operation == "default_drop":
-                    metadata.pop(b"default", None)
+                    metadata = dict(with_column_expressions(existing, ColumnExpressions()).metadata or {})
                 elif operation == "comment":
                     if args["comment"] is None:
                         metadata.pop(b"comment", None)
@@ -356,6 +388,42 @@ class ColumnPathsCatalog(TableLayoutCatalog):
                 db.execute("UPDATE catalog SET version=?, data=? WHERE id=1", (version + 1, json.dumps(data)))
             else:
                 db.execute("UPDATE transactions SET version=?, data=? WHERE id=?", (version + 1, json.dumps(data), tx))
+            if request is not None:
+                return ConstraintSnapshot(
+                    table=request.table, definition_revision=info.definition_revision, constraints=info.constraints
+                )
+        return None
+
+    def table_constraints_apply(self, request: ConstraintsApplyRequest) -> ConstraintSnapshot:
+        """Apply the native single NOT_NULL edit in the same locked data snapshot."""
+        request.__post_init__()
+        changes = request.constraint_changes()
+        if len(changes) != 1:
+            raise NotImplementedError("column reference supports one NOT_NULL change per request")
+        change = changes[0]
+        if change.operation == ConstraintOperation.ADD:
+            definition = change.definition
+            if (
+                definition.kind != ConstraintKind.NOT_NULL
+                or definition.declared_name is not None
+                or change.enforcement != ConstraintEnforcement.ENFORCED
+                or change.validation != ConstraintValidation.ALL_ROWS
+            ):
+                raise NotImplementedError("column reference supports unnamed enforced ALL_ROWS NOT_NULL only")
+        elif change.operation != ConstraintOperation.DROP or change.cascade:
+            raise NotImplementedError("column reference supports NOT_NULL ADD and non-cascading DROP only")
+        result = self._column_change(
+            "constraint",
+            dict(
+                attach_opaque_data=request.attach_opaque_data,
+                transaction_opaque_data=request.transaction_opaque_data,
+                schema_path=request.table.schema_path,
+                name=request.table.name,
+                constraint_request=request,
+            ),
+        )
+        assert result is not None
+        return result
 
     def table_column_add(self, **kwargs: Any) -> None:
         self._column_change("add", kwargs)

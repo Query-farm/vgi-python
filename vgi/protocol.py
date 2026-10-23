@@ -3888,11 +3888,11 @@ class VgiProtocol(Protocol):
         schema_path: SchemaPath,
         name: str,
         column_path: list[str],
-        expression: str,
+        expression: bytes,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
-        """Set the default value expression for a column."""
+        """Set a column default using one canonical SqlExpression IPC record."""
         ...
 
     def catalog_table_column_default_drop(
@@ -3914,11 +3914,11 @@ class VgiProtocol(Protocol):
         name: str,
         column_path: list[str],
         column_definition: bytes,
-        expression: str | None = None,
+        expression: bytes | None = None,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
-        """Change the type of a column."""
+        """Change a column type, optionally using canonical SqlExpression IPC."""
         ...
 
     def catalog_table_not_null_drop(
