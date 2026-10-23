@@ -1167,6 +1167,13 @@ are in the manifest's `write_path_source_audit_2026_10_15` and
 `write_finalization_source_audit_2026_10_22`. These are source findings only;
 EC2 was unavailable and no new tests were run.
 
+The subsequent EC2 checkpoint on `18.234.138.19` ran seven native 1.5 subprocess
+probes: normal INPUT RETURNING, buffered emit/process error, count finalization,
+multiple batches, zero input, finalizer error, and expected rejection of deferred
+RETURNING. All behaved as expected. This diagnostic provider has no transactions
+or stored rows; it does not qualify rollback or signed HTTP. See
+`write_finalization_runtime_checkpoint_2026_10_22` for exact evidence.
+
 ### Trigger definitions and statement ownership
 
 Reuse `CatalogObjectRef(kind="trigger", schema_path, owner_table, name)`.

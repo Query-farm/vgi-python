@@ -6808,5 +6808,50 @@
     ],
     "validation_limits": "EC2 SSH timed out on 2026-10-22. No local or remote tests/builds, runtime fixes, protocol changes or release-gate completion. Existing test cases were inspected, not rerun. Generic finalization SQL tests do not establish writable RETURNING support; simple SQLite writable fixture has no transaction support and cannot prove rollback.",
     "next": "Transaction exception cleanup remains the first concrete fix. Reproduce the signed-HTTP token candidate separately. Treat deferred RETURNING as opt-in adapter work and require a reachable failure before changing the raw pre-FINALIZE drain."
+  },
+  "write_finalization_runtime_checkpoint_2026_10_22": {
+    "date": "2026-10-22",
+    "status": "seven_expected_native15_subprocess_outcomes_verified",
+    "host": "ec2-user@18.234.138.19",
+    "remote_workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+    "artifacts": "logs/write-finalize-20261022-F5qbim/verified",
+    "runner_log": "logs/write-finalize-20261022-F5qbim/verified-runner.log",
+    "baseline": {
+      "native_synced_head": "03bd03221b43a81969d7d3af1c773e0b5b1c8a30",
+      "python_synced_head": "699c3fe5ae92138733eb02b01d19ea4f29a3e05f",
+      "native_build_source": "7588d45947ff4ba11b4dee1e5b53898d859996fa",
+      "python_runtime_source": "9642dae3e8151f1a160ced817f3741231d8b0bed",
+      "engine": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+      "engine_version": "Haybarn 1.5.5-rc1, DuckDB v1.5.6-dev149",
+      "python_version": "3.14.7",
+      "rpc_version": "0.50.0",
+      "pyarrow_version": "25.0.1",
+      "reuse_basis": "Both remote source trees were clean before fast-forwarding documentation commits; local runtime-source diff from the previous verified build/checkpoint is empty. Added only diagnostic runner/provider and documentation. No rebuild required.",
+      "cli_sha256": "93c9a06341698ade678f4463da4b35da59a05397067212810c07112d0e9b063d",
+      "extension_sha256": "df9af0daffc9a46b64d6306a3293acb2ca01dec7b9e306146d7301210e4d5fe4"
+    },
+    "diagnostic_sources": {
+      "native:test/run_write_finalize_probe.py": "0ea02f75bf7cf423e3e0ecfd138eb5f117e2959d094d218f65ad17cfaa36fabb",
+      "tests/catalog/write_finalize_probe.py": "8396b18e8bb0b4057e8c84012c9b65d457b278d3d61d254c298b729369fea7d3"
+    },
+    "results": [
+      "input_returning: two exact rows, one INPUT batch, no finalize callback.",
+      "emit_then_raise: buffered_emit and input_raise traced; process error reaches the client and no successful rows are returned.",
+      "finalize_count: two rows accepted, one finalize callback with matching execution identity.",
+      "finalize_multiple_batches: 5000 rows across three INPUT batches, one finalize callback sees all 5000.",
+      "finalize_zero_input: no INPUT batch, one finalize callback sees zero rows and completes.",
+      "finalize_raise: one finalize callback; its error reaches the client with no successful rows returned.",
+      "deferred_returning: callback emits two id/label rows; native rejects them as incompatible count output, confirming the unsupported form."
+    ],
+    "fixture_lint": "python -m ruff check tests/catalog/write_finalize_probe.py passed on EC2; log at logs/write-finalize-20261022-F5qbim/ruff.log.",
+    "manifest_validation": "EC2 checker passed: 151 audit rows, 20 contract areas, 94 reviews remain. Log at logs/write-finalize-20261022-F5qbim/manifest.log; inventory coverage is not phase completion.",
+    "limits": [
+      "Diagnostic sink only: no stored-table state or transactions, therefore no rollback, atomicity, transaction cleanup or production-provider proof.",
+      "Subprocess transport only; signed HTTP transaction-token candidate remains untested. No new runtime error-loss case established for raw pre-FINALIZE draining.",
+      "Count-mode checks prove successful callback/output processing and traced input totals; CLI does not print affected-row counts.",
+      "First harness attempt failed table materialization because it lacked a scan descriptor. Added a schema-only scan, then reran in a fresh verified artifact directory. The first attempt is not write-path evidence.",
+      "No production code or wire changes, no engine-pin change, no release-gate completion."
+    ],
+    "next": "Reproduce and fix transaction exception cleanup as its own checkpoint; then investigate the signed HTTP transaction-token candidate. Deferred RETURNING remains optional adapter work."
   }
 }
