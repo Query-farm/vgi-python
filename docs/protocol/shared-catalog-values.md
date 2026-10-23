@@ -11,6 +11,10 @@ operation contracts below.
 Completing these codecs does not complete the release gates in the
 [combined manifest](duckdb-2.0-manifest.json).
 
+The [October 23 combined review](#combined-protocol-review--october-23-2026)
+is the current scope decision. In particular, the trigger section below is a
+retained **deferred design**, not a requirement to add its RPCs to this release.
+
 ## Typed option changes and readback
 
 Schema, table, and index options use the same literal-value representation.
@@ -289,11 +293,12 @@ reference behavior; it is not native DuckDB 2.0 qualification.
 Other SDKs carry the new schemas/codecs and retain conservative absent
 agreements. Their current mutation handlers must reject a non-NULL options
 payload before handing an unsupported operation to a provider. Native DuckDB
-1.5 continues to offer no new catalog profiles. The combined public protocol
+1.5 offers no schema-options profiles. The combined public protocol
 version remains undecided until the remaining contract changes are reviewed;
 this development wire snapshot must not be published as a stable 2.1 release.
-Schema comment/tag alterations, object requirements, broader transaction
-semantics, and the other catalog object families remain in the combined plan.
+Schema comment/tag alterations are implemented in the later checkpoint below;
+current operation-specific requirements and remaining work follow the October 23
+review. No generic object-requirements carrier is selected.
 
 ## Table options, creation metadata, and layout
 
@@ -395,7 +400,7 @@ NULL versus empty lists, explicit ordering, nested binary values, and creation
 metadata. SDK workers without these profiles reject new creation payloads before
 mutation and register unsupported RPCs with structured UNIMPLEMENTED errors.
 The native 1.5 adapter sends NULL for the four new creation fields and continues
-to advertise no new catalog profiles. SQL enablement, production provider
+to advertise no table-options/layout profiles. SQL enablement, production provider
 implementations, and the native 2.0 adapter remain separate unfinished work.
 
 ## Schema creation metadata
@@ -742,6 +747,137 @@ ownership, schema mismatch, lost results, expiry and policy changes. General
 provider authorization/snapshot integration, a scheduled production janitor,
 native explicit/automatic adapters and performance qualification remain open.
 
+
+## Combined protocol review — October 23, 2026
+
+This source review reconciles the complete field inventory with the implemented
+development contract. It closes scope/mapping review, not P1 semantic proof,
+P2 freeze or P3 release. No runtime shapes, version labels or engine pins change
+in this checkpoint. Original audit evidence and historical runtime results remain
+intact in the [manifest](duckdb-2.0-manifest.json); its
+`combined_protocol_review_2026_10_23` records the remaining work and deferral costs.
+
+### Remaining included column and cleanup changes
+
+| Existing field | Successor contract selected by this review |
+| --- | --- |
+| `catalog_table_column_default_set.expression` | Required `binary` carrying exactly one canonical `SqlExpression` IPC record, replacing raw SQL text. SQL NULL is an expression value; DROP DEFAULT stays its own existing method. |
+| `catalog_table_column_type_change.expression` | Nullable `binary` carrying the same record. NULL requests the qualified ordinary cast path; a present record defines USING against the old row. |
+| `CatalogAttachResult.default_schema` | Nullable scalar string. NULL means no implicit default; a present value is one nonempty, non-NUL raw root identifier. Existing providers can still explicitly return `main`. No empty-string coercion, dot splitting, nested search path or invented default. |
+| Macro create/read definition | One canonical overload family; represent a single macro as a one-element family. Keep local conversion helpers for legacy definitions, then remove duplicate authoritative wire fields after native family materialization works. |
+
+These are **unimplemented migrations**, to be generated across all SDKs in the
+same major transition. A 1.5 adapter that cannot honor an absent default schema
+must reject it before publishing the attachment. Current native macro discovery
+rejects non-NULL family payloads; deleting legacy fields before that adapter is
+ported would break existing functionality.
+
+Successor column CREATE/ADD will use the existing canonical base64 IPC field
+annotation codecs for defaults/generated expressions; native translation remains
+an implementation task. Comment remains `comment`;
+tags remain `tags`, encoded as a UTF-8 JSON object with literal string keys and
+values. Reject duplicate keys, malformed JSON and non-string values. Preserve
+explicit empty comments/maps. No generic metadata RPC or new expression envelope
+is selected. Schema/table/index option values remain typed literals.
+
+The following are **planned DDL profiles, not currently registered or advertised**:
+
+| Profile | Operations and authority |
+| --- | --- |
+| `vgi.column.default.v1` | Persist defaults on CREATE/ADD and SET DEFAULT, evaluate for omitted values in the qualified default scope, and preserve context/readback. |
+| `vgi.column.generated.virtual.v1` | CREATE/ADD deterministic virtual generation with declared types, dependency ordering and cycle rejection. Stored generation and physical-to-generated replacement reject. |
+| `vgi.column.type.using.v1` | Non-NULL USING: evaluate old rows, cast to target type, validate all affected data/dependencies and publish atomically. |
+| `vgi.column.metadata.create.v1` | Preserve explicit column comments/tags on CREATE/ADD. This grants no expression execution or compression semantics. |
+
+The three expression roles additionally require selected and current
+`vgi.expression.duckdb.scalar.v1` in READ. READ alone never authorizes mutation.
+Nested operations require their existing operation-specific nested profile;
+transactional DDL requires `vgi.transaction.ddl.v1`. Drop-default remains an
+explicit operation and needs no expression evaluator. Validate the complete
+request before effects. Absent or withdrawn role profiles use the existing
+`UNIMPLEMENTED` / `catalog_capability_required` error before provider hooks.
+Malformed payloads and wrong-category agreements reject as malformed, without
+downgrading semantics.
+Durable CREATE/ADD/ALTER readback, failing-expression rollback, generated cycles,
+metadata fidelity and all-SDK preservation are P1/P2 acceptance work.
+
+Views keep SELECT text, owner-relative late binding and derived output schemas;
+no fixed persisted output schema or implicit caller search-path contract is
+introduced. Existing aliases, security, comments/tags and column comments remain.
+Dependency `owned` edges describe drop lifetime, not principal authorization:
+SQL ownership transfer is deferred. Non-default physical compression is also
+deferred until a provider defines portable semantics. Existing typed options or
+metadata may suffice for a future compression profile.
+
+Keep `ClientCapabilities.filter_encodings`: the historical proposal to remove
+it has no demonstrated consumer conflict. Typed function defaults remain
+authoritative; display-only `vgi_default` metadata is not a second executable
+default contract. Raw paths and canonical constraints already provide the other
+selected cleanup; no parallel replacement RPC families are needed.
+
+### Optimizer work that still blocks P1
+
+Projection and repeatability remain included to avoid an immediate second wire
+migration, but their final fields are **not frozen**. Existing split tokens,
+parallelism limits, ordering and string diagnostics remain sufficient for the
+reviewed engine hooks; no typed metric or selected-partition-ID record is selected.
+
+Projection needs a closed scalar profile, exact result types and deterministic
+original-input/result-slot mapping. Filter v2 currently requires a Boolean root
+and types its calls as Boolean; its grammar cannot simply be relabeled a scalar
+projection contract. A bounded first proof can use ordinary CAST of a source
+column, keeping TRY_CAST and other functions unsupported until specified.
+
+The support decision must precede optimizer replacement. Current native
+`table_function_plan` runs during global initialization, so a decline in its
+response arrives too late. Prefer a negotiated closed subset the native callback
+can decide locally, then carry the accepted plan through existing plan/init
+requests and their exact output schema. If support depends on provider state,
+prove a pure preparation round trip before replacement. This lifecycle choice
+and the exact record fields remain P1 work. Declined expressions retain local
+evaluation and all needed input columns; malformed accepted results are errors,
+never execute-then-fallback.
+
+Prove nested paths, reordered outputs, residual/runtime filters, bind copies,
+split fingerprints and cache identities use the same mapping. No general SQL
+bag, serialized private AST, or speculative result-identity framework is selected.
+
+Repeatability needs a bind-specific claim, initially absent/unknown versus
+stable within one query, stored with bind data. Prefer one enum over an empty
+wrapper record. The same bind, parameters and transaction/snapshot must yield
+the same logical result when reevaluated. Cache TTL, scalar stability, replayable
+split tokens and worker count do not prove that guarantee or authorize retries.
+Before freezing, demonstrate mutable-provider behavior, prepared bind reuse,
+snapshot expiry and repeated evaluation without inventing a new query coordinator.
+
+### Reviewed deferrals and rollout
+
+New trigger CRUD/execution, sequence allocation, named-type catalog APIs,
+collation/CRS catalogs, standalone windows, arbitrary mutating statements/CONNECT,
+multiple relational input transport and typed metrics are deferred. Existing
+aggregate windows, read-query execution, supported Arrow value transport and
+transaction/write phases remain. The manifest records each actual missing
+semantic guarantee, inclusion proof, user-visible limitation and future version
+cost. Deferred candidate names are not part of the included freeze inventory.
+
+No new query parameter carrier is needed: types/values use Arrow batches with
+the existing mapping metadata. No additional TUPLE/VARIANT carrier is selected:
+keep recursive tuple annotations and canonical unshredded Arrow Parquet Variant,
+with explicit engine mapping limits. Adapter qualification does not follow from
+opaque metadata/byte preservation alone.
+
+The successor requires a major version and matching routing name; the historical
+additive `2.2.0` candidate is superseded. Choose the number at freeze. Keep exact
+major/minor checks and deploy separate versioned endpoints/processes. Drain old
+transactions, then reattach and reprepare; never transfer tokens or retry an
+ambiguous mutation during migration. Rollback needs old-compatible catalog
+objects or a tested restore/migration. P3 must exercise these steps and safe
+unsupported behavior. No version-aware router or recovery service is required.
+
+Validation on replacement EC2 `98.81.121.120` passed: `--require-decisions` covers
+151 audit rows and 20 areas with zero unresolved scope mappings; all 11 manifest
+tests pass. Logs: `logs/protocol-review-20261023-SBCl67`. P0 is complete; these
+inventory checks do not close P1 or qualify new runtime behavior.
 
 ## Combined expression, constraint, transaction and trigger design
 
@@ -1287,6 +1423,10 @@ the DuckDB2 adapter.
 
 ### Trigger definitions and statement ownership
 
+**Deferred by the October 23 combined review.** The following candidate design
+preserves prior source findings for future work. Its records, methods and
+profiles are not selected for the current freeze and must not be advertised.
+
 Reuse `CatalogObjectRef(kind="trigger", schema_path, owner_table, name)`.
 Persistent definitions are worker-authoritative and survive reconnect/DETACH;
 local engine entries are versioned materializations. Temporary status follows
@@ -1416,11 +1556,9 @@ read/query result replay functionality is unaffected by this scope decision.
    INSERT/CTAS rollback checkpoints. Qualify expanded ALTER, multi-DML and the
    custom DuckDB transactor through the existing transaction paths.
    No savepoints or general statement-ticket/receipt lifecycle is required.
-4. Implement persistent trigger CRUD/readback and ENGINE execution first, using
-   existing transactions and streams. Test exclusivity, order,
-   zero/multiple batches, exact OLD/NEW, stale binds and failure rollback. Select
-   additional metadata only when those paths demonstrate a missing contract;
-   qualify BACKEND execution separately after resolving discovery and batching.
+4. Complete the included column/default-schema/macro migrations and optimizer
+   proofs from the October 23 review. Trigger CRUD/execution is deferred; retain
+   its proof requirements above for any future scope change.
 5. Extend dependency planning to constraints and column/ALTER blockers. Test
    rename/replacement, inaccessible dependents, cross-schema identity and no
    cross-attachment authority assumption.

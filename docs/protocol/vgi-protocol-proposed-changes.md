@@ -1,5 +1,10 @@
 # Proposed VGI protocol changes for DuckDB 2.0
 
+**Current scope:** the [October 23 combined review](shared-catalog-values.md#combined-protocol-review--october-23-2026)
+and [manifest](duckdb-2.0-manifest.json) supersede this historical survey's release
+sequence, version candidates and unresolved inclusion lists. Keep this report
+as source rationale; it is not the current implementation backlog.
+
 **Status:** design/audit report; the argument-monotonicity subsection records an accepted VGI 2.0 protocol addition
 **Audit date:** 2026-09-09
 **Filter-v2 decision:** 2026-09-09 — mandatory in VGI 2.0; no v1 compatibility path

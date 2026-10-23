@@ -6,6 +6,13 @@ remain on DuckDB 1.5. Native creation/loading of the new overload representation
 is a separate adapter checkpoint. Existing `vgi.v2` spelling does not declare
 this breaking development diff compatible with released implementations.
 
+The [October 23 combined review](shared-catalog-values.md#combined-protocol-review--october-23-2026)
+selects a single overload-family representation for the successor freeze.
+The mutually exclusive legacy/family shapes below describe the current
+development implementation. Port native family materialization and migrate
+single macros to one-element families before removing legacy wire fields;
+that cleanup is still outstanding.
+
 ## Representation and capabilities
 
 `MacroInfo` and `MacroCreateRequest` append nullable
