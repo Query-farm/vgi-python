@@ -11,9 +11,9 @@
       "Overload collections replacing single macro definitions"
     ],
     "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
-    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the successor schema inventory; required canonical table constraint lists replace the legacy parent arrays and revision-checked catalog_table_constraints_apply joins the public method surface; typed index definitions/options replace legacy index fields and add catalog_index_option_definitions; required semantic ALTER flags and raw subject/dependent column paths extend embedded dependency records; SET DEFAULT requires binary SqlExpression IPC and USING accepts nullable binary IPC; CREATE/ADD defaults use the canonical field codec, without new capability negotiation",
+    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the successor schema inventory; required canonical table constraint lists replace the legacy parent arrays and revision-checked catalog_table_constraints_apply joins the public method surface; typed index definitions/options replace legacy index fields and add catalog_index_option_definitions; required semantic ALTER flags and raw subject/dependent column paths extend embedded dependency records; SET DEFAULT requires binary SqlExpression IPC and USING accepts nullable binary IPC; CREATE/ADD defaults use the canonical field codec, without new capability negotiation; CatalogAttachResult.default_schema becomes nullable UTF-8, preserving no implicit default independently of an explicit raw schema name",
     "version_requirement": "The existing breaking changes already require a major version and matching routing name. Final number and complete generated diff remain P1/P2 work; the historical additive 2.2.0 candidate is superseded.",
-    "planned_diff": "Included before freeze: nullable scalar default_schema; canonical macro-family cleanup after native support; projection-expression/result-slot and repeatability contracts with P1 proof; remaining generated/column metadata semantics. DEFAULT/USING binary payload migration is implemented in column_expression_checkpoint_2026_10_23. Retain existing transactions/writes and implemented catalog/query/type records. Trigger CRUD/execution and optional feature families remain reviewed deferrals. No protocol freeze or public version transition yet.",
+    "planned_diff": "Included before freeze: canonical macro-family cleanup after native support; projection-expression/result-slot and repeatability contracts with P1 proof; remaining generated/column metadata semantics. DEFAULT/USING binary payloads and nullable default_schema are implemented in their October 23 checkpoints. Retain existing transactions/writes and implemented catalog/query/type records. Trigger CRUD/execution and optional feature families remain reviewed deferrals. No protocol freeze or public version transition yet.",
     "historical_additive_candidate": "vgi.v2/2.2.0"
   },
   "sources": {
@@ -1333,7 +1333,7 @@
     "cleanup": {
       "title": "Existing protocol cleanup",
       "disposition": "include",
-      "status": "reviewed_concrete_major_migrations_pending",
+      "status": "column_and_default_schema_migrations_implemented_macro_cleanup_pending",
       "records": [
         "ColumnPath",
         "ConstraintDefinition",
@@ -1367,6 +1367,22 @@
             "haybarn:src/catalog/catalog.cpp:715,1309"
           ],
           "limits": "Selected changes are unimplemented and must land with all generated schemas before freeze."
+        },
+        {
+          "status": "nullable_default_schema_wire_and_15_rejection_implemented",
+          "checkpoint": "nullable_default_schema_checkpoint_2026_10_23",
+          "sources": [
+            "vgi/catalog/catalog_interface.py",
+            "vgi/catalog/descriptors.py",
+            "vgi/schema_path.py",
+            "vgi/worker.py",
+            "vgi/codegen/ts_types.py",
+            "tests/catalog/test_nullable_default_schema.py",
+            "conformance/catalog-contracts.json",
+            "native:src/vgi_catalog_api.cpp",
+            "native:test/run_default_schema.py"
+          ],
+          "limits": "Native 1.5 rejects absence before attachment publication; this prepares optional-default representation for the later native2 port, not native1.5 execution without a default. Existing omitted provider constructor defaults can remain main."
         }
       ],
       "review_decisions": {
@@ -1374,11 +1390,12 @@
           "SchemaPath/ColumnPath preserve raw components and replace flat or ambiguous dotted identifiers.",
           "Canonical ConstraintDefinition/ConstraintInfo replace parallel legacy constraint arrays; retain this single authoritative shape.",
           "Existing flat/nested column operations share changed path fields; no duplicate field mutation RPC family.",
-          "Typed function defaults are authoritative; vgi_default is explicitly discovery-only, not a competing executable default. Keeping its display metadata is not itself a correctness gap."
+          "Typed function defaults are authoritative; vgi_default is explicitly discovery-only, not a competing executable default. Keeping its display metadata is not itself a correctness gap.",
+          "Canonical DEFAULT/USING payloads and nullable CatalogAttachResult.default_schema are implemented across the coordinated development snapshot without new capability flags."
         ],
-        "recommended_new_wire": "Make CatalogAttachResult.default_schema a nullable scalar raw root-schema identifier. NULL means no implicit default and must never silently become main; present names remain nonempty raw identifiers. This covers actual DuckDB 2.0 lookup behavior. Do not change it to a nested schema path. A 1.5 adapter that cannot honor absence must reject that attach result before publication, while existing providers continue returning main or another root.",
+        "recommended_new_wire": "Implemented nullable scalar default_schema: NULL means no implicit default; non-NULL is a nonempty raw root identifier without NUL. Explicit absence never becomes main. Native1.5 rejects absence before publication; native2 optional-return adaptation remains later work.",
         "macro_canonicalization_decision": "Recommend one canonical overload-family representation at successor release freeze: a single legacy macro becomes a one-element family. Retain SDK conversion helpers, not two authoritative wire shapes. This is additional integration work, not a completed cleanup: the current native loader rejects every non-NULL family. Do not delete legacy fields until native/SDK family materialization and migration are implemented, or silently claim the current mutually exclusive dual representation has already been eliminated.",
-        "remaining_P1": "Set explicit absent/default behavior and adapter rejection; settle canonical macro family transition and update all generated schemas together. Audit any further inconsistency by named field, not blanket renaming or reserved metadata bags.",
+        "remaining_P1": "Settle canonical macro family transition after native consumption and regenerate all SDKs together. Continue remaining column/optimizer semantics. Audit any further inconsistency by named field, not blanket renaming or reserved metadata bags.",
         "evidence": [
           "python:docs/protocol/shared-catalog-values.md:168,176,179,896",
           "python:docs/protocol/vgi-protocol-proposed-changes.md:43,56,184,714",
@@ -1393,14 +1410,13 @@
         "filter_encodings": "Preserve current filter_encodings capability/inventory fields in this package. The old proposal recommends removal because Filter v2 is mandatory, but no concrete consumer conflict or simplification proof is established by this review. Do not broaden cleanup into unproven removals."
       },
       "implementation_work": [
-        "Make CatalogAttachResult.default_schema a nullable scalar raw root-schema identifier. NULL means no implicit default and must never silently become main; present names remain nonempty raw identifiers. This covers actual DuckDB 2.0 lookup behavior. Do not change it to a nested schema path. A 1.5 adapter that cannot honor absence must reject that attach result before publication, while existing providers continue returning main or another root.",
         "Recommend one canonical overload-family representation at successor release freeze: a single legacy macro becomes a one-element family. Retain SDK conversion helpers, not two authoritative wire shapes. This is additional integration work, not a completed cleanup: the current native loader rejects every non-NULL family. Do not delete legacy fields until native/SDK family materialization and migration are implemented, or silently claim the current mutually exclusive dual representation has already been eliminated."
       ]
     },
     "identity": {
       "title": "Full catalog identity",
       "disposition": "existing_contract_plus_engine_port",
-      "status": "contract_reviewed_nullable_default_wire_task_native2_port_pending",
+      "status": "nullable_default_wire_implemented_native2_identity_port_pending",
       "records": [
         "CatalogObjectRef",
         "SchemaPath",
@@ -1415,7 +1431,7 @@
       "scope": [
         "Raw paths, nested ownership, nullable default schema, complete metadata/result cache identity and dependency invalidation. Never split a SQL rendering."
       ],
-      "capability_contract": "Existing raw SchemaPath/ColumnPath/CatalogObjectRef carries full attachment-relative identity, with no engine alias/OID or cross-attachment graph. Add nullable existing default_schema in the combined major transition to preserve absent versus specified; keep non-NULL values a single raw identifier because nested search-path defaults are upstream-unsupported. Native full-path caches/schema tree remain an adapter task, not another identity record.",
+      "capability_contract": "Existing raw SchemaPath/ColumnPath/CatalogObjectRef carries attachment-relative identity without engine aliases/OIDs or cross-attachment graphs. Nullable default_schema now preserves absent versus specified, with no new capability. Non-NULL is one raw identifier; nested defaults are not encoded. Native1.5 rejects absence; full-path caches/schema tree and native2 optional default behavior remain adapter work.",
       "gates": [
         "P1",
         "M1",
@@ -1426,11 +1442,26 @@
           "status": "scope_and_field_mapping_reviewed_2026_10_23",
           "source": "docs/protocol/shared-catalog-values.md#combined-protocol-review--october-23-2026",
           "limits": "Source review only; remaining implementation and qualification tasks are explicit. No new runtime evidence."
+        },
+        {
+          "status": "nullable_default_schema_wire_and_15_rejection_implemented",
+          "checkpoint": "nullable_default_schema_checkpoint_2026_10_23",
+          "sources": [
+            "vgi/catalog/catalog_interface.py",
+            "vgi/catalog/descriptors.py",
+            "vgi/schema_path.py",
+            "vgi/worker.py",
+            "vgi/codegen/ts_types.py",
+            "tests/catalog/test_nullable_default_schema.py",
+            "conformance/catalog-contracts.json",
+            "native:src/vgi_catalog_api.cpp",
+            "native:test/run_default_schema.py"
+          ],
+          "limits": "Native 1.5 rejects absence before attachment publication; this prepares optional-default representation for the later native2 port, not native1.5 execution without a default. Existing omitted provider constructor defaults can remain main."
         }
       ],
       "implementation_work": [
-        "Nullable default_schema is a real unimplemented cross-SDK wire change.",
-        "Native2 full-path ownership/lookup/recursive scans/cache identities; native1.5 currently rejects nested paths safely."
+        "Native2 optional default schema plus full-path ownership/lookup/recursive scans/cache identities; native1.5 rejects absence and nested paths safely."
       ]
     }
   },
@@ -1914,7 +1945,7 @@
       "area": "identity",
       "disposition": "existing_contract",
       "target": "CatalogAttachResult.default_schema: nullable UTF-8 raw top-level identifier",
-      "status": "contract_reviewed_wire_migration_pending",
+      "status": "nullable_wire_implemented_native15_rejection_native2_mapping_pending",
       "evidence": [
         {
           "status": "source_review_2026_10_23",
@@ -1927,11 +1958,27 @@
             "native:docs/duckdb-2.0-catalog-audit.md:84"
           ],
           "limits": "Source/contract reconciliation only. Existing recorded tests retain their original bounded scope; no new tests or native DuckDB 2 qualification."
+        },
+        {
+          "status": "nullable_default_schema_wire_and_15_rejection_implemented",
+          "checkpoint": "nullable_default_schema_checkpoint_2026_10_23",
+          "sources": [
+            "vgi/catalog/catalog_interface.py",
+            "vgi/catalog/descriptors.py",
+            "vgi/schema_path.py",
+            "vgi/worker.py",
+            "vgi/codegen/ts_types.py",
+            "tests/catalog/test_nullable_default_schema.py",
+            "conformance/catalog-contracts.json",
+            "native:src/vgi_catalog_api.cpp",
+            "native:test/run_default_schema.py"
+          ],
+          "limits": "Native 1.5 rejects absence before attachment publication; this prepares optional-default representation for the later native2 port, not native1.5 execution without a default. Existing omitted provider constructor defaults can remain main."
         }
       ],
-      "decision": "Include nullable default_schema in the coordinated major transition: NULL means no declared default; non-NULL is one raw top-level identifier. Do not use empty string as NULL, coerce absence to main, or encode a nested path in a string. The inspected native2 engine does not permit nested schemas in search paths. A 1.5 adapter unable to preserve absence must reject such an attachment, not fabricate a default.",
+      "decision": "Implemented nullable default_schema in the coordinated successor: NULL means no implicit default; non-NULL is a nonempty/NUL-free raw root identifier. No empty-string coercion, main substitution or nested path encoding. Python/declarative clients and SDKs retain explicit absence. Native1.5 rejects absence before publishing attachment or registering settings.",
       "remaining_implementation_or_qualification": [
-        "Current field is non-null str and native empty-string path coerces to main. Update all SDK schemas/defaulting/codecs, preserve explicit NULL, add null/empty/quoted-name native rejection tests."
+        "Map the nullable wire value to optional<Identifier> and qualify lookup/CREATE/search-path behavior in the native2 port."
       ]
     },
     {
@@ -9909,7 +9956,7 @@
     },
     "included_wire_work": [
       "Implemented: required SqlExpression IPC for catalog_table_column_default_set.expression and nullable SqlExpression IPC for catalog_table_column_type_change.expression, plus canonical CREATE/ADD default metadata. No new capability flag or second column RPC family.",
-      "Make existing CatalogAttachResult.default_schema nullable, preserving NULL versus empty versus specified raw identifier across all SDKs. No nested search-path encoding.",
+      "Implemented nullable CatalogAttachResult.default_schema with None/main/literal-dotted corpus cases and SDK consumer changes. Empty/NUL present strings reject. Native1.5 rejects absence before attachment publication; no new capability or nested search-path encoding.",
       "Recommend one canonical overload-family representation at successor release freeze: a single legacy macro becomes a one-element family. Retain SDK conversion helpers, not two authoritative wire shapes. This is additional integration work, not a completed cleanup: the current native loader rejects every non-NULL family. Do not delete legacy fields until native/SDK family materialization and migration are implemented, or silently claim the current mutually exclusive dual representation has already been eliminated.",
       "Retain projection-expression and repeatability design in the combined package; mark P0 scope reviewed and P1 contract/implementation proof outstanding. Reuse existing transport for metrics, partition selection and parallelism unless a concrete missing datum is demonstrated."
     ],
@@ -10069,7 +10116,7 @@
     },
     "gate_effect": {
       "P0": "Complete: all source mappings reviewed; remote inventory --require-decisions and 11 focused tests passed.",
-      "P1": "Open: default-schema/macro migrations, optimizer contract/reference proofs, generated/full column metadata and remaining provider/adapter acceptance. DEFAULT/USING binary payload migration is implemented without new capability negotiation.",
+      "P1": "Open: macro consolidation, optimizer contract/reference proofs, generated/full column metadata and remaining provider/adapter acceptance. DEFAULT/USING and nullable default-schema wire migrations are implemented without new capability negotiation.",
       "P2_P3": "Open: complete generated diff, all-SDK conformance, selected version/routing, capability matrix and deployment/rollback exercise.",
       "M0_M4": "Open: native2 port and qualification, separate from this protocol review."
     },
@@ -10197,6 +10244,86 @@
       "vgi-java": "ab6a22f18555e5d9275ba421943bf85266de1c6a",
       "vgi-csharp": "56866268c5b73b86277eb27065ffcc84b3d77bf0",
       "vgi-cpp": "a671498abc73e653f1bf58aaaa794fe8b3460613"
+    }
+  },
+  "nullable_default_schema_checkpoint_2026_10_23": {
+    "date": "2026-10-23",
+    "status": "implemented_and_validated_on_15_with_explicit_absence_rejection",
+    "base_revisions": {
+      "native": "4ece92d2bc709f6ee1c9dc0774b90342414989f8",
+      "python": "73bd21c22716ca33eb066952c2b078c3de39ac10"
+    },
+    "engine_15": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "contract": {
+      "field": "CatalogAttachResult.default_schema: nullable UTF-8",
+      "absent": "NULL means no implicit default schema",
+      "present": "one nonempty raw root identifier without NUL; literal dots never split",
+      "constructor_omission": "Existing provider defaults may remain main; explicit NULL never selects a fallback",
+      "capabilities": "No new negotiation or permission flags",
+      "function_registration": "Catalogs without a default register functions under explicit schemas"
+    },
+    "implementation": [
+      "Python attach result/declarative Catalog/provider response validation, signed HTTP discovery/load and CLI JSON preserve explicit absence.",
+      "All six worker SDK schemas/codecs and affected clients/provider defaults retain NULL, main and literal dotted names.",
+      "TypeScript generated builders distinguish undefined from explicit null when applying a non-null constructor default.",
+      "Native1.5 rejects absent/empty/NUL defaults before settings parsing and attachment publication; valid raw names retain behavior."
+    ],
+    "validation": {
+      "host": "ec2-user@98.81.121.120",
+      "workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+      "logs": "logs/nullable-default-schema-20261023-3AVBK6",
+      "status": "passed",
+      "python_regression": {
+        "passed": 1454,
+        "skipped": 8
+      },
+      "ruff": "passed",
+      "mypy": "223 source files passed",
+      "generation": "--check --require-all passed",
+      "manifest": {
+        "audit_rows": 151,
+        "areas": 20,
+        "unresolved_reviews": 0,
+        "tests_passed": 11
+      },
+      "native_unit": {
+        "cases": 2,
+        "assertions": 41
+      },
+      "sdks": {
+        "go": "65 HTTP codec corpus subcases passed",
+        "rust": "1 catalog codec test + 1 public accessor test passed; cargo check -p vgi-client --tests passed",
+        "typescript": "2 Arrow + 2 Flechette attach/default tests and typecheck passed",
+        "java": "17 CatalogContracts + 23 HostedCatalog tests passed",
+        "csharp": "29 tests and solution build passed",
+        "cpp": "normal SDK target built; 1 test / 331 assertions passed"
+      },
+      "browser_client_sha256": "e5983b73d2cc45b561f213049490fa300fc2bcf64bd96bddebd3e681aedb441c",
+      "protocol_hash": "457a2fc7c24a637480d2c34237ea0ccf826b10f4ea5e316d4623895f4a535585",
+      "protocol_hash_limits": "The existing fingerprint is unchanged for this nullability-only field change. Direct generated-schema and codec checks, not fingerprint equality, validate nullability.",
+      "native_build": "production/loadable/unittest/haybarn/catalog-tests targets passed",
+      "native_sql": {
+        "cases": 1,
+        "assertions": 16,
+        "scope": "absence rejects before publication/settings; rejected alias reused; main and literal dotted default work"
+      },
+      "native_attach_regression": {
+        "cases": 12,
+        "assertions": 394,
+        "skipped": 5,
+        "scope": "existing attach/global functions/reflection",
+        "skips": "Optional HTTP versioning workers not configured"
+      },
+      "source_integrity": "All changed files matched local/EC2 SHA256 before commit; source-checkpoint.json, commits.json and artifacts.sha256 are in the checkpoint log directory."
+    },
+    "limits": "No native1.5 no-default execution claim. Native2 optional-return mapping/SQL behavior, protocol freeze/public major transition and broader release gates remain open. The previous nested NOT NULL schema-reconciliation regression is unchanged and outside this field migration.",
+    "sdk_revisions": {
+      "vgi-go": "6273e4abbe06209972237769d2e033ea50920cdc",
+      "vgi-rust": "e0fe7c71d748142a2f342bcc023b1fb21abb35d5",
+      "vgi-typescript": "0e713aa68d87d9e76670eab52c31337fbf2367d4",
+      "vgi-java": "bae44574113fa7670c98da69504fb7a58e4535aa",
+      "vgi-csharp": "02d2cec4517d483c16fbdbb2369438a2a8af887b",
+      "vgi-cpp": "48c41588768efc9a23371027ad35f65b74894557"
     }
   }
 }

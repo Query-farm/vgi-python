@@ -298,7 +298,10 @@ def _render_record(r: _Record) -> str:
     lines.append(f"export function build{r.name}(init: {r.name}Init): {r.name} {{")
     lines.append("  return {")
     for f in r.fields:
-        if f.default is not None:
+        if f.default is not None and f.default != "null" and f.nullable:
+            # Explicit NULL is a wire value; only omission selects a default.
+            lines.append(f"    {f.name}: init.{f.name} === undefined ? {f.default} : init.{f.name},")
+        elif f.default is not None:
             lines.append(f"    {f.name}: init.{f.name} ?? {f.default},")
         elif f.nullable:
             lines.append(f"    {f.name}: init.{f.name} ?? null,")

@@ -774,11 +774,25 @@ representations**, with no new default/USING capability negotiation. The semanti
 the SQL, not a new permission flag. Unknown profiles, malformed records and
 owner mismatches reject before provider effects.
 
-Nullable default schema and macro-family consolidation remain **unimplemented
-migrations** in the same major transition. A 1.5 adapter that cannot honor an absent default schema
-must reject it before publishing the attachment. Current native macro discovery
-rejects non-NULL family payloads; deleting legacy fields before that adapter is
-ported would break existing functionality.
+Nullable default schema is now implemented in the development protocol and SDKs.
+Python's attach result and declarative `Catalog` accept `default_schema=None`.
+Omitting the constructor argument retains the existing `"main"` default;
+explicit NULL stays absent through attach responses, catalog discovery, clients
+and codecs. A present value must be nonempty and contain no NUL; dots are literal
+characters in one root identifier. A catalog without a default must register its
+functions in explicit schemas instead of relying on an implicit registration
+schema. No capability flag or extra field is needed.
+
+The native 1.5 adapter rejects absent defaults before publishing an attachment
+or registering its settings. It also rejects empty/NUL names instead of
+coercing them to `main`. Present defaults, including literal dotted identifiers,
+retain their behavior. Native 2.0 can later map absence to its optional catalog
+API; that execution path is not qualified by the 1.5 tests.
+
+Macro-family consolidation remains an **unimplemented migration** in the same
+major transition. Current native macro discovery rejects non-NULL family
+payloads; deleting legacy fields before that adapter is ported would break
+existing functionality.
 
 Successor column CREATE/ADD use canonical base64 IPC field annotations for
 defaults. Native 1.5 translates its supported defaults; generated-expression
@@ -1579,8 +1593,9 @@ read/query result replay functionality is unaffected by this scope decision.
    INSERT/CTAS rollback checkpoints. Qualify expanded ALTER, multi-DML and the
    custom DuckDB transactor through the existing transaction paths.
    No savepoints or general statement-ticket/receipt lifecycle is required.
-4. Complete the included column/default-schema/macro migrations and optimizer
-   proofs from the October 23 review. Trigger CRUD/execution is deferred; retain
+4. Complete macro consolidation, remaining column semantics and optimizer
+   proofs from the October 23 review. DEFAULT/USING and nullable default-schema
+   wire migrations are implemented. Trigger CRUD/execution is deferred; retain
    its proof requirements above for any future scope change.
 5. Extend dependency planning to constraints and column/ALTER blockers. Test
    rename/replacement, inaccessible dependents, cross-schema identity and no

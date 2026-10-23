@@ -10,7 +10,7 @@ from pathlib import Path
 import pyarrow as pa
 
 from vgi.catalog.capabilities import SCHEMA_OPTIONS_CREATE, SCHEMA_OPTIONS_READ, CatalogCapabilities
-from vgi.catalog.catalog_interface import MacroInfo, TableInfo, ViewInfo
+from vgi.catalog.catalog_interface import CatalogAttachResult, MacroInfo, TableInfo, ViewInfo
 from vgi.catalog.dependencies import DependencySnapshot, ObjectDependency
 from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.indexes import IndexDefinition, IndexKey
@@ -18,12 +18,22 @@ from vgi.catalog.layout import LayoutChangeMode, SortKey, SqlExpression, TableLa
 from vgi.catalog.macros import MacroOverload, MacroParameter
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
 from vgi.catalog.sql import column_expressions
-from vgi.codegen.catalog_contract_fixtures import constraint_records, render
+from vgi.codegen.catalog_contract_fixtures import attach_records, constraint_records, render
 from vgi.column_path import RequiredFilterPaths
 from vgi.logical_types import LOGICAL_TYPE_PROFILES, validate_logical_values
 from vgi.protocol import MacroCreateRequest, TableCreateRequest
 from vgi.query_parameters import QueryParameters
 from vgi.typed_values import TypedValueBatch
+
+
+def test_attach_vectors_preserve_default_schema_absence_and_raw_names() -> None:
+    fixtures = {name: base64.b64decode(value) for name, value in json.loads(render())["records"].items()}
+    assert CatalogAttachResult.ARROW_SCHEMA.field("default_schema").nullable
+    for name, source in attach_records().items():
+        restored = CatalogAttachResult.deserialize_from_bytes(fixtures[name])
+        assert restored.default_schema == source.default_schema
+        assert restored == source
+        assert restored.serialize_to_bytes() == fixtures[name]
 
 
 def test_canonical_constraint_vectors_preserve_every_field() -> None:

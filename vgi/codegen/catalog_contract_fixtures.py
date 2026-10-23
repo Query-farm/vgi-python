@@ -25,7 +25,16 @@ from vgi.catalog.capabilities import (
     SCHEMA_OPTIONS_READ,
     CatalogCapabilities,
 )
-from vgi.catalog.catalog_interface import IndexInfo, MacroInfo, MacroType, OnConflict, TableInfo, ViewInfo
+from vgi.catalog.catalog_interface import (
+    AttachOpaqueData,
+    CatalogAttachResult,
+    IndexInfo,
+    MacroInfo,
+    MacroType,
+    OnConflict,
+    TableInfo,
+    ViewInfo,
+)
 from vgi.catalog.constraints import (
     ConstraintChange,
     ConstraintDefinition,
@@ -69,6 +78,23 @@ from vgi.logical_types import tuple_field, variant_field
 from vgi.protocol import IndexCreateRequest, MacroCreateRequest, TableCreateRequest, VgiProtocol
 from vgi.query_parameters import QueryParameters
 from vgi.typed_values import TypedValueBatch
+
+
+def attach_records() -> dict[str, CatalogAttachResult]:
+    """Preserve absent, ordinary and literal dotted default schema identifiers."""
+    return {
+        f"attach_default_schema_{name}": CatalogAttachResult(
+            attach_opaque_data=AttachOpaqueData(b"attachment"),
+            supports_transactions=False,
+            supports_time_travel=False,
+            catalog_version_frozen=True,
+            catalog_version=7,
+            default_schema=default,
+            resolved_data_version=None,
+            resolved_implementation_version=None,
+        )
+        for name, default in (("none", None), ("main", "main"), ("dotted", "sales.archive"))
+    }
 
 
 def column_requests() -> dict[str, bytes]:
@@ -561,6 +587,7 @@ def render() -> str:
             dependencies=[e.serialize_to_bytes() for e in [literal, generated, generated_chain]],
         ),
     )
+    records.update(attach_records())
     records.update(logical_and_macro_records())
     records.update(constraint_records())
     records.update(index_records(values))

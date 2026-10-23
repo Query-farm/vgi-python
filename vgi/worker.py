@@ -215,7 +215,7 @@ from vgi.protocol import (
 )
 from vgi.rpc_server import build_rpc_server
 from vgi.scalar_function import ScalarFunctionGenerator
-from vgi.schema_path import schema_path_display, schema_path_key
+from vgi.schema_path import schema_path_display, schema_path_key, validate_default_schema
 from vgi.table_buffering_function import (
     TableBufferingFunction,
     TableBufferingParams,
@@ -1449,6 +1449,23 @@ class Worker:
         # them into, so a qualified call has to find them there.
         default_schema = catalog_obj.default_schema if catalog_obj is not None else "main"
         for func_cls in cls.functions:
+            if default_schema is None:
+                assert catalog_obj is not None
+                explicitly_registered = any(
+                    func_cls in schema.functions
+                    or any(
+                        func_cls is getattr(table, attribute, None)
+                        for table in schema.tables
+                        for attribute in ("function", "insert_function", "update_function", "delete_function")
+                    )
+                    for schema in catalog_obj.schemas
+                )
+                if explicitly_registered:
+                    continue
+                raise ValueError(
+                    f"Function '{func_cls.get_metadata().name}' requires explicit schema registration "
+                    "when catalog.default_schema is None"
+                )
             add_function(func_cls, [default_schema])
 
         # Declarative pattern: functions in catalog schemas
@@ -5107,6 +5124,7 @@ class Worker:
             client_capabilities=request.client_capabilities,
             ctx=ctx,
         )
+        validate_default_schema(result.default_schema)
         available = cat.catalog_capabilities(attach_opaque_data=result.attach_opaque_data)
         offered = request.client_capabilities.catalog if request.client_capabilities is not None else None
         selected = available.select(offered)

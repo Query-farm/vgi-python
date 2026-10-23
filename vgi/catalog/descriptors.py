@@ -43,7 +43,7 @@ from vgi.catalog.options import OptionState
 from vgi.column_path import RequiredFilterPaths, column_path_key
 from vgi.invocation import BindResponse, FunctionType
 from vgi.metadata import CatalogFunctionType
-from vgi.schema_path import SchemaPath, schema_path_display, schema_path_key
+from vgi.schema_path import SchemaPath, schema_path_display, schema_path_key, validate_default_schema
 from vgi.write_results import validate_write_result_modes
 
 if TYPE_CHECKING:
@@ -915,7 +915,7 @@ class Catalog:
 
     Attributes:
         name: The catalog name (used in SQL as the database name).
-        default_schema: Schema to use for unqualified table/view/function names.
+        default_schema: Raw root schema name for unqualified names, or None for no implicit default.
         schemas: Sequence of Schema objects defining the catalog contents.
         comment: Optional comment describing the catalog.
         tags: Optional key-value tags associated with the catalog.
@@ -948,7 +948,7 @@ class Catalog:
     """
 
     name: str
-    default_schema: str = "main"
+    default_schema: str | None = "main"
     schemas: Sequence[Schema] = ()
     comment: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
@@ -960,8 +960,9 @@ class Catalog:
         """Validate catalog configuration."""
         schema_paths = {schema_path_key(s.path) for s in self.schemas}
 
-        # Validate default_schema exists
-        if (self.default_schema.lower(),) not in schema_paths:
+        # A present default names one root; dots are literal identifier text.
+        validate_default_schema(self.default_schema)
+        if self.default_schema is not None and (self.default_schema.lower(),) not in schema_paths:
             available = sorted(schema_path_display(s.path) for s in self.schemas) or ["(none)"]
             raise ValueError(
                 f"Catalog '{self.name}': default_schema '{self.default_schema}' "

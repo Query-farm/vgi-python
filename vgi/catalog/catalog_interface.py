@@ -65,7 +65,7 @@ from vgi.metadata import (
     PartitionKind,
     RuntimeFilterAlgorithmCapability,
 )
-from vgi.schema_path import SchemaKey, SchemaPath, schema_path_display, schema_path_key
+from vgi.schema_path import SchemaKey, SchemaPath, schema_path_display, schema_path_key, validate_default_schema
 from vgi.typed_values import TypedValueBatch
 
 _FILTER_IDENTITY_LIST_TYPE = pa.list_(
@@ -283,7 +283,7 @@ class CatalogAttachResult(ArrowSerializableDataclass):
             persisted across commands. True: Catalog is stateful;
             attach_opaque_data represents a session. False: Catalog is
             stateless; CLI can auto-attach on each command.
-        default_schema: The name of the default schema for this catalog.
+        default_schema: Raw root schema name, or None when there is no implicit default.
         settings: Extension options (settings) exposed by this catalog/worker.
             Each ExtensionOption is serialized as bytes for Arrow compatibility.
         secret_types: Secret types registered with DuckDB's SecretManager. Each
@@ -333,7 +333,7 @@ class CatalogAttachResult(ArrowSerializableDataclass):
     catalog_version_frozen: bool
     catalog_version: int
     attach_opaque_data_required: bool = True
-    default_schema: str = "main"
+    default_schema: str | None = "main"
     settings: list[bytes] = field(default_factory=list)
     secret_types: list[bytes] = field(default_factory=list)
     attach_catalogs: list[bytes] = field(default_factory=list)
@@ -352,6 +352,10 @@ class CatalogAttachResult(ArrowSerializableDataclass):
         default=None, kw_only=True
     )
     query_pushdown: QueryCapabilities | None = field(default=None, kw_only=True)
+
+    def __post_init__(self) -> None:
+        """Reject invalid defaults before an attachment can be published."""
+        validate_default_schema(self.default_schema)
 
 
 @dataclass(frozen=True)
@@ -3241,7 +3245,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         return self.catalog_name
 
     @property
-    def _default_schema_name(self) -> str:
+    def _default_schema_name(self) -> str | None:
         """Get default schema name."""
         if self.catalog is not None:
             return self.catalog.default_schema
