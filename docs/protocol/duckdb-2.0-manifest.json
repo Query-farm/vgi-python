@@ -7032,5 +7032,86 @@
       "No new protocol fields, matched release, broad phase completion or native2 runtime qualification."
     ],
     "next": "Implement persistent trigger CRUD/readback and the minimal native2 ENGINE adapter using existing transactions and write results. Qualify native2 OLD/NEW, expanded ALTER and multi-DML before enabling them; qualify BACKEND triggers and deferred RETURNING separately. Complete custom DuckDB transactor qualification when a compatible Python build is available."
+  },
+  "regression_checkpoint_2026_10_23": {
+    "date": "2026-10-23",
+    "status": "bounded_native15_constraint_read_and_scan_framing_fixes",
+    "ec2_root": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+    "baseline_heads": {
+      "native": "eaaab1443599813487624ab425771838f12e3b83",
+      "python": "cf1a06ed6e60f93ce5bfc8b673863487bde6ddd2"
+    },
+    "engine_pin": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "source_sha256": {
+      "native:src/include/vgi_arrow_ipc.hpp": "1e22a709c2667ee998831da6d7bf95da8ec2e48950788866edb261370263c077",
+      "native:src/include/vgi_constraint_contract.hpp": "8ded28bf85c786f8d112b7032c5de5c0e73d8199ce8c73a6d5c81011675cc4dc",
+      "native:src/storage/vgi_catalog.cpp": "616c46fe9f78bc71130074e783b9c410075737c8270e1713b7be09bc0826d859",
+      "native:src/storage/vgi_physical_write.cpp": "9065c08c1b9241675e535f0c6f90e7f231c671aebbad42bafdb92ea55212c7f2",
+      "native:src/storage/vgi_table_set.cpp": "ab56ee8d0df910a87098e0d259df4e76eeced86f8c11b92c235f4c98de6d1a90",
+      "native:src/vgi_arrow_ipc.cpp": "6374173938e8d11422af535d88b63fab54f688a879f65c7d32bc43ef87cba2a3",
+      "native:src/vgi_catalog_api.cpp": "5aac30c603954da50af185cfdf3660be02673087824a24b7ce3ab747f7dac34e",
+      "native:src/vgi_constraint_contract.cpp": "43b41c9bec97a5bb676436bfe97457f97831272cd83aa8cbdc553186bf36ac8b",
+      "native:src/vgi_function_connection.cpp": "35b9f5e1b2deef48b026205f39b1f57be3e61eafb903109b46f1d4232870c46e",
+      "native:src/vgi_index_contract.cpp": "d7001bbc96ff755edb61c46edcd81f54913fb7f87692098ebcc335820706db1f",
+      "native:test/cpp/test_constraint_contract.cpp": "e783778a7c850da96f4470950d9856d4879b1bf8a0a239e070fbb31b3a639773",
+      "native:test/cpp/test_index_contract.cpp": "61cc2352c9ed91d806ff692e6a10fc8f779f9e7d8c4b41f8bb1979e508b54662",
+      "native:test/sql/integration/table/constraints.test": "eee609abf1024a0046026b01cdd94b7404f16c429ce1434a5bd8466944d92bbb",
+      "native:test/run_scan_truncation_probe.py": "c82c6640275aacd8d585f6196bf07cf7027bb1bbd57fb992dfe81cad1f6d48ca",
+      "tests/scan_truncation_probe.py": "b7d0ef0853d06b9bba9c62fc6a2e4f0f8419febd44be988cb7c7ee50fd046e22"
+    },
+    "artifacts_sha256": {
+      "build/release/haybarn": "8f5b5ca513f140e9b1e1ee326b045a5a95805b5ed350aa2b53880ef88d2984a8",
+      "build/release/extension/vgi/vgi.duckdb_extension": "dbab5b1d78c17b7c3a492f77b45d021ec04f5a7035b0a5ac05f4175a6d762d73"
+    },
+    "constraint_read": {
+      "changes": [
+        "Canonical trusted ENFORCED/ALL_ROWS facts require selected read authority, not write-enforcement authority. All four table materialization paths check selected read profiles, including time travel.",
+        "Offer the existing scalar expression profile in READ only and import bounded numeric CHECK comparisons after exact envelope, owner/context, AST, column and Boolean binding validation.",
+        "Explicit enforcement gates protect constrained INSERT/UPDATE/DELETE/MERGE planning, physical write resolution including CTAS, constraint DDL and unique-index DDL. Read-only discovery cannot grant writes.",
+        "Existing immutable Python fixture metadata and trust states are unchanged; no semantic metadata is removed or downgraded."
+      ],
+      "qualified_check_scope": "One =, <>, <, >, <= or >= comparison of primitive signed numeric columns (including FLOAT/DOUBLE) and numeric constants. Explicit default context and owning flat schema required; actual table binding must produce BOOLEAN. No function, cast, qualified/ambiguous/synthetic/generated/extension-typed operand, other expression shape/context, extra query clause or statement. CHECK creation remains rejected.",
+      "validation": [
+        "16 C++ constraint/index cases, 415 assertions passed; positive numeric CHECK, malformed envelopes, unsupported semantics, read/write and unique-index authorization boundaries.",
+        "Four native SQL probes, 308 assertions and no skips: catalog enumeration, comments, constraints and time travel. Added SQL INSERT asserts native enforcement rejection before fallback discovery and unchanged row count."
+      ],
+      "artifacts": "logs/regressions-20261023-6SzJ8G/{build-constraints-fixed.log,constraints-unit.log,constraints-integration.log}"
+    },
+    "scan_framing": {
+      "baseline": "Injected real launcher worker termination after one valid batch produced successful count0 after an empty filtered batch and count100 after a nonempty batch from an incomplete 10000-row producer. Split termination was accepted through missing EOS and then failed while closing input for the next split.",
+      "fix": "FunctionConnection raw FD input enables complete reads: physical EOF before the explicit Arrow EOS marker produces IOError rather than successful stream end or tolerated ArrowInvalid. Other FdInputStream callers retain their previous default.",
+      "validation": "Six cases each on launcher and subprocess (12 passed): early termination after empty/nonempty/split output rejects with no successful aggregate result; healthy 99-empty-batch, empty-result and paginated controls complete. Baseline six cases captured against copied pre-fix artifacts.",
+      "artifacts": "logs/scan-investigation-20261023-t8GYBQ/{truncated-baseline-final,fixed-launcher,fixed-subprocess,final.sha256}",
+      "limits": "The original spontaneous disconnect was not reproduced. Nine predecessor cases plus one spatial skip passed; 30 same-session cycles passed 90 result checks while mixing 30 expected catalog errors, 30 abandoned split scans, pagination and long empty-batch runs. Injected split truncation did not reproduce the original header-EOF text; the original disconnect trigger remains unproven."
+    },
+    "dependency_followup": {
+      "artifacts": "logs/idle-race-audit-eREs07/{reproduce_idle_shutdown.py,result.json}",
+      "finding": "Independent vgi-rpc0.50.0 launcher idle-shutdown race reproduced with controlled timer-before-accept ordering, a real handler and the production10-second join. A new handler can be cut off by a shutdown request set while the worker was idle.",
+      "limit": "No production dependency change. The original full-suite log spans174 seconds, below the default300-second idle timeout, and has no evidence of an inherited expiring worker. This race is not attributed to the original scan failure."
+    },
+    "limits": [
+      "No wire/schema/version/engine-pin change or retry/recovery change.",
+      "Bounded CHECK discovery does not qualify general scalar SQL, CHECK creation, other trust states, nested constraints or native2 execution.",
+      "The original intermittent worker-disconnect trigger remains unknown; deterministic truncation coverage establishes the corrected client failure behavior."
+    ],
+    "next": "Continue persistent trigger catalog implementation using existing transactions/write phases. Track the independent RPC idle-shutdown race separately; do not claim native2 execution or complete protocol-release qualification.",
+    "full_launcher_integration": {
+      "artifacts": "logs/regressions-20261023-6SzJ8G/integration-full.log",
+      "result": "308 executed cases passed, 11538 assertions, zero failures; 59 environment-dependent cases skipped.",
+      "executed_passed": 308,
+      "failed": 0,
+      "skipped": 59,
+      "assertions": 11538,
+      "configuration": "Pinned 1.5 release CLI/unittest, launcher subprocess transport, strict no-error-skip config and unique worker command to isolate other sessions.",
+      "scope": "All64 prior constraint failures and both previously failing scan tests pass. One full clean run does not identify the original spontaneous disconnect trigger or qualify skipped transports/backends."
+    },
+    "quality": {
+      "artifacts": "logs/regressions-20261023-6SzJ8G/quality-and-source-hashes.json",
+      "result": "Whole-repo Ruff check passes; mypy passes223 source files. Format check:508 already formatted, one unchanged baseline failure tests/catalog/write_finalize_probe.py. Changed files pass focused lint/format. All15 native/Python source/test hashes match local copies and final binary hashes are recorded."
+    },
+    "manifest_validation": {
+      "artifacts": "logs/regressions-20261023-6SzJ8G/manifest.log",
+      "result": "151 audit rows and20 contract areas covered;94 scope/capability/field reviews remain. No release gate closed."
+    }
   }
 }

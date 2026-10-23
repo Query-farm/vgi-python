@@ -810,9 +810,11 @@ transactions. It advertises no public scan/write functions. Its provider-side
 row replacement authority continues validating the same persisted constraints.
 The native 1.5 subset translates top-level NOT_NULL, UNIQUE, PRIMARY_KEY and
 same-schema MATCH SIMPLE NO_ACTION/RESTRICT foreign keys. SET/DROP NOT NULL uses
-canonical apply with the discovered revision. CHECK, nested paths, unsupported
-trust states and broader FK actions reject explicitly. Native default/generated
-metadata translation remains pending.
+canonical apply with the discovered revision. At that checkpoint CHECK, nested
+paths, unsupported trust states and broader FK actions rejected explicitly.
+The October 23 checkpoint below adds bounded CHECK discovery; CHECK creation,
+nested paths and the other unsupported semantics still reject. Native
+default/generated metadata translation remains pending.
 
 EC2 validation passed for the Python public lifecycle, all SDK contract/adapter
 suites, the bounded native 1.5 adapter and six built-worker discovery lanes.
@@ -1234,12 +1236,54 @@ OLD/NEW, triggers, expanded ALTER and multi-DML qualification remain separate.
 Exact artifacts and source/binary hashes are recorded in
 `transaction_write_checkpoint_2026_10_22` in the manifest.
 
-The full launcher regression run remains non-green: 242 actual passes,
+The October 22 full launcher regression run was non-green: 242 actual passes,
 66 failures and 59 skips. Baseline source and representative probes account
 for 64 constraint-negotiation failures. Two full-run scan failures pass focused
 old/current Python reruns; their cause remains unresolved. Whole-repo lint and
 mypy pass; one unchanged baseline file fails formatting. The manifest separates
 this broader status from the passing transaction/write checkpoint.
+
+The subsequent October 23 checkpoint corrects native constraint negotiation:
+canonical read authority permits discovery of trusted ENFORCED/ALL_ROWS facts
+without granting write authority. Native constrained DML, constraint DDL and
+unique-index DDL check enforcement explicitly. All four table-loading paths
+check the selected read profiles, including time travel. No provider constraint
+metadata is removed or downgraded to make discovery succeed.
+
+Native CHECK discovery accepts one numeric comparison (`=`, `<>`, `<`, `>`,
+`<=`, `>=`) under `vgi.expression.duckdb.scalar.v1` in the read category. Operands
+are primitive signed numeric columns (including FLOAT/DOUBLE) or numeric
+constants; the complete expression record must identify the owning flat schema
+and explicit default evaluation context. The receiving binder verifies the
+actual table columns and Boolean result. Functions, casts, generated or
+extension-typed operands, other expression shapes/contexts and extra statements
+reject. This bounded read support does not enable CHECK creation or general
+scalar expressions. Sixteen C++ cases (415 assertions) and four integration
+probes (308 assertions, no skips) verify the boundary, including a real SQL
+INSERT rejected before write discovery on the read-only fixture.
+
+The scan investigation also reproduces silent truncation through real launcher
+workers: after an early process exit, native returned successful counts of zero
+or 100 from an incomplete scan. VGI requires explicit Arrow EOS; physical EOF is
+not successful completion. Raw function connections now reject incomplete reads
+with an I/O error, including EOF at a valid batch boundary. Twelve launcher and
+subprocess cases verify failure without partial successful output after empty,
+nonempty and split batches, plus healthy empty-batch, empty-result and pagination
+controls. This changes neither the wire format nor retry policy.
+
+The original spontaneous disconnect was not reproduced: predecessor tests and
+30 stress cycles passed. A separately reproduced RPC launcher idle race has no
+established link to that run and is recorded as a dependency follow-up, with no
+dependency change here. The manifest's `regression_checkpoint_2026_10_23` records
+the full-suite result and the distinction between injected failures and the
+original intermittent observations.
+
+The final October 23 full launcher suite passes 308 executed cases and 11,538
+assertions with zero failures; 59 environment-dependent cases remain skipped.
+Both previously failing scan tests pass in that run. Whole-repo Python lint and
+mypy pass; the same unchanged baseline formatting issue remains. These results
+qualify the tested configuration, not the skipped transport/backend matrix or
+the DuckDB2 adapter.
 
 ### Trigger definitions and statement ownership
 
