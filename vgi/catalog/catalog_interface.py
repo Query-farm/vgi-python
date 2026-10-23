@@ -797,6 +797,9 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
             subclassing; the C++ extension reads it to enter the in-out
             registration branch with real-typed args and drive the literal
             single-row scan-mode.
+        input_rows_per_call: For a blended ``RowTransformFunction``, the most
+            input rows one worker call receives; the client splits each input
+            chunk into calls of at most this many rows. Null sends a whole chunk.
         required_settings: Settings required by the function.
         required_secrets: Secrets required by the function (each entry has
             secret_type, optional secret_name, optional scope).
@@ -864,6 +867,10 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     # subclassing; the C++ extension reads it to enter the in-out registration
     # branch with real-typed args and drive the literal single-row scan-mode.
     input_from_args: bool = False
+
+    # Blended only: the most input rows per worker call; the client splits each
+    # input chunk into calls of at most this many rows. None = a whole chunk.
+    input_rows_per_call: int | None = None
 
     required_settings: list[str] = field(default_factory=list)
 
@@ -3698,6 +3705,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             sink_order_dependent=meta.sink_order_dependent,
             requires_input_batch_index=meta.requires_input_batch_index,
             input_from_args=False if is_scalar else meta.input_from_args,
+            input_rows_per_call=None if is_scalar else meta.input_rows_per_call,
             # Settings
             required_settings=meta.required_settings,
             # Secrets

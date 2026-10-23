@@ -124,6 +124,9 @@ from vgi.invocation import (
     GlobalInitResponse,
 )
 from vgi.protocol import (
+    CONTINUE,
+    HAVE_MORE_OUTPUT,
+    STATUS_KEY,
     BindRequest,
     CopyFromContext,
     CopyToContext,
@@ -2147,9 +2150,10 @@ class Client(CatalogClientMixin, AggregateClientMixin):
     ) -> tuple[list[pa.RecordBatch], list[list[int]] | None]:
         """Send a batch to a worker and collect all output batches.
 
-        Sends the input batch via stream.exchange(), then checks the vgi.status
-        metadata. If the worker returns HAVE_MORE_OUTPUT, sends the same input
-        again. Continues until NEED_MORE_INPUT or no status (scalar functions).
+        Sends the input batch via stream.exchange(), then checks the reply's
+        vgi.status. While the worker returns HAVE_MORE_OUTPUT, sends a zero-row tick
+        (``vgi.status: CONTINUE``) for its next batch. Stops at NEED_MORE_INPUT
+        or no status (scalar functions).
 
         Args:
             worker: The worker connection to use. Must have stream initialized.
@@ -2181,17 +2185,26 @@ class Client(CatalogClientMixin, AggregateClientMixin):
 
         output_batches: list[pa.RecordBatch] = []
         parent_rows_batches: list[list[int]] | None = [] if decode_parent_rows else None
+        tick = False
 
         while True:
             _logger.debug(
-                "sending_batch_to_worker worker_index=%s batch_index=%s num_rows=%s",
+                "sending_batch_to_worker worker_index=%s batch_index=%s num_rows=%s tick=%s",
                 worker.worker_index,
                 batch_index,
                 input_batch.num_rows,
+                tick,
             )
 
             try:
-                annotated = self._maybe_externalize_input_batch(input_batch)
+                if tick:
+                    # More output for the same input: ask for it with a zero-row tick.
+                    annotated = AnnotatedBatch(
+                        batch=input_batch.slice(0, 0),
+                        custom_metadata=pa.KeyValueMetadata({STATUS_KEY: CONTINUE}),
+                    )
+                else:
+                    annotated = self._maybe_externalize_input_batch(input_batch)
                 output = worker.stream.exchange(annotated)
             except RpcError as e:
                 raise ClientError.from_rpc_error(e) from e
@@ -2216,13 +2229,13 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 except RuntimeError as e:
                     raise ClientError(str(e)) from e
 
-            # Check vgi.status for table-in-out status
+            # HAVE_MORE_OUTPUT: this input has more output, fetched with a tick.
             status = None
             if output.custom_metadata:
-                status = output.custom_metadata.get(b"vgi.status")
+                status = output.custom_metadata.get(STATUS_KEY)
 
-            # status is None for scalar functions (no status metadata)
-            if status == b"HAVE_MORE_OUTPUT":
+            if status == HAVE_MORE_OUTPUT:
+                tick = True
                 continue
             elif status == b"NEED_MORE_INPUT" or status is None:
                 break

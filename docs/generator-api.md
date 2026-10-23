@@ -275,14 +275,32 @@ class SumFunction(TableInOutFunction):
         )]
 ```
 
-**Multiple outputs per input (HAVE_MORE_OUTPUT status):**
-```python
-from vgi_rpc.rpc import OutputCollector
+**Multiple outputs per input (`more=True` and `resume()`):**
 
-def process(cls, params, state, batch, out: OutputCollector) -> None:
-    # Emit multiple batches for one input by setting vgi.status metadata
-    out.emit(batch, custom_metadata={b"vgi.status": b"HAVE_MORE_OUTPUT"})
+Each call still emits exactly one batch. To return several for one input
+batch, emit the first with `more=True`; the framework then calls `resume()`,
+with no input, for each next batch until one is emitted without `more=True`.
+`resume()` continues from `state` alone, so the function must declare a
+serializable `TState`; over HTTP it travels in the stream's state token, so
+store positions to resume from, not output rows. A function with `resume()`
+cannot set `max_workers = 1`: the client runs such a function on one connection
+shared by every pipeline, which cannot leave output pending.
+
+```python test="skip"
+@classmethod
+def process(cls, params, state, batch, out) -> None:
+    state.pages = plan_pages(batch)  # where each page starts: small
+    cls.resume(params, state, out)
+
+@classmethod
+def resume(cls, params, state, out) -> None:
+    page = fetch(state.pages.pop(0))
+    out.emit(page.batch, parent_rows=page.parent_rows, more=bool(state.pages))
 ```
+
+On the wire the reply carries `vgi.status: HAVE_MORE_OUTPUT` and the client
+asks for the next batch with a zero-row input carrying `vgi.status: CONTINUE`.
+While output is pending that tick is the only valid input.
 
 **In-band logging via OutputCollector:**
 ```python
