@@ -65,6 +65,7 @@ from vgi.catalog.catalog_interface import (
     TableInfo,
     ViewInfo,
 )
+from vgi.catalog.column_metadata import validate_column_metadata
 from vgi.catalog.constraints import ConstraintsApplyRequest, ConstraintSnapshot, constraint_definitions
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot
 from vgi.catalog.indexes import IndexDefinition
@@ -823,10 +824,16 @@ class TableCreateRequest(ArrowSerializableDataclass):
 
     def __post_init__(self) -> None:
         """Reject missing, malformed or conflicting canonical definitions."""
+        validate_column_metadata(pa.ipc.read_schema(pa.py_buffer(self.columns)))
         constraint_definitions(
             self.constraint_definitions,
             CatalogObjectRef(kind="table", schema_path=self.schema_path, name=self.name),
         )
+
+    def serialize_to_bytes(self) -> bytes:
+        """Recheck column metadata before a CREATE request reaches a provider."""
+        self.__post_init__()
+        return ArrowSerializableDataclass.serialize_to_bytes(self)
 
 
 # ---------------------------------------------------------------------------

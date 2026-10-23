@@ -13,7 +13,7 @@ from __future__ import annotations
 import base64
 import json
 from dataclasses import replace
-from typing import Any, TextIO
+from typing import Any, TextIO, cast
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
@@ -94,6 +94,79 @@ def attach_records() -> dict[str, CatalogAttachResult]:
             resolved_implementation_version=None,
         )
         for name, default in (("none", None), ("main", "main"), ("dotted", "sales.archive"))
+    }
+
+
+def column_metadata_schemas() -> dict[str, dict[str, str]]:
+    """Share accepted and rejected metadata through real Arrow schema messages."""
+    empty = {b"comment": b"", b"tags": b"{}", b"provider.note": b"keep me"}
+    literal = {
+        b"comment": "A café column\x00 with a literal dot.".encode(),
+        b"tags": json.dumps({"a.b": 'literal "value"', "": "", "雪": "\x00"}, ensure_ascii=False).encode(),
+        b"provider.note": b"keep me too",
+    }
+    nested = pa.struct(
+        [
+            pa.field("absent", pa.int32()),
+            pa.field("empty", pa.string(), metadata=empty),
+            pa.field("literal.dot", pa.int64(), metadata=literal),
+            pa.field("list", pa.list_(pa.field("item", pa.string(), metadata=empty))),
+            pa.field("map", pa.map_(pa.string(), cast(Any, pa.field("value", pa.int64(), metadata=literal)))),
+            pa.field(
+                "dictionary",
+                pa.dictionary(pa.int32(), cast(Any, pa.struct([pa.field("child", pa.int32(), metadata=empty)]))),
+            ),
+        ]
+    )
+    valid = {
+        "absent": pa.schema([pa.field("a.b", pa.int32())]),
+        "empty": pa.schema([pa.field("a.b", pa.int32(), metadata=empty)]),
+        "literal": pa.schema([pa.field("a.b", pa.int32(), metadata=literal)], metadata={b"provider": b"retained"}),
+        "nested": pa.schema([pa.field("record", nested, metadata=empty)], metadata={b"provider": b"retained"}),
+    }
+    invalid_tags = {
+        "duplicate_keys": b'{"key":"one","key":"two"}',
+        "escaped_duplicate_keys": b'{"key":"one","\\u006bey":"two"}',
+        "array": b"[]",
+        "null": b"null",
+        "number": b"1",
+        "string": b'"text"',
+        "number_value": b'{"key":1}',
+        "null_value": b'{"key":null}',
+        "boolean_value": b'{"key":true}',
+        "object_value": b'{"key":{}}',
+        "array_value": b'{"key":[]}',
+        "malformed": b'{"key":',
+        "trailing": b"{} trailing",
+        "invalid_utf8": b'{"key":"\xff"}',
+        "surrogate_key": b'{"\\ud800":"value"}',
+        "surrogate_value": b'{"key":"\\udfff"}',
+    }
+    invalid = {
+        f"tags_{name}": pa.schema([pa.field("a.b", pa.int32(), metadata={b"tags": value})])
+        for name, value in invalid_tags.items()
+    }
+    invalid["comment_invalid_utf8"] = pa.schema([pa.field("a.b", pa.int32(), metadata={b"comment": b"\xff"})])
+    for name, value in {"overlong": b"\xc0\xaf", "surrogate": b"\xed\xa0\x80", "truncated": b"\xe2\x82"}.items():
+        invalid[f"comment_{name}_utf8"] = pa.schema([pa.field("a.b", pa.int32(), metadata={b"comment": value})])
+    for name, key, value in (("comment", b"comment", b""), ("tags", b"tags", b"{}"), ("opaque", b"provider", b"keep")):
+        pairs: Any = [(key, value), (key, value)]
+        invalid[f"duplicate_arrow_{name}"] = pa.schema(
+            [pa.field("a.b", pa.int32(), metadata=cast(Any, pa.KeyValueMetadata(pairs)))]
+        )
+    bad_child = pa.field("child", pa.string(), metadata={b"tags": invalid_tags["duplicate_keys"]})
+    for name, kind in {
+        "struct": pa.struct([bad_child]),
+        "list": pa.list_(bad_child),
+        "map": pa.map_(pa.string(), cast(Any, bad_child)),
+        "dictionary": pa.dictionary(pa.int32(), cast(Any, pa.struct([bad_child]))),
+    }.items():
+        invalid[f"nested_{name}"] = pa.schema([pa.field("outer", kind)])
+    return {
+        group: {
+            name: base64.b64encode(schema.serialize().to_pybytes()).decode("ascii") for name, schema in schemas.items()
+        }
+        for group, schemas in (("valid", valid), ("invalid", invalid))
     }
 
 
@@ -662,6 +735,7 @@ def render() -> str:
                 "format_version": 1,
                 "generator": "vgi.codegen.catalog_contract_fixtures",
                 "records": {name: base64.b64encode(payload).decode("ascii") for name, payload in encoded.items()},
+                "column_metadata_schemas": column_metadata_schemas(),
             },
             indent=2,
         )

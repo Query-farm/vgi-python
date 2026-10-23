@@ -42,6 +42,12 @@ from vgi.catalog.catalog_interface import (
     deserialize_column_statistics,
     serialize_column_statistics,
 )
+from vgi.catalog.column_metadata import (
+    ColumnMetadata,
+    column_metadata,
+    validate_column_metadata,
+    with_column_metadata,
+)
 from vgi.catalog.constraints import (
     ConstraintChange,
     ConstraintDefinition,
@@ -76,6 +82,10 @@ from vgi.catalog.storage import CatalogStorage, CatalogStorageSqlite
 from vgi.write_results import WriteOperation, WriteResultMode, write_changes_batch, write_result_schema
 
 __all__ = [
+    "ColumnMetadata",
+    "column_metadata",
+    "validate_column_metadata",
+    "with_column_metadata",
     "IndexDefinition",
     "IndexKey",
     "ConstraintChange",

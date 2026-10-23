@@ -803,12 +803,32 @@ Successor column CREATE/ADD use canonical base64 IPC field annotations for
 defaults. Native 1.5 translates its supported defaults; generated-expression
 execution remains unsupported. Comment remains `comment`;
 tags remain `tags`, encoded as a UTF-8 JSON object with literal string keys and
-values. Reject duplicate keys, malformed JSON and non-string values. Preserve
-explicit empty comments/maps. No generic metadata RPC or new expression envelope
-is selected. Schema/table/index option values remain typed literals.
+values. Reject duplicate decoded keys (including escaped-equivalent keys),
+malformed UTF-8/JSON, unpaired Unicode surrogates and non-string values before
+provider effects or table publication. Preserve explicit empty comments/maps,
+literal dots, Unicode and NUL, and unrelated metadata. Validation traverses
+container, dictionary and extension children. No generic metadata RPC or new
+expression envelope is selected. Schema/table/index option values remain typed
+literals.
 
-The following remain separate **planned DDL profiles, not currently registered
-or advertised**. The previously proposed `vgi.column.default.v1` and
+The existing keys have mandatory meanings in this successor contract; no
+`vgi.column.metadata.create.v1` opt-in is required. Python's `ColumnMetadata`,
+`column_metadata`, `with_column_metadata` and `validate_column_metadata` helpers
+provide authoring and validation without changing the wire schema. CREATE, ADD
+and discovery validate the same values. The durable column reference retains
+them in its existing transaction snapshots and readback.
+
+Native 1.5 forwards column comments on CREATE/ADD and imports them on discovery,
+preserving absent versus empty text. It validates and retains tag annotations in
+the authoritative Arrow schema. Its `ColumnDefinition` has no public tags API,
+so SQL authoring/introspection of column tags and tag preservation through
+reconstruction using only native columns remain native-adapter limitations.
+Nested comments likewise remain Arrow metadata where the engine lacks a nested
+column-comment API. No engine-private access or engine-pin change is introduced.
+
+The following remains a separate **planned DDL profile, not currently registered
+or advertised**. The previously proposed `vgi.column.default.v1`,
+`vgi.column.metadata.create.v1` and
 `vgi.column.type.using.v1` capability flags were withdrawn: changing the wire
 does not need an additional opt-in. `vgi.column.default.v1` remains the existing
 Arrow metadata key, which is a different use of that name.
@@ -816,7 +836,6 @@ Arrow metadata key, which is a different use of that name.
 | Profile | Operations and authority |
 | --- | --- |
 | `vgi.column.generated.virtual.v1` | CREATE/ADD deterministic virtual generation with declared types, dependency ordering and cycle rejection. Stored generation and physical-to-generated replacement reject. |
-| `vgi.column.metadata.create.v1` | Preserve explicit column comments/tags on CREATE/ADD. This grants no expression execution or compression semantics. |
 
 DEFAULT/USING now use the mandatory canonical representation even with no
 catalog-capability offer. Existing nested-operation, transaction and constraint
@@ -824,8 +843,8 @@ requirements still apply where they already applied. DROP DEFAULT remains its
 own operation. Providers validate their supported grammar/context and return
 ordinary unsupported errors for operations they cannot implement. A TYPE-only
 column definition cannot carry default/generated metadata at any nesting level.
-Generated-column execution and broader column-metadata qualification remain P1
-work, separate from this payload change.
+Generated-column execution and its dependency/type rules remain P1 work,
+separate from these default and descriptive-metadata changes.
 
 The durable column reference preserves canonical SQL/context through CREATE,
 ADD, SET/DROP DEFAULT, USING, discovery and transaction snapshots. The native

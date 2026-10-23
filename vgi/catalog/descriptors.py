@@ -37,6 +37,7 @@ from vgi.catalog.catalog_interface import (
     scan_arguments_from,
     serialize_column_statistics,
 )
+from vgi.catalog.column_metadata import column_metadata, with_column_metadata
 from vgi.catalog.constraints import ConstraintInfo
 from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.indexes import IndexDefinition
@@ -621,13 +622,9 @@ class Table:
         if not self.column_comments:
             return schema
         for col_name, comment in self.column_comments.items():
-            if not comment:
-                continue
             idx = schema.get_field_index(col_name)
             f = schema.field(idx)
-            existing = dict(f.metadata) if f.metadata else {}
-            existing[b"comment"] = comment.encode("utf-8")
-            schema = schema.set(idx, f.with_metadata(existing))  # type: ignore[arg-type]
+            schema = schema.set(idx, with_column_metadata(f, replace(column_metadata(f), comment=comment)))
         return schema
 
     def to_table_info(self, schema_path: SchemaPath) -> TableInfo:

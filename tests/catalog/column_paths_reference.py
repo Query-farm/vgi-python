@@ -39,6 +39,7 @@ from vgi.catalog.capabilities import (
     CONSTRAINT_RECORDS_READ,
     CatalogCapabilities,
 )
+from vgi.catalog.column_metadata import column_metadata
 from vgi.catalog.constraints import (
     ConstraintDefinition,
     ConstraintEnforcement,
@@ -111,6 +112,7 @@ def _fields(fields: Any, path: list[str]) -> None:
     if len(names) != len(set(names)):
         raise ValueError("duplicate field names")
     for field in fields:
+        column_metadata(field)
         column_path_key([field.name])
         if pa.types.is_struct(field.type):
             if not len(field.type):

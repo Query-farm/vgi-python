@@ -43,6 +43,7 @@ from vgi.arguments import Arguments, SecretLookupEntry
 from vgi.catalog.capabilities import (
     CatalogCapabilities,
 )
+from vgi.catalog.column_metadata import validate_column_metadata
 from vgi.catalog.constraints import ConstraintInfo, ConstraintsApplyRequest, ConstraintSnapshot, constraint_infos
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot
 from vgi.catalog.indexes import IndexConstraintType, IndexDefinition
@@ -551,6 +552,12 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     def __post_init__(self) -> None:
         """Validate canonical identities and revision without inferring enforcement."""
         self.constraint_infos()
+        validate_column_metadata(pa.ipc.read_schema(pa.py_buffer(self.columns)))
+
+    def serialize_to_bytes(self) -> bytes:
+        """Validate field metadata again before publishing a table descriptor."""
+        self.__post_init__()
+        return super().serialize_to_bytes()
 
     def constraint_infos(self) -> list[ConstraintInfo]:
         """Decode the complete canonical constraint readback for this table."""

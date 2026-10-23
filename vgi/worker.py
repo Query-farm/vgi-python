@@ -141,6 +141,7 @@ from vgi.catalog.catalog_interface import (
     _validate_at_params,
     serialize_column_statistics,
 )
+from vgi.catalog.column_metadata import validate_column_metadata
 from vgi.catalog.constraints import (
     ConstraintDefinition,
     ConstraintEnforcement,
@@ -2877,6 +2878,7 @@ class Worker:
         operation: str,
     ) -> None:
         """Validate CREATE/ADD expression metadata before provider effects."""
+        validate_column_metadata(schema)
         found = self._require_column_expression_profiles(
             schema, self._effective_catalog_capabilities(attach), operation, owner_schema_path
         )
@@ -2980,6 +2982,7 @@ class Worker:
     @staticmethod
     def _table_for_capabilities(info: TableInfo, selected: CatalogCapabilities) -> TableInfo:
         schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
+        validate_column_metadata(schema)
         require_logical_profiles(schema, selected_profiles=selected.read)
         Worker._require_column_expression_profiles(schema, selected, "read column expressions", info.schema_path)
         infos = info.constraint_infos()

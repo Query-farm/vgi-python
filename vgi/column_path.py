@@ -151,10 +151,13 @@ def column_definition(payload: bytes, path: Sequence[str], *, type_only: bool = 
     Type changes use a plain nullable field as a type carrier. Nullability and
     metadata must be changed through their own operations, never discarded.
     """
+    from vgi.catalog.column_metadata import validate_column_metadata
+
     key = column_path_key(path)
     reader = pa.BufferReader(payload)
     # The Arrow stubs omit NativeFile, which read_schema accepts at runtime.
     schema = pa.ipc.read_schema(reader)  # type: ignore[arg-type]
+    validate_column_metadata(schema)
     if reader.tell() != len(payload) or len(schema) != 1 or schema.metadata:
         raise ValueError("column definition must contain exactly one field and no schema metadata or trailing bytes")
     result = schema.field(0)

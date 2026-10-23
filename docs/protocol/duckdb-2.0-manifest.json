@@ -11,9 +11,9 @@
       "Overload collections replacing single macro definitions"
     ],
     "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
-    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the successor schema inventory; required canonical table constraint lists replace the legacy parent arrays and revision-checked catalog_table_constraints_apply joins the public method surface; typed index definitions/options replace legacy index fields and add catalog_index_option_definitions; required semantic ALTER flags and raw subject/dependent column paths extend embedded dependency records; SET DEFAULT requires binary SqlExpression IPC and USING accepts nullable binary IPC; CREATE/ADD defaults use the canonical field codec, without new capability negotiation; CatalogAttachResult.default_schema becomes nullable UTF-8, preserving no implicit default independently of an explicit raw schema name; MacroInfo and MacroCreateRequest require nonempty overloads and remove legacy parent parameters/definition/parameter_default_values/arguments_schema; canonical families need no overload read/create opt-in",
+    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the successor schema inventory; required canonical table constraint lists replace the legacy parent arrays and revision-checked catalog_table_constraints_apply joins the public method surface; typed index definitions/options replace legacy index fields and add catalog_index_option_definitions; required semantic ALTER flags and raw subject/dependent column paths extend embedded dependency records; SET DEFAULT requires binary SqlExpression IPC and USING accepts nullable binary IPC; CREATE/ADD defaults use the canonical field codec, without new capability negotiation; CatalogAttachResult.default_schema becomes nullable UTF-8, preserving no implicit default independently of an explicit raw schema name; MacroInfo and MacroCreateRequest require nonempty overloads and remove legacy parent parameters/definition/parameter_default_values/arguments_schema; canonical families need no overload read/create opt-in; existing column comment/tags Arrow metadata gains strict shared validation and preservation on CREATE/ADD/discovery, with no record/RPC change",
     "version_requirement": "The existing breaking changes already require a major version and matching routing name. Final number and complete generated diff remain P1/P2 work; the historical additive 2.2.0 candidate is superseded.",
-    "planned_diff": "Included before freeze: projection-expression/result-slot and repeatability contracts with P1 proof; remaining generated/column metadata semantics. DEFAULT/USING binary payloads, nullable default_schema and canonical macro families are implemented in their October 23 checkpoints. Retain existing transactions/writes and implemented catalog/query/type records. Trigger CRUD/execution and optional feature families remain reviewed deferrals. No protocol freeze or public version transition yet.",
+    "planned_diff": "Included before freeze: projection-expression/result-slot and repeatability contracts with P1 proof; virtual generated-column semantics and broader provider/adapter qualification. Canonical DEFAULT/USING, nullable default_schema, macro families and descriptive column metadata are implemented in October23 checkpoints. Trigger CRUD/execution and optional feature families remain reviewed deferrals. No protocol freeze or public version transition yet.",
     "historical_additive_candidate": "vgi.v2/2.2.0"
   },
   "sources": {
@@ -278,7 +278,7 @@
     "columns": {
       "title": "Columns and nested fields",
       "disposition": "include",
-      "status": "canonical_default_using_wire_implemented_remaining_column_semantics_open",
+      "status": "default_using_and_descriptive_metadata_implemented_generated_semantics_open",
       "records": [
         "ColumnPath",
         "SqlExpression",
@@ -300,7 +300,7 @@
         "Raw component `ColumnPath`; add/drop/rename/type/default/nullability operations; defaults, generated expressions, comments, tags, and supported compression policy",
         "Consistent create/alter/read representation, USING expression semantics, generated dependencies, quoted dotted names, and complete validation before mutation. Keep existing Arrow metadata keys where sufficient."
       ],
-      "capability_contract": "DEFAULT/USING canonical payloads are mandatory successor representations with no new opt-in or scalar READ gate. Existing nested add/drop/rename/type/default/nullability/comment.v1 and transaction/constraint requirements remain where applicable. SqlExpression.profile specifies interpretation, not permission. Providers reject unsupported grammar/context before effects. Virtual generation and CREATE/ADD comment/tag qualification remain separate work; stored generation and non-default compression remain unsupported.",
+      "capability_contract": "Canonical DEFAULT/USING and existing Arrow comment/tags metadata are mandatory successor representations, with no new opt-in. Existing nested-operation, transaction and constraint requirements remain. SqlExpression.profile identifies interpretation. Providers reject unsupported expression grammar/context before effects. Virtual generation remains separate; stored generation and non-default compression are unsupported.",
       "gates": [
         "P1",
         "P2",
@@ -368,12 +368,28 @@
           ],
           "checkpoint": "column_expression_checkpoint_2026_10_23",
           "limits": "Bounded deterministic primitive scalar grammar/default evaluation context on native 1.5 and durable reference; no generated/volatile/general SQL or native2 qualification. Static descriptor legacy discovery remains; custom DuckDB transactor rejects canonical expressions because it cannot preserve context."
+        },
+        {
+          "status": "descriptive_column_metadata_implemented",
+          "checkpoint": "column_metadata_checkpoint_2026_10_23",
+          "sources": [
+            "python:vgi/catalog/column_metadata.py",
+            "python:vgi/catalog/catalog_interface.py",
+            "python:vgi/protocol.py",
+            "python:vgi/worker.py",
+            "native:src/vgi_column_metadata.cpp",
+            "native:src/vgi_arrow_utils.cpp",
+            "native:src/vgi_catalog_api.cpp",
+            "native:test/cpp/test_column_metadata.cpp",
+            "native:test/run_column_metadata.py"
+          ],
+          "limits": "Native1.5 comments are materialized; tags and nested metadata remain authoritative Arrow annotations where its public column APIs lack support. Generated semantics are separate."
         }
       ],
       "implementation_work": [
-        "Qualify remaining generated-column semantics and full column metadata; DEFAULT/USING payload migration is complete without new capability checks.",
-        "Define/test strict tags JSON-map parsing and CREATE/ADD metadata fidelity across SDKs; no generic metadata RPC.",
-        "Broaden native/provider grammar only with semantic tests; port the native adapter to 2.0 in its separate phase."
+        "Qualify virtual generated-column semantics, dependency/type rules and provider execution; DEFAULT/USING and descriptive column metadata are implemented.",
+        "Qualify native2 public column-tag APIs and nested metadata materialization in the separate engine port; native1.5 retains authoritative Arrow tags without public ColumnDefinition tag access.",
+        "Broaden native/provider grammar only with semantic tests; no new generic metadata RPC or capability flag."
       ]
     },
     "views": {
@@ -525,7 +541,7 @@
       "review_decision": "Retain canonical constraints and typed index wire; use the existing bounded public/reference/native1.5 checkpoints. No additional constraint or index shape is selected in this source review."
     },
     "macros": {
-      "title": "Macros \u2014 canonical families and bounded native 1.5 support",
+      "title": "Macros — canonical families and bounded native 1.5 support",
       "disposition": "include",
       "status": "canonical_family_bounded_native15_implemented_and_validated",
       "records": [
@@ -762,7 +778,7 @@
       ]
     },
     "triggers": {
-      "title": "Triggers \u2014 reviewed deferral",
+      "title": "Triggers — reviewed deferral",
       "disposition": "defer",
       "status": "reviewed_deferred_existing_coverage_retained",
       "records": [
@@ -846,7 +862,7 @@
       ]
     },
     "query": {
-      "title": "Catalog query execution \u2014 explicit 1.5 adapter implemented; automatic pending",
+      "title": "Catalog query execution — explicit 1.5 adapter implemented; automatic pending",
       "disposition": "include",
       "status": "reference_and_native_15_explicit_implemented_automatic_pending",
       "records": [
@@ -918,7 +934,7 @@
       ]
     },
     "logical_types": {
-      "title": "Logical type preservation \u2014 concrete contract and codecs implemented; adapters pending",
+      "title": "Logical type preservation — concrete contract and codecs implemented; adapters pending",
       "disposition": "include",
       "status": "reference_implemented_native_qualification_pending",
       "records": [
@@ -981,7 +997,7 @@
       ]
     },
     "optimizer": {
-      "title": "Optimizer and observability additions \u2014 P1 design required",
+      "title": "Optimizer and observability additions — P1 design required",
       "disposition": "include",
       "status": "scope_reviewed_projection_repeatability_P1_contract_proof_pending",
       "records": [
@@ -3226,7 +3242,7 @@
       "area": "columns",
       "disposition": "existing_contract",
       "target": "Arrow Field.metadata[comment] / catalog_table_column_comment_set",
-      "status": "contract_reviewed_metadata_codec_profile_pending",
+      "status": "descriptive_metadata_implemented_bounded_validation_passed",
       "evidence": [
         {
           "status": "source_review_2026_10_23",
@@ -3242,9 +3258,20 @@
             "native:docs/duckdb-2.0-catalog-audit.md:159"
           ],
           "limits": "Source/contract reconciliation only. Existing recorded tests retain their original bounded scope; no new tests or native DuckDB 2 qualification."
+        },
+        {
+          "status": "descriptive_column_metadata_implemented",
+          "checkpoint": "column_metadata_checkpoint_2026_10_23",
+          "sources": [
+            "python:vgi/catalog/column_metadata.py",
+            "python:conformance/catalog-contracts.json",
+            "native:src/vgi_column_metadata.cpp",
+            "native:test/run_column_metadata.py"
+          ],
+          "limits": "No native1.5 SQL column-tags API; no generated-column execution claim."
         }
       ],
-      "decision": "Keep Arrow metadata for column creation/ADD: comment is literal UTF-8 with absent versus empty distinction; tags is UTF-8 JSON object mapping strings to strings (existing tags key). Require strict JSON object/string values, reject duplicate keys or malformed encoding before effects, retain literal keys/values and preserve unrelated metadata. Proposed DDL vgi.column.metadata.create.v1 gates explicit CREATE/ADD comment/tags, including an empty explicit map. No metadata RPC is added; existing comment mutations retain their operation.",
+      "decision": "Existing Arrow comment/tags keys are now validated and preserved on CREATE/ADD/discovery, without the proposed metadata-create capability. Comment is literal UTF-8; tags is strict UTF-8 JSON object mapping strings to strings. Absent/empty stay distinct; decoded duplicate keys, malformed JSON/UTF-8, unpaired surrogates and non-string values reject before provider effects. Existing unique Arrow metadata-key rule remains. Valid unrelated metadata is retained. Native1.5 imports/emits comments; its private tags member has no public accessor, so tags remain in authoritative Arrow schema. No engine changes or generic metadata RPC.",
       "remaining_implementation_or_qualification": [
         "Nested-path reference preserves JSON tags but does not establish strict cross-SDK tag decoding. Native CREATE/ADD currently rejects inline comments/generated/compression; tag install and metadata profile need implementation and parity tests."
       ]
@@ -3262,7 +3289,7 @@
       "area": "columns",
       "disposition": "include",
       "target": "Arrow Field.metadata[tags]: strict UTF-8 JSON string map",
-      "status": "contract_reviewed_metadata_codec_profile_pending",
+      "status": "descriptive_metadata_implemented_bounded_validation_passed",
       "evidence": [
         {
           "status": "source_review_2026_10_23",
@@ -3278,9 +3305,20 @@
             "native:docs/duckdb-2.0-catalog-audit.md:160"
           ],
           "limits": "Source/contract reconciliation only. Existing recorded tests retain their original bounded scope; no new tests or native DuckDB 2 qualification."
+        },
+        {
+          "status": "descriptive_column_metadata_implemented",
+          "checkpoint": "column_metadata_checkpoint_2026_10_23",
+          "sources": [
+            "python:vgi/catalog/column_metadata.py",
+            "python:conformance/catalog-contracts.json",
+            "native:src/vgi_column_metadata.cpp",
+            "native:test/run_column_metadata.py"
+          ],
+          "limits": "No native1.5 SQL column-tags API; no generated-column execution claim."
         }
       ],
-      "decision": "Keep Arrow metadata for column creation/ADD: comment is literal UTF-8 with absent versus empty distinction; tags is UTF-8 JSON object mapping strings to strings (existing tags key). Require strict JSON object/string values, reject duplicate keys or malformed encoding before effects, retain literal keys/values and preserve unrelated metadata. Proposed DDL vgi.column.metadata.create.v1 gates explicit CREATE/ADD comment/tags, including an empty explicit map. No metadata RPC is added; existing comment mutations retain their operation.",
+      "decision": "Existing Arrow comment/tags keys are now validated and preserved on CREATE/ADD/discovery, without the proposed metadata-create capability. Comment is literal UTF-8; tags is strict UTF-8 JSON object mapping strings to strings. Absent/empty stay distinct; decoded duplicate keys, malformed JSON/UTF-8, unpaired surrogates and non-string values reject before provider effects. Existing unique Arrow metadata-key rule remains. Valid unrelated metadata is retained. Native1.5 imports/emits comments; its private tags member has no public accessor, so tags remain in authoritative Arrow schema. No engine changes or generic metadata RPC.",
       "remaining_implementation_or_qualification": [
         "Nested-path reference preserves JSON tags but does not establish strict cross-SDK tag decoding. Native CREATE/ADD currently rejects inline comments/generated/compression; tag install and metadata profile need implementation and parity tests."
       ]
@@ -3762,7 +3800,7 @@
       "area": "columns",
       "disposition": "existing_contract",
       "target": "catalog_table_column_add.column_path/column_definition/if_column_not_exists",
-      "status": "contract_reviewed_metadata_codec_profile_pending",
+      "status": "descriptive_metadata_implemented_bounded_validation_passed",
       "evidence": [
         {
           "status": "partial_column_path_qualification",
@@ -3802,9 +3840,20 @@
           ],
           "checkpoint": "column_expression_checkpoint_2026_10_23",
           "limits": "Bounded deterministic primitive scalar grammar/default evaluation context on native 1.5 and durable reference; no generated/volatile/general SQL or native2 qualification. Static descriptor legacy discovery remains; custom DuckDB transactor rejects canonical expressions because it cannot preserve context."
+        },
+        {
+          "status": "descriptive_column_metadata_implemented",
+          "checkpoint": "column_metadata_checkpoint_2026_10_23",
+          "sources": [
+            "python:vgi/catalog/column_metadata.py",
+            "python:conformance/catalog-contracts.json",
+            "native:src/vgi_column_metadata.cpp",
+            "native:test/run_column_metadata.py"
+          ],
+          "limits": "No native1.5 SQL column-tags API; no generated-column execution claim."
         }
       ],
-      "decision": "Keep Arrow metadata for column creation/ADD: comment is literal UTF-8 with absent versus empty distinction; tags is UTF-8 JSON object mapping strings to strings (existing tags key). Require strict JSON object/string values, reject duplicate keys or malformed encoding before effects, retain literal keys/values and preserve unrelated metadata. Proposed DDL vgi.column.metadata.create.v1 gates explicit CREATE/ADD comment/tags, including an empty explicit map. No metadata RPC is added; existing comment mutations retain their operation.",
+      "decision": "Existing Arrow comment/tags keys are now validated and preserved on CREATE/ADD/discovery, without the proposed metadata-create capability. Comment is literal UTF-8; tags is strict UTF-8 JSON object mapping strings to strings. Absent/empty stay distinct; decoded duplicate keys, malformed JSON/UTF-8, unpaired surrogates and non-string values reject before provider effects. Existing unique Arrow metadata-key rule remains. Valid unrelated metadata is retained. Native1.5 imports/emits comments; its private tags member has no public accessor, so tags remain in authoritative Arrow schema. No engine changes or generic metadata RPC.",
       "remaining_implementation_or_qualification": [
         "Canonical ADD defaults now use the same codec as CREATE/SET/READ. Strict cross-SDK tags, inline comment/generated support, complete dependencies and native2 binding remain separate work."
       ]
@@ -10060,25 +10109,11 @@
           "vgi.transaction.ddl.v1 when transaction token supplied"
         ],
         "semantics": "Deterministic virtual generation only, declared Arrow type, dependency order/cycle rejection and provider authority. Stored generation or physical-to-generated replacement rejects."
-      },
-      {
-        "name": "vgi.column.metadata.create.v1",
-        "category": "ddl",
-        "status": "planned_unimplemented",
-        "operations": [
-          "catalog_table_create with explicit column comment/tags",
-          "catalog_table_column_add with explicit column comment/tags"
-        ],
-        "requires": [
-          "vgi.column.nested.add.v1 for nested ADD",
-          "vgi.transaction.ddl.v1 when transaction token supplied"
-        ],
-        "semantics": "Preserve literal comment and strict UTF-8 JSON string-map tags, including explicit empty values. Reject duplicate keys/malformed JSON/non-string values before effects. No compression promise."
       }
     ],
     "column_contract_work": [
-      "DEFAULT/USING mandatory binary payload migration is implemented without capability flags. Virtual generation and CREATE/ADD comment/tag semantics remain separate unfinished work.",
-      "Complete strict UTF-8 JSON string-map tags convention using the existing Arrow metadata tags key and native CREATE/ADD/default/generated translation. Existing dedicated comment APIs remain.",
+      "DEFAULT/USING mandatory binary payload migration is implemented without capability flags. CREATE/ADD/discovery comment/tag semantics are implemented; virtual generation remains unfinished.",
+      "Strict UTF-8 JSON string-map tags and native CREATE/ADD comment translation are implemented using existing metadata keys. Generated translation and native2 column-tags materialization remain separate. Existing dedicated comment APIs remain.",
       "Enforce exactly one SELECT for view definition and qualify owner-relative late binding; no additional view wire carrier or fixed-output contract selected."
     ],
     "column_acceptance": [
@@ -10201,7 +10236,7 @@
     },
     "gate_effect": {
       "P0": "Complete: all source mappings reviewed; remote inventory --require-decisions and 11 focused tests passed.",
-      "P1": "Open: macro consolidation, optimizer contract/reference proofs, generated/full column metadata and remaining provider/adapter acceptance. DEFAULT/USING and nullable default-schema wire migrations are implemented without new capability negotiation.",
+      "P1": "Open: optimizer contract/reference proofs, virtual generated-column semantics and remaining provider/adapter acceptance. DEFAULT/USING, nullable default-schema, macro families and descriptive column metadata are implemented without new capability flags.",
       "P2_P3": "Open: complete generated diff, all-SDK conformance, selected version/routing, capability matrix and deployment/rollback exercise.",
       "M0_M4": "Open: native2 port and qualification, separate from this protocol review."
     },
@@ -10216,7 +10251,12 @@
         "status": "withdrawn_by_user_2026_10_23",
         "reason": "Mandatory unpublished wire migration; no new opt-in. Default metadata keeps its existing key independently of capability names."
       }
-    ]
+    ],
+    "withdrawn_column_metadata_profile": {
+      "name": "vgi.column.metadata.create.v1",
+      "reason": "Existing metadata semantics are mandatory in the unpublished successor; no additional representation opt-in.",
+      "checkpoint": "column_metadata_checkpoint_2026_10_23"
+    }
   },
   "column_expression_checkpoint_2026_10_23": {
     "date": "2026-10-23",
@@ -10515,6 +10555,144 @@
       "vgi-java": "3b30cb560cbc283eb6c1c9d858cded1c9cf3079d",
       "vgi-csharp": "07057799d86274ddf5767e98aec1c190eeadeb24",
       "vgi-cpp": "d3a5be374a75395a117f026b2ded3f1a67bb06c3"
+    }
+  },
+  "column_metadata_checkpoint_2026_10_23": {
+    "date": "2026-10-23",
+    "status": "implemented_bounded_validation_passed",
+    "base_revisions": {
+      "native": "5b9d26f814c42e7c8706ab0c3e344570929a6580",
+      "python": "7dc36111c8552e07ee418719ac369b8276d0a686"
+    },
+    "engine_15": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "contract": {
+      "keys": {
+        "comment": "Literal UTF-8 string; absent differs from present empty.",
+        "tags": "UTF-8 JSON object with unique decoded keys and string values; absent differs from present {}."
+      },
+      "validation": "Reject malformed UTF-8/JSON, unpaired surrogates, non-string tag values, duplicate decoded JSON keys and existing invalid duplicate Arrow metadata keys. Recurse container/dictionary/extension fields before provider effects or discovery publication.",
+      "preservation": "Literal Unicode, NUL, dots, case and unrelated valid metadata remain unchanged; validation does not rewrite accepted payloads.",
+      "wire": "No record/RPC/version change and no new capability flag; existing comment mutations stay separate."
+    },
+    "validation": {
+      "status": "bounded_runtime_and_conformance_passed",
+      "host": "ec2-user@98.81.121.120",
+      "workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+      "logs": "logs/column-metadata-20261023-6KZ8Vg",
+      "corpus": {
+        "valid_schemas": 4,
+        "invalid_schemas": 27
+      },
+      "python_focused": {
+        "passed": 59
+      },
+      "python_regression": {
+        "passed": 1484,
+        "skipped": 8,
+        "initial_failures": 1,
+        "correction": "Root-owned unused-loop Ruff failure corrected; focused rerun passed."
+      },
+      "python_final_corpus": {
+        "passed": 14,
+        "scope": "Includes added overlong, surrogate-encoded and truncated UTF-8 cases."
+      },
+      "ruff": "passed",
+      "mypy": "224 source files passed",
+      "native_build": "production/loadable/unittest/haybarn/catalog-tests targets passed",
+      "native_metadata": {
+        "cases": 5,
+        "assertions": 183,
+        "log": "native-metadata-verified.log",
+        "scope": "CREATE/ADD preflight, both discovery paths, native comments/COPY, public persisted reconnect readback and 31 shared valid/invalid schemas."
+      },
+      "native_regression": {
+        "unit_cases": 7,
+        "unit_assertions": 181,
+        "column_sql_cases": 3,
+        "column_sql_assertions": 251,
+        "catalog_sql_files_passed": 11,
+        "logs": [
+          "native-metadata-regression.log",
+          "native-column-regression.log",
+          "native-catalog-regression.log"
+        ]
+      },
+      "native_fixture_lint": "Ruff and format checks passed",
+      "protocol_hash": "457a2fc7c24a637480d2c34237ea0ccf826b10f4ea5e316d4623895f4a535585",
+      "protocol_hash_limits": "No RPC or record schema change in this checkpoint. Metadata meanings are validated inside existing Arrow schema carriers; the fingerprint alone does not prove semantic compatibility.",
+      "browser_bundle_sha256": "840df926c9b2ebbe63d6c480eed2444ec984f34d29a33f8572d92ca9d4b55479",
+      "browser_bundle": "Rebuilt on EC2 and copied locally; unchanged because server-side validation is excluded from the browser bundle.",
+      "source_integrity": "Changed files checked local versus EC2 by SHA256; source-checkpoint.json, commits.json and artifacts.sha256 in the checkpoint log directory identify exact sources, synchronized branch heads and binaries.",
+      "generation": "regen_generated.py --check --require-all passed; only shared conformance corpus changed, no generated record layout.",
+      "manifest_inventory": {
+        "audit_rows": 151,
+        "contract_areas": 20,
+        "pending_reviews": 0,
+        "focused_tests_passed": 11
+      },
+      "sdks": {
+        "go": {
+          "passed": 663,
+          "scope": "vgi and generated package suites; all shared schema vectors plus actual HTTP rejection/readback, MAP child metadata, endianness and registered-extension round trips",
+          "log": "sdk/go-regression.jsonl"
+        },
+        "rust": {
+          "passed": 78,
+          "scope": "contract, dispatch and bounded stored-catalog CREATE lifecycle",
+          "log": "sdk/rust-regression.log"
+        },
+        "typescript": {
+          "passed_per_backend": 65,
+          "skipped_per_backend": 41,
+          "assertions_per_backend": 724,
+          "skip_reason": "external-service/environment requirements",
+          "scope": "both Arrow backends; shared corpus and real CREATE/ADD/discovery dispatch",
+          "log": "sdk/typescript-regression.log"
+        },
+        "java": {
+          "regression_passed": 655,
+          "skipped": 2,
+          "initial_failures": 1,
+          "correction": "Stale test-only protocol hash expectation refreshed to the unchanged current fingerprint; VgiProtocolSurfaceTest focused rerun passed 2/2.",
+          "logs": [
+            "sdk/java-regression.log",
+            "sdk/java-hash-regression.log"
+          ]
+        },
+        "csharp": {
+          "regression_passed": 660,
+          "initial_failures": 1,
+          "correction": "Stale test-only protocol hash expectation refreshed to the unchanged current fingerprint; VgiProtocolHashTests focused rerun passed 10/10.",
+          "logs": [
+            "sdk/csharp-regression.log",
+            "sdk/csharp-hash-regression.log"
+          ]
+        },
+        "cpp": {
+          "cases": 9,
+          "assertions": 227,
+          "log": "sdk/cpp-regression.log"
+        }
+      }
+    },
+    "limits": [
+      "Native1.5 ColumnDefinition exposes comments but no public tag accessor; tags remain in authoritative Arrow schema, not native SQL tag authoring/introspection. Reconstruction using only native columns cannot preserve tags or nested field metadata.",
+      "Generated-column execution/dependencies, optimizer contracts, broad provider qualification, protocol freeze/release and native2 engine port remain open.",
+      "The previously recorded nested NOT_NULL schema-reconciliation regression is outside this descriptive metadata checkpoint."
+    ],
+    "sdk_reader_fixes": [
+      "Go recovers nested MAP key/value field metadata lost by the pinned Arrow IPC reader, retaining schema endianness, sorted-map flags and registered-extension semantics. MAP entries-field metadata that the Go API cannot represent rejects explicitly.",
+      "SDKs whose Arrow decoders normalize metadata validate raw schema metadata before duplicate keys or malformed UTF-8 can be erased.",
+      "Go and TypeScript declarative comment overrides preserve empty comments and existing field/schema metadata."
+    ],
+    "gate_effect": "Closes descriptive column comment/tag preservation and validation for the existing Arrow carrier with bounded native1.5 and six-SDK evidence. Virtual generated columns, optimizer work, remaining provider acceptance, P1-P3 freeze/release and M0-M4 native2 remain open.",
+    "sdk_revisions": {
+      "vgi-go": "d4fef8f319ae80dc87a3f4586c3ec14213bd833c",
+      "vgi-rust": "fb80c5755efcdf3484d6ed49a1eea74b7f5ce4cf",
+      "vgi-typescript": "3e6bb0c023653a69983ef0f3b3753b5b609bf2e8",
+      "vgi-java": "7bc58105c79e2917f9204798cd28291a3204872e",
+      "vgi-csharp": "5b2e090c02efef7590a8c19decea6ddf8692b7c0",
+      "vgi-cpp": "65a72eed971aa7ede4a181273685be5048398867"
     }
   }
 }
