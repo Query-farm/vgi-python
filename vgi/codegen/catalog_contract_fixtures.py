@@ -170,6 +170,102 @@ def column_metadata_schemas() -> dict[str, dict[str, str]]:
     }
 
 
+def generated_column_schemas() -> dict[str, Any]:
+    """Share canonical virtual definitions and rejection cases without evaluating SQL."""
+    owner = ["main"]
+    expression = SqlExpression(
+        sql="n * 2", profile=ROW_SCALAR_EXPRESSION, schema_path=owner, evaluation_context=QueryEvaluationContext()
+    )
+    payload = expression.serialize_to_bytes()
+    encoded = base64.b64encode(payload)
+    expression_key = b"vgi.column.generated.v1"
+    category_key = b"vgi.column.generation.v1"
+    metadata = {expression_key: encoded, category_key: b"virtual", b"comment": b"", b"provider.note": b"retained"}
+
+    def field(name: str, sql: str) -> pa.Field[Any]:
+        return with_column_expressions(
+            pa.field(name, pa.int64()), ColumnExpressions(generated=replace(expression, sql=sql), generation="virtual")
+        )
+
+    valid = {
+        "ordinary": pa.schema([pa.field("n", pa.int64())]),
+        "interleaved_chain": pa.schema(
+            [
+                pa.field("n", pa.int64()),
+                pa.field("doubled", pa.int64(), metadata=metadata),
+                pa.field("tail", pa.int64()),
+                field("last", "doubled + tail"),
+            ],
+            metadata={b"provider": b"retained"},
+        ),
+        "literal_dotted_column": pa.schema([pa.field("a.b", pa.int64()), field("computed", '"a.b" * 2')]),
+    }
+
+    def malformed_record(**changes: Any) -> bytes:
+        # Deliberately bypass dataclass validation to exercise real wire readers.
+        row = pa.ipc.open_stream(payload).read_next_batch().to_pylist()[0]
+        row.update(changes)
+        batch = pa.RecordBatch.from_pylist([row], schema=SqlExpression.ARROW_SCHEMA)
+        sink = pa.BufferOutputStream()
+        with pa.ipc.new_stream(sink, batch.schema) as writer:
+            writer.write_batch(batch)
+        return base64.b64encode(sink.getvalue().to_pybytes())
+
+    invalid_metadata = {
+        "missing_generation": {expression_key: encoded},
+        "missing_expression": {category_key: b"virtual"},
+        "unknown_generation": {**metadata, category_key: b"unknown"},
+        "stored_unsupported": {**metadata, category_key: b"stored"},
+        "default_conflict": {**metadata, b"vgi.column.default.v1": encoded},
+        "legacy_conflict": {**metadata, b"generated_expression": b"n * 2"},
+        "legacy_generated_only": {b"generated_expression": b"n * 2"},
+        "unknown_metadata_version": {**metadata, b"vgi.column.generated.v2": encoded},
+        "invalid_base64": {**metadata, expression_key: b"not_base64!"},
+        "base64_whitespace": {**metadata, expression_key: encoded + b"\n"},
+        "empty_payload": {**metadata, expression_key: b""},
+        "invalid_ipc": {**metadata, expression_key: base64.b64encode(b"not an IPC record")},
+        "invalid_utf8_sql": {**metadata, expression_key: base64.b64encode(payload.replace(b"n * 2", b"n \xff 2"))},
+        "trailing_ipc": {**metadata, expression_key: base64.b64encode(payload + b"trailing")},
+        "wrong_record": {**metadata, expression_key: base64.b64encode(QueryEvaluationContext().serialize_to_bytes())},
+        "missing_context": {**metadata, expression_key: malformed_record(evaluation_context=None)},
+        "invalid_context": {
+            **metadata,
+            expression_key: malformed_record(
+                evaluation_context={
+                    "timezone": "UTC",
+                    "collation": "binary",
+                    "default_order": "sideways",
+                    "default_null_order": "nulls_last",
+                    "preserve_insertion_order": True,
+                }
+            ),
+        },
+        "empty_sql": {**metadata, expression_key: malformed_record(sql="")},
+        "owner_mismatch": {
+            **metadata,
+            expression_key: base64.b64encode(replace(expression, schema_path=["elsewhere"]).serialize_to_bytes()),
+        },
+        "unsupported_profile": {
+            **metadata,
+            expression_key: base64.b64encode(replace(expression, profile="other.expression.v1").serialize_to_bytes()),
+        },
+    }
+    invalid = {
+        name: pa.schema([pa.field("n", pa.int64()), pa.field("computed", pa.int64(), metadata=annotations)])
+        for name, annotations in invalid_metadata.items()
+    }
+    return {
+        "owner_schema_path": owner,
+        **{
+            group: {
+                name: base64.b64encode(schema.serialize().to_pybytes()).decode("ascii")
+                for name, schema in schemas.items()
+            }
+            for group, schemas in (("valid", valid), ("invalid", invalid))
+        },
+    }
+
+
 def column_requests() -> dict[str, bytes]:
     """Encode literal and nested targets through each actual RPC parameter schema."""
     methods = rpc_methods(VgiProtocol)
@@ -736,6 +832,7 @@ def render() -> str:
                 "generator": "vgi.codegen.catalog_contract_fixtures",
                 "records": {name: base64.b64encode(payload).decode("ascii") for name, payload in encoded.items()},
                 "column_metadata_schemas": column_metadata_schemas(),
+                "generated_column_schemas": generated_column_schemas(),
             },
             indent=2,
         )

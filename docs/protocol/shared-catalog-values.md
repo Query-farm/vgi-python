@@ -800,8 +800,9 @@ defaults remain a separate, unchanged contract. See the
 and remaining qualification work.
 
 Successor column CREATE/ADD use canonical base64 IPC field annotations for
-defaults. Native 1.5 translates its supported defaults; generated-expression
-execution remains unsupported. Comment remains `comment`;
+defaults. Native 1.5 also translates supported virtual generated definitions
+on CREATE and discovery; its parser rejects ALTER ADD of generated columns.
+Comment remains `comment`;
 tags remain `tags`, encoded as a UTF-8 JSON object with literal string keys and
 values. Reject duplicate decoded keys (including escaped-equivalent keys),
 malformed UTF-8/JSON, unpaired Unicode surrogates and non-string values before
@@ -826,16 +827,12 @@ reconstruction using only native columns remain native-adapter limitations.
 Nested comments likewise remain Arrow metadata where the engine lacks a nested
 column-comment API. No engine-private access or engine-pin change is introduced.
 
-The following remains a separate **planned DDL profile, not currently registered
-or advertised**. The previously proposed `vgi.column.default.v1`,
-`vgi.column.metadata.create.v1` and
-`vgi.column.type.using.v1` capability flags were withdrawn: changing the wire
-does not need an additional opt-in. `vgi.column.default.v1` remains the existing
-Arrow metadata key, which is a different use of that name.
-
-| Profile | Operations and authority |
-| --- | --- |
-| `vgi.column.generated.virtual.v1` | CREATE/ADD deterministic virtual generation with declared types, dependency ordering and cycle rejection. Stored generation and physical-to-generated replacement reject. |
+The proposed `vgi.column.default.v1`, `vgi.column.metadata.create.v1`,
+`vgi.column.type.using.v1` and `vgi.column.generated.virtual.v1` capability flags
+are withdrawn: the canonical representations need no additional opt-in.
+`vgi.column.default.v1` remains an Arrow metadata key, independently of
+capability names. A codec accepting an expression record does not establish
+provider execution support.
 
 DEFAULT/USING now use the mandatory canonical representation even with no
 catalog-capability offer. Existing nested-operation, transaction and constraint
@@ -843,16 +840,16 @@ requirements still apply where they already applied. DROP DEFAULT remains its
 own operation. Providers validate their supported grammar/context and return
 ordinary unsupported errors for operations they cannot implement. A TYPE-only
 column definition cannot carry default/generated metadata at any nesting level.
-Generated-column execution and its dependency/type rules remain P1 work,
-separate from these default and descriptive-metadata changes.
+The virtual generated-column checkpoint below qualifies a bounded CREATE/read
+path. Unsupported generated mutations and grammar remain ordinary errors.
 
 The durable column reference preserves canonical SQL/context through CREATE,
 ADD, SET/DROP DEFAULT, USING, discovery and transaction snapshots. The native
 1.5 adapter supports a bounded deterministic scalar grammar under the explicit
 default evaluation context, including numeric division. It materializes supported
 defaults as typed literals for later native binding while retaining the original
-record in authoritative table metadata. Unsupported contexts, volatile/general
-SQL and generated expressions reject. This does not claim general SQL evaluation.
+record in authoritative table metadata. Unsupported contexts and volatile/general
+SQL reject; the generated path has its own bounded qualification below.
 
 Existing static `Table.defaults` descriptor discovery retains its legacy read
 adapter; it is not silently interpreted as new canonical metadata. The custom
@@ -860,6 +857,34 @@ DuckDB transactor fixture cannot preserve canonical expression contexts and now
 rejects those DEFAULT/USING operations explicitly. Its plain casts and expression-
 free CREATE/ADD remain available. The durable reference supplies the tested
 canonical mutation behavior; no transactor or native2 qualification is implied.
+
+Virtual generated definitions pair `vgi.column.generated.v1` (canonical base64
+`SqlExpression` IPC) with `vgi.column.generation.v1 = virtual`. The Arrow field
+supplies the resolved result type. Authoring conveniences translate their SQL
+strings locally using the owning schema and explicit default evaluation context.
+Discovery and CREATE reject legacy-only `generated_expression`, mixed legacy
+and canonical forms, incomplete pairs, malformed records, wrong owners and
+unsupported interpretation profiles. The generic category codec retains
+`stored`, but current catalog admission rejects it before provider effects or
+publication; it is not an executable feature.
+
+The native 1.5 checkpoint supports top-level deterministic virtual expressions
+over signed integer, Boolean and string columns under the default context.
+Dependencies, cycles and declared result types are checked before publication.
+The worker returns physical fields in their original relative order; DuckDB
+computes virtual results. Generated fields must not consume physical indices.
+The durable generated reference reuses the existing dependency authority and
+transaction snapshots, including physical scan readback after reconnect.
+
+This checkpoint does not qualify native INSERT/UPDATE/DELETE on generated
+tables, stored or nested generation, or semantic generated-column rewrites.
+Those paths reject before effects. Native ALTER ADD of generated columns remains
+rejected by the pinned parser. The durable reference rejects rename/drop/type
+column edits unchanged; the earlier metadata-only dependency reference retains
+its separately bounded rewrite behavior. The native proof covers a single
+worker-function scan; delegated, multiple-branch and partitioned generated scans
+reject pending separate qualification. No new RPC, record schema, engine pin,
+capability flag or public protocol version is introduced.
 
 Views keep SELECT text, owner-relative late binding and derived output schemas;
 no fixed persisted output schema or implicit caller search-path contract is

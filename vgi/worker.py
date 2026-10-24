@@ -2844,24 +2844,25 @@ class Worker:
     ) -> bool:
         """Validate canonical field expressions recursively without rewriting metadata.
 
-        DEFAULT uses the mandatory owned scalar representation. Generated
-        definitions retain their existing selected-profile requirement, including
-        fields nested inside struct, dictionary or extension storage types.
+        DEFAULT and generated definitions use the mandatory owned scalar
+        representation, including fields nested inside struct, dictionary or
+        extension storage types. Receiving providers qualify execution support.
         """
         pending = list(schema)
         found = False
         while pending:
             field = pending.pop()
+            if b"generated_expression" in (field.metadata or {}):
+                raise ValueError("generated columns require canonical SqlExpression metadata")
             expressions = column_expressions(field)
+            if expressions.generated is not None and expressions.generation != "virtual":
+                raise NotImplementedError("stored generated columns are not supported")
             for expression in (expressions.default, expressions.generated):
                 if expression is not None:
                     if owner_schema_path is not None:
                         expression.validate_owner(owner_schema_path)
-                    if expression is expressions.default:
-                        if expression.profile != ROW_SCALAR_EXPRESSION:
-                            raise ValueError("unsupported column default expression profile")
-                    else:
-                        selected.require(expression.profile, available=selected, operation=operation)
+                    if expression.profile != ROW_SCALAR_EXPRESSION:
+                        raise ValueError("unsupported column expression profile")
                     found = True
             dtype = field.type
             while isinstance(dtype, pa.BaseExtensionType) or pa.types.is_dictionary(dtype):

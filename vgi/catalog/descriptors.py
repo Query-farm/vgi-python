@@ -21,6 +21,7 @@ import pyarrow as pa
 
 from vgi.argument_spec import macro_arguments_schema
 from vgi.arguments import Arguments
+from vgi.catalog.capabilities import ROW_SCALAR_EXPRESSION
 from vgi.catalog.catalog_interface import (
     AttachOpaqueData,
     ColumnStatistics,
@@ -43,6 +44,7 @@ from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.indexes import IndexDefinition
 from vgi.catalog.macros import normalize_macro_overloads
 from vgi.catalog.options import OptionState
+from vgi.catalog.sql import ColumnExpressions, SqlExpression, column_expressions, with_column_expressions
 from vgi.column_path import RequiredFilterPaths, column_path_key
 from vgi.invocation import BindResponse, FunctionType
 from vgi.metadata import CatalogFunctionType
@@ -605,16 +607,26 @@ class Table:
             schema = schema.set(idx, f.with_metadata(existing))  # type: ignore[arg-type]
         return schema
 
-    def _apply_generated_columns_to_schema(self, schema: pa.Schema) -> pa.Schema:
+    def _apply_generated_columns_to_schema(self, schema: pa.Schema, schema_path: SchemaPath) -> pa.Schema:
         """Return schema with generated expression metadata applied to fields."""
         if not self.generated_columns:
             return schema
         for col_name, expression in self.generated_columns.items():
             idx = schema.get_field_index(col_name)
             f = schema.field(idx)
-            existing = dict(f.metadata) if f.metadata else {}
-            existing[b"generated_expression"] = expression.encode("utf-8")
-            schema = schema.set(idx, f.with_metadata(existing))  # type: ignore[arg-type]
+            existing = column_expressions(f)
+            generated = SqlExpression(
+                sql=expression,
+                profile=ROW_SCALAR_EXPRESSION,
+                schema_path=list(schema_path),
+                evaluation_context=QueryEvaluationContext(),
+            )
+            schema = schema.set(
+                idx,
+                with_column_expressions(
+                    f, ColumnExpressions(default=existing.default, generated=generated, generation="virtual")
+                ),
+            )
         return schema
 
     def _apply_column_comments_to_schema(self, schema: pa.Schema) -> pa.Schema:
@@ -632,7 +644,7 @@ class Table:
         if any((self.not_null, self.unique, self.check, self.primary_key, self.foreign_key)):
             raise ValueError("legacy constraint declarations require explicit canonical ConstraintInfo records")
         cols = self._apply_defaults_to_schema(self.resolved_columns)
-        cols = self._apply_generated_columns_to_schema(cols)
+        cols = self._apply_generated_columns_to_schema(cols, schema_path)
         cols = self._apply_column_comments_to_schema(cols)
         # Inline the resolved stats blob so the C++ extension can short-circuit
         # the per-scan ``table_function_statistics`` and per-table

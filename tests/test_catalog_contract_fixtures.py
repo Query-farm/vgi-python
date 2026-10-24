@@ -26,6 +26,7 @@ from vgi.logical_types import LOGICAL_TYPE_PROFILES, validate_logical_values
 from vgi.protocol import MacroCreateRequest, TableCreateRequest
 from vgi.query_parameters import QueryParameters
 from vgi.typed_values import TypedValueBatch
+from vgi.worker import Worker
 
 
 def test_attach_vectors_preserve_default_schema_absence_and_raw_names() -> None:
@@ -65,6 +66,26 @@ def test_canonical_constraint_vectors_preserve_every_field() -> None:
         decoded = type(source).deserialize_from_bytes(fixtures[name])
         assert decoded == source
         assert decoded.serialize_to_bytes() == fixtures[name]
+
+
+def test_generated_schema_vectors_validate_without_a_capability_offer() -> None:
+    fixtures = json.loads(render())["generated_column_schemas"]
+    owner = fixtures["owner_schema_path"]
+    for payload in fixtures["valid"].values():
+        schema = pa.ipc.read_schema(pa.py_buffer(base64.b64decode(payload)))
+        before = schema.serialize().to_pybytes()
+        Worker._require_column_expression_profiles(schema, CatalogCapabilities(), "read generated columns", owner)
+        assert schema.serialize().to_pybytes() == before
+        for field in schema:
+            generated = column_expressions(field)
+            if generated.generated is not None:
+                assert generated.generation == "virtual"
+                assert generated.generated.schema_path == owner
+    for name, payload in fixtures["invalid"].items():
+        schema = pa.ipc.read_schema(pa.py_buffer(base64.b64decode(payload)))
+        with pytest.raises((ValueError, TypeError, NotImplementedError, pa.ArrowInvalid, pa.ArrowIOError)) as error:
+            Worker._require_column_expression_profiles(schema, CatalogCapabilities(), "read generated columns", owner)
+        assert str(error.value), name
 
 
 def test_index_vectors_preserve_keys_typed_options_and_association() -> None:

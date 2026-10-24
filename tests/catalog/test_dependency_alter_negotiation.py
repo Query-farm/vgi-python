@@ -1,7 +1,7 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 # ruff: noqa: D103
 
-"""Selected expression and transaction promises reject before metadata effects."""
+"""Mandatory column expressions preserve existing transaction promises."""
 
 from dataclasses import replace
 
@@ -43,7 +43,7 @@ def limited_expression_token(backend, monkeypatch, mode):
 @pytest.mark.parametrize("mode", ["unselected", "withdrawn"])
 @pytest.mark.parametrize("operation", ["create", "add"])
 @pytest.mark.parametrize("nested", [False, True])
-def test_canonical_column_expression_profiles_are_checked_before_provider_calls(
+def test_canonical_generated_representation_needs_no_expression_read_opt_in(
     backend, monkeypatch, mode, operation, nested
 ):
     token = limited_expression_token(backend, monkeypatch, mode)
@@ -54,16 +54,15 @@ def test_canonical_column_expression_profiles_are_checked_before_provider_calls(
     monkeypatch.setattr(backend._get_catalog(), "table_create", lambda **kwargs: calls.append(kwargs))
     monkeypatch.setattr(backend._get_catalog(), "table_column_add", lambda **kwargs: calls.append(kwargs))
     before = backend.catalog_dependencies(token)
-    with pytest.raises(CatalogCapabilityError, match=ROW_SCALAR_EXPRESSION):
-        if operation == "create":
-            backend.catalog_table_create(create_request(token, schema(pa.field("id", pa.int64()), field)))
-        else:
-            backend.catalog_table_column_add(token, ["main"], "items", [field.name], schema(field))
-    assert calls == [] and backend.catalog_dependencies(token) == before
+    if operation == "create":
+        backend.catalog_table_create(create_request(token, schema(pa.field("id", pa.int64()), field)))
+    else:
+        backend.catalog_table_column_add(token, ["main"], "items", [field.name], schema(field))
+    assert len(calls) == 1 and backend.catalog_dependencies(token) == before
 
 
 @pytest.mark.parametrize("mode", ["unselected", "withdrawn"])
-def test_all_table_discovery_paths_recheck_canonical_expression_profiles(backend, monkeypatch, mode):
+def test_all_table_discovery_paths_preserve_generated_without_read_opt_in(backend, monkeypatch, mode):
     full = backend.catalog_attach(request()).attach_opaque_data
     backend.catalog_table_create(
         create_request(full, schema(pa.field("id", pa.int64()), generated("computed", "id + 1")))
@@ -75,8 +74,7 @@ def test_all_table_discovery_paths_recheck_canonical_expression_profiles(backend
         lambda: backend.catalog_schema_contents_tables(token, ["main"]),
         lambda: backend.catalog_contents(token),
     ]:
-        with pytest.raises(CatalogCapabilityError, match=ROW_SCALAR_EXPRESSION):
-            read()
+        read()
     assert backend.catalog_dependencies(token) == before
 
 

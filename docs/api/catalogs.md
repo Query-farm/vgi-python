@@ -25,4 +25,23 @@ mutation. No additional capability flag is required. Native DuckDB 1.5 exposes
 comments; tags remain in the catalog's Arrow schema until the engine adapter can
 map them through a public column-tags API.
 
+Virtual generated columns can use the existing `Table` convenience:
+
+```python
+from vgi.catalog import Table
+
+items = Table(
+    name="items",
+    columns=pa.schema([pa.field("n", pa.int64()), pa.field("doubled", pa.int64())]),
+    generated_columns={"doubled": "n * 2"},
+)
+```
+
+The helper emits canonical expression metadata with the containing schema as
+owner. A scan supplies only the physical `n` column; DuckDB computes `doubled`.
+The native 1.5 adapter supports bounded deterministic virtual expressions on
+CREATE and discovery. Writes to generated tables, stored generation and ALTER
+ADD of generated columns remain unsupported in this checkpoint. Custom catalog
+providers must validate and persist definitions before accepting CREATE.
+
 ::: vgi.catalog

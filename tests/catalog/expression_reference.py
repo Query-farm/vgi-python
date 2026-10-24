@@ -89,7 +89,11 @@ def validate_expression(
             for child in expression["children"]:
                 check(child)
             return
-        functions = {"+", "-", "*", "%", "abs", "lower", "upper"} | ({"/"} if role == "using" else set())
+        functions = (
+            {"+", "-", "*", "%", "abs", "lower", "upper"}
+            | ({"/"} if role == "using" else set())
+            | ({"||"} if role == "generated" else set())
+        )
         if kind == "FUNCTION" and expression.get("function_name") in functions:
             if (
                 expression.get("schema")
