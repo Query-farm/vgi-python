@@ -396,9 +396,17 @@ Leave the callback unset for the initial port. If implemented later, reuse a saf
 
 ### Repeatability
 
-`TableFunction::is_repeatable` tells the optimizer whether executions with identical bind data are stable within one query. If the callback is absent, DuckDB treats the function conservatively as not repeatable. That is correct.
+The selected [bound scan contract](scan-repeatability.md) appends
+`BindResponse.repeatability`, with `UNKNOWN` and `STABLE_WITHIN_QUERY` wire
+values. A stable claim belongs to one complete bind state within one statement;
+it is independent of scalar-function stability. The native 1.5 adapter carries
+the claim and guards snapshot lifetime but has no repeatability callback.
 
-A future `repeatability` metadata value could improve plans, but it must be defined separately from scalar-function stability. A remote table may change between calls even when its schema and arguments do not. Suggested values are `unknown` and `stable_within_query`; do not infer repeatability merely from a read-only-looking function.
+DuckDB 2.0's `TableFunction::is_repeatable` supplies the optimizer hook. Its
+table-backed scan shortcut classifies a catalog table before consulting that
+hook, so the later native port must also address that shortcut to keep unknown
+VGI scans conservative. Source changes and mutable-provider tests are authored;
+remote runtime qualification remains pending.
 
 ### Partition selection
 

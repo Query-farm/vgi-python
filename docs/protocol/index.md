@@ -12,6 +12,7 @@ Each document declares its own status; “proposed” means the contract is stil
 | [Proposed VGI protocol changes for DuckDB 2.0](vgi-protocol-proposed-changes.md) | **Informative design/audit report** | Rationale, migration inventory, implementation status, and deferred protocol decisions. It is not an implementation specification. |
 | [View security](view-security.md) | **Successor contract, proposed** | Explicit optimization-barrier metadata, read/create profiles, unsupported-reader behavior, and current qualification limits. |
 | [Scalar projection expressions](projection-expressions.md) | **Successor contract, proposed** | Optional bind-specific offers, structured expression proposals, partial acceptance, exact appended result fields and local fallback. |
+| [Bound scan repeatability](scan-repeatability.md) | **Successor contract, proposed** | Optional per-bind stability claim, snapshot lifetime, conservative defaults and native adapter limits. |
 
 ## Reading order
 

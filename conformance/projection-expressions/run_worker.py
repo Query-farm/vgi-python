@@ -22,7 +22,7 @@ from vgi.catalog.capabilities import ROW_SCALAR_EXPRESSION
 from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.sql import SqlExpression
 from vgi.client import Client
-from vgi.invocation import BindResponse, FunctionType
+from vgi.invocation import BindRepeatability, BindResponse, FunctionType
 from vgi.protocol import (
     BindRequest,
     ClientCapabilities,
@@ -97,9 +97,36 @@ def raw_batch(batch):
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, batch.schema) as writer:
         writer.write_batch(batch)
+    return raw_payload(sink.getvalue().to_pybytes())
+
+
+def raw_payload(payload):
+    """Wrap exact bytes without normalizing their IPC framing."""
     invalid = object.__new__(RawProjectionRequest)
-    object.__setattr__(invalid, "raw_payload", sink.getvalue().to_pybytes())
+    object.__setattr__(invalid, "raw_payload", payload)
     return invalid
+
+
+def wrapped_framing_cases(request):
+    """Return valid EOF alternatives and malformed single-record envelopes."""
+    encoded = request.serialize_to_bytes()
+    assert encoded.endswith(b"\xff\xff\xff\xff\x00\x00\x00\x00")
+    with pa.ipc.open_stream(encoded) as reader:
+        batch = reader.read_next_batch()
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, batch.schema) as writer:
+        writer.write_batch(batch)
+        writer.write_batch(batch)
+    return [
+        ("physical EOF", encoded[:-8], True),
+        ("legacy EOS", encoded[:-8] + b"\x00\x00\x00\x00", True),
+        ("extra IPC batch", sink.getvalue().to_pybytes(), False),
+        ("trailing IPC bytes", encoded + b"garbage", False),
+        ("repeated EOS", encoded + encoded[-8:], False),
+        ("truncated EOS", encoded[:-1], False),
+        ("truncated record body", encoded[:-9], False),
+        ("oversized wrapped request", encoded + bytes(8 * 1024 * 1024), False),
+    ]
 
 
 def invalid_cases(request):
@@ -107,6 +134,16 @@ def invalid_cases(request):
     expressions = request.expression_records()
     return [
         ("empty expressions", "expressions", []),
+        (
+            "unknown repeatability",
+            "bind_result",
+            raw_request(request.bind_result, "repeatability", "ALWAYS").serialize_to_bytes(),
+        ),
+        (
+            "null repeatability",
+            "bind_result",
+            raw_request(request.bind_result, "repeatability", None).serialize_to_bytes(),
+        ),
         ("malformed expression IPC", "expressions", [b"invalid", request.expressions[1]]),
         ("wrong result count", "result_schema", pa.schema([]).serialize().to_pybytes()),
         (
@@ -138,7 +175,7 @@ def invalid_cases(request):
     ]
 
 
-def run(worker):
+def run(worker, *, wrapped_framing=False):
     """Return named successes, failing immediately on any protocol mismatch."""
     client = Client.from_http(worker) if worker.startswith(("http://", "https://")) else Client(worker, pool=None)
     results = []
@@ -165,6 +202,7 @@ def run(worker):
         proxy = client._primary.proxy
         original = proxy.bind(request=bind_call)
         assert original.projection_expression_profiles == [ROW_SCALAR_EXPRESSION]
+        assert original.repeatability is BindRepeatability.STABLE_WITHIN_QUERY
         assert original.output_schema.equals(pa.schema([pa.field("n", pa.int32())]), check_metadata=True)
         scan(proxy, bind_call, original)
         results.append("ordinary scan before negotiation")
@@ -186,6 +224,7 @@ def run(worker):
             response.validate_request(request)
             assert response.accepted_indices == expected_indices, response
             selected: BindResponse = response.bind_result or original
+            assert selected.repeatability is original.repeatability
             scan(proxy, bind_call, selected)
             # Reusing accepted bind bytes must retain the accepted schema/state.
             if expected_indices:
@@ -193,6 +232,19 @@ def run(worker):
             results.append(name)
 
         valid = proposal(bind_call, original, ['CAST("n" AS BIGINT)', 'CAST("n" AS BIGINT)'])
+        if wrapped_framing:
+            for name, payload, accepted in wrapped_framing_cases(valid):
+                try:
+                    response = proxy.table_function_projection(request=raw_payload(payload))
+                except RpcError:
+                    if accepted:
+                        raise
+                else:
+                    if not accepted:
+                        raise AssertionError("malformed wrapped request was not rejected: " + name)
+                    response.validate_request(valid)
+                    assert response.accepted_indices == [0, 1]
+                results.append(("accept " if accepted else "reject ") + name)
         for name, field, value in invalid_cases(valid):
             try:
                 proxy.table_function_projection(request=raw_request(valid, field, value))
@@ -220,6 +272,7 @@ def run(worker):
                 raise AssertionError("malformed proposal envelope was not rejected: " + name)
 
         rebound = proxy.bind(request=bind_call)
+        assert rebound.repeatability is original.repeatability
         assert rebound.output_schema.equals(original.output_schema, check_metadata=True)
         scan(proxy, bind_call, rebound)
         results.append("independent ordinary rebind")
@@ -231,8 +284,9 @@ def main():
     """Run the same transport-level proof against any example worker."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--worker", required=True, help="Worker command or HTTP URL")
+    parser.add_argument("--wrapped-framing", action="store_true", help="Also qualify raw outer IPC framing and size")
     args = parser.parse_args()
-    results = run(args.worker)
+    results = run(args.worker, wrapped_framing=args.wrapped_framing)
     print(json.dumps({"passed": len(results), "cases": results}))
 
 

@@ -71,6 +71,7 @@ def accepted(proposal, indices=None):
             ),
             opaque_data=b"complete replacement",
             projection_expression_profiles=proposal.bind_result.projection_expression_profiles,
+            repeatability=proposal.bind_result.repeatability,
         ),
     )
 

@@ -55,7 +55,8 @@ expressions with references to slots 2 and 3. It retains `label_size` and its
 inputs for local evaluation. Selection/reordering of the resulting scan fields
 continues to use the existing `projection_ids` contract.
 
-The accepted bind result must keep the original profile list unchanged and
+The accepted bind result must keep the original profile list and
+`repeatability` value unchanged and
 must contain no secret-scope request fields. Its `opaque_data` is the complete
 replacement provider bind state: the provider must retain any original state
 it will need. Existing init, secondary init and HTTP continuation carry that
@@ -104,13 +105,18 @@ negotiates again. Restoration of an accepted serialized scan requires the
 original bind identity and complete original bind response, including opaque
 provider state, to remain identical; otherwise restoration fails explicitly.
 
-Bind-specific repeatability remains a separate planned contract. This method
-does not claim that repeating a scan against a mutable backend is safe or
-returns identical rows.
+The separate [bound scan repeatability contract](scan-repeatability.md) defines
+that promise. Projection acceptance preserves it; accepting an expression does
+not itself grant it.
 
-The Go SDK's existing RPC dependency unwraps the outer request before the SDK
-handler receives it. Its row/schema validation is covered by the shared
-17-case runner; full rejection of trailing outer IPC data/extra batches and
-the raw outer size limit remain dependency-level release-qualification work.
-The new handler validates its nested bind/expression records strictly. This
-checkpoint does not claim complete transport conformance or protocol freeze.
+The Go SDK's RPC dependency unwraps the outer request before the SDK handler
+receives it. The isolated dependency now has a source fix for trailing data,
+extra batches, truncated messages and the raw outer 8 MiB limit. It preserves
+valid physical-EOF and explicit-EOS stream endings under the
+[Arrow streaming format](https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format).
+The projection parameter type opts into a raw-byte limit before Arrow decoding;
+other methods retain their existing size policy. The SDK has a compile-time
+dependency on this limit interface, so shipping it requires the corresponding
+RPC dependency release/pin. Remote dependency and public-RPC qualification is
+pending; this source checkpoint does not claim complete transport conformance
+or protocol freeze.

@@ -20,7 +20,7 @@ from vgi import Worker
 from vgi.catalog import Catalog, Schema, Table
 from vgi.catalog.capabilities import ROW_SCALAR_EXPRESSION
 from vgi.catalog.evaluation_context import QueryEvaluationContext
-from vgi.invocation import BindResponse, GlobalInitResponse
+from vgi.invocation import BindRepeatability, BindResponse, GlobalInitResponse
 from vgi.protocol import TableFunctionProjectionRequest, TableFunctionProjectionResponse
 from vgi.table_function import BindParams, InitParams, ProcessParams, TableFunctionGenerator
 
@@ -69,6 +69,7 @@ class ProjectionSource(TableFunctionGenerator[None, ProjectionState]):
     """Qualify only total INTEGER-to-BIGINT widening casts against this source."""
 
     mode: ClassVar[str] = "accepted"
+    repeatability: ClassVar[BindRepeatability] = BindRepeatability.UNKNOWN
     source: ClassVar[pa.Schema] = SOURCE
     rows: ClassVar[list[dict]] = ROWS
 
@@ -84,6 +85,7 @@ class ProjectionSource(TableFunctionGenerator[None, ProjectionState]):
             output_schema=cls.source,
             opaque_data=BASE,
             projection_expression_profiles=[] if cls.mode == "unoffered" else [ROW_SCALAR_EXPRESSION],
+            repeatability=cls.repeatability,
         )
 
     @classmethod
@@ -132,6 +134,7 @@ class ProjectionSource(TableFunctionGenerator[None, ProjectionState]):
                 output_schema=schema,
                 opaque_data=state.serialize_to_bytes(),
                 projection_expression_profiles=request.bind_result.projection_expression_profiles,
+                repeatability=request.bind_result.repeatability,
             ),
         )
 
@@ -150,6 +153,7 @@ class ProjectionSource(TableFunctionGenerator[None, ProjectionState]):
                 output_schema=params.init_call.output_schema,
                 opaque_data=payload,
                 projection_expression_profiles=request.bind_result.projection_expression_profiles,
+                repeatability=request.bind_result.repeatability,
             ),
         )
         result.validate_request(request)
@@ -232,6 +236,7 @@ class ExecutionError(ProjectionSource):
 
 
 class ProjectionSequence(ProjectionSource):
+    repeatability = BindRepeatability.STABLE_WITHIN_QUERY
     source = pa.schema([pa.field("n", pa.int32())])
     rows = [{"n": n} for n in range(10)]
 

@@ -351,6 +351,8 @@ class TableFunctionProjectionResponse(_SqlRecord):
             raise ValueError("accepted projection index is outside the proposal")
         if self.bind_result.projection_expression_profiles != request.bind_result.projection_expression_profiles:
             raise ValueError("accepted scalar projection cannot change the bind profile offer")
+        if self.bind_result.repeatability != request.bind_result.repeatability:
+            raise ValueError("accepted scalar projection cannot change bind repeatability")
         source = request.bind_result.output_schema
         expected = pa.schema(
             [*source, *(request.result_schema.field(index) for index in self.accepted_indices)],

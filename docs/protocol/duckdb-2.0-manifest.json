@@ -11,9 +11,9 @@
       "Overload collections replacing single macro definitions"
     ],
     "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
-    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the successor schema inventory; required canonical table constraint lists replace the legacy parent arrays and revision-checked catalog_table_constraints_apply joins the public method surface; typed index definitions/options replace legacy index fields and add catalog_index_option_definitions; required semantic ALTER flags and raw subject/dependent column paths extend embedded dependency records; SET DEFAULT requires binary SqlExpression IPC and USING accepts nullable binary IPC; CREATE/ADD defaults use the canonical field codec, without new capability negotiation; CatalogAttachResult.default_schema becomes nullable UTF-8, preserving no implicit default independently of an explicit raw schema name; MacroInfo and MacroCreateRequest require nonempty overloads and remove legacy parent parameters/definition/parameter_default_values/arguments_schema; canonical families need no overload read/create opt-in; existing column comment/tags Arrow metadata gains strict shared validation and preservation on CREATE/ADD/discovery, with no record/RPC change; generated-column authoring/discovery/CREATE consistently use the existing canonical SqlExpression/category metadata, replacing legacy generated_expression strings without a new RPC or record layout; BindResponse adds optional projection_expression_profiles and table_function_projection adds structured early subset acceptance with canonical expressions and exact appended Arrow fields",
+    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the successor schema inventory; required canonical table constraint lists replace the legacy parent arrays and revision-checked catalog_table_constraints_apply joins the public method surface; typed index definitions/options replace legacy index fields and add catalog_index_option_definitions; required semantic ALTER flags and raw subject/dependent column paths extend embedded dependency records; SET DEFAULT requires binary SqlExpression IPC and USING accepts nullable binary IPC; CREATE/ADD defaults use the canonical field codec, without new capability negotiation; CatalogAttachResult.default_schema becomes nullable UTF-8, preserving no implicit default independently of an explicit raw schema name; MacroInfo and MacroCreateRequest require nonempty overloads and remove legacy parent parameters/definition/parameter_default_values/arguments_schema; canonical families need no overload read/create opt-in; existing column comment/tags Arrow metadata gains strict shared validation and preservation on CREATE/ADD/discovery, with no record/RPC change; generated-column authoring/discovery/CREATE consistently use the existing canonical SqlExpression/category metadata, replacing legacy generated_expression strings without a new RPC or record layout; BindResponse adds optional projection_expression_profiles and table_function_projection adds structured early subset acceptance with canonical expressions and exact appended Arrow fields; BindResponse appends required repeatability enum UNKNOWN/STABLE_WITHIN_QUERY, with source implementation awaiting remote qualification",
     "version_requirement": "The existing breaking changes already require a major version and matching routing name. Final number and complete generated diff remain P1/P2 work; the historical additive 2.2.0 candidate is superseded.",
-    "planned_diff": "Included before freeze: finish projection negotiation/runtime qualification and bind-specific repeatability contract/proof, plus broader provider/adapter acceptance. Canonical column expressions/metadata, bounded virtual generated CREATE/read, nullable default_schema and macro families are implemented in October23 checkpoints. Trigger CRUD/execution and optional feature families remain reviewed deferrals. No protocol freeze or public version transition yet.",
+    "planned_diff": "Included before freeze: remote qualification of the new bind-specific repeatability and Go wrapped IPC source changes, broader projection/provider/adapter acceptance and release gates. Repeatability uses one required enum field with a conservative UNKNOWN authoring default; no new query coordinator or capability gate. EC2 is currently unavailable. No protocol freeze or public version transition yet.",
     "historical_additive_candidate": "vgi.v2/2.2.0"
   },
   "sources": {
@@ -1015,7 +1015,7 @@
     "optimizer": {
       "title": "Optimizer and observability additions \u2014 P1 design required",
       "disposition": "include",
-      "status": "bounded_projection_native15_and_sdk_reference_qualified_repeatability_release_pending",
+      "status": "bounded_projection_qualified_repeatability_and_go_framing_source_ready_runtime_pending",
       "records": [
         "FunctionInfo",
         "BindResponse",
@@ -1058,18 +1058,15 @@
         }
       ],
       "proposed_records": [],
-      "record_inventory_status": "Canonical SqlExpression payloads, bind-specific profile offers and the explicit TableFunctionProjectionRequest/Response replace the provisional ProjectionExpression. Append-only result slots use ordered accepted_indices; no separate ResultMapping or preparation-ticket record.",
+      "record_inventory_status": "Canonical SqlExpression payloads, bind-specific profile offers and the explicit TableFunctionProjectionRequest/Response replace the provisional ProjectionExpression. Append-only result slots use ordered accepted_indices; no separate ResultMapping or preparation-ticket record. BindResponse also carries one repeatability enum; existing opaque state anchors the promise.",
       "implementation_work": [
         "Bounded proposal/partial-decline/result-schema and native1.5 optimizer proof passed; qualify broader production providers and transport boundaries before freeze.",
-        "Go vgi-rpc-go outer wrapped-request decoder validates row/schema but unwraps the first IPC batch before SDK code; strict trailing/extra-batch/raw-size rejection requires dependency qualification before release. New nested bind/expression records are checked strictly.",
         "Broaden scalar grammar only with error-order, context, NULL, overflow and logical-type equivalence; throwing expressions stay local.",
         "Qualify direct function calls, generated/nested/rowid/delegated/partitioned scans and filter/runtime-hint coordinates before enabling them.",
         "Qualify expanded-schema cache/split identity before enabling those paths; disabled accepted paths must not silently reactivate.",
         "Native DuckDB2 optimizer API integration remains separate from the pinned1.5 proof.",
-        "Whether a provider can guarantee repeatability for a prepared bind reused by later executions without a new query identity; otherwise it must decline the claim",
-        "Same bind copies versus separately bound equivalent calls, mutable backend snapshots, sampling, dynamic filters, cancellation and token expiry",
-        "Read-only/scalar CONSISTENT, max_workers, catalog version and split TTL cannot manufacture this guarantee",
-        "A concrete mutable-provider reference must prove repeated evaluation semantics before offering the profile"
+        "Run the October24 repeatability source checkpoint on EC2: mutable-source, prepared/copy/cache/inline, SDK wire preservation and signed HTTP/continuation tests.",
+        "Qualify the isolated Go RPC wrapped IPC fix and per-parameter raw-byte limit; publish/pin the paired dependency before release."
       ],
       "review_decisions": {
         "recommended_scope": "Retain projection-expression and repeatability design in the combined package; mark P0 scope reviewed and P1 contract/implementation proof outstanding. Reuse existing transport for metrics, partition selection and parallelism unless a concrete missing datum is demonstrated.",
@@ -1094,14 +1091,13 @@
           ]
         },
         "repeatability": {
-          "existing": "Scalar stability, cache TTL/transaction cache scope, replayable individual split tokens and scan execution_id do not assert that reexecuting identical table bind data in the same query returns the same logical result. The engine treats an absent callback as UNKNOWN.",
-          "justified_new_information": "An optional bind-specific repeatability claim, initially unknown or stable_within_query. Prefer one enum field to an otherwise empty RepeatabilityInfo record. Bound opaque state already carries provider snapshot identity; do not add a general query coordinator or public snapshot token merely to mirror this callback.",
-          "minimal_candidate": "Return the claim with BindResponse, store it in native FunctionData and consult it in is_repeatable. Missing or unnegotiated claim is unknown. stable_within_query means the same bind/arguments/transaction/snapshot can be reevaluated with the same logical result, independent of result cache hits. It is not an automatic retry permission. Existing bind_opaque_data plus transaction_opaque_data carries the actual provider consistency anchor.",
+          "existing": "Scalar stability, cache TTL/transaction cache scope, replayable split tokens and scan execution_id do not assert query-scoped table repeatability. DuckDB2 consults the table-function callback only after its table-backed scan shortcut; that shortcut remains native-port work.",
+          "justified_new_information": "One required BindResponse.repeatability dictionary<int16,utf8> field: UNKNOWN or STABLE_WITHIN_QUERY. SDK defaults UNKNOWN, with no capability gate. The stable promise covers equivalent scans of one complete bind state within a statement.",
+          "minimal_candidate": "Selected and implemented in source: existing opaque bind/transaction state anchors the promise. Projection preserves it exactly. Stable prepared executions bind afresh, stale stable inline metadata triggers fresh bind, result caches lacking snapshot identity are bypassed, copies preserve state and serialized changed-state restores fail. No new coordinator, public snapshot token, release RPC or retry permission.",
           "remaining_P1_questions": [
-            "Whether a provider can guarantee repeatability for a prepared bind reused by later executions without a new query identity; otherwise it must decline the claim",
-            "Same bind copies versus separately bound equivalent calls, mutable backend snapshots, sampling, dynamic filters, cancellation and token expiry",
-            "Read-only/scalar CONSISTENT, max_workers, catalog version and split TTL cannot manufacture this guarantee",
-            "A concrete mutable-provider reference must prove repeated evaluation semantics before offering the profile"
+            "Remote runtime qualification of authored mutable-provider, signed HTTP/continuation, native prepared/cache/inline/copy tests and SDK codec tests.",
+            "Native2 port must address table-backed LogicalGet repeatability classification before callback dispatch, plus sampling/dynamic-filter checks.",
+            "Qualify shipping provider state lifetime and any cache/split integration before relaxing the conservative initial adapter exclusions."
           ],
           "evidence": [
             "python:vgi/invocation.py:52,76,84,125",
@@ -1109,7 +1105,8 @@
             "python:vgi/cache_control.py:75,79,88",
             "haybarn:src/include/duckdb/function/table_function.hpp:533",
             "haybarn:src/planner/logical_operator_repeatability.cpp:60,62,68"
-          ]
+          ],
+          "specification": "docs/protocol/scan-repeatability.md"
         },
         "metrics": {
           "decision": "Existing contract plus engine port; no TypedMetric wire record justified for baseline 2.0 coverage. Retain existing string diagnostics and locally measured native counters/timings.",
@@ -10978,5 +10975,43 @@
     "browser_sha256": "6cca300e3de26d60eca2eb7a3f0449edf7875d6c1d9d4f7b8784bbad89ad9b77",
     "native_lifetime": "Known offers disable prepared bind reuse before optimization. Copy retains accepted schema/state; serialized restore requires byte-identical original bind call and bind response, including opaque state. Java offered original binds now use stable invocation-scoped portable state rather than random pending-bind handles.",
     "known_external_regression": "Existing unrelated catalog constraint/nullability enumeration mismatch remains separate. Native SDK queries/copy probes select the projection fixture without bulk catalog enumeration."
+  },
+  "scan_repeatability_and_go_framing_2026_10_24": {
+    "status": "source_implementation_runtime_pending",
+    "specification": "docs/protocol/scan-repeatability.md",
+    "wire_change": "Append required non-null dictionary<int16,utf8> BindResponse.repeatability with UNKNOWN/STABLE_WITHIN_QUERY; provider opt-in defaults UNKNOWN, no capability negotiation. Projection acceptance preserves exact value.",
+    "native_15": "Stores/copies claim; stable binds disable statement reuse and result cache, bypass stable inline bind metadata, and reject changed original state on serialized table-copy rebind. No new optimizer rewrite on 1.5.",
+    "native_20_remaining": "Port callback and table-backed scan classifier shortcut, preserving sampling/dynamic-filter conservatism.",
+    "go_rpc_dependency": {
+      "worktree": "vgi-rpc-go-duckdb2",
+      "branch": "codex/duckdb-2.0-qualification",
+      "fix": "Complete single-batch wrapped IPC consumption, valid physical EOF/legacy+modern EOS, rejection of extra batches/trailing/repeated/truncated messages; optional params-type raw byte limit checked before reader creation.",
+      "release_requirement": "SDK compile-time assertion requires new WrappedRequestSizeLimiter API. Publish and pin the paired dependency; isolated workspace replacement is for qualification only."
+    },
+    "authored_evidence": [
+      "Python mutable SQLite bound snapshot versus fresh-bind data, signed HTTP, two-turn continuation and projection preservation",
+      "Native decode/copy/serialized restoration, prepared execution, result-cache exclusion, stale inline metadata and recursive same-bind rescan",
+      "SDK default/stable enum codecs, invalid/null values, projection preservation and common immutable sequence fixture",
+      "Go dependency framing/early-limit unit tests; shared public RPC runner19cases, optional wrapped framing27cases"
+    ],
+    "validation": {
+      "status": "not_run",
+      "reason": "EC2 SSH98.81.121.120 times out; user requested edits locally and all builds/tests remotely. No local build/test substitution.",
+      "remaining": [
+        "Remote synchronization",
+        "Go dependency/workspace verification",
+        "Native1.5 and SDK builds/tests",
+        "Shared subprocess/HTTP conformance",
+        "Browser bundle regeneration",
+        "Generated drift/inventory and runtime reflection checks"
+      ],
+      "source_checks": "Generated artifacts regenerated with all explicit isolated worktree roots; source review and formatting only. No builds/runtime tests."
+    },
+    "protocol_hash": "41f61f37c7ce42f63f3ca47f8861508f3f356d2422a5b8a0bab48ff92c0857a8",
+    "protocol_hash_note": "Canonical generator preimage unchanged because BindResponse is packed binary; nested DTO schema changes are not reflected in endpoint schema hash.",
+    "published_protocol_unchanged": "vgi.v2/2.1.0",
+    "engine_pin_unchanged": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "artifacts_planned": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC/logs/repeatability-20261024-w3GOmK",
+    "release_gates_unchanged": true
   }
 }

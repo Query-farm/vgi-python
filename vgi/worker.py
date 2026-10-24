@@ -3283,13 +3283,18 @@ class Worker:
         self._validate_bind_shape(func_cls, request)
         instance = func_cls(logger=_logger)
         if isinstance(instance, TableFunctionBase):
-            return instance.bind(
+            result = instance.bind(
                 request,
                 ctx=ctx,
                 attach_plaintext=attach_plaintext,
                 transaction_plaintext=self._unwrap_transaction_for(request),
             )
-        return instance.bind(request, ctx=ctx, attach_plaintext=attach_plaintext)  # type: ignore[attr-defined, no-any-return]
+        else:
+            result = instance.bind(request, ctx=ctx, attach_plaintext=attach_plaintext)  # type: ignore[attr-defined]
+        if not isinstance(result, BindResponse):
+            raise TypeError("bind must return BindResponse")
+        result.__post_init__()
+        return result
 
     def table_function_projection(
         self, request: TableFunctionProjectionRequest, ctx: CallContext

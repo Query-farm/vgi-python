@@ -79,6 +79,7 @@ from vgi.filter_v2_builder import (
     type_payload,
     value_payload,
 )
+from vgi.invocation import BindRepeatability
 from vgi.metadata import (
     ArgumentMonotonicity,
     CatalogFunctionType,
@@ -155,6 +156,7 @@ __all__ = [
     "argument_specs_to_schema",
     "parameter_default_values_from_specs",
     "BindRequest",
+    "BindRepeatability",
     "ColumnBounds",
     "ColumnRefNode",
     "ComparisonNode",
