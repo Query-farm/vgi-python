@@ -25,7 +25,9 @@ responses have separate tests; this runner does not claim those properties.
 
 Add `--wrapped-framing` to qualify raw outer IPC handling: valid physical EOF
 and legacy EOS, extra batches, trailing bytes, repeated EOS, truncated EOS/body
-and requests exceeding 8 MiB. This adds eight cases, for 27 total. The new Go
-RPC dependency fix must pass this mode over subprocess and HTTP before release;
-the dependency's unit tests also check rejection before Arrow decoding. These
-new cases are authored but await remote runtime qualification.
+and requests exceeding 8 MiB. This adds eight cases, for 27 total. The paired
+Go RPC dependency passes this mode over subprocess and HTTP; its unit tests
+also check rejection before Arrow decoding. Python passes the 19 semantic
+cases but its generic RPC wrapper accepts an extra outer batch before typed
+validation; complete Python outer framing/raw-size rejection remains an open
+release requirement. See the manifest checkpoint for each SDK's evidence.

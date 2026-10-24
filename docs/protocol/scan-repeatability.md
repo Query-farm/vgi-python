@@ -2,7 +2,8 @@
 
 This is a proposed successor contract in the combined, unpublished DuckDB 2.0
 transition. The native implementation continues to target DuckDB 1.5.x.
-Source implementation is underway; remote runtime qualification is pending.
+The bounded native 1.5 and mutable-provider proofs passed on EC2 Linux ARM64.
+Broader production-provider qualification and the native 2.0 port remain open.
 
 ## Wire field
 
@@ -69,5 +70,6 @@ typed snapshot during bind. Its tests mutate committed source data between
 scans of one bind, then create a fresh bind. They also cover signed HTTP,
 continuation state, stale inline metadata and projection preservation. Native
 tests cover copies, changed-state rejection, prepared executions and cache
-exclusion. These tests are authored; passing runtime evidence must be recorded
-after the EC2 build/test host is available.
+exclusion. These tests passed on the pinned native 1.5 build. Exact results and remaining
+transport/provider limits are recorded in the companion manifest checkpoint
+`scan_repeatability_and_go_framing_2026_10_24`.

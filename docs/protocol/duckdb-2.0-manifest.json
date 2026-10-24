@@ -11,9 +11,9 @@
       "Overload collections replacing single macro definitions"
     ],
     "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
-    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the successor schema inventory; required canonical table constraint lists replace the legacy parent arrays and revision-checked catalog_table_constraints_apply joins the public method surface; typed index definitions/options replace legacy index fields and add catalog_index_option_definitions; required semantic ALTER flags and raw subject/dependent column paths extend embedded dependency records; SET DEFAULT requires binary SqlExpression IPC and USING accepts nullable binary IPC; CREATE/ADD defaults use the canonical field codec, without new capability negotiation; CatalogAttachResult.default_schema becomes nullable UTF-8, preserving no implicit default independently of an explicit raw schema name; MacroInfo and MacroCreateRequest require nonempty overloads and remove legacy parent parameters/definition/parameter_default_values/arguments_schema; canonical families need no overload read/create opt-in; existing column comment/tags Arrow metadata gains strict shared validation and preservation on CREATE/ADD/discovery, with no record/RPC change; generated-column authoring/discovery/CREATE consistently use the existing canonical SqlExpression/category metadata, replacing legacy generated_expression strings without a new RPC or record layout; BindResponse adds optional projection_expression_profiles and table_function_projection adds structured early subset acceptance with canonical expressions and exact appended Arrow fields; BindResponse appends required repeatability enum UNKNOWN/STABLE_WITHIN_QUERY, with source implementation awaiting remote qualification",
+    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the successor schema inventory; required canonical table constraint lists replace the legacy parent arrays and revision-checked catalog_table_constraints_apply joins the public method surface; typed index definitions/options replace legacy index fields and add catalog_index_option_definitions; required semantic ALTER flags and raw subject/dependent column paths extend embedded dependency records; SET DEFAULT requires binary SqlExpression IPC and USING accepts nullable binary IPC; CREATE/ADD defaults use the canonical field codec, without new capability negotiation; CatalogAttachResult.default_schema becomes nullable UTF-8, preserving no implicit default independently of an explicit raw schema name; MacroInfo and MacroCreateRequest require nonempty overloads and remove legacy parent parameters/definition/parameter_default_values/arguments_schema; canonical families need no overload read/create opt-in; existing column comment/tags Arrow metadata gains strict shared validation and preservation on CREATE/ADD/discovery, with no record/RPC change; generated-column authoring/discovery/CREATE consistently use the existing canonical SqlExpression/category metadata, replacing legacy generated_expression strings without a new RPC or record layout; BindResponse adds optional projection_expression_profiles and table_function_projection adds structured early subset acceptance with canonical expressions and exact appended Arrow fields; BindResponse appends required repeatability enum UNKNOWN/STABLE_WITHIN_QUERY, with bounded native1.5 and SDK qualification",
     "version_requirement": "The existing breaking changes already require a major version and matching routing name. Final number and complete generated diff remain P1/P2 work; the historical additive 2.2.0 candidate is superseded.",
-    "planned_diff": "Included before freeze: remote qualification of the new bind-specific repeatability and Go wrapped IPC source changes, broader projection/provider/adapter acceptance and release gates. Repeatability uses one required enum field with a conservative UNKNOWN authoring default; no new query coordinator or capability gate. EC2 is currently unavailable. No protocol freeze or public version transition yet.",
+    "planned_diff": "Included before freeze: broader production-provider/adapter acceptance and release gates. Bounded scalar projection, bind-specific repeatability and Go wrapped IPC qualification pass on the pinned1.5 build. Python generic RPC outer framing/raw-size rejection, paired Go dependency publication/pinning and remaining transports still require qualification. No protocol freeze or public version transition yet.",
     "historical_additive_candidate": "vgi.v2/2.2.0"
   },
   "sources": {
@@ -1015,7 +1015,7 @@
     "optimizer": {
       "title": "Optimizer and observability additions \u2014 P1 design required",
       "disposition": "include",
-      "status": "bounded_projection_qualified_repeatability_and_go_framing_source_ready_runtime_pending",
+      "status": "bounded_projection_repeatability_native15_sdk_qualified_release_pending",
       "records": [
         "FunctionInfo",
         "BindResponse",
@@ -1055,6 +1055,12 @@
           "source": "docs/protocol/projection-expressions.md",
           "checkpoint": "projection_expressions_2026_10_23",
           "limits": "Repeatability, broader projection shapes/grammar/cache/split identity, Go outer framing qualification, production-provider/release gates and native2 port remain open."
+        },
+        {
+          "status": "bounded_repeatability_checkpoint_2026_10_24",
+          "source": "docs/protocol/scan-repeatability.md",
+          "checkpoint": "scan_repeatability_and_go_framing_2026_10_24",
+          "limits": "Finite native1.5/SDK/provider proofs only; production state lifetime, Python outer IPC framing, all transports and native2 integration remain open."
         }
       ],
       "proposed_records": [],
@@ -1065,8 +1071,8 @@
         "Qualify direct function calls, generated/nested/rowid/delegated/partitioned scans and filter/runtime-hint coordinates before enabling them.",
         "Qualify expanded-schema cache/split identity before enabling those paths; disabled accepted paths must not silently reactivate.",
         "Native DuckDB2 optimizer API integration remains separate from the pinned1.5 proof.",
-        "Run the October24 repeatability source checkpoint on EC2: mutable-source, prepared/copy/cache/inline, SDK wire preservation and signed HTTP/continuation tests.",
-        "Qualify the isolated Go RPC wrapped IPC fix and per-parameter raw-byte limit; publish/pin the paired dependency before release."
+        "Bounded repeatability proof passed on native1.5 and SDK references; qualify shipping provider state lifetime and native2 sampling/dynamic-filter/scan-classifier behavior.",
+        "Go wrapped IPC qualification passed; publish/pin its paired RPC dependency. Python generic outer wrapped-request decoding still accepts an extra batch before typed validation; close framing/raw-size rejection before release."
       ],
       "review_decisions": {
         "recommended_scope": "Retain projection-expression and repeatability design in the combined package; mark P0 scope reviewed and P1 contract/implementation proof outstanding. Reuse existing transport for metrics, partition selection and parallelism unless a concrete missing datum is demonstrated.",
@@ -1095,7 +1101,6 @@
           "justified_new_information": "One required BindResponse.repeatability dictionary<int16,utf8> field: UNKNOWN or STABLE_WITHIN_QUERY. SDK defaults UNKNOWN, with no capability gate. The stable promise covers equivalent scans of one complete bind state within a statement.",
           "minimal_candidate": "Selected and implemented in source: existing opaque bind/transaction state anchors the promise. Projection preserves it exactly. Stable prepared executions bind afresh, stale stable inline metadata triggers fresh bind, result caches lacking snapshot identity are bypassed, copies preserve state and serialized changed-state restores fail. No new coordinator, public snapshot token, release RPC or retry permission.",
           "remaining_P1_questions": [
-            "Remote runtime qualification of authored mutable-provider, signed HTTP/continuation, native prepared/cache/inline/copy tests and SDK codec tests.",
             "Native2 port must address table-backed LogicalGet repeatability classification before callback dispatch, plus sampling/dynamic-filter checks.",
             "Qualify shipping provider state lifetime and any cache/split integration before relaxing the conservative initial adapter exclusions."
           ],
@@ -1106,7 +1111,8 @@
             "haybarn:src/include/duckdb/function/table_function.hpp:533",
             "haybarn:src/planner/logical_operator_repeatability.cpp:60,62,68"
           ],
-          "specification": "docs/protocol/scan-repeatability.md"
+          "specification": "docs/protocol/scan-repeatability.md",
+          "qualified_checkpoint": "scan_repeatability_and_go_framing_2026_10_24"
         },
         "metrics": {
           "decision": "Existing contract plus engine port; no TypedMetric wire record justified for baseline 2.0 coverage. Retain existing string diagnostics and locally measured native counters/timings.",
@@ -10977,7 +10983,7 @@
     "known_external_regression": "Existing unrelated catalog constraint/nullability enumeration mismatch remains separate. Native SDK queries/copy probes select the projection fixture without bulk catalog enumeration."
   },
   "scan_repeatability_and_go_framing_2026_10_24": {
-    "status": "source_implementation_runtime_pending",
+    "status": "bounded_native15_and_sdk_qualified_release_pending",
     "specification": "docs/protocol/scan-repeatability.md",
     "wire_change": "Append required non-null dictionary<int16,utf8> BindResponse.repeatability with UNKNOWN/STABLE_WITHIN_QUERY; provider opt-in defaults UNKNOWN, no capability negotiation. Projection acceptance preserves exact value.",
     "native_15": "Stores/copies claim; stable binds disable statement reuse and result cache, bypass stable inline bind metadata, and reject changed original state on serialized table-copy rebind. No new optimizer rewrite on 1.5.",
@@ -10995,23 +11001,154 @@
       "Go dependency framing/early-limit unit tests; shared public RPC runner19cases, optional wrapped framing27cases"
     ],
     "validation": {
-      "status": "not_run",
-      "reason": "EC2 SSH98.81.121.120 times out; user requested edits locally and all builds/tests remotely. No local build/test substitution.",
-      "remaining": [
-        "Remote synchronization",
-        "Go dependency/workspace verification",
-        "Native1.5 and SDK builds/tests",
-        "Shared subprocess/HTTP conformance",
-        "Browser bundle regeneration",
-        "Generated drift/inventory and runtime reflection checks"
-      ],
-      "source_checks": "Generated artifacts regenerated with all explicit isolated worktree roots; source review and formatting only. No builds/runtime tests."
+      "status": "passed_with_explicit_limits",
+      "execution": "All builds and tests ran on EC2; edits and commits stayed in the isolated local worktrees.",
+      "native_build": "Static/loadable extensions, shell, unittest and vgi_catalog_tests passed against unchanged pinned engine.",
+      "native_contract_and_copy": {
+        "cases": 8,
+        "assertions": 100,
+        "logs": [
+          "native-contract.log",
+          "native-copy.log"
+        ]
+      },
+      "native_repeatability_live": {
+        "passed": 5,
+        "scope": "Fresh prepared snapshots, unoffered result-cache exclusion, stale inline bypass, projected prepared state, recursive repeated evaluation of one bound snapshot.",
+        "log": "native-live/verified.json"
+      },
+      "native_projection_regression": {
+        "passed": 12,
+        "log": "projection-live.log"
+      },
+      "native_explicit_remote_queries": {
+        "passed": 18,
+        "scope": "Typed parameters, ordering/empty output, autocommit/transaction prepared executions, release, refusal/error boundaries, rollback, early LIMIT and interruption; zero retained preparations/executions/fragments/attachments.",
+        "log": "native-query-regression.log",
+        "audit_artifacts": "native-query-scenarios"
+      },
+      "native_sdk_queries_and_copies": {
+        "workers": [
+          "go",
+          "rust",
+          "typescript",
+          "java",
+          "csharp",
+          "cpp"
+        ],
+        "query_shapes_per_worker": 5,
+        "all_passed": true,
+        "scope": "Widening, residual/reordered/duplicate projections, local expressions, prepared executions and ordinary rebind; actual serialized plan copies retain bound state. Targeted discovery excludes known unrelated bulk constraint enumeration issue."
+      },
+      "python": {
+        "focused_passed": 47,
+        "broader_passed": 1340,
+        "skipped": 8,
+        "public_rpc_cases": 19,
+        "ruff": "pass",
+        "mypy_source_files": 224,
+        "logs": [
+          "python-focused.log",
+          "python-broad.log"
+        ],
+        "format_limit": "Whole-repo formatting has unchanged baseline exception tests/catalog/write_finalize_probe.py; no unrelated reformat applied."
+      },
+      "go_rpc": {
+        "top_level_tests_passed": 15,
+        "test_records_including_subtests": 30,
+        "vet": "pass",
+        "docs_verified_files": 18,
+        "logs": "sdk-go",
+        "workspace": "Qualification uses isolated vgi-go and vgi-rpc-go modules. docs-verify runs standalone with GOWORK=off; initial inherited workspace/tooling mismatch is not a source failure."
+      },
+      "go_sdk": {
+        "top_level_tests_passed": 7,
+        "test_records_including_subtests": 29,
+        "subprocess_cases": 27,
+        "http_cases": 27
+      },
+      "rust": {
+        "focused_passed": 30,
+        "subprocess_cases": 27,
+        "additional_public_probe": "Rejected1-,2-,3-byte incomplete next-message prefixes after reproducing the original acceptance.",
+        "logs": "sdk-rust"
+      },
+      "typescript": {
+        "type_build": "pass",
+        "focused_passed_per_backend": 14,
+        "backends": [
+          "ArrowJS",
+          "Flechette"
+        ],
+        "default_subprocess_cases": 27,
+        "default_http_cases": 27,
+        "browser_build": "pass",
+        "logs": "sdk-ts"
+      },
+      "java": {
+        "core_passed": 668,
+        "example_passed": 42,
+        "skipped": 2,
+        "subprocess_cases": 27,
+        "log": "java-full-2.log"
+      },
+      "csharp": {
+        "passed": 679,
+        "subprocess_cases": 27,
+        "log": "csharp-full-2.log"
+      },
+      "cpp": {
+        "ctest_passed": 72,
+        "subprocess_cases": 27,
+        "logs": [
+          "cpp-ctest-final.log",
+          "cpp-projection-framing.log"
+        ]
+      },
+      "generation": "Strict --check --require-all passed with all isolated roots supplied.",
+      "inventory": {
+        "audit_rows": 151,
+        "areas": 20,
+        "unresolved_reviews": 0
+      },
+      "review": "Independent source review covered native snapshot lifetime, Go framing and final Java/C#/Rust/TypeScript bounds; malformed dictionary values are covered by explicit NULL-bitmap regressions.",
+      "final_manifest_and_browser_regression": {
+        "passed": 13,
+        "log": "final-manifest-browser.log"
+      }
     },
     "protocol_hash": "41f61f37c7ce42f63f3ca47f8861508f3f356d2422a5b8a0bab48ff92c0857a8",
     "protocol_hash_note": "Canonical generator preimage unchanged because BindResponse is packed binary; nested DTO schema changes are not reflected in endpoint schema hash.",
     "published_protocol_unchanged": "vgi.v2/2.1.0",
     "engine_pin_unchanged": "105edd31b57fe7e6d32ee648efad562e45a9f908",
-    "artifacts_planned": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC/logs/repeatability-20261024-w3GOmK",
-    "release_gates_unchanged": true
+    "release_gates_unchanged": true,
+    "artifacts": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC/logs/repeatability-20261024-w3GOmK",
+    "engine_banner": "v1.5.6-dev149",
+    "ec2_host": "3.82.45.233",
+    "browser_sha256": "1c69d491c0de9a8f133ea047dc6b976b872b76806c4b709eaf8a297770af927b",
+    "source_checkpoint_revisions": {
+      "vgi": "dc4e7b0bf5fd6dd85bad61ee4ab6748a0ae699a7",
+      "vgi-python": "fe7f2dbd39ba4dbe85819454ecdbaaa840f6a45c",
+      "vgi-go": "ad5f89701ef0bc20845ae95bf1cffe0f8e6cbed8",
+      "vgi-rust": "1b8379f9222797b6ba93a5e851f96d9a3e2d062d",
+      "vgi-typescript": "35af7185611b298b3d1b35f2ab44051524fbc28b",
+      "vgi-java": "8127455e398b960ce8cd525c5cc331b8ca118bc3",
+      "vgi-csharp": "617f0161dd3f47ba9f8ae9dc4e105a05d5224e4b",
+      "vgi-cpp": "b9ac8fa825828493f94d87ba3295ecbca6a00e53",
+      "vgi-rpc-go": "2921723df8246e8715785ffccae4b1a0912d2550"
+    },
+    "runtime_fixes": [
+      "Java and TypeScript accept valid physical EOF after exactly one complete record batch.",
+      "C# rejects partial EOS before its permissive Arrow reader can treat it as EOF.",
+      "Rust checks the exact remaining stream suffix to reject partial length prefixes accepted by Arrow-Rust.",
+      "C++ expected reflection hash fixtures now match the unchanged canonical Python endpoint hash.",
+      "Native malformed-enum tests now include hidden NULL dictionary values retaining valid claim bytes."
+    ],
+    "remaining": [
+      "Python generic RPC wrapper unwraps only the first outer batch before typed validation. The optional extra-batch probe fails (python-common-2.log); complete outer framing/raw-size rejection remains a release prerequisite.",
+      "TypeScript fullworker Flechette launch fails at catalog_attach on Binary schema backend comparison before reaching bind/projection (sdk-ts/subprocess27-flechette.log). Default ArrowJS subprocess/HTTP and focused newcode under both backends pass; Flechette fullworker transport remains unqualified.",
+      "Publish and pin the paired Go RPC dependency before release; qualification workspace is not a published dependency solution.",
+      "Broader production providers, state expiry/cleanup and transport/platform coverage; combined P1-P3 release gates and native DuckDB2 M0-M4 port remain open."
+    ]
   }
 }

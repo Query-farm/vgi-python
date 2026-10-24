@@ -110,13 +110,18 @@ that promise. Projection acceptance preserves it; accepting an expression does
 not itself grant it.
 
 The Go SDK's RPC dependency unwraps the outer request before the SDK handler
-receives it. The isolated dependency now has a source fix for trailing data,
-extra batches, truncated messages and the raw outer 8 MiB limit. It preserves
+receives it. The isolated dependency now rejects trailing data, extra batches,
+truncated messages and requests exceeding the raw outer 8 MiB limit. It preserves
 valid physical-EOF and explicit-EOS stream endings under the
 [Arrow streaming format](https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format).
 The projection parameter type opts into a raw-byte limit before Arrow decoding;
 other methods retain their existing size policy. The SDK has a compile-time
 dependency on this limit interface, so shipping it requires the corresponding
-RPC dependency release/pin. Remote dependency and public-RPC qualification is
-pending; this source checkpoint does not claim complete transport conformance
-or protocol freeze.
+RPC dependency release/pin. The dependency tests and all 27 public-RPC cases
+pass over subprocess and HTTP. Java, C#, Rust and TypeScript also received
+narrow request-local framing fixes.
+Python's generic RPC wrapper still unwraps only the first outer batch before
+its typed validator runs: the extra-batch probe fails, while its 19 required
+semantic cases pass. Python outer framing/raw-size qualification remains a
+release prerequisite. This checkpoint does not claim complete transport
+conformance or protocol freeze.

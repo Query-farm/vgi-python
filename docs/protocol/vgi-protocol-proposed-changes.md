@@ -405,8 +405,9 @@ the claim and guards snapshot lifetime but has no repeatability callback.
 DuckDB 2.0's `TableFunction::is_repeatable` supplies the optimizer hook. Its
 table-backed scan shortcut classifies a catalog table before consulting that
 hook, so the later native port must also address that shortcut to keep unknown
-VGI scans conservative. Source changes and mutable-provider tests are authored;
-remote runtime qualification remains pending.
+VGI scans conservative. The bounded source implementation and mutable-provider tests passed on the
+pinned 1.5 build; production providers and the native 2.0 optimizer port remain
+separate qualification work.
 
 ### Partition selection
 
