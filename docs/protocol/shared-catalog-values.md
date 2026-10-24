@@ -1050,9 +1050,15 @@ The native 1.5 subset translates top-level NOT_NULL, UNIQUE, PRIMARY_KEY and
 same-schema MATCH SIMPLE NO_ACTION/RESTRICT foreign keys. SET/DROP NOT NULL uses
 canonical apply with the discovered revision. At that checkpoint CHECK, nested
 paths, unsupported trust states and broader FK actions rejected explicitly.
-The October 23 checkpoint below adds bounded CHECK discovery; CHECK creation,
-nested paths and the other unsupported semantics still reject. Native
-default/generated metadata translation remains pending.
+The October 23 checkpoint below adds bounded CHECK discovery. The October 24
+nested-NOT_NULL follow-up additionally imports enforced, ALL_ROWS facts for
+ordinary STRUCT field paths. It validates exact raw components and recursive
+Arrow nullability, preserving the original canonical records. A nonnullable
+child does not make its parent nonnullable: only top-level NOT_NULL facts become
+DuckDB 1.5 constraints or supply top-level ALTER identities. Writes still require
+the negotiated provider enforcement profile. Collection and logical-type storage
+children do not become SQL constraint paths. Nested UNIQUE/PRIMARY_KEY/FK, nested
+SQL constraint DDL, CHECK creation and other unsupported semantics still reject.
 
 EC2 validation passed for the Python public lifecycle, all SDK contract/adapter
 suites, the bounded native 1.5 adapter and six built-worker discovery lanes.

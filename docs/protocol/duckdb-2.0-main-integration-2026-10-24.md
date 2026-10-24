@@ -1,5 +1,13 @@
 # Latest-main integration — October 24, 2026
 
+**Subsequent fix:** the nested-NOT_NULL schema-reconciliation failure recorded
+below has been resolved. Native 1.5 now validates and retains nested facts without
+making nullable parents NOT NULL. The write regression passes with Python and Go
+workers over subprocess and HTTP. The full native 1.5 rerun passed 347 test files,
+with 32 skips and zero failures. Current regression and seven-framework evidence
+are in `nested_not_null_checkpoint_2026_10_24` in the
+[manifest](duckdb-2.0-manifest.json); the original integration results below remain historical.
+
 Published main is now `vgi.v2` / `2.2.0`. The combined successor remains unpublished and
 incompatible despite temporarily carrying those development labels. Its final major version,
 routing name and coordinated release gates remain unresolved. The native runtime stays pinned

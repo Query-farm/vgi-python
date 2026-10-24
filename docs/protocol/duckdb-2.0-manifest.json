@@ -11553,7 +11553,8 @@
               "Premerge Python 7dc87f44 schema_reconcile fixture already publishes nested.a NOT_NULL.",
               "SQL test unchanged; prior matching runtime failure documented in native docs/duckdb-2.0-plan.md."
             ],
-            "limits": "No new nested-constraint support or fixture weakening was included in this integration."
+            "limits": "No new nested-constraint support or fixture weakening was included in this integration.",
+            "resolved_by": "nested_not_null_checkpoint_2026_10_24"
           }
         }
       },
@@ -11642,7 +11643,6 @@
     "browser_sha256": "2b49411f93ff4f538dcbec6c767c663c56026b11f5e5595c0fb749e4743dc6e8",
     "historical_evidence_policy": "Earlier dated checkpoints, version fields, source revisions and initial A0 counts describe their original inputs. They are retained as historical evidence and are not silently requalified by this merge.",
     "remaining": [
-      "Existing native 1.5 schema reconciliation failure with nested constraint paths remains; separately qualify any adapter change.",
       "Native 2.0 read-path port after refreshed compile inventory",
       "General SQL provider, shared mutable snapshot and active-SQL cancellation proof",
       "Automatic whole-query eligibility/export/replacement; no new wire requirement demonstrated",
@@ -11660,6 +11660,107 @@
       "vgi-rpc-java": "3c9ed089f0d197ed7691e724dcfb52a5ca554ea5",
       "vgi-rpc-c++": "3ee63c04a32b1bad75d722467ada25760c16ba7d",
       "vgi": "95df719667a5e226f6c82cc13d643a2a13207d08"
-    }
+    },
+    "superseded_native15_failure_by": "nested_not_null_checkpoint_2026_10_24"
+  },
+  "nested_not_null_checkpoint_2026_10_24": {
+    "status": "implemented_and_qualified_on_native15",
+    "summary": "Native 1.5 imports enforced ALL_ROWS nested STRUCT NOT_NULL facts while preserving nullable parents and canonical identities; Python and Go reconciliation writes reject invalid nested values.",
+    "wire_change": false,
+    "sources": [
+      "native:src/vgi_constraint_contract.cpp",
+      "native:test/cpp/test_constraint_contract.cpp",
+      "native:test/sql/integration/schema_reconcile.test",
+      "go:examples/schema_reconcile/constraints.go",
+      "go:examples/schema_reconcile/constraints_test.go",
+      "go:vgi/attach_capabilities_test.go"
+    ],
+    "semantics": [
+      "Exact raw path resolution with ambiguity, depth and synthetic/storage-target rejection.",
+      "Arrow nullability agrees recursively with trusted facts through ordinary STRUCT fields. List and logical-type storage children are not SQL paths.",
+      "Only top-level NOT_NULL facts enter native indices and ALTER identity maps. Required children never make their nullable ancestors required.",
+      "Provider enforcement remains required for writes. No new nested UNIQUE/PRIMARY_KEY/FK, nested SQL constraint DDL, generic enforcement or transaction guarantee.",
+      "Go bounded fixture validates actual stored rows before ALL_ROWS and validates insert/update arrays before effects; its attach selection intersects existing offers/prerequisites. The generic hook only forwards provider-owned capability records."
+    ],
+    "validation": {
+      "native_build": "static/loadable extension, shell, unittest and catalog tests passed on the retained 1.5 pin",
+      "native_constraints": {
+        "cases": 14,
+        "assertions": 480,
+        "log": "nested-not-null-20261024/native/constraints-final.log"
+      },
+      "python_native_subprocess": {
+        "cases": 1,
+        "assertions": 64,
+        "log": "nested-not-null-20261024/native/schema-reconcile-subprocess.log"
+      },
+      "python_native_http": {
+        "cases": 1,
+        "skipped": 0,
+        "log": "nested-not-null-20261024/native/schema-reconcile-http.log"
+      },
+      "python_contracts": {
+        "passed": 85,
+        "skipped": 0,
+        "log": "nested-not-null-20261024/python-contracts.log"
+      },
+      "go_full": {
+        "passed": 887,
+        "skipped": 1,
+        "skip_reason": "TestCfDoStorage_Live requires an external service",
+        "vet": "passed",
+        "log": "nested-not-null-sdk-20261024-gKrJCb/go-full.jsonl"
+      },
+      "go_native_subprocess": {
+        "cases": 1,
+        "assertions": 64,
+        "skipped": 0,
+        "log": "nested-not-null-sdk-20261024-gKrJCb/go-native.log"
+      },
+      "go_native_http": {
+        "cases": 1,
+        "assertions": 64,
+        "skipped": 0,
+        "log": "nested-not-null-sdk-20261024-gKrJCb/go-native-http.log"
+      },
+      "rust_targeted": {
+        "passed": 21,
+        "log": "nested-not-null-sdk-20261024-gKrJCb/rust.log"
+      },
+      "cpp_sdk_targeted": {
+        "passed": 4,
+        "log": "nested-not-null-sdk-20261024-gKrJCb/cpp.log"
+      },
+      "typescript_targeted": {
+        "arrowjs_passed": 65,
+        "flechette_passed": 65,
+        "skipped": 0
+      },
+      "java_targeted": {
+        "core_passed": 40,
+        "example_passed": 7,
+        "skipped": 0
+      },
+      "csharp_targeted": {
+        "passed": 45,
+        "skipped": 0,
+        "rpc": "published 0.18.1"
+      },
+      "managed_sdk_evidence": "nested-not-null-20261024/sdk-audit-VtU0JX/results.json",
+      "scope": "Same native write regression qualified with Python and Go only. Remaining SDK checks establish record preservation and explicit refusal of unsupported constrained mutations; they do not claim provider enforcement.",
+      "full_native": {
+        "status": "passed",
+        "log": "nested-not-null-20261024/native/full.log",
+        "summary": "nested-not-null-20261024/native/full.csv",
+        "files": 379,
+        "passed": 347,
+        "skipped": 32,
+        "failed": 0,
+        "seconds": 376.25,
+        "skip_scope": "Optional services/extensions and transport-specific fixtures; skipped files are not passes."
+      }
+    },
+    "limits": "Native DuckDB 2 port, automatic whole-query pushdown, protocol freeze and release qualification remain open.",
+    "go_revision": "4dcba2ac1d5cf2dd219bfd7598f8b75d89d01fee"
   }
 }
