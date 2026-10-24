@@ -935,6 +935,19 @@
             "haybarn:src/include/duckdb/catalog/catalog.hpp:90,417"
           ],
           "limits": "Retains existing bounded runtime evidence; no new qualification."
+        },
+        {
+          "status": "automatic_planning_source_review_2026_10_24",
+          "source": "automatic_query_pushdown_plan_2026_10_24",
+          "sources": [
+            "docs/protocol/vgi-catalog-query-pushdown-design.md#implementation-checkpoint--october-24-2026",
+            "native:src/vgi_query_rpc.cpp",
+            "native:src/vgi_query_function.cpp",
+            "tests/catalog/query_reference.py",
+            "haybarn:src/include/duckdb/planner/logical_plan_sql_exporter.hpp",
+            "haybarn:src/planner/sql_export/bound_expression_sql_exporter.cpp"
+          ],
+          "limits": "Planning/source evidence only. No native 2.0 build, automatic replacement, general provider or mutable snapshot qualification. Engine API evidence uses exact e1784fa42310, not later Haybarn HEAD."
         }
       ],
       "implementation_notes": [
@@ -942,11 +955,16 @@
         "Prepared tokens and execution locators are opaque; preparation release is a wire RPC. Resolve/start/read/close remain provider hooks over the existing TABLE stream.",
         "The finite Python reference accepts six exact read queries; explicit support never implies automatic semantic equivalence.",
         "Native 1.5 explicit vgi_query is implemented and tested: vgi_query_enabled before ATTACH, typed parameters, fresh prepared-statement binding, exact output validation and independent cleanup. See native_query_adapter_validation.",
-        "General SQL providers, mutable snapshots, production janitor behavior, HTTP/WASM query qualification and automatic native 2.0 integration remain open."
+        "General SQL providers, shared mutable backend snapshots, active-query cancellation, bounded incremental spooling and independent abandoned-token cleanup remain open. Existing signed-HTTP fragment continuation is qualified separately; automatic native 2.0 and wider HTTP/WASM query coverage remain open."
       ],
       "review_decision": "Keep existing negotiated prepare/release plus TABLE bind/init/stream contract; no additional query RPC family or parameter value record required.",
       "implementation_work": [
-        "Automatic native2 export/eligibility and semantic certification; general provider execution, mutable snapshot correctness, production abandoned-token cleanup, HTTP/WASM and cancellation qualification. None proves a new wire datum missing yet. Keep EXECUTE_STATEMENT and CONNECT unsupported: readonly query support does not imply remote writes or raw-session routing. Existing native1.5 vgi_query is explicitly gated and uses one ordered reader without optimizer pushdowns or init retry."
+        "A0/A1: isolated pinned 2.0 diagnostic build and basic catalog/scan/explicit-query port. Keep the 1.5 lane unchanged; mechanical compatibility of the monolithic source list or explicit module exclusions is required even for a read-only target.",
+        "A2: bounded DuckDB-backed SQL provider serving ordinary logical scans and remote queries under the same existing backend transaction/snapshot, with active-query interruption and incremental result bounds. Metadata etags and per-bind repeatability do not prove shared data visibility.",
+        "A3/A4: early bound-plan eligibility/export before scalar projection and multi-scan transforms; native automatic capabilities, context digest, object/output manifest and verified positional replacement. Reuse preparation ownership and the conservative TABLE executor; preserve the original local plan only on unsupported shape or valid decline.",
+        "A5: bounded semantic/snapshot/authorization/lifetime/transport and actual plan-copy/prepared-freshness qualification, with EXPLAIN and result-traffic evidence. No local replay after remote errors or execution. Keep automatic mode opt-in.",
+        "Follow-up: typed automatic parameter export. Audited bound expression exporter rejects BOUND_PARAMETER; first milestone uses the existing zero-parameter representation and leaves parameterized candidates local. No new wire parameter design.",
+        "See automatic_query_pushdown_plan_2026_10_24 for checkpoints, dependencies and provisional effort. Keep EXECUTE_STATEMENT and CONNECT unsupported. No demonstrated additional wire datum or query RPC family is required; full M0-M4 and release gates remain open."
       ]
     },
     "logical_types": {
@@ -11150,5 +11168,116 @@
       "Publish and pin the paired Go RPC dependency before release; qualification workspace is not a published dependency solution.",
       "Broader production providers, state expiry/cleanup and transport/platform coverage; combined P1-P3 release gates and native DuckDB2 M0-M4 port remain open."
     ]
+  },
+  "automatic_query_pushdown_plan_2026_10_24": {
+    "status": "planned_not_implemented",
+    "design": "docs/protocol/vgi-catalog-query-pushdown-design.md#implementation-checkpoint--october-24-2026",
+    "review_inputs": {
+      "native": "38fe3c775bd332b9cd4b845f3518631ee6070955",
+      "python": "0566afd7f12a93dc8441db930ae85d764d35b570",
+      "engine_15": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+      "engine_20_source_audit": "e1784fa4231072d7152b8aaa20977bdb8ff4ace3",
+      "haybarn_head_observed_not_substituted_for_audit": "5ab8a76db12ad1ad63c4e4997bce37602a9d0b43"
+    },
+    "wire_decision": "Reuse existing automatic query records and prepare/release plus TABLE execution. No new wire change demonstrated by this review.",
+    "route": "Whole-SELECT early bound-plan optimizer using LogicalPlanSQLExporter::Export; preserve original plan until replacement validation. Parsed RemoteExecute remains disabled. ExportWithSources is conditional because it materializes replacement sources.",
+    "first_milestone": "Ordinary single-attachment INNER JOIN, predicate and GROUP BY COUNT with explicit ordering; one remote execution, no ordinary scan execution, final grouped rows returned, equality under the same snapshot and clean decline retaining the local plan.",
+    "checkpoints": [
+      {
+        "id": "A0",
+        "work": "Exact 2.0 pin and isolated diagnostic build",
+        "depends_on": [],
+        "engineer_days": [
+          1,
+          3
+        ]
+      },
+      {
+        "id": "A1",
+        "work": "Basic 2.0 catalog/scan and explicit-query port",
+        "depends_on": [
+          "A0"
+        ],
+        "engineer_days": [
+          4,
+          10
+        ]
+      },
+      {
+        "id": "A2",
+        "work": "Real SQL provider and shared backend snapshot proof",
+        "depends_on": [],
+        "engineer_days": [
+          4,
+          8
+        ],
+        "note": "May begin on 1.5 in parallel; certify chosen engine before A5."
+      },
+      {
+        "id": "A3",
+        "work": "Bound-plan eligibility, export and output mapping",
+        "depends_on": [
+          "A1"
+        ],
+        "engineer_days": [
+          3,
+          6
+        ]
+      },
+      {
+        "id": "A4",
+        "work": "Native automatic preparation and verified replacement",
+        "depends_on": [
+          "A2",
+          "A3"
+        ],
+        "engineer_days": [
+          4,
+          8
+        ]
+      },
+      {
+        "id": "A5",
+        "work": "Bounded pilot qualification and observability",
+        "depends_on": [
+          "A4"
+        ],
+        "engineer_days": [
+          5,
+          10
+        ]
+      }
+    ],
+    "estimates": {
+      "basis": "Source-review judgments, not measured delivery commitments. One experienced engineer, one DuckDB-backed provider, Linux ARM64; reuse current protocol/lifecycle. Re-estimate after A0/A1.",
+      "checkpoint_total_engineer_days_before_contingency": [
+        21,
+        45
+      ],
+      "first_end_to_end_demo_engineer_weeks": [
+        2,
+        5
+      ],
+      "qualified_pilot_engineer_weeks_with_contingency": [
+        5,
+        10
+      ],
+      "parallelism": "A2 can overlap A0/A1/A3; the first demonstration is an intermediate A2-A4 result, not additional effort."
+    },
+    "provider_evidence_limits": [
+      "Finite explicit reference accepts six exact SQL strings over immutable data and creates fresh preparation/start connections; transaction token does not prove shared mutable data visibility.",
+      "Current fixture materializes before init and applies byte quota afterward; delayed fragment-read cancellation does not prove active backend SQL interruption.",
+      "Existing signed-HTTP ownership and fragment continuation tests remain valid; no claim that all HTTP query coverage is missing."
+    ],
+    "follow_up": [
+      "Automatic typed parameters: pinned exporter rejects BOUND_PARAMETER; retain local execution initially and later preserve typed placeholders and fresh EXECUTE binding.",
+      "Wider relational/type/policy coverage after certification; not included in first pilot."
+    ],
+    "out_of_scope": [
+      "Full nested-schema DDL, writes/COPY/advanced operators, all SDK SQL backends, WASM/platform distribution and full M0-M4 parity",
+      "New transaction framework, savepoints, durable replay/status services, query coordinator or separate snapshot registry",
+      "Protocol freeze, public version transition or completed P1-P3 qualification"
+    ],
+    "validation": "Documentation/source review only. Existing runtime results retain their original scope; no automatic 2.0 runtime evidence added."
   }
 }
