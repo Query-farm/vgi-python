@@ -1068,6 +1068,15 @@ SDK fixture declarations are METADATA_ONLY/UNVALIDATED, without an enforcement
 or native trusted-materialization claim. Exact counts, skips and logs are in
 the manifest's `constraint_public_checkpoint`.
 
+The October 24 full-language SQL follow-up supersedes those unqualified example
+fixture declarations. The read-only examples validate facts against the same
+immutable rows emitted by scans and publish matching Arrow nullability and
+version-owned constraint snapshots. Their attach selection advertises and selects
+only supported, offered read profiles; it adds no generic enforcement or write
+claim. Ordinary unconstrained fixture columns remain nullable. The complete
+configured seven-language matrix and explicit skips are recorded under
+`full_language_slt_checkpoint_2026_10_24`.
+
 This checkpoint adds one method and changes parent schemas; no version is
 published or release gate closed. Generic legacy
 write/bind authorization remains provider-owned: preliminary table reads are

@@ -132,3 +132,52 @@ Remaining work is the native 2.0 read port, a general SQL provider with shared m
 and active-SQL cancellation proof, automatic eligibility/export/replacement, remaining transport
 and platform qualification, and P1–P3 release gates. Existing query records remain the planned
 carrier; this merge demonstrates no additional wire requirement.
+
+## Full configured language SQL matrix follow-up
+
+The initial broad integration run used Python only. The October 24 follow-up
+runs the configured native SQL lanes across all seven SDKs on the same final
+1.5 binary (`98842b7122ad5fb2f07c04f5d551bc87eb5103a961d948529e0c849088fe440e`).
+All lanes meet their unchanged execution floor and declared-skip gate.
+
+| Worker | Passing SQL files | Expected skips |
+| --- | ---: | ---: |
+| Python | 356 | 33 |
+| Go | 358 | 32 |
+| Rust | 342 | 37 |
+| TypeScript, each Arrow backend | 342 | 46 |
+| Java | 336 | 37 |
+| C# | 342 | 37 |
+| C++ | 341 | 38 |
+
+TypeScript runs both ArrowJS and Flechette. Python/TypeScript/Java/C# each pass
+2/2 separate subprocess crash tests; the other primary lanes include those files.
+Counts are files, not assertions. Optional-service/extension/transport and absent
+provider-fixture skips are not passes. Dedicated native references run separately,
+and the C++ lane supplements the six targets in native `make test_languages`.
+This does not establish a full HTTP matrix, every optional provider capability,
+other platforms, or DuckDB 2 runtime support.
+
+Fixes include complete Go inline bind serialization; truthful immutable constraint
+facts and historical snapshots; offered read-profile selection without write
+claims; ordinary Go fixture nullability; owner-qualified native macro CTE/AT
+expressions; and plain-table lookup under nondefault context without evaluating
+unrelated generated columns. Native guards for actual expression use remain.
+Duplicate relative/absolute SQL registrations no longer execute a file twice.
+The hostile metadata workers now corrupt encoded get/list/bulk collections.
+Bulk framing failures are asserted through the direct diagnostic, preserving
+main's optional bulk-discovery fallback; semantic security failures still test
+materialization from the bulk snapshot.
+
+Native contracts pass 12 cases/165 assertions; three column/reference files pass
+252 assertions, with schema dependency and nullable-default probes also passing.
+The loadable extension and CLI build and pass actual load/query checks. Full
+changed SDK unit suites pass. No wire fields, generated schema/hash, or engine
+pins change in this follow-up.
+
+Evidence: `logs/full-language-slt-20261024-75jtiyf_/matrix-summary.json`, per-lane
+logs and CSVs, `source-checkpoint.json`, and `commits.json` in the owned EC2 workspace.
+The corresponding manifest checkpoint retains exact limits and qualification data.
+Earlier failed/interrupted/stale-worker runs remain diagnostic evidence, not
+successful qualifications. The final breaking protocol version/routing choice
+and P1–P3 release gates remain open before treating this as main/release-ready.

@@ -11762,5 +11762,171 @@
     },
     "limits": "Native DuckDB 2 port, automatic whole-query pushdown, protocol freeze and release qualification remain open.",
     "go_revision": "4dcba2ac1d5cf2dd219bfd7598f8b75d89d01fee"
+  },
+  "full_language_slt_checkpoint_2026_10_24": {
+    "status": "qualified_configured_native15_matrix",
+    "wire_change": false,
+    "engine_pin_changed": false,
+    "native_pin": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "native_unittest_sha256": "98842b7122ad5fb2f07c04f5d551bc87eb5103a961d948529e0c849088fe440e",
+    "remote_log_root": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC/logs/full-language-slt-20261024-75jtiyf_",
+    "lanes": {
+      "python": {
+        "files": 389,
+        "passed": 356,
+        "skipped": 33,
+        "failed": 0,
+        "transport": "launcher",
+        "floor": 300,
+        "log": "python/final-stable/full.log",
+        "crash_passed": 2
+      },
+      "go": {
+        "files": 390,
+        "passed": 358,
+        "skipped": 32,
+        "failed": 0,
+        "transport": "subprocess",
+        "floor": 305,
+        "log": "go/final-qualified/full.log",
+        "crash_in_primary": true
+      },
+      "rust": {
+        "files": 379,
+        "passed": 342,
+        "skipped": 37,
+        "failed": 0,
+        "transport": "subprocess",
+        "floor": 290,
+        "log": "rust/final/full.log",
+        "crash_in_primary": true
+      },
+      "typescript_arrowjs": {
+        "files": 388,
+        "passed": 342,
+        "skipped": 46,
+        "failed": 0,
+        "transport": "launcher",
+        "floor": 290,
+        "log": "typescript/arrowjs-final3",
+        "crash_passed": 2
+      },
+      "typescript_flechette": {
+        "files": 388,
+        "passed": 342,
+        "skipped": 46,
+        "failed": 0,
+        "transport": "launcher",
+        "floor": 290,
+        "log": "typescript/flechette-final3",
+        "crash_passed": 2
+      },
+      "java": {
+        "files": 373,
+        "passed": 336,
+        "skipped": 37,
+        "failed": 0,
+        "transport": "launcher",
+        "floor": 295,
+        "log": "java/final3",
+        "crash_passed": 2
+      },
+      "csharp": {
+        "files": 379,
+        "passed": 342,
+        "skipped": 37,
+        "failed": 0,
+        "transport": "launcher",
+        "log": "csharp/final3",
+        "crash_passed": 2,
+        "floor": 318
+      },
+      "cpp": {
+        "files": 379,
+        "passed": 341,
+        "skipped": 38,
+        "failed": 0,
+        "transport": "subprocess",
+        "floor": 290,
+        "log": "cpp/final-stable/full.log",
+        "crash_in_primary": true
+      }
+    },
+    "notes": [
+      "Pass and skip counts are SQL files, not individual assertions.",
+      "Full configured primary lanes; expected skip and minimum-executed gates retained. Dedicated fixture/reference probes run separately.",
+      "Launcher lanes exclude destructive worker-crash tests and run their two-file subprocess lane separately.",
+      "C++ is qualified separately because native make test_languages currently includes only six SDK targets.",
+      "This does not qualify all HTTP/external services/platforms, native DuckDB 2 runtime or the unpublished breaking protocol release."
+    ],
+    "native_contracts": {
+      "cases": 12,
+      "assertions": 165,
+      "failed": 0
+    },
+    "reference_sql": {
+      "column_paths_required_filters_view_aliases": {
+        "files": 3,
+        "assertions": 252,
+        "failed": 0
+      },
+      "schema_dependencies": "passed",
+      "default_schema": "passed"
+    },
+    "release_artifacts": {
+      "loadable_extension": "built",
+      "shell": "built",
+      "cli_load_and_queries": "passed (10 rows and product 42)"
+    },
+    "sdk_suites": {
+      "rust": {
+        "passed": 669,
+        "ignored": 4
+      },
+      "cpp": {
+        "passed": 93,
+        "skipped": 0
+      },
+      "typescript_arrowjs": {
+        "passed": 741,
+        "skipped": 68
+      },
+      "typescript_flechette": {
+        "passed": 742,
+        "skipped": 67
+      },
+      "java_core": {
+        "passed": 739,
+        "skipped": 2
+      },
+      "java_example": {
+        "passed": 63,
+        "skipped": 0
+      },
+      "csharp": {
+        "passed": 766,
+        "skipped": 0
+      },
+      "go": {
+        "passed": 908,
+        "skipped": 1,
+        "vet": "passed",
+        "log": "go/sdk-final.jsonl",
+        "skip_reason": "TestCfDoStorage_Live requires external service"
+      },
+      "python": {
+        "scope": "Production code unchanged in this checkpoint; prior full suite4602pass129skip retained as historical evidence. Changed diagnostic workers qualify through the native reference SQL and Ruff."
+      }
+    },
+    "fixes": [
+      "Exact single SQL-file registration selection; missing/ambiguous registrations fail.",
+      "Complete Go inline BindResult encoding and truthful nullable ordinary fixture fields.",
+      "Immutable constraint facts validated against scan rows, explicit read-profile offer selection, and version-owned snapshots.",
+      "Native nonrecursive CTE/set-operation and AT macro qualification, preserving caller ownership and invocation context guards.",
+      "Plain-table lookup declines eager neighboring expression materialization in unsupported contexts.",
+      "Malformed diagnostic fixtures corrupt current item/category streams; direct bulk framing tests retain existing optional-discovery fallback."
+    ],
+    "gate_effect": "No main merge or release approval. Breaking successor version/routing decision, P1-P3 release qualification, native2 M0-M4 and automatic whole-query implementation remain open.",
+    "diagnostic_scope": "Required-filter hostile metadata covers get/list paths. View security covers get/list and bulk: direct diagnostics for malformed collection schema/nullability, seeded materialization for semantic barrier/unknown modes. No required-filter bulk qualification claim."
   }
 }
