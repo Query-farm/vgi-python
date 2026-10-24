@@ -106,6 +106,20 @@ parameter values into SQL. Explicit `vgi_query` already supports typed parameter
 
 ### Remaining work and reviewable checkpoints
 
+**Enablement is worker opt-in through attachment capability discovery.** The client offers
+its supported encoding/profiles and actual engine build in `ClientQueryCapabilities`; the worker
+selects the compatible subset in `QueryCapabilities`. Automatic support requires the selected
+`automatic` mode and `vgi.duckdb.relational.v1` profile, with transaction support. A worker may
+omit query support entirely or select explicit queries only. Neither case enables automatic
+pushdown, and neither requires probing it with preparation RPCs.
+
+Once the 2.0 adapter is qualified, ordinary eligible queries use the discovered support
+without a user setting. Capability discovery is the enablement mechanism; there is no automatic
+pushdown on/off/require control. Each candidate still requires eligibility checks and provider
+acceptance during preparation. The existing records already express this agreement; no new
+enablement field is needed. The current 1.5 explicit-query setting does not gate this future
+2.0 automatic path.
+
 Effort ranges below are engineering effort, not measured execution time or delivery promises.
 They assume one experienced engineer, one DuckDB-backed provider, Linux ARM64, and reuse of the
 current wire and execution lifecycle. A0 must narrow the largest uncertainty before treating the
@@ -118,8 +132,8 @@ failures recorded; do not wait for the full feature to report progress.
 | A1: working 2.0 read path | Port identifiers/qualified names, optional default schema, table column ownership, bound table functions, typed plan bindings and Arrow cardinality. Demonstrate ATTACH, flat table lookup, an ordinary scan and explicit `vgi_query`. | A0 | 4–10 days |
 | A2: real query provider | Prepare a bounded family of SQL SELECTs against actual logical catalog tables. Reuse the existing transaction owner so ordinary scans and query execution share a real backend snapshot; prove concurrent mutation and prior-write visibility where supported. Use bounded fragment spooling and active-query interruption. An initial explicit-provider proof can run on 1.5. | Can start alongside A0/A1; certify against the chosen engine before A5 | 4–8 days |
 | A3: eligibility and export | Add the early bound-plan hook before existing VGI projection/multi-scan transforms. Export an eligible whole SELECT; retain source identities and an exact positional output map. Demonstrate unsupported export leaves local execution intact. | A1; can use a declining provider before A2 is complete | 3–6 days |
-| A4: preparation and replacement | Extend native explicit-only capability/request/digest handling to automatic mode. Populate transaction, metadata revision, table manifest, expected output and ordering. Build and verify the replacement before swapping; reuse the reserved executor, preparation lease and single-attempt execution. Show the ordinary SQL example succeeds and a clean decline remains local. | A2 + A3 | 4–8 days |
-| A5: bounded pilot qualification | Differential types/NULLs/duplicates/empty inputs/order; snapshot and logical-object authorization; real plan copying and prepared re-execution; active cancellation, quotas and cleanup. Test subprocess first, then the supported HTTP path. Add EXPLAIN/decline diagnostics and a rows/bytes comparison. Keep automatic mode opt-in. | A4 | 5–10 days |
+| A4: preparation and replacement | Extend native explicit-only capability/request/digest handling to automatic mode. Discover the worker's selection at ATTACH without requiring the 1.5 explicit-query manual enablement step. Populate transaction, metadata revision, table manifest, expected output and ordering. Build and verify the replacement before swapping; reuse the reserved executor, preparation lease and single-attempt execution. Show the ordinary SQL example succeeds and a clean decline remains local. | A2 + A3 | 4–8 days |
+| A5: bounded pilot qualification | Differential types/NULLs/duplicates/empty inputs/order; snapshot and logical-object authorization; real plan copying and prepared re-execution; active cancellation, quotas and cleanup. Test subprocess first, then the supported HTTP path. Add EXPLAIN/decline diagnostics and a rows/bytes comparison. Prove worker opt-in/discovery, absent/explicit-only support and per-query decline. | A4 | 5–10 days |
 
 The table is roughly **21–45 engineer-days** for the bounded qualified pilot, with uncertainty
 at the upper end from the engine port and provider ownership. Budget approximately **2–5
@@ -789,8 +803,8 @@ unacceptable.
 
 ### 7.3 VGI adapter responsibilities
 
-The preferred callback identifies attached VGI scans directly and checks the current session's
-pushdown setting before making preparation RPCs. It leaves VGI's parsed-statement
+The preferred callback identifies attached VGI scans directly and checks the attachment's
+negotiated automatic query capability before making preparation RPCs. It leaves VGI's parsed-statement
 `EXECUTE_QUERY_NODE`, `EXECUTE_STATEMENT`, and `CONNECT` delegation disabled. Do not store
 per-session settings in shared catalog state. Adding INSERT/CTAS source pushdown later is a
 separate read-source optimization; it must not imply atomic cross-database writes.
@@ -1053,22 +1067,22 @@ capability misses.
 
 ## 10. Planning policy and observability
 
-Propose a `vgi_query_pushdown` engine setting with `off`, `auto`, and `require` values. Initially
-default to `off` while compatibility tests and a reference provider mature. `auto` tries only
-the tested subset and otherwise keeps normal VGI scans. `require` is a development/diagnostic
-mode: a detected single-VGI-catalog candidate must be accepted or produce an actionable error;
-it is not an instruction to push writes or mixed-catalog queries. Queries with no such candidate
-are unaffected. Explicit `vgi_query` is an intentional separate entry point.
+Worker opt-in is negotiated during ATTACH using the existing query capability records. The
+client offers supported profiles and its engine build; the worker selects compatible automatic
+support. The qualified 2.0 adapter then considers eligible queries automatically. Absent or
+explicit-only support keeps normal VGI scans without an automatic preparation RPC. Individual
+queries can still be declined during preparation, leaving the original plan local.
 
-Declare this session setting in `vgi/src/vgi_settings.json` and regenerate with
-`scripts/generate_settings.py`, using the existing flat-settings validation and scope rules.
-Do not add an unvalidated registration or a second stored setting on `VgiCatalog`.
+There is no proposed user/session pushdown setting or off/auto/require control. Do not add one
+to the generated settings registry. The current 1.5 explicit adapter's `vgi_query_enabled=true`
+requirement remains specific to that existing path; automatic capability discovery must not
+depend on it. Explicit `vgi_query` remains a separate entry point.
 
 The first automatic policy is capability/shape based, not cost based. Prefer eligible joins,
 aggregations, DISTINCT once supported, and ordered reductions; skip trivial scans. Keep estimates
 optional and explicitly advisory. An early bound-plan extension is not a full distributed cost
 model, and incomparable local/backend cost units should not decide correctness-sensitive rewrites.
-Benchmark before enabling automatic mode by default for a certified provider.
+Benchmark the qualified matrix before releasing capability-driven automatic behavior.
 
 Local EXPLAIN may prepare but must not execute the remote SELECT. Show a `VGI_REMOTE_QUERY` node
 with provider/profile, redacted operation summary, result columns, order guarantee, and optional
@@ -1078,8 +1092,7 @@ debug diagnostics without flooding ordinary successful query logs.
 
 Useful counters: candidates, local ineligibility by bounded reason, worker declines by bounded
 reason, accepted preparations, started/completed/cancelled/failed executions, schema violations,
-token expiry, active owners, and transferred rows/bytes. Compare actual traffic with pushdown
-disabled; do not invent a “rows avoided” metric when the baseline is unknown.
+token expiry, active owners, and transferred rows/bytes. Compare actual traffic against a local-execution test fixture; do not invent a “rows avoided” metric when the baseline is unknown.
 
 ## 11. Implementation map and sequencing
 
@@ -1194,12 +1207,14 @@ the portable VGI wire layer and the 1.5 build. Do not enable the consuming remot
 ### PR 7: hardening, documentation, and staged enablement
 
 **Status:** bounded explicit lifecycle evidence exists; A5 and wider automatic coverage remain
-open. The first pilot stays opt-in and claims only its tested engine/provider/operator matrix.
+open. Workers opt in through capability discovery; claim only the tested engine/provider/operator
+matrix, with no additional user enablement required once the adapter is qualified.
 
 Run semantic, cross-process, transaction, security, and fault-injection suites. Document the
-provider contract, opt-in catalog example, `vgi_query`, EXPLAIN, decline reasons, and rollout
-settings. Publish compatibility claims for tested engine/provider combinations, not just a
-minimum semver. Enable `auto` by default only for certified providers after performance evidence.
+provider contract, opt-in catalog example, `vgi_query`, EXPLAIN, decline reasons, and capability
+discovery. Publish compatibility claims for tested engine/provider combinations, not just a
+minimum semver. Qualify automatic behavior for workers selecting compatible support,
+including omitted/explicit-only capabilities and per-query declines.
 
 ## 12. Required verification
 
@@ -1226,8 +1241,9 @@ minimum semver. Enable `auto` by default only for certified providers after perf
 - Same principal with narrowed grant authority; secret ATTACH options; token/SQL redaction;
   new query APIs cannot bypass LOCATION restrictions or replay authorization from metadata caches.
 
-Run each accepted automatic query against an immutable fixture with pushdown `off` and `auto`;
-compare output names/types and result bags or ordered sequences as specified by the query. For
+Run each accepted automatic query against paired immutable fixtures: one selects automatic
+capability and one omits it, while exposing identical logical tables. Compare output names/types
+and result bags or ordered sequences as specified by the query. For
 nonunique order keys, validate the permitted tie groups rather than demanding an arbitrary
 identical tie order. Add metamorphic and generated query cases to catch missing overload checks.
 Use instrumentation to prove accepted queries execute exactly once and declined queries never

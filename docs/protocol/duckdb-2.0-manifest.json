@@ -901,7 +901,7 @@
         "Negotiated query preparation, typed parameters/context, prepared-result schema and lifetime, and execution through the existing TABLE stream",
         "Reuse the existing read-query proposal. Separate explicit provider-dialect queries from automatic semantic-equivalence pushdown; define decline-before-execution, transaction/identity binding, ordered results, cancellation, token cleanup, and reconnect behavior."
       ],
-      "capability_contract": "ClientQueryCapabilities/QueryCapabilities select duckdb.sql.v1 with vgi.remote.readonly.v1 for explicit mode. vgi.duckdb.relational.v1 automatic mode requires transaction support and separately certified engine/context equivalence; it is not currently advertised by the finite reference.",
+      "capability_contract": "ClientQueryCapabilities/QueryCapabilities select duckdb.sql.v1 with vgi.remote.readonly.v1 for explicit mode. vgi.duckdb.relational.v1 automatic mode requires transaction support and separately certified engine/context equivalence; it is not currently advertised by the finite reference. Worker opt-in is the ATTACH selection of automatic mode/profile from the client offer. The qualified 2.0 adapter uses discovered automatic support by default; absent or explicit-only support stays local without preparation RPCs. Capability discovery is the sole enablement mechanism; there is no user/session pushdown control and no new wire field. Per-query eligibility and preparation acceptance still apply.",
       "gates": [
         "P1",
         "P2",
@@ -962,7 +962,7 @@
         "A0/A1: isolated pinned 2.0 diagnostic build and basic catalog/scan/explicit-query port. Keep the 1.5 lane unchanged; mechanical compatibility of the monolithic source list or explicit module exclusions is required even for a read-only target.",
         "A2: bounded DuckDB-backed SQL provider serving ordinary logical scans and remote queries under the same existing backend transaction/snapshot, with active-query interruption and incremental result bounds. Metadata etags and per-bind repeatability do not prove shared data visibility.",
         "A3/A4: early bound-plan eligibility/export before scalar projection and multi-scan transforms; native automatic capabilities, context digest, object/output manifest and verified positional replacement. Reuse preparation ownership and the conservative TABLE executor; preserve the original local plan only on unsupported shape or valid decline.",
-        "A5: bounded semantic/snapshot/authorization/lifetime/transport and actual plan-copy/prepared-freshness qualification, with EXPLAIN and result-traffic evidence. No local replay after remote errors or execution. Keep automatic mode opt-in.",
+        "A5: bounded semantic/snapshot/authorization/lifetime/transport and actual plan-copy/prepared-freshness qualification, with EXPLAIN and result-traffic evidence. No local replay after remote errors or execution. Qualify worker opt-in through attachment discovery and automatic behavior for selected compatible support, absent/explicit-only capabilities and per-query decline. No user/session pushdown control.",
         "Follow-up: typed automatic parameter export. Audited bound expression exporter rejects BOUND_PARAMETER; first milestone uses the existing zero-parameter representation and leaves parameterized candidates local. No new wire parameter design.",
         "See automatic_query_pushdown_plan_2026_10_24 for checkpoints, dependencies and provisional effort. Keep EXECUTE_STATEMENT and CONNECT unsupported. No demonstrated additional wire datum or query RPC family is required; full M0-M4 and release gates remain open."
       ]
@@ -11278,6 +11278,13 @@
       "New transaction framework, savepoints, durable replay/status services, query coordinator or separate snapshot registry",
       "Protocol freeze, public version transition or completed P1-P3 qualification"
     ],
-    "validation": "Documentation/source review only. Existing runtime results retain their original scope; no automatic 2.0 runtime evidence added."
+    "validation": "Documentation/source review only. Existing runtime results retain their original scope; no automatic 2.0 runtime evidence added.",
+    "enablement": {
+      "worker_opt_in": "ClientQueryCapabilities offers encoding/profiles and client engine build; worker QueryCapabilities selects automatic mode and vgi.duckdb.relational.v1 only when compatible and transaction support exists.",
+      "client_default": "Qualified 2.0 adapter automatically considers eligible queries when compatible automatic support is discovered. No user/session control; the current 1.5 explicit-query gate does not govern the future automatic path.",
+      "absent_or_explicit_only": "Keep ordinary local plans and send no automatic preparation RPC.",
+      "wire_change": "None; reuse the existing capability offer/selection and per-query preparation decision.",
+      "per_query_decision": "Eligibility checks and provider preparation acceptance remain mandatory; a valid decline retains the original local plan."
+    }
   }
 }
