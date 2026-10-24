@@ -106,6 +106,14 @@ parameter values into SQL. Explicit `vgi_query` already supports typed parameter
 
 ### Remaining work and reviewable checkpoints
 
+**A0 initial inventory is now recorded.** The isolated configuration at audited engine
+`e1784fa42310` passes. All 107 native C++ sources were attempted: 53 compiled and 54 failed;
+generated `describe.c` also compiled. Shared catalog/index declarations are the first blocker
+in 27 failed sources. See the native `docs/duckdb-2.0-a0-diagnostics.md` and JSON inventory.
+There is no engine/loadable link or runtime proof yet. The next A1 batch starts with shared
+catalog/read declarations, then bound functions and read conversion. Source counts are not a
+migration-completion percentage; the overall effort estimate remains provisional.
+
 **Enablement is worker opt-in through attachment capability discovery.** The client offers
 its supported encoding/profiles and actual engine build in `ClientQueryCapabilities`; the worker
 selects the compatible subset in `QueryCapabilities`. Automatic support requires the selected
@@ -128,7 +136,7 @@ failures recorded; do not wait for the full feature to report progress.
 
 | Checkpoint | Work and exit evidence | Dependencies | Indicative effort |
 | --- | --- | --- | --- |
-| A0: pin and diagnostic build | Select an exact 2.0 engine/toolchain in a separate build lane; reconcile changes from the audit pin. Produce a complete compile/link failure inventory by subsystem and a bounded read-target decision. Keep the 1.5 build unchanged. | None | 1–3 engineer-days |
+| A0: pin and diagnostic build | Initial checkpoint recorded at audited pin: configuration passes, all 107 native C++ sources attempted (53 compiled / 54 failed). Keep full source compilation for diagnostics; first runtime scope remains reads. Linking is blocked by compile failures; 1.5 is unchanged. | None | Initial checkpoint reached; original budget 1–3 engineer-days |
 | A1: working 2.0 read path | Port identifiers/qualified names, optional default schema, table column ownership, bound table functions, typed plan bindings and Arrow cardinality. Demonstrate ATTACH, flat table lookup, an ordinary scan and explicit `vgi_query`. | A0 | 4–10 days |
 | A2: real query provider | Prepare a bounded family of SQL SELECTs against actual logical catalog tables. Reuse the existing transaction owner so ordinary scans and query execution share a real backend snapshot; prove concurrent mutation and prior-write visibility where supported. Use bounded fragment spooling and active-query interruption. An initial explicit-provider proof can run on 1.5. | Can start alongside A0/A1; certify against the chosen engine before A5 | 4–8 days |
 | A3: eligibility and export | Add the early bound-plan hook before existing VGI projection/multi-scan transforms. Export an eligible whole SELECT; retain source identities and an exact positional output map. Demonstrate unsupported export leaves local execution intact. | A1; can use a declining provider before A2 is complete | 3–6 days |
