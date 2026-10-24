@@ -168,7 +168,7 @@ class TestSchemaInfoSerialization:
         batch, _ = deserialize_record_batch(serialized)
         restored = SchemaInfo.deserialize_from_batch(batch)
 
-        assert restored.attach_opaque_data == original.attach_opaque_data
+        assert "attach_opaque_data" not in batch.schema.names
         assert restored.path == original.path
         assert restored.comment == original.comment
         assert restored.tags == original.tags
@@ -1114,8 +1114,8 @@ class TestArrowSchemaCorrectness:
     def test_schema_info_schema(self) -> None:
         """Verify SchemaInfo Arrow schema."""
         schema = SchemaInfo.ARROW_SCHEMA
-        assert len(schema) == 6
-        assert schema.field("attach_opaque_data").type == pa.binary()
+        assert len(schema) == 5
+        assert "attach_opaque_data" not in schema.names
         assert schema.field("path").type == pa.list_(pa.string())
         assert schema.field("comment").type == pa.string()
         assert schema.field("comment").nullable is True
@@ -1153,8 +1153,8 @@ class TestArrowSchemaCorrectness:
         """Verify FunctionInfo Arrow schema."""
         schema = FunctionInfo.ARROW_SCHEMA
         assert schema.field("name").type == pa.string()
-        assert schema.field("arguments").type == pa.binary()
-        assert schema.field("output_schema").type == pa.binary()
+        for name in ("arguments", "output_schema", "parameter_default_values"):
+            assert schema.field(name).type == pa.dictionary(pa.int32(), pa.binary())
 
     def test_scan_function_result_schema(self) -> None:
         """Verify ScanFunctionResult Arrow schema."""

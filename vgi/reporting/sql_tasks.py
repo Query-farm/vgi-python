@@ -23,26 +23,47 @@ from vgi.reporting.common import (
     CredentialStatus,
     DataSource,
     Destination,
+    DestinationResult,
     ExecutionIdentity,
     ExecutionInput,
+    OwnerKey,
     Ownership,
+    OwnershipCapabilities,
     OwnershipInput,
+    OwnershipScope,
     ParamValue,
+    PreviewJob,
+    RecoveryEvent,
     ResourceMeta,
     RetryPolicy,
     Run,
     RunError,
+    RunStep,
+    RunSummary,
     ServiceInfo,
+    StepAttempt,
     StepResolution,
     Trigger,
     TriggerPreview,
+    ValidationResult,
 )
+from vgi.reporting.sources import QuerySource, ResolvedSource, SourceProgressDecision
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TaskRunSummary(RunSummary):
+    """Run status associated with a task without its frozen SQL definition."""
+
+    task_id: str
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class TaskRun(Run):
     """Task run with frozen inputs, load counts and typed watermark JSON."""
 
+    resolved_sources: Annotated[list[ResolvedSource], non_null_list(pa.struct(ResolvedSource.ARROW_SCHEMA))] = field(
+        default_factory=list
+    )
     task_id: str
     task: SqlTask
     full_refresh: bool
@@ -69,8 +90,7 @@ class Target(ArrowSerializableDataclass):
 class LoadBody(ArrowSerializableDataclass):
     """Read-only source query and transactional load configuration."""
 
-    setup_sql: str = ""
-    query: str
+    source: QuerySource
     target: Target
     mode: LoadMode
     key_columns: Annotated[list[str], non_null_list(pa.string())] = field(default_factory=list)
@@ -123,7 +143,11 @@ class TaskNotify(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SqlTask(ArrowSerializableDataclass):
-    """Editable SQL task definition, trigger and incremental policy."""
+    """Editable task; incremental saved-query loads must use pinned selection.
+
+    data_sources holds task-owned target/condition bindings; a saved source owns
+    its own query bindings. Conflicting aliases are rejected, never substituted.
+    """
 
     title: str
     description: str = ""
@@ -170,14 +194,31 @@ class TaskRecord(ResourceMeta):
 
     task_id: str
     definition: SqlTask
+    accepted_source: ResolvedSource | None = None
+    pending_full_refresh: bool = False
     execution_identity: ExecutionIdentity
     next_fire_at: Instant | None
-    last_run: TaskRun | None
+    last_run: TaskRunSummary | None
     watermark_json: Json | None
     target: ResolvedTarget | None
     target_row_count: int | None
     disabled_reason: str | None
     credentials: Annotated[list[CredentialStatus], non_null_list(pa.struct(CredentialStatus.ARROW_SCHEMA))]
+    health: TaskHealth
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TaskSummary(ResourceMeta):
+    """Task management and health, without SQL, source bindings or histories."""
+
+    task_id: str
+    title: str
+    enabled: bool
+    execution_identity: ExecutionIdentity
+    next_fire_at: Instant | None
+    last_run: TaskRunSummary | None
+    target: ResolvedTarget | None
+    pending_full_refresh: bool
     health: TaskHealth
 
 
@@ -198,9 +239,17 @@ class TaskTest(ArrowSerializableDataclass):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class TaskPreviewJob(PreviewJob):
+    """Typed rollback-only task observations, populated exactly on success."""
+
+    result: TaskTest | None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class TasksInfo(ServiceInfo):
     """Supported task modes, host catalog, limits and progress guarantees."""
 
+    ownership: OwnershipCapabilities
     body_kinds: Annotated[list[str], non_null_list(pa.string())]
     load_modes: Annotated[list[str], non_null_list(pa.string())]
     host_location: str | None
@@ -212,7 +261,13 @@ class TasksInfo(ServiceInfo):
 
 
 class SqlTasksProtocol(Protocol):
-    """Proposed vgi.sql_tasks.v1 records and RPC interface; implementations supply all methods."""
+    """Proposed vgi.sql_tasks.v1 records and RPC interface; implementations supply all methods.
+
+    OwnershipCapabilities defines all list/scan scope semantics. Exact owner
+    cannot be combined with a non-all ownership_scope. parent_owner matches
+    only the recorded direct management parent; folder recursion never expands
+    directory ancestry. Filters select authorized resources and never grant access.
+    """
 
     protocol_name: ClassVar[str] = "vgi.sql_tasks.v1"
     protocol_version: ClassVar[str] = "1.0.0"
@@ -231,11 +286,42 @@ class SqlTasksProtocol(Protocol):
         """As in schedules."""
         ...
 
-    @sql_read(row_type=TaskRecord, table="tasks")
+    @sql_read(row_type=TaskSummary, table="tasks")
     def list_tasks(
-        self, owned_by_me: bool = False, target_id: str = "", health_state: str = ""
+        self,
+        ownership_scope: OwnershipScope = "all",
+        target_id: str = "",
+        health_state: str = "",
+        owner: OwnerKey | None = None,
+        parent_owner: OwnerKey | None = None,
+        execution_principal_id: str | None = None,
+        query: str = "",
+        enabled: bool | None = None,
+        limit: int | None = None,
+        order_by: str = "id",
     ) -> Stream[ProducerState]:
-        """Read, with health; health_state filters ("everything failing")."""
+        """AND-filtered summaries; title substring query and id/title/updated_desc ordering.
+
+        Owner filters are canonical exact keys, a non-all ownership_scope cannot be combined with owner;
+        limit counts all rows across continuations. Task ID breaks ordering ties.
+        """
+        ...
+
+    @sql_read(row_type=TaskRecord)
+    def scan_tasks(
+        self,
+        ownership_scope: OwnershipScope = "all",
+        target_id: str = "",
+        health_state: str = "",
+        owner: OwnerKey | None = None,
+        parent_owner: OwnerKey | None = None,
+        execution_principal_id: str | None = None,
+        query: str = "",
+        enabled: bool | None = None,
+        limit: int | None = None,
+        order_by: str = "id",
+    ) -> Stream[ProducerState]:
+        """Full definition export with the same filters, snapshot and ordering as list_tasks."""
         ...
 
     @sql_read()
@@ -257,21 +343,47 @@ class SqlTasksProtocol(Protocol):
         """
         ...
 
-    def update_task(self, task_id: str, expected_version: int, request_id: str, task: SqlTask) -> TaskRecord:
-        """Includes pausing via enabled. Changing the target, mode or cursor column clears a stored watermark."""
+    def update_task(
+        self,
+        task_id: str,
+        expected_version: int,
+        request_id: str,
+        task: SqlTask,
+        progress: SourceProgressDecision | None = None,
+    ) -> TaskRecord:
+        """Update with explicit progress choice for changed incremental inputs.
+
+        Source edits require no active run or unresolved effect. A rebuild gates
+        ordinary admission until its full refresh and progress are confirmed.
+        Workers validate retain/reset safety; derived progress cannot use reset.
+        """
         ...
 
     def delete_task(self, task_id: str, expected_version: int, request_id: str, drop_target: bool = False) -> Ack:
         """drop_target drops a host table; a catalog target is never dropped."""
         ...
 
-    def test_run(self, task: SqlTask, *, execution: ExecutionInput | None = None, as_of: Instant) -> TaskTest:
-        """Test run.
+    def validate_task(self, task: SqlTask, execution: ExecutionInput | None = None) -> ValidationResult:
+        """Check structure, policy and sources without executing user SQL; incomplete checks are explicit."""
+        ...
 
-        Tests a load or single script in a transaction that is always rolled back; returns counts, old/new
-        watermark, target schema and condition value. Refuses bodies, statements or CALLs whose effects cannot be
-        rolled back, including per_statement and none scripts.
+    def start_test_run(
+        self, request_id: str, task: SqlTask, *, execution: ExecutionInput | None = None, as_of: Instant
+    ) -> TaskPreviewJob:
+        """Admit a bounded rollback-only preview; reject irreversible effects before dispatch.
+
+        Refuse per_statement/none scripts and calls not safely rolled back.
+        Never change saved progress, adopt a source, or send notifications.
         """
+        ...
+
+    @sql_read()
+    def get_test_run(self, job_id: str) -> TaskPreviewJob:
+        """Read caller-authorized status/results until expiry."""
+        ...
+
+    def cancel_test_run(self, job_id: str, expected_version: int, request_id: str) -> TaskPreviewJob:
+        """Request cancellation and rollback; nonterminal status does not confirm cessation."""
         ...
 
     def run_now(
@@ -292,20 +404,26 @@ class SqlTasksProtocol(Protocol):
         """
         ...
 
-    @sql_read(row_type=TaskRun, table="runs")
-    def list_runs(self, task_id: str = "", status: str = "", since: Instant | None = None) -> Stream[ProducerState]:
-        """Run history.
+    @sql_read(row_type=TaskRunSummary, table="runs")
+    def list_runs(
+        self,
+        task_id: str = "",
+        status: str = "",
+        since: Instant | None = None,
+        before: Instant | None = None,
+        execution_principal_id: str | None = None,
+        limit: int | None = None,
+    ) -> Stream[ProducerState]:
+        """Authorized summaries by descending (scheduled_for, run_id); since inclusive, before exclusive.
 
-        task_id empty lists runs across every task the caller can read, so "what failed overnight" is one call.
+        Execution filters match frozen identity. Empty task_id includes every
+        currently readable task; reversed/empty time windows are invalid.
         """
         ...
 
     @sql_read()
     def get_run(self, run_id: str) -> TaskRun:
-        """Run history.
-
-        task_id empty lists runs across every task the caller can read, so "what failed overnight" is one call.
-        """
+        """Frozen inputs and current run status; growing histories are separate streams."""
         ...
 
     def cancel_run(self, run_id: str, expected_version: int, request_id: str) -> TaskRun:
@@ -335,4 +453,24 @@ class SqlTasksProtocol(Protocol):
         self, task_id: str, expected_version: int, request_id: str, principal_id: str
     ) -> TaskRecord:
         """Select a separately authorized execution identity for future work."""
+        ...
+
+    @sql_read(row_type=RunStep)
+    def list_run_steps(self, run_id: str, limit: int | None = None) -> Stream[ProducerState]:
+        """Authorized snapshot ordered by step_index; attempts are separate rows."""
+        ...
+
+    @sql_read(row_type=StepAttempt)
+    def list_step_attempts(self, run_id: str, step_index: int, limit: int | None = None) -> Stream[ProducerState]:
+        """Authorized attempt history in ascending attempt order."""
+        ...
+
+    @sql_read(row_type=RecoveryEvent)
+    def list_recovery_events(self, run_id: str, limit: int | None = None) -> Stream[ProducerState]:
+        """Authorized recovery audit in stable admission order; recheck access on continuation."""
+        ...
+
+    @sql_read(row_type=DestinationResult)
+    def list_run_destinations(self, run_id: str, limit: int | None = None) -> Stream[ProducerState]:
+        """Authorized per-destination outcomes in original dispatch order."""
         ...

@@ -551,6 +551,10 @@ class ResolvedMetadata:
             positional args ARE its per-row input columns, so one registration
             serves the literal / column / LATERAL call shapes. Detected from
             ``RowTransformFunction`` subclassing.
+        input_rows_per_call: Only for a ``RowTransformFunction``: the most input
+            rows one worker call receives. The client splits each input chunk into
+            calls of at most this many rows (``1`` = a row per call). None (the
+            default) sends a whole chunk per call.
 
     """
 
@@ -647,6 +651,11 @@ class ResolvedMetadata:
     # drive the literal single-row scan-mode. function_type stays TABLE.
     input_from_args: bool = False
 
+    # RowTransformFunction only: the most input rows one worker call receives; the
+    # client splits each input chunk into calls of at most this many rows. None =
+    # a whole chunk per call.
+    input_rows_per_call: int | None = None
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -691,6 +700,7 @@ class ResolvedMetadata:
             "sink_order_dependent": self.sink_order_dependent,
             "requires_input_batch_index": self.requires_input_batch_index,
             "input_from_args": self.input_from_args,
+            "input_rows_per_call": self.input_rows_per_call,
         }
 
     @staticmethod
@@ -746,6 +756,7 @@ class ResolvedMetadata:
             sink_order_dependent=d.get("sink_order_dependent", False),
             requires_input_batch_index=d.get("requires_input_batch_index", False),
             input_from_args=d.get("input_from_args", False),
+            input_rows_per_call=d.get("input_rows_per_call"),
         )
 
 
@@ -1146,6 +1157,7 @@ _VALID_META_ATTRIBUTES: frozenset[str] = frozenset(
         "filters_exactly_applied",  # worker applies pushed filters exactly (engine may drop its own filter)
         "supports_positions",  # addressable positions in the data (incremental / streaming reads)
         "split_token_ttl_seconds",  # None = unbounded; a client refuses a TTL below its scheduling horizon
+        "input_rows_per_call",  # RowTransformFunction: most input rows per worker call (None = a whole chunk)
         "partition_kind",  # opt-in to PartitionColumns mode for Hive-style partitioning
         # Table-in-out specific: explicit override for the has_finalize auto-detection.
         # Set to True or False to force the emitted ``in_out_function_final``
@@ -1347,6 +1359,9 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
                 f"TableInput mode for a REQUIRED constant, or a named arg for optional config."
             )
 
+    _validate_resume_state(cls, attrs.get("max_workers"))
+    input_rows_per_call = _validate_input_rows_per_call(cls, attrs.get("input_rows_per_call"), input_from_args)
+
     # Merge annotation-derived setting/secret keys into required_settings/required_secrets
     meta_required_settings: list[str] = list(attrs.get("required_settings", []))
 
@@ -1452,7 +1467,22 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         sink_order_dependent=bool(attrs.get("sink_order_dependent", False)),
         requires_input_batch_index=bool(attrs.get("requires_input_batch_index", False)),
         input_from_args=input_from_args,
+        input_rows_per_call=input_rows_per_call,
     )
+
+
+def _validate_input_rows_per_call(cls: type, value: Any, input_from_args: bool) -> int | None:
+    """Check ``Meta.input_rows_per_call``: a positive int, on a RowTransformFunction only."""
+    if value is None:
+        return None
+    if not input_from_args:
+        raise TypeError(
+            f"{cls.__name__}: Meta.input_rows_per_call applies only to a RowTransformFunction, whose "
+            f"per-row input the client can split into calls"
+        )
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{cls.__name__}: Meta.input_rows_per_call must be a positive int, got {value!r}")
+    return value
 
 
 def _validate_partition_kind(cls: type, kind: PartitionKind) -> PartitionKind:
@@ -1534,6 +1564,35 @@ def _detect_has_finalize(cls: type, function_type: CatalogFunctionType) -> bool:
     if not issubclass(cls, TableInOutGenerator):
         return False
     return cls.has_finalize_override()
+
+
+def _validate_resume_state(cls: type, max_workers: object) -> None:
+    """Refuse a table-in-out ``resume()`` the client cannot drive.
+
+    ``resume()`` receives no input, so it continues from ``state`` alone, and over
+    HTTP that state reaches the next turn only through the stream's state token.
+    Without a serializable state the cursor would be silently lost between turns.
+
+    ``max_workers = 1`` is refused too: the client then feeds every pipeline's
+    input through one shared connection, which cannot leave output pending while
+    another pipeline's input waits.
+    """
+    # Lazy imports to avoid a circular dependency.
+    from vgi.protocol import _resolve_state_type
+    from vgi.table_in_out_function import TableInOutGenerator
+
+    if not (isinstance(cls, type) and issubclass(cls, TableInOutGenerator)) or not cls.has_resume_override():
+        return
+    if max_workers == 1:
+        raise TypeError(
+            f"{cls.__name__}: resume() (continued output) is not supported with max_workers = 1; "
+            f"the client runs such a function on one shared connection."
+        )
+    if _resolve_state_type(cls) is None:
+        raise TypeError(
+            f"{cls.__name__}: resume() continues from its state alone, so the class must declare a "
+            f"serializable TState (an ArrowSerializableDataclass), e.g. RowTransformFunction[Args, State]."
+        )
 
 
 def _detect_input_from_args(cls: type) -> bool:
@@ -1646,6 +1705,7 @@ _METADATA_SCHEMA = pa.schema(
         pa.field("sink_order_dependent", pa.bool_()),
         pa.field("requires_input_batch_index", pa.bool_()),
         pa.field("input_from_args", pa.bool_()),
+        pa.field("input_rows_per_call", pa.int64(), nullable=True),
     ]
 )
 

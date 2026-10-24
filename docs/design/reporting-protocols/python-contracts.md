@@ -9,6 +9,12 @@ Methods take direct named arguments, with dataclasses for structured values such
 | Reference | Python source |
 | --- | --- |
 | [Shared records](reference/common.md) | `vgi/reporting/common.py` |
+| [Portable sources](reference/sources.md) | `vgi/reporting/sources.py` |
+| [Bounded discovery](reference/discovery.md) | `vgi/reporting/discovery.py` |
+| [Resource identity checks](reference/resource_identity.md) | `vgi/reporting/resource_identity.py` |
+| [Objects](reference/objects.md) | `vgi/reporting/objects.py` |
+| [Resource ownership discovery](reference/resource_ownership.md) | `vgi/reporting/resource_ownership.py` |
+| [Object schedules](reference/schedules_v2.md) | `vgi/reporting/schedules_v2.py` |
 | [Reports](reference/reports.md) | `vgi/reporting/reports.py` |
 | [Report ownership discovery (optional)](reference/ownership.md) | `vgi/reporting/ownership.py` |
 | [Rendering](reference/render.md) | `vgi/reporting/render.py` |

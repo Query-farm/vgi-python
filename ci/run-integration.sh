@@ -2,8 +2,8 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 #
 # Run the canonical Query-farm/vgi integration sqllogictest suite against the
-# Python example worker, using a prebuilt standalone `haybarn-unittest` and the
-# signed community vgi extension — no C++ build from source. See ci/README.md.
+# Python example worker, using either a native runner with linked extensions or
+# standalone `haybarn-unittest` and the signed community extension. See ci/README.md.
 #
 # Ported from vgi-go's harness. The Python differences:
 #   * The "worker binaries" are console scripts installed into the project venv
@@ -29,6 +29,8 @@
 # Optional:
 #   BIN_DIR           dir holding the fixture console scripts (default: $REPO/.venv/bin)
 #   TRANSPORT         stdio | shm | launch | http   (default: launch)
+#   RUNNER_LINKS_EXTENSIONS  1 for a native runner linking vgi/httpfs/json/parquet;
+#                     0 for the published standalone runner (default)
 #   VGI_RPC_SHM_SIZE_BYTES  shm side-channel segment size (the shm lane)
 #   STAGE             scratch dir for the preprocessed test tree (default: mktemp)
 set -euo pipefail
@@ -41,6 +43,7 @@ REPO="$(cd "$HERE/.." && pwd)"
 BIN_DIR="${BIN_DIR:-$REPO/.venv/bin}"
 STAGE="${STAGE:-$(mktemp -d)}"
 TRANSPORT="${TRANSPORT:-launch}"
+RUNNER_LINKS_EXTENSIONS="${RUNNER_LINKS_EXTENSIONS:-0}"
 INTEGRATION="$VGI_SRC/test/sql/integration"
 [ -d "$INTEGRATION" ] || { echo "::error::no test/sql/integration under VGI_SRC=$VGI_SRC"; exit 1; }
 
@@ -118,7 +121,11 @@ mkdir -p "$STAGE/test/sql/integration"
        -not -name 'nested_type_combinations.test' \
        "${EXTRA_SKIP[@]}" | while read -r f; do
     mkdir -p "$STAGE/test/sql/integration/$(dirname "$f")"
-    awk -v http="$AWK_HTTP" -f "$HERE/preprocess-require.awk" "$f" > "$STAGE/test/sql/integration/$f"
+    if [ "$RUNNER_LINKS_EXTENSIONS" = "1" ]; then
+      cp "$f" "$STAGE/test/sql/integration/$f"
+    else
+      awk -v http="$AWK_HTTP" -f "$HERE/preprocess-require.awk" "$f" > "$STAGE/test/sql/integration/$f"
+    fi
   done )
 
 # Some integration cases package an executable from the upstream support tree.
@@ -310,6 +317,9 @@ esac
 
 cd "$STAGE"
 
+if [ "$RUNNER_LINKS_EXTENSIONS" = "1" ]; then
+  echo "Using extensions linked into the matching native runner."
+else
 echo "Warming the extension cache (vgi from community, deps from core) ..."
 mkdir -p "$STAGE/test"
 # FORCE INSTALL vgi re-downloads the currently-published community build,
@@ -335,6 +345,7 @@ INSTALL spatial FROM core;
 EOF
 "$HAYBARN_UNITTEST" "test/_warm.test" >/dev/null 2>&1 || echo "::warning::extension warm step did not fully succeed"
 rm -f "$STAGE/test/_warm.test"
+fi
 
 # DuckDB's sqllogictest runner, given no --test-config, turns any error whose
 # text contains "HTTP" or "Unable to connect" into a SKIP and exits 0. Over the
@@ -342,6 +353,14 @@ rm -f "$STAGE/test/_warm.test"
 # skips. The extension ships a config that disables that; every run below uses it.
 TEST_CONFIG="$VGI_SRC/test/configs/no_error_skip.json"
 [ -f "$TEST_CONFIG" ] || { echo "::error::missing $TEST_CONFIG (VGI_REF predates it?)"; exit 1; }
+
+# Native unittest defaults to its compiled source directory even after `cd`.
+# Select the staged tree explicitly so discovery respects the exclusions above
+# and spawned workers resolve relative fixture paths from the same directory.
+RUNNER_ARGS=()
+if [ "$RUNNER_LINKS_EXTENSIONS" = "1" ]; then
+  RUNNER_ARGS=(--test-dir "$STAGE")
+fi
 
 # Run the lane, streaming the native sqllogictest report (a progress line per
 # file + the final "All tests passed (.. N assertions ..)" summary). Out-of-scope
@@ -373,13 +392,17 @@ run_unittest() {
   # `set +e` rather than `|| true`: the latter runs before PIPESTATUS is read and
   # overwrites it with true's 0, silently swallowing every real test failure.
   set +e
-  "$HAYBARN_UNITTEST" --test-config "$TEST_CONFIG" "$@" 2>&1 | tee "$log"
+  "$HAYBARN_UNITTEST" "${RUNNER_ARGS[@]}" --test-config "$TEST_CONFIG" "$@" 2>&1 | tee "$log"
   rc="${PIPESTATUS[0]}"
   set -e
   if grep -q 'due to a fatal error condition' "$log"; then
     echo "::error::a forked child ran the test harness's signal handler (see the" \
          "'fatal error condition' block above). The parent exited $rc and would" \
          "otherwise have passed. This is invisible to the exit code by construction."
+    rc=1
+  fi
+  if grep -Eq 'No tests ran|No test cases matched' "$log"; then
+    echo "::error::the runner did not execute the selected tests"
     rc=1
   fi
   rm -f "$log"

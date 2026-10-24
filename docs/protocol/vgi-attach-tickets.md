@@ -1,7 +1,11 @@
 # VGI Attach Tickets
 
 **Status:** Normative. Reference implementation: vgi-python `vgi/attach_ticket.py`.
-**Protocol:** `vgi.attach_tickets.v1`, version `1.0.0`. No change to `vgi.v2`.
+**Protocol:** `vgi.attach_tickets.v1`, version `2.0.0`. No change to `vgi.v2`.
+**Revision 2026-10-17 (`2.0.0`):** `AttachTicket.expires_at` changed from
+`float64` unix seconds (`+inf` = no expiry) to nullable
+`timestamp[us, tz="UTC"]` (null = no expiry). The sealed payload (§2) is
+unchanged; the exact major.minor version check rejects a `1.0.0` peer.
 **Vectors:** [`vgi/_test_fixtures/attach_ticket_vectors.json`](https://github.com/Query-farm/vgi-python/blob/main/vgi/_test_fixtures/attach_ticket_vectors.json)
 
 An SDK implements attach tickets from this page alone. The words MUST, MUST
@@ -17,7 +21,7 @@ this worker can open. Later a runner attaches with one option,
 `vgi_attach_ticket`, and the worker restores the original attach before any
 catalog code runs.
 
-A ticket says *what* to attach. A sealed grant (`vgi_rpc.Identity.v1`
+A ticket says *what* to attach. A sealed grant (`vgi_rpc.Identity.v2`
 `issue_grant`) says *who* attaches. The two are separate on purpose:
 
 - **A ticket carries no authority.** It opens only under the caller's
@@ -133,7 +137,7 @@ from `vgi_rpc.Reflection.v1` `list_protocols`):
    is useless without a grant.
 
 It is hosted beside `vgi.v2` and never changes how a `vgi.v2` request is
-dispatched. Wire name `vgi.attach_tickets.v1`, `protocol_version = "1.0.0"`.
+dispatched. Wire name `vgi.attach_tickets.v1`, `protocol_version = "2.0.0"`.
 
 ### 5.2 Shapes
 
@@ -154,7 +158,7 @@ One unary method, `seal_attach(request: SealAttachRequest) -> AttachTicket`.
 | Field | Arrow type | Meaning |
 | --- | --- | --- |
 | `ticket` | `utf8` not null | The `vgia1.` text |
-| `expires_at` | `float64` not null | Unix seconds; `+inf` when the ticket has no expiry |
+| `expires_at` | `timestamp[us, tz="UTC"]` nullable | The UTC instant the ticket expires (the sealed `expires_at` seconds × 1 000 000 µs); null when the ticket has no expiry |
 
 ### 5.3 Rules
 
@@ -194,7 +198,7 @@ In this order:
 
    So the two halves of a held entry (grant and ticket) expire together.
 5. **Seal** per §2 with a fresh `ticket_id` and nonce. Return the text and
-   `expires_at` (`+inf` for `0`).
+   `expires_at` (null for `0`).
 
 A worker MAY refuse by policy with `action_denied`.
 

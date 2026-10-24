@@ -19,7 +19,7 @@ def generated_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "_TARGETS",
         [("present.module", "generated.txt", "present"), ("missing.module", "generated.txt", "missing")],
     )
-    monkeypatch.setattr(regen_generated, "_repo_root", lambda name: tmp_path if name == "present" else None)
+    monkeypatch.setattr(regen_generated, "_repo_root", lambda name, overrides: tmp_path if name == "present" else None)
     monkeypatch.setattr(regen_generated, "_render", lambda name: f"{name}\n")
     return tmp_path
 

@@ -1,13 +1,12 @@
 # Runs the canonical Query-farm/vgi integration sqllogictest suite against the
-# Python example worker on every push / PR. Rather than building the C++ extension
-# from source, it drives a prebuilt standalone `haybarn-unittest` and installs the
-# SIGNED vgi extension from the Haybarn community channel + its deps from core.
-# The .test files come from a pinned Query-farm/vgi checkout; ci/run-integration.sh
-# + ci/preprocess-require.awk adapt them for the standalone runner. See ci/README.md.
+# Python example worker on every push / PR. The native runner comes from the
+# Query-farm/vgi Actions build of the same commit as the test suite and statically
+# links the matching extension. Public package releases remain separate.
+# ci/run-integration.sh also supports the published standalone runner locally.
 #
 # (The separate ci.yml covers lint / type-check / unit + conformance tests / docs.
 # Those drive the pure-Python in-process Client; this workflow is the only place
-# the worker is exercised through the real published DuckDB extension over the wire.)
+# the worker is exercised through the real DuckDB extension over the wire.)
 name: Integration suite
 
 on:
@@ -19,20 +18,16 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: integration-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  # The Query-farm/vgi ref whose test/sql/integration suite we run. For now this
-  # tracks the latest `main` (resolved at checkout time) so the Python port is
-  # always validated against the newest C++ test suite. Pin to a specific commit
-  # SHA here if/when reproducible, deliberate bumps are wanted (see ci/README.md).
-  VGI_REF: main
-  # The Haybarn release providing the prebuilt haybarn-unittest binary. Must be
-  # ABI-compatible with the community-published vgi extension.
-  HAYBARN_RELEASE: haybarn-v1.5.5-rc1
+  # The test suite and native Actions artifact must come from this exact ref.
+  # The downloader verifies its provenance against the checked-out commit.
+  VGI_REF: fc3e08f7e7fd800165a0edc00313de46fed15329
   # CI is not a user: its ATTACHes should not land in Query.Farm's adoption data.
   # The vgi extension fires a telemetry event per successful ATTACH, and this
   # suite performs several hundred of them per lane, so opting out keeps the
@@ -81,18 +76,13 @@ jobs:
       - name: Install dependencies (vgi + fixtures + all extras)
         run: uv sync --all-extras --python 3.14
 
-      - name: Download haybarn-unittest
+      - name: Download the matching native integration runner
         run: |
-          gh release download "$HAYBARN_RELEASE" \
-            --repo Query-farm-haybarn/haybarn \
-            --pattern 'haybarn_unittest-linux-amd64.zip' \
-            --output /tmp/haybarn-unittest.zip --clobber
-          unzip -o -q /tmp/haybarn-unittest.zip -d /tmp/haybarn-unittest
-          UNITTEST=$(find /tmp/haybarn-unittest -name 'haybarn-unittest' -type f | head -1)
-          chmod +x "$UNITTEST"
-          echo "HAYBARN_UNITTEST=$UNITTEST" >> "$GITHUB_ENV"
+          python3 "$VGI_SRC/scripts/ci_fetch_native_runner.py" \
+            --source "$VGI_SRC" --output "$RUNNER_TEMP/vgi-native"
         env:
           GH_TOKEN: ${{ github.token }}
+          VGI_SRC: ${{ github.workspace }}/vgi-upstream
 
       - name: Run integration suite (${{ matrix.lane }})
         run: ci/run-integration.sh

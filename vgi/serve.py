@@ -276,7 +276,7 @@ def create_app(
             escape, because bytes already uploaded cannot be un-uploaded.
             ``None`` (the default) means no cap.
         introspect_principals: Principals permitted to call
-            ``vgi_rpc.Identity.v1``'s ``introspect_token``.  Only consulted
+            ``vgi_rpc.Identity.v2``'s ``introspect_token``.  Only consulted
             when the worker class overrides ``resolve_token``.  ``None`` reads
             ``VGI_INTROSPECT_PRINCIPALS``.
         grant_keys: Sealed-grant configuration. ``None`` reads

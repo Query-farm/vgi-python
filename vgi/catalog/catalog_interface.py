@@ -10,7 +10,7 @@ import dataclasses
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import (
@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from vgi.catalog.descriptors import Catalog, Index, Macro, Schema, Table, View
     from vgi.catalog.secret_type import SecretTypeSpec
     from vgi.catalog.setting import SettingSpec
+    from vgi.catalog.snapshot import CatalogSnapshotPolicy
     from vgi.protocol import ClientCapabilities
     from vgi.query_provider import CatalogQueryProvider
 
@@ -53,7 +54,7 @@ from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
 from vgi.catalog.query import QueryCapabilities
 from vgi.catalog.sql import SqlExpression as SqlExpression
-from vgi.exceptions import CatalogReadOnlyError
+from vgi.exceptions import CatalogReadOnlyError, InvalidArgumentError, NotFoundError, UnsupportedOperationError
 from vgi.metadata import (
     ArgumentMonotonicity,
     DistinctDependence,
@@ -116,7 +117,7 @@ __all__ = [
 def _validate_at_params(at_unit: str | None, at_value: str | None) -> None:
     """Validate that at_unit and at_value are both provided or both absent."""
     if bool(at_unit) != bool(at_value):
-        raise ValueError("at_unit and at_value must both be provided or both be None")
+        raise InvalidArgumentError("at_unit and at_value must both be provided or both be None")
 
 
 @dataclass(frozen=True)
@@ -390,8 +391,10 @@ class SchemaInfo(CatalogObject, ArrowSerializableDataclass):
     """Information about a schema in a catalog.
 
     Attributes:
-        attach_opaque_data: The unique id for the attached catalog.
         path: Raw identifier components from the outermost schema to this schema.
+        attach_opaque_data: Deprecated constructor-only compatibility argument.
+            Discarded and never serialized; attachment state belongs to
+            ``CatalogAttachResult`` and subsequent request envelopes.
         estimated_object_count: Approximate population per object kind, keyed by
             the same names the C++ extension uses for its set-cache
             instrumentation: ``"table"``, ``"view"``, ``"scalar_function"``,
@@ -418,8 +421,9 @@ class SchemaInfo(CatalogObject, ArrowSerializableDataclass):
         options: Effective typed options and explicit overrides when negotiated.
     """
 
-    attach_opaque_data: AttachOpaqueData
     path: SchemaPath
+    # Constructor-only compatibility for existing catalog authors; never metadata.
+    attach_opaque_data: InitVar[AttachOpaqueData | None] = field(default=None, kw_only=True)
     estimated_object_count: dict[str, int] | None = None
     options: Annotated[OptionState | None, ArrowType(pa.binary())] = None
 
@@ -573,13 +577,7 @@ class ViewInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     """Information about a view in a schema.
 
     Attributes:
-        security: ``regular`` or ``barrier``. A barrier prevents unsafe query
-            optimization across the view; it does not grant privileges. Readers
-            must enforce the barrier when materializing or reject the view.
         definition: The definition of the view which is a SQL query string.
-        aliases: Ordered raw output identifiers. A partial list renames the leading
-            outputs; an empty list retains names from the SELECT. Literal dots and
-            quotes are part of the identifier, never SQL syntax.
         column_comments: Per-column comments, keyed by the view's output column
             name. Unlike tables (whose column comments ride along as Arrow field
             metadata on the serialized ``columns`` schema), a view ships only its
@@ -588,6 +586,12 @@ class ViewInfo(CatalogSchemaObject, ArrowSerializableDataclass):
             aligns these by name against the bound output columns and feeds them
             into ``CreateViewInfo.column_comments_map``; names that don't match a
             bound column are ignored.
+        aliases: Ordered raw output identifiers. A partial list renames the leading
+            outputs; an empty list retains names from the SELECT. Literal dots and
+            quotes are part of the identifier, never SQL syntax.
+        security: ``regular`` or ``barrier``. A barrier prevents unsafe query
+            optimization across the view; it does not grant privileges. Readers
+            must enforce the barrier when materializing or reject the view.
     """
 
     definition: str
@@ -878,6 +882,9 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
             subclassing; the C++ extension reads it to enter the in-out
             registration branch with real-typed args and drive the literal
             single-row scan-mode.
+        input_rows_per_call: For a blended ``RowTransformFunction``, the most
+            input rows one worker call receives; the client splits each input
+            chunk into calls of at most this many rows. Null sends a whole chunk.
         required_settings: Settings required by the function.
         required_secrets: Secrets required by the function (each entry has
             secret_type, optional secret_name, optional scope).
@@ -885,11 +892,11 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
 
     function_type: FunctionType
 
-    arguments: SerializedSchema
+    arguments: Annotated[SerializedSchema, ArrowType(pa.dictionary(pa.int32(), pa.binary()))]
 
-    output_schema: SerializedSchema
+    output_schema: Annotated[SerializedSchema, ArrowType(pa.dictionary(pa.int32(), pa.binary()))]
 
-    parameter_default_values: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
+    parameter_default_values: Annotated[pa.RecordBatch | None, ArrowType(pa.dictionary(pa.int32(), pa.binary()))] = None
 
     stability: FunctionStability | None = None
     null_handling: NullHandling | None = None
@@ -945,6 +952,10 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     # subclassing; the C++ extension reads it to enter the in-out registration
     # branch with real-typed args and drive the literal single-row scan-mode.
     input_from_args: bool = False
+
+    # Blended only: the most input rows per worker call; the client splits each
+    # input chunk into calls of at most this many rows. None = a whole chunk.
+    input_rows_per_call: int | None = None
 
     required_settings: list[str] = field(default_factory=list)
 
@@ -1842,6 +1853,8 @@ class CatalogInterface(ABC):
     #: Optional provider for prepared read-only catalog queries. The Worker
     #: negotiates and binds it to each attachment; default catalogs select none.
     query_provider: "CatalogQueryProvider | None" = None
+    #: Optional framework publication policy; ordinary delivery when unset.
+    catalog_snapshot_policy: ClassVar["CatalogSnapshotPolicy | None"] = None
 
     @property
     def interface_feature_flags(self) -> set[str]:
@@ -1899,12 +1912,12 @@ class CatalogInterface(ABC):
         If on_conflict is ERROR and the catalog already exists, raise an error.
 
         """
-        raise NotImplementedError("Catalog create not implemented.")
+        raise UnsupportedOperationError("Catalog create not implemented.")
 
     # Drop a catalog
     def catalog_drop(self, *, name: str) -> None:
         """Drop the catalog with the given name."""
-        raise NotImplementedError("Catalog drop not implemented.")
+        raise UnsupportedOperationError("Catalog drop not implemented.")
 
     # Transactions are initiated and driven by DuckDB it is rare for CatalogInterface
     # implementors to implement them, but I want to support them.
@@ -1919,7 +1932,7 @@ class CatalogInterface(ABC):
 
         If the implementation does not support transactions, it can return None.
         """
-        raise NotImplementedError("Catalog transactions not implemented.")
+        raise UnsupportedOperationError("Catalog transactions not implemented.")
 
     def catalog_transaction_commit(
         self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData
@@ -1928,7 +1941,7 @@ class CatalogInterface(ABC):
 
         If the transaction cannot be committed, an exception should be raised.
         """
-        raise NotImplementedError("Catalog transactions not implemented.")
+        raise UnsupportedOperationError("Catalog transactions not implemented.")
 
     def catalog_transaction_rollback(
         self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData
@@ -1937,7 +1950,7 @@ class CatalogInterface(ABC):
 
         If the transaction cannot be rolled back, an exception should be raised.
         """
-        raise NotImplementedError("Catalog transactions not implemented.")
+        raise UnsupportedOperationError("Catalog transactions not implemented.")
 
     def catalog_capabilities(self, *, attach_opaque_data: AttachOpaqueData) -> CatalogCapabilities:
         """Return currently implemented profiles for this attachment, not authorization.
@@ -2044,7 +2057,7 @@ class CatalogInterface(ABC):
         options: TypedValueBatch | None = None,
     ) -> None:
         """Create a new schema with the given path, comment, and tags."""
-        raise NotImplementedError("Schema create not implemented.")
+        raise UnsupportedOperationError("Schema create not implemented.")
 
     def schema_option_definitions(
         self,
@@ -2058,7 +2071,7 @@ class CatalogInterface(ABC):
         Defaults come from this transaction snapshot. Implementations validate
         again within each mutation; discovery does not reserve defaults.
         """
-        raise NotImplementedError("Schema option discovery not implemented.")
+        raise UnsupportedOperationError("Schema option discovery not implemented.")
 
     def schema_alter_metadata(
         self,
@@ -2077,7 +2090,7 @@ class CatalogInterface(ABC):
         the transaction-visible version and invalidate committed snapshots on
         commit, under the provider's declared transaction guarantees.
         """
-        raise NotImplementedError("Schema metadata alteration not implemented.")
+        raise UnsupportedOperationError("Schema metadata alteration not implemented.")
 
     def schema_alter_options(
         self,
@@ -2088,7 +2101,7 @@ class CatalogInterface(ABC):
         changes: OptionChanges,
     ) -> None:
         """Validate and apply the entire SET/RESET operation atomically."""
-        raise NotImplementedError("Schema option alteration not implemented.")
+        raise UnsupportedOperationError("Schema option alteration not implemented.")
 
     def catalog_dependencies(
         self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None
@@ -2099,7 +2112,7 @@ class CatalogInterface(ABC):
         Reject this read when policy prevents disclosure; mutations still enforce
         all dependencies. Discovery does not reserve or authorize later changes.
         """
-        raise NotImplementedError("Catalog dependency discovery not implemented.")
+        raise UnsupportedOperationError("Catalog dependency discovery not implemented.")
 
     def schema_drop(
         self,
@@ -2111,7 +2124,7 @@ class CatalogInterface(ABC):
         cascade: bool,
     ) -> None:
         """Drop the schema with the given path."""
-        raise NotImplementedError("Schema drop not implemented.")
+        raise UnsupportedOperationError("Schema drop not implemented.")
 
     @overload
     def schema_contents(
@@ -2197,7 +2210,7 @@ class CatalogInterface(ABC):
             depending on the type parameter.
 
         """
-        raise NotImplementedError("Schema contents not implemented.")
+        raise UnsupportedOperationError("Schema contents not implemented.")
 
     def catalog_contents(
         self,
@@ -2316,11 +2329,11 @@ class CatalogInterface(ABC):
 
         New metadata, typed options and layout require their selected profiles.
         """
-        raise NotImplementedError("Table create not implemented.")
+        raise UnsupportedOperationError("Table create not implemented.")
 
     def table_constraints_apply(self, request: ConstraintsApplyRequest) -> ConstraintSnapshot:
         """Apply all canonical changes atomically; opaque attachment/tx are unwrapped."""
-        raise NotImplementedError("Canonical constraint mutation is not implemented")
+        raise UnsupportedOperationError("Canonical constraint mutation is not implemented")
 
     def table_option_definitions(
         self,
@@ -2331,7 +2344,7 @@ class CatalogInterface(ABC):
         name: str,
     ) -> OptionDefinitions:
         """Return typed definitions for a prospective or existing table."""
-        raise NotImplementedError("Table option definitions not implemented")
+        raise UnsupportedOperationError("Table option definitions not implemented")
 
     def table_alter_options(
         self,
@@ -2343,7 +2356,7 @@ class CatalogInterface(ABC):
         changes: OptionChanges,
     ) -> None:
         """Validate and persist the whole option change atomically."""
-        raise NotImplementedError("Table option alteration not implemented")
+        raise UnsupportedOperationError("Table option alteration not implemented")
 
     def table_alter_layout(
         self,
@@ -2355,7 +2368,7 @@ class CatalogInterface(ABC):
         changes: TableLayoutChange,
     ) -> None:
         """Apply the requested future-write policy or atomic existing-data rewrite."""
-        raise NotImplementedError("Table layout alteration not implemented")
+        raise UnsupportedOperationError("Table layout alteration not implemented")
 
     def table_drop(
         self,
@@ -2368,7 +2381,7 @@ class CatalogInterface(ABC):
         cascade: bool = False,
     ) -> None:
         """Drop the table with the given name."""
-        raise NotImplementedError("Table drop not implemented.")
+        raise UnsupportedOperationError("Table drop not implemented.")
 
     def table_comment_set(
         self,
@@ -2381,7 +2394,7 @@ class CatalogInterface(ABC):
         ignore_not_found: bool,
     ) -> None:
         """Set the comment for the table with the given name."""
-        raise NotImplementedError("Table comment set not implemented.")
+        raise UnsupportedOperationError("Table comment set not implemented.")
 
     def table_column_comment_set(
         self,
@@ -2395,7 +2408,7 @@ class CatalogInterface(ABC):
         ignore_not_found: bool,
     ) -> None:
         """Set the comment for a column in the table."""
-        raise NotImplementedError("Table column comment set not implemented.")
+        raise UnsupportedOperationError("Table column comment set not implemented.")
 
     def table_rename(
         self,
@@ -2408,7 +2421,7 @@ class CatalogInterface(ABC):
         ignore_not_found: bool,
     ) -> None:
         """Rename the table with the given name to the new name."""
-        raise NotImplementedError("Table rename not implemented.")
+        raise UnsupportedOperationError("Table rename not implemented.")
 
     def table_column_add(
         self,
@@ -2425,7 +2438,7 @@ class CatalogInterface(ABC):
         if_column_not_exists: bool,
     ) -> None:
         """Add a column to the table with the given name."""
-        raise NotImplementedError("Table column add not implemented.")
+        raise UnsupportedOperationError("Table column add not implemented.")
 
     def table_column_drop(
         self,
@@ -2440,7 +2453,7 @@ class CatalogInterface(ABC):
         cascade: bool,
     ) -> None:
         """Drop the column from the table with the given name."""
-        raise NotImplementedError("Table column drop not implemented.")
+        raise UnsupportedOperationError("Table column drop not implemented.")
 
     def table_column_rename(
         self,
@@ -2454,7 +2467,7 @@ class CatalogInterface(ABC):
         ignore_not_found: bool,
     ) -> None:
         """Rename the column in the table with the given name."""
-        raise NotImplementedError("Table column rename not implemented.")
+        raise UnsupportedOperationError("Table column rename not implemented.")
 
     def table_column_default_set(
         self,
@@ -2468,7 +2481,7 @@ class CatalogInterface(ABC):
         ignore_not_found: bool,
     ) -> None:
         """Set the default expression for the column."""
-        raise NotImplementedError("Table column default set not implemented.")
+        raise UnsupportedOperationError("Table column default set not implemented.")
 
     def table_column_default_drop(
         self,
@@ -2481,7 +2494,7 @@ class CatalogInterface(ABC):
         ignore_not_found: bool,
     ) -> None:
         """Drop the default expression for the column."""
-        raise NotImplementedError("Table column default drop not implemented.")
+        raise UnsupportedOperationError("Table column default drop not implemented.")
 
     def table_column_type_change(
         self,
@@ -2501,7 +2514,7 @@ class CatalogInterface(ABC):
 
         The explicit path selects the field; the definition name must match its final component.
         """
-        raise NotImplementedError("Table column type change not implemented.")
+        raise UnsupportedOperationError("Table column type change not implemented.")
 
     def table_not_null_drop(
         self,
@@ -2514,7 +2527,7 @@ class CatalogInterface(ABC):
         ignore_not_found: bool,
     ) -> None:
         """Drop the NOT NULL constraint from the column."""
-        raise NotImplementedError("Table NOT NULL drop not implemented.")
+        raise UnsupportedOperationError("Table NOT NULL drop not implemented.")
 
     def table_not_null_set(
         self,
@@ -2527,7 +2540,7 @@ class CatalogInterface(ABC):
         ignore_not_found: bool,
     ) -> None:
         """Set the NOT NULL constraint on the column."""
-        raise NotImplementedError("Table NOT NULL set not implemented.")
+        raise UnsupportedOperationError("Table NOT NULL set not implemented.")
 
     def table_scan_function_get(
         self,
@@ -2545,7 +2558,7 @@ class CatalogInterface(ABC):
         Returns information about the VGI table function to call when scanning
         this table. The at_unit and at_value support time travel queries.
         """
-        raise NotImplementedError("Table scan function get not implemented.")
+        raise UnsupportedOperationError("Table scan function get not implemented.")
 
     def table_scan_branches_get(
         self,
@@ -2664,7 +2677,7 @@ class CatalogInterface(ABC):
         For single-branch tables this is ``None`` (or unset for legacy
         overrides).
         """
-        raise NotImplementedError("Table insert not supported.")
+        raise UnsupportedOperationError("Table insert not supported.")
 
     def table_update_function_get(
         self,
@@ -2680,7 +2693,7 @@ class CatalogInterface(ABC):
         to call for updating rows in this table. Input batches will include a
         rowid column plus the columns being updated.
         """
-        raise NotImplementedError("Table update not supported.")
+        raise UnsupportedOperationError("Table update not supported.")
 
     def table_delete_function_get(
         self,
@@ -2696,7 +2709,7 @@ class CatalogInterface(ABC):
         to call for deleting rows from this table. Input batches will contain
         a rowid column identifying the rows to delete.
         """
-        raise NotImplementedError("Table delete not supported.")
+        raise UnsupportedOperationError("Table delete not supported.")
 
     def view_create(
         self,
@@ -2714,7 +2727,7 @@ class CatalogInterface(ABC):
         column_comments: dict[str, str] | None = None,
     ) -> None:
         """Create a new view with the given definition."""
-        raise NotImplementedError("View create not implemented.")
+        raise UnsupportedOperationError("View create not implemented.")
 
     def view_drop(
         self,
@@ -2727,7 +2740,7 @@ class CatalogInterface(ABC):
         cascade: bool = False,
     ) -> None:
         """Drop the view with the given name."""
-        raise NotImplementedError("View drop not implemented.")
+        raise UnsupportedOperationError("View drop not implemented.")
 
     def view_rename(
         self,
@@ -2740,7 +2753,7 @@ class CatalogInterface(ABC):
         ignore_not_found: bool,
     ) -> None:
         """Rename the view to the new name."""
-        raise NotImplementedError("View rename not implemented.")
+        raise UnsupportedOperationError("View rename not implemented.")
 
     @abstractmethod
     def view_get(
@@ -2767,7 +2780,7 @@ class CatalogInterface(ABC):
         ignore_not_found: bool,
     ) -> None:
         """Set the comment for the view with the given name."""
-        raise NotImplementedError("View comment set not implemented.")
+        raise UnsupportedOperationError("View comment set not implemented.")
 
     def view_column_comment_set(
         self,
@@ -2781,7 +2794,7 @@ class CatalogInterface(ABC):
         ignore_not_found: bool,
     ) -> None:
         """Set or clear the comment keyed by a raw view output name."""
-        raise NotImplementedError("View column comment set not implemented.")
+        raise UnsupportedOperationError("View column comment set not implemented.")
 
     # ---- Macros ----
 
@@ -2815,7 +2828,7 @@ class CatalogInterface(ABC):
         Providers resolve supported expression defaults once at creation and
         return resolved literal defaults on discovery.
         """
-        raise NotImplementedError("Macro create not implemented.")
+        raise UnsupportedOperationError("Macro create not implemented.")
 
     def macro_drop(
         self,
@@ -2827,7 +2840,7 @@ class CatalogInterface(ABC):
         ignore_not_found: bool,
     ) -> None:
         """Drop the macro with the given name."""
-        raise NotImplementedError("Macro drop not implemented.")
+        raise UnsupportedOperationError("Macro drop not implemented.")
 
     # ---- Indexes ----
 
@@ -2855,7 +2868,7 @@ class CatalogInterface(ABC):
         algorithm: str,
     ) -> OptionDefinitions:
         """Return supported typed options for the exact table and algorithm."""
-        raise NotImplementedError("Index option definitions not implemented.")
+        raise UnsupportedOperationError("Index option definitions not implemented.")
 
     def index_create(
         self,
@@ -2868,7 +2881,7 @@ class CatalogInterface(ABC):
         on_conflict: OnConflict,
     ) -> None:
         """Bind and atomically construct a physical index before publishing it."""
-        raise NotImplementedError("Index create not implemented.")
+        raise UnsupportedOperationError("Index create not implemented.")
 
     def index_drop(
         self,
@@ -2881,7 +2894,7 @@ class CatalogInterface(ABC):
         cascade: bool = False,
     ) -> None:
         """Drop the index with the given name."""
-        raise NotImplementedError("Index drop not implemented.")
+        raise UnsupportedOperationError("Index drop not implemented.")
 
     def copy_from_formats(
         self,
@@ -3000,8 +3013,10 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         catalog_transaction_commit: DDL stub that raises `[`CatalogReadOnlyError`][].
         catalog_transaction_rollback: DDL stub that raises `[`CatalogReadOnlyError`][].
         schema_create: DDL stub that raises `[`CatalogReadOnlyError`][].
+        schema_alter_metadata: DDL stub that raises `[`CatalogReadOnlyError`][].
         schema_drop: DDL stub that raises `[`CatalogReadOnlyError`][].
         table_create: DDL stub that raises `[`CatalogReadOnlyError`][].
+        table_constraints_apply: DDL stub that raises `[`CatalogReadOnlyError`][].
         table_drop: DDL stub that raises `[`CatalogReadOnlyError`][].
         table_comment_set: DDL stub that raises `[`CatalogReadOnlyError`][].
         table_column_comment_set: DDL stub that raises `[`CatalogReadOnlyError`][].
@@ -3017,6 +3032,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         view_create: DDL stub that raises `[`CatalogReadOnlyError`][].
         view_drop: DDL stub that raises `[`CatalogReadOnlyError`][].
         view_rename: DDL stub that raises `[`CatalogReadOnlyError`][].
+        view_column_comment_set: DDL stub that raises `[`CatalogReadOnlyError`][].
         view_comment_set: DDL stub that raises `[`CatalogReadOnlyError`][].
         macro_create: DDL stub that raises `[`CatalogReadOnlyError`][].
         macro_drop: DDL stub that raises `[`CatalogReadOnlyError`][].
@@ -3225,7 +3241,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         del data_version_spec, implementation_version, ctx
         effective_name = self._effective_catalog_name
         if name != effective_name:
-            raise ValueError(f"Unknown catalog: {name!r}. Available: {effective_name}")
+            raise NotFoundError(f"Unknown catalog: {name!r}. Available: {effective_name}")
         validate_required_attach_options(effective_name, self.attach_option_specs, options)
 
         # Serialize settings and secret types for the attach result
@@ -3464,7 +3480,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         ]
         available_str = ", ".join(sorted(available)) if available else "(none)"
 
-        raise NotImplementedError(
+        raise UnsupportedOperationError(
             f"table_scan_function_get not implemented for table "
             f"{self._effective_catalog_name}.{schema_path_display(schema_path)}::{name!r}. "
             f"Available tables: {available_str}. "
@@ -3486,7 +3502,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
 
         table = self._table_registry.get((schema_path_key(schema_path), name.lower()))
         if table is None:
-            raise NotImplementedError(f"Table {schema_path_display(schema_path)}::{name!r} not found in catalog.")
+            raise NotFoundError(f"Table {schema_path_display(schema_path)}::{name!r} not found in catalog.")
 
         write_func = getattr(table, attr_name, None)
         if write_func is None:
@@ -3901,6 +3917,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             sink_order_dependent=meta.sink_order_dependent,
             requires_input_batch_index=meta.requires_input_batch_index,
             input_from_args=False if is_scalar else meta.input_from_args,
+            input_rows_per_call=None if is_scalar else meta.input_rows_per_call,
             # Settings
             required_settings=meta.required_settings,
             # Secrets

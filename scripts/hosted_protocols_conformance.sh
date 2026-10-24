@@ -6,7 +6,7 @@
 #
 #   stdio  vgi-fixture-worker                       (MetaWorker.serve, pipe)
 #   unix   vgi-fixture-worker --unix <sock>         (the DuckDB launcher path)
-#   http   vgi-fixture-http --identity              (+ the Identity.v1 groups)
+#   http   vgi-fixture-http --identity              (+ the Identity.v2 groups)
 #
 # Every worker must host, in order, vgi.v2 then conformance.Secondary.v1.
 #

@@ -567,7 +567,6 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         # default of 1 (unknown / eager-load), which restores correct lookups.
         static_schemas = [
             SchemaInfo(
-                attach_opaque_data=s.attach_opaque_data,
                 path=list(s.path),
                 comment=s.comment,
                 tags=s.tags,

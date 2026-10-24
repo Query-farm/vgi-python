@@ -17,9 +17,12 @@ and only then written.
 
 Targets in sibling repos that are not checked out are skipped, not failed:
 nobody has all of them. A registry backend's ``root_env`` (``VGI_JAVA_ROOT``,
-``VGI_TYPESCRIPT_ROOT``, ...) points its SDK target at another checkout.
-Release checks use ``--require-all`` to reject a missing checkout before any
-artifact is written. With ``--only``, it requires that selected repository.
+``VGI_TYPESCRIPT_ROOT``, ...) points its SDK target at another checkout, as does
+``--root REPO=PATH``. ``--only REPO`` (repeatable) limits the run to those repos,
+so regenerating one SDK's worktree writes nothing into any other checkout:
+
+    uv run python scripts/regen_generated.py --only vgi-go --root vgi-go=~/Development/vgi-go-feature
+Release checks use ``--require-all`` to reject missing selected repositories before writing.
 """
 
 from __future__ import annotations
@@ -40,6 +43,8 @@ _TARGETS: list[tuple[str, str, str]] = [
     ("vgi.codegen.cpp_constants", "src/generated/vgi_protocol_constants.hpp", "vgi"),
     ("vgi.codegen.cpp_protocol_version", "src/generated/vgi_protocol_version.hpp", "vgi"),
     ("vgi.codegen.cpp_protocol_name", "src/generated/vgi_protocol_names.hpp", "vgi"),
+    ("vgi.codegen.cpp_records:hpp", "src/generated/vgi_protocol_records.hpp", "vgi"),
+    ("vgi.codegen.cpp_records:cpp", "src/generated/vgi_protocol_records.cpp", "vgi"),
     # The secret protocol's three artifacts were checked in but never listed here,
     # so `--check` reported "no drift" over a stale secret header. Listed now: a
     # regen script that silently skips an artifact is worse than no script, because
@@ -119,11 +124,11 @@ _TARGETS += [
 _ROOT_ENV: dict[str, str] = {"vgi": "VGI_NATIVE_ROOT", **{b.repo: b.root_env for b in _REGISTRY_BACKENDS}}
 
 
-def _repo_root(name: str) -> Path | None:
+def _repo_root(name: str, roots: dict[str, str]) -> Path | None:
     """Locate a sibling checkout, or ``None`` when it is not present."""
-    if name == "vgi-python":
-        return Path(__file__).resolve().parents[1]
-    override = os.environ.get(_ROOT_ENV.get(name, ""))
+    override = roots.get(name) or os.environ.get(_ROOT_ENV.get(name, ""))
+    if not override and name == "vgi":
+        override = os.environ.get("VGI_EXTENSION_ROOT")
     if override:
         return Path(override) if Path(override).is_dir() else None
     siblings = Path(__file__).resolve().parents[2]
@@ -160,18 +165,39 @@ def main() -> int:
         action="store_true",
         help="report drift without writing anything (exit 1 if any file is stale)",
     )
-    parser.add_argument("--only", metavar="REPO", help="generate/check only artifacts belonging to this repo")
+    parser.add_argument(
+        "--only",
+        action="append",
+        default=[],
+        metavar="REPO",
+        help="only these repos' targets (repeatable), e.g. --only vgi-go",
+    )
+    parser.add_argument(
+        "--root",
+        action="append",
+        default=[],
+        metavar="REPO=PATH",
+        help="the checkout to use for REPO (repeatable), e.g. --root vgi-go=../vgi-go-feature",
+    )
     parser.add_argument(
         "--require-all",
         action="store_true",
-        help="fail before writing if any selected repository is missing (for coordinated release checks)",
+        help="fail before writing if any selected repository is missing",
     )
     args = parser.parse_args()
-    if args.only is not None and args.only not in {repo for _, _, repo in _TARGETS}:
-        parser.error(f"unknown target repo: {args.only}")
+    known = {repo for _, _, repo in _TARGETS}
+    unknown = set(args.only) - known
+    if unknown:
+        parser.error(f"--only: unknown repo(s) {sorted(unknown)}; known: {sorted(known)}")
+    roots: dict[str, str] = {}
+    for spec in args.root:
+        repo, sep, path = spec.partition("=")
+        if not sep or repo not in known:
+            parser.error(f"--root expects REPO=PATH with REPO one of {sorted(known)}, got {spec!r}")
+        roots[repo] = str(Path(path).expanduser())
 
-    targets = [(module, relative, repo) for module, relative, repo in _TARGETS if args.only in (None, repo)]
-    roots = {repo: _repo_root(repo) for _, _, repo in targets}
+    targets = [(module, relative, repo) for module, relative, repo in _TARGETS if not args.only or repo in args.only]
+    roots = {repo: _repo_root(repo, roots) for _, _, repo in targets}
     if args.require_all:
         missing = sorted(repo for repo, root in roots.items() if root is None)
         if missing:

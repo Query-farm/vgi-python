@@ -163,7 +163,12 @@ from vgi.catalog.setting import SettingSpec, extract_setting_specs
 from vgi.catalog.sql import column_expressions
 from vgi.column_path import column_definition as decode_column_definition
 from vgi.column_path import column_path_key
-from vgi.exceptions import OpaqueDataNotRecognizedError
+from vgi.exceptions import (
+    InvalidArgumentError,
+    NotFoundError,
+    OpaqueDataNotRecognizedError,
+    UnsupportedOperationError,
+)
 from vgi.function import (
     Function,
 )
@@ -194,7 +199,6 @@ from vgi.protocol import (
     ProcessState,
     ScalarExchangeState,
     ScanSplit,
-    SchemaContents,
     SchemasResponse,
     TableBufferingFinalizeState,
     TableCreateRequest,
@@ -212,7 +216,6 @@ from vgi.protocol import (
     VgiCallState,
     VgiProtocol,
     ViewsResponse,
-    _item_ipc_bytes,
 )
 from vgi.rpc_server import build_rpc_server
 from vgi.scalar_function import ScalarFunctionGenerator
@@ -1165,47 +1168,11 @@ def _transaction_aad(auth: AuthContext | None, attach_envelope: bytes) -> bytes:
     return _TRANSACTION_AAD_PREFIX + _identity_tail(auth) + b"\x00" + attach_envelope
 
 
-def catalog_contents_digest(schemas: Sequence[SchemaContents]) -> str:
-    """Hex SHA-256 over a ``catalog_contents`` snapshot: the ``content-hash`` etag.
+def catalog_contents_digest(response: CatalogContentsResponse) -> str:
+    """Content ETag over the six catalog-wide collection streams."""
+    from vgi.catalog.contents_codec import CATEGORY_TYPES, contents_digest
 
-    Covers every schema's path and the exact item bytes of every kind, in
-    order, each length-prefixed so no two different snapshots share an input.
-    Deterministic because the items' encoding is (map columns are written in
-    sorted key order), so two builds of the same catalog hash alike.
-
-    Args:
-        schemas: The snapshot, in wire order.
-
-    Returns:
-        The lowercase hex digest.
-    """
-    digest = hashlib.sha256()
-
-    def chunk(data: bytes) -> None:
-        digest.update(len(data).to_bytes(8, "little"))
-        digest.update(data)
-
-    def chunks(values: Sequence[bytes]) -> None:
-        digest.update(len(values).to_bytes(8, "little"))
-        for value in values:
-            chunk(value)
-
-    digest.update(len(schemas).to_bytes(8, "little"))
-    for entry in schemas:
-        chunks([part.encode() for part in entry.path])
-        chunk(entry.schema)
-        for kind in (
-            entry.tables,
-            entry.views,
-            entry.scalar_functions,
-            entry.aggregate_functions,
-            entry.table_functions,
-            entry.scalar_macros,
-            entry.table_macros,
-            entry.indexes,
-        ):
-            chunks(kind)
-    return digest.hexdigest()
+    return contents_digest({kind: getattr(response, kind) for kind in CATEGORY_TYPES})
 
 
 class _PreserializedContentsResponse(CatalogContentsResponse):
@@ -1235,6 +1202,11 @@ class _PreserializedContentsResponse(CatalogContentsResponse):
             etag=response.etag,
             not_modified=response.not_modified,
             schemas=response.schemas,
+            tables=response.tables,
+            views=response.views,
+            functions=response.functions,
+            macros=response.macros,
+            indexes=response.indexes,
         )
         object.__setattr__(out, "_wire", response.serialize_to_bytes())
         return out
@@ -1520,7 +1492,7 @@ class Worker:
             # does live rather than the generic unknown-function list.
             if function_name in registry:
                 schemas = sorted({schema for (schema, name) in self._build_schema_registry() if name == function_name})
-                raise ValueError(
+                raise NotFoundError(
                     f"Function '{function_name}' is not registered in schema {schema_path_display(schema_path)}. "
                     f"It is available in: {[schema_path_display(path) for path in schemas]}"
                 )
@@ -1534,7 +1506,7 @@ class Worker:
                 for suggestion in suggestions[:3]:
                     msg_lines.append(f"    - {suggestion}")
             msg_lines.append(f"  Available functions: {available}")
-            raise ValueError("\n".join(msg_lines))
+            raise NotFoundError("\n".join(msg_lines))
 
         return list(registry[function_name])
 
@@ -1618,7 +1590,7 @@ class Worker:
         Each protocol needs a distinct wire name (``protocol_name:
         ClassVar[str]``). Names may not repeat, may not equal the worker's own
         protocol, and may not use the reserved ``vgi_rpc.`` prefix: reflection
-        is hosted automatically and ``vgi_rpc.Identity.v1`` is enabled by
+        is hosted automatically and ``vgi_rpc.Identity.v2`` is enabled by
         overriding [`resolve_token`][vgi.worker.Worker.resolve_token] /
         [`mint_grant`][vgi.worker.Worker.mint_grant]. Violations are a startup
         error naming this method.
@@ -1636,7 +1608,7 @@ class Worker:
     def resolve_token(cls, token: str) -> TokenIdentity | None:
         """Resolve an opaque bearer credential to the identity it authenticates as.
 
-        Override to host ``vgi_rpc.Identity.v1``'s ``introspect_token``,
+        Override to host ``vgi_rpc.Identity.v2``'s ``introspect_token``,
         which a reverse proxy calls when it terminates the only public
         listener and must know *which principal* a credential is before it can
         authorize anything. Until it is overridden the protocol is not hosted
@@ -1703,7 +1675,7 @@ class Worker:
     def mint_grant(cls, principal: str, purpose: str, scopes: list[str], ttl_seconds: int) -> IssuedGrant:
         """Mint a standing delegation credential for *principal*.
 
-        Override to host ``vgi_rpc.Identity.v1``'s ``issue_grant``. Like
+        Override to host ``vgi_rpc.Identity.v2``'s ``issue_grant``. Like
         ``resolve_token``, the method is absent until it is overridden rather
         than hosted-and-refusing, so no worker grows a credential *issuer* by
         upgrading a dependency.
@@ -1746,7 +1718,9 @@ class Worker:
                 never issue a longer one.
 
         Returns:
-            The minted ``IssuedGrant``. ``expires_at`` is a declaration rather
+            The minted ``IssuedGrant``. ``expires_at`` is a timezone-aware UTC
+            ``datetime`` (``timestamp[us, tz="UTC"]`` on the wire, under
+            ``vgi_rpc.Identity.v2``), and a declaration rather
             than an enforcement: the real lifetime lives inside the opaque
             token, so a worker that states one has thought about one.
 
@@ -2338,7 +2312,7 @@ class Worker:
                 cols = [f"{f.name}: {f.type}" for f in input_schema]
                 input_schema_str = f"input_columns=[{', '.join(cols)}], "
 
-            raise ValueError(
+            raise InvalidArgumentError(
                 f"No matching function '{function_name}' for arguments: "
                 f"{input_schema_str}{_format_arguments_for_error(args)}. "
                 f"Available overloads:\n" + "\n".join(param_summaries)
@@ -2359,7 +2333,7 @@ class Worker:
                         f". These are declared in different schemas ({owners}) — "
                         f"qualify the call with a schema to disambiguate"
                     )
-            raise ValueError(
+            raise InvalidArgumentError(
                 f"Ambiguous function call '{function_name}': multiple overloads match: {match_names}{hint}"
             )
 
@@ -2667,7 +2641,7 @@ class Worker:
         if function_type is not None:
             candidates = [c for c in candidates if issubclass(c, function_type)]
             if not candidates:
-                raise ValueError(
+                raise NotFoundError(
                     f"No {function_type.__name__} named '{function_name}' found. "
                     f"Candidates exist but are not {function_type.__name__}."
                 )
@@ -3354,7 +3328,7 @@ class Worker:
         all", i.e. the caller used the wrong `Client` method entirely.
         """
         if issubclass(func_cls, TableInOutGenerator) and request.input_schema is None:
-            raise ValueError(
+            raise InvalidArgumentError(
                 f"'{request.function_name}' is a table-in-out function (it requires an input row "
                 "stream) but no input schema was supplied — use "
                 "Client.table_in_out_function(input=...), not Client.table_function()."
@@ -3364,7 +3338,7 @@ class Worker:
             and not issubclass(func_cls, TableInOutGenerator)
             and request.input_schema is not None
         ):
-            raise ValueError(
+            raise InvalidArgumentError(
                 f"'{request.function_name}' is a plain table function (it takes no input row "
                 "stream) but an input schema was supplied — use Client.table_function(), not "
                 "Client.table_in_out_function()."
@@ -3712,7 +3686,7 @@ class Worker:
         result = func_cls.on_bind(bind_params)
 
         if bind_params.secrets.needs_resolution:
-            raise NotImplementedError(
+            raise UnsupportedOperationError(
                 f"Aggregate function '{request.function_name}' requires secret resolution, "
                 "which is not yet supported for aggregate functions."
             )
@@ -4965,7 +4939,7 @@ class Worker:
                 # blended-row-transform worker: the client polls for more
                 # output, the server polls for more input, neither ever
                 # arrives). Name the mismatch immediately instead.
-                raise ValueError(
+                raise InvalidArgumentError(
                     f"'{request.bind_call.function_name}' is a table-in-out function "
                     "(it requires an input row stream) but was called with no input "
                     "phase — use Client.table_in_out_function(input=...), not "
@@ -4983,7 +4957,7 @@ class Worker:
                 # immediately rather than silently ignoring the phase/input
                 # stream and running as an ordinary producer while the caller
                 # is left feeding batches nobody reads.
-                raise ValueError(
+                raise InvalidArgumentError(
                     f"'{request.bind_call.function_name}' is a plain table function "
                     "(it takes no input row stream) but was called with init "
                     f"phase={request.phase!r} — use Client.table_function(), not "
@@ -5551,18 +5525,63 @@ class Worker:
         version = cat.catalog_version(attach_opaque_data=attach, transaction_opaque_data=None)
         selected = self._catalog_agreement(attach_opaque_data)
         available = cat.catalog_capabilities(attach_opaque_data=attach)
-        if selected.names() or available.names():
-            # Do not reuse attachment-independent snapshots or provider etags
-            # across capability projections. Hash the projected response and
-            # agreement; a token from another projection cannot produce 304.
-            effective = available.select(selected)
+        effective = available.select(selected)
+        projected = bool(selected.names() or available.names())
+        projection_key = hashlib.sha256(effective.serialize_to_bytes()).hexdigest() if projected else ""
+
+        def build_response() -> CatalogContentsResponse:
             response = self._catalog_contents_response(cat, attach, version, None, effective)
-            etag = hashlib.sha256(
-                effective.serialize_to_bytes() + catalog_contents_digest(response.schemas).encode()
-            ).hexdigest()
-            if etag == if_none_match:
-                return CatalogContentsResponse(catalog_version=version, etag=etag, not_modified=True)
-            return _dataclass_replace(response, etag=etag)
+            if projected:
+                etag = hashlib.sha256(
+                    effective.serialize_to_bytes() + catalog_contents_digest(response).encode()
+                ).hexdigest()
+                response = _dataclass_replace(response, etag=etag)
+            return response
+
+        policy = cat.catalog_snapshot_policy
+        if policy is not None and policy.delivery == "published":
+            from vgi.catalog.contents_codec import decode_inventory
+            from vgi.catalog.snapshot import SnapshotRequest
+
+            manager = self._catalog_snapshot_manager(policy)
+            request = SnapshotRequest(
+                catalog=cat,
+                attach_opaque_data=attach,
+                attachment_scope=hashlib.sha256(attach_opaque_data).hexdigest(),
+                catalog_version=version,
+                capability_projection=projection_key,
+            )
+            built: CatalogContentsResponse | None = None
+
+            def build() -> CatalogContentsResponse:
+                nonlocal built
+                if built is None:
+                    candidate = build_response()
+                    decode_inventory(candidate)
+                    after_version = cat.catalog_version(attach_opaque_data=attach, transaction_opaque_data=None)
+                    if after_version != version:
+                        raise ValueError("catalog changed while building its publication")
+                    built = candidate
+                return built
+
+            try:
+                return cast(CatalogContentsResponse, manager.resolve(request, build, if_none_match))
+            except Exception:
+                if policy.on_publication_failure != "ordinary":
+                    raise
+                fallback_key = manager.cache_key(request)
+                built = None
+                response = build()
+                if manager.cache_key(request) != fallback_key:
+                    raise ValueError("catalog generation changed while building publication fallback") from None
+                if response.etag is not None and response.etag == if_none_match:
+                    return CatalogContentsResponse(catalog_version=version, etag=response.etag, not_modified=True)
+                return response
+        if projected:
+            response = build_response()
+            if response.etag == if_none_match:
+                return CatalogContentsResponse(catalog_version=version, etag=response.etag, not_modified=True)
+            return response
         if type(cat).catalog_contents_attach_independent and getattr(type(cat), "catalog_version_frozen", False):
             snapshot = self._contents_cache
             if snapshot is None or snapshot.catalog is not cat or snapshot.catalog_version != version:
@@ -5581,6 +5600,75 @@ class Worker:
                 return CatalogContentsResponse(catalog_version=version, etag=snapshot.etag, not_modified=True)
             return snapshot.response
         return self._catalog_contents_response(cat, attach, version, if_none_match)
+
+    _publication_manager: Any = None
+
+    def _catalog_snapshot_manager(self, policy: Any) -> Any:
+        from vgi.catalog.snapshot import CatalogSnapshotManager
+
+        if self._publication_manager is None or self._publication_manager.policy is not policy:
+            with _CONTENTS_CACHE_LOCK:
+                if self._publication_manager is None or self._publication_manager.policy is not policy:
+                    self._publication_manager = CatalogSnapshotManager(policy)
+        return self._publication_manager
+
+    def warm_catalog_contents(self, attach_opaque_data: bytes) -> Any:
+        """Authorize and warm the configured publication using a normal full request."""
+        policy = self._get_catalog().catalog_snapshot_policy
+        if policy is None or policy.delivery != "published":
+            raise ValueError("catalog has no published snapshot policy")
+        return self.catalog_contents(attach_opaque_data)
+
+    def import_catalog_publication(self, attach_opaque_data: bytes, manifest: Any) -> Any:
+        """Authorize, fetch and validate an existing publication before importing it."""
+        from vgi.catalog.snapshot import SnapshotRequest
+
+        cat = self._get_catalog()
+        attach = self._unwrap_attach(attach_opaque_data)
+        policy = cat.catalog_snapshot_policy
+        if policy is None or policy.delivery != "published":
+            raise ValueError("catalog has no published snapshot policy")
+        version = cat.catalog_version(attach_opaque_data=attach, transaction_opaque_data=None)
+        selected = self._catalog_agreement(attach_opaque_data)
+        available = cat.catalog_capabilities(attach_opaque_data=attach)
+        effective = available.select(selected)
+        projection_key = (
+            hashlib.sha256(effective.serialize_to_bytes()).hexdigest() if selected.names() or available.names() else ""
+        )
+        request = SnapshotRequest(
+            catalog=cat,
+            attach_opaque_data=attach,
+            attachment_scope=hashlib.sha256(attach_opaque_data).hexdigest(),
+            catalog_version=version,
+            capability_projection=projection_key,
+        )
+        return self._catalog_snapshot_manager(policy).import_publication(request, manifest)
+
+    def invalidate_catalog_publication(self, attach_opaque_data: bytes, manifest_id: str) -> bool:
+        """Authorize and conditionally invalidate this attachment's current publication."""
+        from vgi.catalog.snapshot import SnapshotRequest
+
+        cat = self._get_catalog()
+        attach = self._unwrap_attach(attach_opaque_data)
+        policy = cat.catalog_snapshot_policy
+        if policy is None or policy.delivery != "published":
+            raise ValueError("catalog has no published snapshot policy")
+        version = cat.catalog_version(attach_opaque_data=attach, transaction_opaque_data=None)
+        selected = self._catalog_agreement(attach_opaque_data)
+        available = cat.catalog_capabilities(attach_opaque_data=attach)
+        effective = available.select(selected)
+        projection_key = (
+            hashlib.sha256(effective.serialize_to_bytes()).hexdigest() if selected.names() or available.names() else ""
+        )
+        request = SnapshotRequest(
+            catalog=cat,
+            attach_opaque_data=attach,
+            attachment_scope=hashlib.sha256(attach_opaque_data).hexdigest(),
+            catalog_version=version,
+            capability_projection=projection_key,
+        )
+        manager = self._catalog_snapshot_manager(policy)
+        return bool(manager.invalidate(manager.cache_key(request), manifest_id))
 
     _contents_cache: _ContentsSnapshot | None = None
 
@@ -5610,50 +5698,40 @@ class Worker:
                 raise ValueError("catalog_contents returned not_modified with schemas; it must return none")
             return CatalogContentsResponse(catalog_version=version, etag=result.etag, not_modified=True)
 
-        infos = list(result.schemas)
-        path_keys = [schema_path_key(c.schema.path) for c in infos]
-        path_key_set = set(path_keys)
-        if len(path_keys) != len(path_key_set):
-            raise ValueError("catalog_contents returned duplicate schema paths")
-        for path_key in path_keys:
-            if len(path_key) > 1 and path_key[:-1] not in path_key_set:
-                raise ValueError(f"catalog_contents returned schema path {list(path_key)!r} without its parent")
+        from vgi.catalog.contents_codec import contents_digest, encode_inventory
 
-        def items(objs: Sequence[object]) -> list[bytes]:
-            return [_item_ipc_bytes(obj) for obj in objs]
-
-        # Same parent-before-child order catalog_schemas guarantees.
-        schemas = [
-            SchemaContents(
-                path=list(c.schema.path),
-                schema=_item_ipc_bytes(
-                    Worker._schema_for_capabilities(
-                        c.schema, selected if selected is not None else CatalogCapabilities()
-                    )
-                ),
-                tables=items([Worker._table_for_capabilities(t, selected or CatalogCapabilities()) for t in c.tables]),
-                views=items([Worker._view_for_capabilities(v, selected or CatalogCapabilities()) for v in c.views]),
-                scalar_functions=items(c.scalar_functions),
-                aggregate_functions=items(c.aggregate_functions),
-                table_functions=items(c.table_functions),
-                scalar_macros=items(
-                    [Worker._macro_for_capabilities(m, selected or CatalogCapabilities()) for m in c.scalar_macros]
-                ),
-                table_macros=items(
-                    [Worker._macro_for_capabilities(m, selected or CatalogCapabilities()) for m in c.table_macros]
-                ),
-                indexes=items(
-                    [Worker._index_for_capabilities(i, selected or CatalogCapabilities()) for i in c.indexes]
-                ),
+        infos = [
+            _dataclass_replace(
+                item,
+                schema=Worker._schema_for_capabilities(item.schema, selected or CatalogCapabilities()),
+                tables=[Worker._table_for_capabilities(t, selected or CatalogCapabilities()) for t in item.tables],
+                views=[Worker._view_for_capabilities(v, selected or CatalogCapabilities()) for v in item.views],
+                scalar_macros=[
+                    Worker._macro_for_capabilities(m, selected or CatalogCapabilities()) for m in item.scalar_macros
+                ],
+                table_macros=[
+                    Worker._macro_for_capabilities(m, selected or CatalogCapabilities()) for m in item.table_macros
+                ],
+                indexes=[Worker._index_for_capabilities(ix, selected or CatalogCapabilities()) for ix in item.indexes],
             )
-            for c in sorted(infos, key=lambda c: len(c.schema.path))
+            for item in result.schemas
         ]
+        categories = encode_inventory(infos)
         etag = result.etag
         if etag is None and type(cat).catalog_contents_etag == "content-hash":
-            etag = catalog_contents_digest(schemas)
+            etag = contents_digest(categories)
         if etag is not None and if_none_match is not None and etag == if_none_match:
             return CatalogContentsResponse(catalog_version=version, etag=etag, not_modified=True)
-        return CatalogContentsResponse(catalog_version=version, etag=etag, schemas=schemas)
+        return CatalogContentsResponse(
+            catalog_version=version,
+            etag=etag,
+            schemas=categories["schemas"],
+            tables=categories["tables"],
+            views=categories["views"],
+            functions=categories["functions"],
+            macros=categories["macros"],
+            indexes=categories["indexes"],
+        )
 
     def catalog_copy_from_formats(
         self,

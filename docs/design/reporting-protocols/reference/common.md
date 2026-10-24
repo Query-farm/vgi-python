@@ -79,7 +79,7 @@ RevisionKind = Annotated[Literal["edit", "agent", "restore", "import"], ArrowTyp
 RenderStatus = Annotated[Literal["queued", "running", "succeeded", "failed", "cancelled"], ArrowType(pa.string())]
 ReportTracking = Annotated[Literal["pinned", "published", "head"], ArrowType(pa.string())]
 OutputFormat = Annotated[Literal["none", "arrow", "parquet", "csv"], ArrowType(pa.string())]
-InlineMode = Annotated[Literal["none", "summary", "image", "table"], ArrowType(pa.string())]
+InlineMode = Annotated[Literal["none", "summary", "image", "table", "report"], ArrowType(pa.string())]
 TargetKind = Annotated[Literal["catalog", "host"], ArrowType(pa.string())]
 LoadMode = Annotated[Literal["replace", "append", "merge", "snapshot"], ArrowType(pa.string())]
 SchemaChangePolicy = Annotated[Literal["fail", "add_columns"], ArrowType(pa.string())]
@@ -117,16 +117,26 @@ DelegationKind = Annotated[Literal["catalog", "service"], ArrowType(pa.string())
 """Shared reporting records.
 
 These are importable protocol definitions, not a service implementation.
-Behavior and worker policy are documented in docs/design/reporting-protocols/.
+Every call runs within one tenant selected and authorized by trusted host
+authentication/routing, including single-tenant installations. Resource IDs,
+owner IDs and principal IDs are opaque, stable, non-recycled host-canonical
+identifiers that disambiguate tenants and identity issuers. Bare provider-local
+IDs are insufficient when they can collide. Keys never select or switch the
+authenticated tenant; foreign-tenant resources and identities are refused.
+
+Caches, request-id replay records, jobs and continuations are bound to the host,
+authenticated tenant and caller. Reauthentication must preserve that binding;
+a continuation cannot preserve revoked access. Workers evaluate current policy
+and authoritative effective membership without requiring directory enumeration.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Annotated
+from typing import Annotated, Literal
 
 import pyarrow as pa
-from vgi_rpc import ArrowSerializableDataclass
+from vgi_rpc import ArrowSerializableDataclass, ArrowType
 
 from vgi.reporting._arrow import Instant, Json, non_null_list
 from vgi.reporting._enums import (
@@ -139,6 +149,7 @@ from vgi.reporting._enums import (
     ParameterType,
     ParamKind,
     RecoveryState,
+    RenderStatus,
     ResolvedOutcome,
     RunStatus,
     RunTriggerKind,
@@ -147,36 +158,104 @@ from vgi.reporting._enums import (
     TriggerKind,
 )
 
+OwnershipScope = Annotated[Literal["all", "self", "member", "self_or_member"], ArrowType(pa.string())]
+
+# Teams use group identities. One directory entity has one canonical kind/id,
+# never interchangeable team/group aliases. Extensions use <vendor>.<name>.
+STANDARD_OWNER_KINDS = ("principal", "group", "organization", "project", "workspace")
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PrincipalRef(ArrowSerializableDataclass):
-    """Historical or authenticated principal reference; labels are not authority."""
+    """Canonical human or service actor; group owners are never execution actors.
+
+    Labels and email are display metadata, never authority. The host resolves
+    issuer/tenant mappings and eligibility; kind alone grants no permission.
+    """
 
     id: str
+    kind: Annotated[Literal["user", "service"], ArrowType(pa.string())]
     display_name: str
     email: str | None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class OwnerRef(ArrowSerializableDataclass):
-    """Worker-resolved management identity: principal, group, project or workspace."""
+class OwnerKey(ArrowSerializableDataclass):
+    """Host-canonical management identity, matched by exact (kind, id).
+
+    Standard kinds are principal, group (including teams), organization,
+    project and workspace; advertised extensions use <vendor>.<name>. Principal
+    owner IDs equal the corresponding PrincipalRef.id, for user or service
+    actors. No key implies membership, a role, or permission to act as its owner.
+    """
 
     kind: str
     id: str
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class OwnerRef(OwnerKey):
+    """Canonical owner and display label; workers never authorize supplied labels."""
+
     display_name: str
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Ownership(ArrowSerializableDataclass):
-    """Management owner and durable parent, independent of execution credentials."""
+    """One direct owner and one durable management parent in the authorized tenant.
+
+    parent_owner_ref is the recorded direct authority, not the full organization
+    hierarchy, directory membership or folder containment. A principal owner
+    requires a non-principal durable parent; a root organizational owner may
+    have no parent. Parent changes require explicit authorized ownership changes.
+
+    Ownership never grants execution consent or credentials. Transfers preserve
+    execution identity, but workers revalidate resource-bound execution consent
+    after a transfer and before dispatch, disabling work if it is no longer valid.
+    """
 
     owner_ref: OwnerRef
     parent_owner_ref: OwnerRef | None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class OwnershipCapabilities(ArrowSerializableDataclass):
+    """Finite ownership vocabulary and collection filters supported by a worker.
+
+    Service-info policy applies to every listed resource kind, including folders;
+    context-specific identity capabilities can narrow the assignable kinds.
+    all/self are required scopes. member/self_or_member are optional as a pair,
+    requiring nonempty membership_owner_kinds, a subset of non-principal
+    owner_kinds. An empty list disables membership filtering, not exact checks.
+
+    all selects every currently readable match; self selects resources directly
+    owned by the authenticated principal (user or service). member selects only
+    resources whose direct owner is an advertised membership kind and for which
+    authoritative effective membership holds, including nested groups according
+    to the identity authority's rules. Parent membership, authorship, delegated
+    administration and ACL visibility alone never satisfy member. self_or_member
+    is the deduplicated union. Every selection still requires resource access.
+
+    Membership is evaluated server-side without client-supplied membership lists.
+    Unsupported scopes fail UNIMPLEMENTED; an unavailable/incomplete membership
+    decision fails UNAVAILABLE rather than returning empty or broadened results.
+    """
+
+    owner_kinds: Annotated[list[str], non_null_list(pa.string())]
+    parent_owner_kinds: Annotated[list[str], non_null_list(pa.string())]
+    scopes: Annotated[list[OwnershipScope], non_null_list(pa.string())]
+    membership_owner_kinds: Annotated[list[str], non_null_list(pa.string())]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class ResourceMeta(ArrowSerializableDataclass):
-    """Versioned ownership and attribution shared by persistent resources."""
+    """Versioned ownership and attribution shared by persistent resources.
+
+    allowed_actions is a caller-specific hint, never a grant. Worker policy
+    independently authorizes reads, edits, transfers and execution using current
+    membership/roles; membership does not imply every action. Folder recursion
+    and placement never rewrite explicit ownership or its management parent.
+    """
 
     version: int
     ownership: Ownership
@@ -189,7 +268,11 @@ class ResourceMeta(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class OwnershipInput(ArrowSerializableDataclass):
-    """Creation-time ownership preferences; None asks the worker for its default."""
+    """Creation-time preferences; None requests defaults in the authenticated tenant.
+
+    Workers resolve canonical keys and labels and authorize the complete owner
+    and parent assignment. Supplied display metadata cannot confer authority.
+    """
 
     owner_ref: OwnerRef | None = None
     parent_owner_ref: OwnerRef | None = None
@@ -197,7 +280,11 @@ class OwnershipInput(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ExecutionInput(ArrowSerializableDataclass):
-    """Creation/test execution identity; None selects the authenticated caller."""
+    """Canonical user/service execution ID; None selects the authenticated caller.
+
+    Team/group ownership never chooses an execution actor. The host must resolve
+    and separately authorize the actor, including consent and credential use.
+    """
 
     principal_id: str | None = None
 
@@ -313,7 +400,11 @@ class ParameterOption(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ParameterSpec(ArrowSerializableDataclass):
-    """Public parameter type, default and allowed select values."""
+    """Public parameter type, default and bounded static select values.
+
+    Workers advertise and enforce max_parameter_options; dynamic directory/data
+    selectors are not encoded as unbounded option arrays.
+    """
 
     key: str
     label: str
@@ -415,6 +506,7 @@ class Notification(ArrowSerializableDataclass):
     title: str
     summary: str
     body_markdown: str = ""
+    body_html: Attachment | None = None
     link_url: str = ""
     link_label: str = ""
     fields: Annotated[list[Field], non_null_list(pa.struct(Field.ARROW_SCHEMA))] = field(default_factory=list)
@@ -463,14 +555,15 @@ class StepAttempt(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RunStep(ArrowSerializableDataclass):
-    """Stable operation identity and persisted attempts for one execution step."""
+    """Step status and last attempt; full attempt history is a separate stream."""
 
     step_index: int
     operation_id: str
     kind: str
     status: StepStatus
     effect_outcome: EffectOutcome
-    attempts: Annotated[list[StepAttempt], non_null_list(pa.struct(StepAttempt.ARROW_SCHEMA))]
+    attempt_count: int
+    last_attempt: StepAttempt | None
     rows_affected: int | None
     receiver_reference: str | None
     deduplication_expires_at: Instant | None
@@ -509,8 +602,8 @@ class RecoveryEvent(ArrowSerializableDataclass):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class Run(ArrowSerializableDataclass):
-    """Shared run snapshot, execution identity, outcomes and recovery history."""
+class RunSummary(ArrowSerializableDataclass):
+    """Bounded run status; step attempts and recovery history are streamed reads."""
 
     run_id: str
     version: int
@@ -523,13 +616,68 @@ class Run(ArrowSerializableDataclass):
     skip_reason: str | None
     execution_principal: PrincipalRef
     resource_version: int
-    parameter_values: Annotated[list[ParamValue], non_null_list(pa.struct(ParamValue.ARROW_SCHEMA))]
-    outputs: Annotated[list[Output], non_null_list(pa.struct(Output.ARROW_SCHEMA))]
-    destination_results: Annotated[list[DestinationResult], non_null_list(pa.struct(DestinationResult.ARROW_SCHEMA))]
-    steps: Annotated[list[RunStep], non_null_list(pa.struct(RunStep.ARROW_SCHEMA))]
     error: RunError | None
     recovery: Recovery
-    recovery_events: Annotated[list[RecoveryEvent], non_null_list(pa.struct(RecoveryEvent.ARROW_SCHEMA))]
+    allowed_actions: Annotated[list[str], non_null_list(pa.string())]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Run(RunSummary):
+    """Frozen run inputs and bounded outputs, without nested histories.
+
+    list_run_steps, list_step_attempts, list_recovery_events and
+    list_run_destinations expose independently consumable history rows.
+    """
+
+    parameter_values: Annotated[list[ParamValue], non_null_list(pa.struct(ParamValue.ARROW_SCHEMA))]
+    outputs: Annotated[list[Output], non_null_list(pa.struct(Output.ARROW_SCHEMA))]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ValidationIssue(ArrowSerializableDataclass):
+    """A safe field-specific validation failure or incomplete check."""
+
+    field: str
+    code: str
+    message: str
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ValidationResult(ArrowSerializableDataclass):
+    """Advisory validation without user SQL or rendering.
+
+    complete=False means one or more checks could not finish; valid cannot be
+    true in that case. A valid result never grants future execution authority.
+    Workers bound issues and report truncation explicitly through complete=False.
+    """
+
+    valid: bool
+    complete: bool
+    issues: Annotated[list[ValidationIssue], non_null_list(pa.struct(ValidationIssue.ARROW_SCHEMA))]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PreviewJob(ArrowSerializableDataclass):
+    """Versioned, caller-authorized execution preview with a typed child result.
+
+    Starts deduplicate request_id. A worker may complete synchronously. Success
+    has a result, failure an error, and terminal jobs have zero polling delay.
+    Cancellation is best effort; results expire at expires_at. Tests preserve
+    the original read-only/rollback-only restrictions and never deliver messages.
+
+    Preview services advertise finite max_preview_seconds (seconds) and
+    max_preview_result_bytes (bytes) in their service limits. Exceeding either
+    fails the job with RESOURCE_EXHAUSTED, never silently truncates a success.
+    """
+
+    job_id: str
+    version: int
+    status: RenderStatus
+    created_at: Instant
+    finished_at: Instant | None
+    poll_after_seconds: int
+    expires_at: Instant
+    error: RunError | None
     allowed_actions: Annotated[list[str], non_null_list(pa.string())]
 
 

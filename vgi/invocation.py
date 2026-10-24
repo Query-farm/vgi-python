@@ -86,6 +86,8 @@ class BindResponse(ArrowSerializableDataclass):
         lookup_secret_types: Secret types for scoped lookup requests (empty = normal response).
         lookup_scopes: Scopes for scoped lookup requests (parallel to lookup_secret_types).
         lookup_names: Names for scoped lookup requests (parallel to lookup_secret_types).
+        projection_expression_profiles: Scalar expression profiles offered for optional
+            projection proposals on this bind; an empty list offers none.
         repeatability: Optional provider promise for equivalent scans of this
             complete bind state within one query; unknown makes no promise.
 

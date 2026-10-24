@@ -76,6 +76,7 @@ from vgi.catalog import (
 )
 from vgi.catalog.catalog_interface import deserialize_column_statistics
 from vgi.catalog.constraints import ConstraintsApplyRequest, ConstraintSnapshot
+from vgi.catalog.contents_codec import decode_inventory
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot
 from vgi.catalog.indexes import IndexDefinition
 from vgi.catalog.layout import TableLayout, TableLayoutChange
@@ -88,7 +89,6 @@ from vgi.protocol import (
     ClientCapabilities,
     IndexCreateRequest,
     MacroCreateRequest,
-    SchemaContents,
     TableCreateRequest,
     VgiProtocol,
 )
@@ -98,27 +98,6 @@ from vgi.typed_values import TypedValueBatch
 # Workers are cached by command and reused across catalog calls, avoiding
 # the overhead of spawning/tearing down a subprocess for each call.
 _catalog_pool = WorkerPool(max_idle=4, idle_timeout=30.0)
-
-
-def _decode_schema_contents(entry: SchemaContents) -> SchemaContentsInfo:
-    """Decode one ``catalog_contents`` schema struct into Python catalog objects."""
-    schema = SchemaInfo.deserialize_from_bytes(entry.schema)
-    if list(schema.path) != list(entry.path):
-        raise CatalogClientError(
-            f"catalog_contents schema path {list(entry.path)!r} does not match "
-            f"its SchemaInfo path {list(schema.path)!r}"
-        )
-    return SchemaContentsInfo(
-        schema=schema,
-        tables=[TableInfo.deserialize_from_bytes(b) for b in entry.tables],
-        views=[ViewInfo.deserialize_from_bytes(b) for b in entry.views],
-        scalar_functions=[FunctionInfo.deserialize_from_bytes(b) for b in entry.scalar_functions],
-        aggregate_functions=[FunctionInfo.deserialize_from_bytes(b) for b in entry.aggregate_functions],
-        table_functions=[FunctionInfo.deserialize_from_bytes(b) for b in entry.table_functions],
-        scalar_macros=[MacroInfo.deserialize_from_bytes(b) for b in entry.scalar_macros],
-        table_macros=[MacroInfo.deserialize_from_bytes(b) for b in entry.table_macros],
-        indexes=[IndexInfo.deserialize_from_bytes(b) for b in entry.indexes],
-    )
 
 
 @dataclass(frozen=True)
@@ -337,7 +316,11 @@ class CatalogClientMixin:
                     yield proxy
             else:
                 cmd = self._worker_argv()
-                with _catalog_pool.connect(VgiProtocol, cmd) as proxy:  # type: ignore[type-abstract]
+                with _catalog_pool.connect(
+                    VgiProtocol,  # type: ignore[type-abstract]
+                    cmd,
+                    external_location=getattr(self, "_external_location", None),
+                ) as proxy:
                     yield proxy
         except RpcError as e:
             raise CatalogClientError(str(e)) from e
@@ -594,7 +577,7 @@ class CatalogClientMixin:
                 catalog_version=response.catalog_version,
                 etag=response.etag,
                 not_modified=response.not_modified,
-                schemas=[_decode_schema_contents(entry) for entry in response.schemas],
+                schemas=decode_inventory(response, if_none_match=if_none_match),
             )
 
     def load_catalog(
@@ -1852,12 +1835,12 @@ class CatalogClientMixin:
             schema_path: The schema to create the view in.
             name: The name for the new view.
             definition: The SQL SELECT statement defining the view.
+            on_conflict: Behavior if view already exists.
+            aliases: Ordered raw output identifiers; omitted uses query names.
+            security: Optimization barrier mode; barrier requires negotiated support.
             comment: Creation comment; None and an empty string remain distinct.
             tags: Creation tags; omitted or empty resets tags on REPLACE.
             column_comments: Comments keyed by raw output names.
-            security: Optimization barrier mode; barrier requires negotiated support.
-            aliases: Ordered raw output identifiers; omitted uses query names.
-            on_conflict: Behavior if view already exists.
 
         """
         with self._catalog_connect() as proxy:

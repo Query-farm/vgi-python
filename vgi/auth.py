@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from vgi_rpc.rpc import AuthContext, CallContext
 
-# ``vgi_rpc.Identity.v1`` lives at the RPC layer as of vgi-rpc 0.46.0 -- it was
+# ``vgi_rpc.Identity.v2`` lives at the RPC layer as of vgi-rpc 0.46.0 -- it was
 # an HTTP JSON route (``POST {prefix}/__introspect_token__``) through 0.45.x,
 # which meant it existed on exactly one transport.  So this is no longer gated
 # on the ``http`` extra.  Still not re-exported by ``vgi_rpc.rpc`` itself, so

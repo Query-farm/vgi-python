@@ -4,8 +4,10 @@ The operation sections through prepared read queries describe implemented
 records and bounded reference behavior on the DuckDB 2.0 preparation branch.
 The combined-design section distinguishes implemented SQL/constraint records
 and reference proofs from the remaining public API and execution work. Both are
-part of one combined successor contract. The published protocol is still `vgi.v2` / `2.1.0`; the
-unpublished development snapshot now carries typed schema/table options,
+part of one combined successor contract. Published main now uses `vgi.v2` / `2.2.0`. The
+unpublished successor temporarily uses the same development labels but contains incompatible
+changes; its final major version and routing name remain unresolved. The development snapshot
+carries typed schema/table options,
 layouts, raw column mutation paths, and capability negotiation. See the
 operation contracts below.
 Completing these codecs does not complete the release gates in the
@@ -14,6 +16,19 @@ Completing these codecs does not complete the release gates in the
 The [October 23 combined review](#combined-protocol-review--october-23-2026)
 is the current scope decision. In particular, the trigger section below is a
 retained **deferred design**, not a requirement to add its RPCs to this release.
+
+## Latest-main integration — October 24, 2026
+
+The [integration checkpoint](duckdb-2.0-main-integration-2026-10-24.md) records exact merged
+refs, dependency versions and bounded test evidence. Published 2.2's six batched catalog streams
+carry the successor records unchanged, including canonical constraints, typed index definitions,
+macro families and column metadata. `SchemaInfo` no longer carries attachment state on the wire.
+Where selected capabilities project inventory, Python scopes cached responses, publication keys
+and etags to that projection. The discriminator is internal; no new RPC or capability is added.
+
+Identity.v2 and continued table-in-out output are integrated alongside generated native codecs.
+Earlier dated version/source/test statements below remain historical. This merge does not freeze
+the successor, complete the 2.0 engine port or implement automatic whole-query pushdown.
 
 ## Typed option changes and readback
 
@@ -952,7 +967,9 @@ with explicit engine mapping limits. Adapter qualification does not follow from
 opaque metadata/byte preservation alone.
 
 The successor requires a major version and matching routing name; the historical
-additive `2.2.0` candidate is superseded. Choose the number at freeze. Keep exact
+additive `2.2.0` successor candidate is superseded. Published main has independently reached
+`2.2.0`; that release is the integration baseline, not the final successor version. Choose the
+number at freeze. Keep exact
 major/minor checks and deploy separate versioned endpoints/processes. Drain old
 transactions, then reattach and reprepare; never transfer tokens or retry an
 ambiguous mutation during migration. Rollback needs old-compatible catalog

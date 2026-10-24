@@ -10,8 +10,10 @@ DuckDB 2.0-development automatic-pushdown adapter.
 
 The implementation belongs to the **combined successor protocol release**, alongside the
 catalog/type changes in the [manifest](duckdb-2.0-manifest.json). It does not reserve a separate
-2.2 minor release. The development branch retains `vgi.v2` / `2.1.0` placeholders while the
-combined breaking contract, final major version and routing transition are reviewed.
+minor release. Published main now uses `vgi.v2` / `2.2.0`; the merged development branch
+retains those labels only as an unpublished incompatible placeholder. The final successor
+major version and routing transition remain unresolved. See the
+[latest-main integration checkpoint](duckdb-2.0-main-integration-2026-10-24.md).
 
 The current wire authority is [prepared read queries and typed parameters](shared-catalog-values.md#prepared-read-queries-and-typed-parameters)
 and `vgi/catalog/query.py`. This earlier design's illustrative schemas/provider pseudocode are
@@ -33,6 +35,13 @@ below records the original design survey, not current implementation heads.
 Wire versions, SDK package versions, and the two engine targets are separate version axes.
 
 ## Implementation checkpoint — October 24, 2026
+
+The source-review table and original A0 counts below predate the latest-main merge. They
+remain historical inputs. Current merged refs, 1.5 runtime evidence and the refreshed 2.0
+compile inventory are recorded in the [integration checkpoint](duckdb-2.0-main-integration-2026-10-24.md).
+The refreshed inventory attempted all 110 native C++ sources: 54 compiled and 56 failed;
+generated `describe.c` also compiled. The merge changes the published baseline to 2.2.0 and
+preserves the successor work; it does not add automatic whole-query execution.
 
 **Automatic whole-query pushdown is not implemented.** The protocol and explicit execution
 machinery are reusable; the substantial remaining pieces are the native 2.0 read port, the
@@ -106,7 +115,7 @@ parameter values into SQL. Explicit `vgi_query` already supports typed parameter
 
 ### Remaining work and reviewable checkpoints
 
-**A0 initial inventory is now recorded.** The isolated configuration at audited engine
+**Historical pre-main A0 inventory.** The isolated configuration at audited engine
 `e1784fa42310` passes. All 107 native C++ sources were attempted: 53 compiled and 54 failed;
 generated `describe.c` also compiled. Shared catalog/index declarations are the first blocker
 in 27 failed sources. See the native `docs/duckdb-2.0-a0-diagnostics.md` and JSON inventory.
@@ -237,7 +246,7 @@ while using the bound-plan path.
 | Logical-plan SQL exporter and structured issues | Reuse the exporter in a pre-optimizer feasibility spike; do not build a general SQL decompiler |
 | `BoundTableFunction`, explicit parser contexts, ref-counted `LogicalType` | Add a dedicated 2.0 compatibility layer before enabling automatic queries |
 | `catalog_contents`, metadata etags, version adoption | Reuse existing metadata caches; distinguish committed metadata from transaction/data snapshots |
-| `vgi.v2` routing and wire `2.1.0` | Route new RPCs with generated identifiers; release once with the combined successor transition |
+| Historical `vgi.v2` routing and wire `2.1.0` | Route new RPCs with generated identifiers; release once with the combined successor transition |
 | Typed nested catalog records and six worker SDKs | Use typed structs for new query records and include C# schema/type generation |
 | Worker-batch validation, cancellation dispatcher, scan interrupt checks | Extend existing guards and lifecycle hooks rather than recreate them |
 | Credential-aware caches and HTTP grants | Preserve current identity isolation; keep query-result caching disabled |
@@ -1306,16 +1315,11 @@ universal speedup percentage; establish budgets from these measurements before d
 
 ## 13. Compatibility, alternatives, and launch gates
 
-The Python SDK and extension retain development placeholders **2.1.0** under **`vgi.v2`**.
+Published main now uses **2.2.0** under **`vgi.v2`**. The merged Python SDK and extension
+retain those labels only as an unpublished development placeholder.
 The query capability, preparation/release RPCs and parameter metadata join the combined breaking
 successor contract. Freeze the major version and routing/migration policy with that package;
-do not publish this development surface as a compatible 2.1.0 update.
-
-The [reporting SQL binding](../design/reporting-protocols/README.md#scope-and-compatibility)
-now exposes reads only, with mutations on RPC. It uses existing VGI facilities and does not
-reserve a surface revision for SQL execution context or depend on query pushdown. Future SQL
-mutation support, if needed, requires its own design. A reporting source's attachment reference
-still does not authorize merging distinct live VGI attachments in query pushdown.
+do not publish this development surface as a compatible 2.2.0 update.
 
 The framework enforces exact major/minor compatibility. Some catalog-item decoders tolerate
 absent optional fields by name, but the generated request/response validators also compare schema

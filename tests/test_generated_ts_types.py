@@ -75,15 +75,16 @@ def test_builder_fields_follow_arrow_schema_order() -> None:
 
 
 def test_client_records_are_reexported() -> None:
-    """ts_client's records, the nested SchemaContents struct included, are re-exported, not redeclared."""
+    """Client records are re-exported; the legacy SchemaContents author type remains declared."""
     by_name = {r.name: r for r in build_model()}
-    assert by_name["SchemaContents"].reexported
+    assert not by_name["SchemaContents"].reexported
     assert by_name["CatalogAttachResult"].reexported
     assert by_name["CatalogContentsResponse"].schema_const == "CatalogContentsResultSchema"
     schemas = next(f for f in by_name["CatalogContentsResponse"].fields if f.name == "schemas")
-    assert schemas.ts_type == "SchemaContents[]"
+    assert schemas.ts_type == "Uint8Array"
+    assert schemas.nullable
     text = _render()
-    assert "export interface SchemaContents {" not in text
+    assert "export interface SchemaContents {" in text
     assert "export interface CatalogAttachResult {" not in text
 
 

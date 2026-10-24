@@ -153,7 +153,9 @@ def test_barrier_change_invalidates_etag_even_with_constant_provider_token(backe
     create(backend, token, security="barrier", on_conflict=OnConflict.REPLACE)
     barrier = backend.catalog_contents(token, regular.etag)
     assert not barrier.not_modified and barrier.etag != regular.etag
-    assert ViewInfo.deserialize_from_bytes(barrier.schemas[0].views[0]).security == "barrier"
+    from vgi.catalog.contents_codec import decode_collection
+
+    assert decode_collection(ViewInfo, barrier.views)[0].security == "barrier"
 
 
 def test_transactional_barrier_create_requires_ddl_guarantee(backend: ViewSecurityWorker) -> None:

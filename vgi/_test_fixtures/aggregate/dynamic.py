@@ -232,7 +232,9 @@ class _DynamicAggregateBase(AggregateFunction[DynamicState]):
                     t = t.filter(null_mask)
             slices.append(t)
         if not slices:
-            return pa.table({c: pa.array([], type=cols[i].type) for i, c in enumerate(col_names)})
+            # pa.nulls(0, ...), not pa.array([], ...): the latter has no
+            # builder for union or extension types.
+            return pa.table({c: pa.nulls(0, type=cols[i].type) for i, c in enumerate(col_names)})
         return pa.concat_tables(slices)
 
     @staticmethod

@@ -5,12 +5,14 @@
 from __future__ import annotations
 
 import os
-import socket
 import subprocess
 import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from urllib.parse import urlsplit
 
 import httpx2
 import pyarrow as pa
@@ -26,20 +28,13 @@ from vgi.protocol import BindRequest, InitRequest, VgiProtocol
 # ---------------------------------------------------------------------------
 
 
-def _free_port() -> int:
-    """Allocate an available localhost TCP port."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
-
-
 @contextmanager
 def _run_demo_http_server(
     *,
-    port: int,
+    port: int = 0,
     threshold_bytes: int,
     compression: str = "none",
-) -> Iterator[None]:
+) -> Iterator[str]:
     """Run vgi._test_fixtures.http_server with --demo-storage in a subprocess."""
     cmd = [
         sys.executable,
@@ -58,43 +53,52 @@ def _run_demo_http_server(
         compression,
     ]
     env = os.environ.copy()
-    proc = subprocess.Popen(
-        cmd,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    try:
-        yield
-    finally:
-        proc.terminate()
+    with TemporaryDirectory(prefix="vgi-demo-http-") as directory:
+        port_file = Path(directory) / "port"
+        proc = subprocess.Popen(
+            [*cmd, "--port-file", str(port_file)],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
         try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=5)
+            yield _wait_for_http_server(proc, port_file)
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
 
-        # POSIX terminate() -> SIGTERM (-15); Windows terminate() is
-        # TerminateProcess(handle, 1), so a cleanly-stopped worker reports 1.
-        ok_codes = (0, 1) if sys.platform == "win32" else (0, -15)
-        if proc.returncode not in ok_codes:
-            stderr = proc.stderr.read() if proc.stderr is not None else ""
-            raise RuntimeError(f"example HTTP worker exited with code {proc.returncode}: {stderr}")
+            # POSIX terminate() -> SIGTERM (-15); Windows terminate() is
+            # TerminateProcess(handle, 1), so a cleanly-stopped worker reports 1.
+            ok_codes = (0, 1) if sys.platform == "win32" else (0, -15)
+            if proc.returncode not in ok_codes:
+                stderr = proc.stderr.read() if proc.stderr is not None else ""
+                raise RuntimeError(f"example HTTP worker exited with code {proc.returncode}: {stderr}")
 
 
-def _wait_for_http_server(base_url: str) -> None:
-    """Wait until the HTTP server responds to capabilities requests."""
+def _wait_for_http_server(proc: subprocess.Popen[str], port_file: Path) -> str:
+    """Wait for this live child to bind and answer capabilities requests."""
     from vgi_rpc.http import http_capabilities
 
-    deadline = time.time() + 30
-    while time.time() < deadline:
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            stderr = proc.stderr.read() if proc.stderr is not None else ""
+            raise RuntimeError(f"example HTTP worker exited with code {proc.returncode}: {stderr}")
+        if not port_file.exists():
+            time.sleep(0.05)
+            continue
+        base_url = f"http://127.0.0.1:{int(port_file.read_text())}"
         try:
             http_capabilities(base_url=base_url)
-            return
+            return base_url
         except Exception:
             time.sleep(0.25)
-    raise TimeoutError(f"Timed out waiting for HTTP server at {base_url}")
+    raise TimeoutError(f"Timed out waiting for HTTP worker {proc.pid} to bind and serve")
 
 
 def _batch_to_ipc_bytes(batch: pa.RecordBatch) -> bytes:
@@ -239,16 +243,10 @@ def test_demo_output_offload_large_response(compression: str, expected_extension
     payload_bytes = threshold_bytes + 1024
     seed = 12345
 
-    port = _free_port()
-    base_url = f"http://127.0.0.1:{port}"
-
     with _run_demo_http_server(
-        port=port,
         threshold_bytes=threshold_bytes,
         compression=compression,
-    ):
-        _wait_for_http_server(base_url)
-
+    ) as base_url:
         caps = http_capabilities(base_url=base_url)
         assert caps.upload_url_support
         assert caps.max_upload_bytes == threshold_bytes
@@ -294,6 +292,12 @@ def test_demo_output_offload_large_response(compression: str, expected_extension
         assert source.decode().endswith(expected_extension)
         assert fetch_ms is not None
 
+        # Advertising both headers causes clients that decode standard HTTP
+        # compression to try to decompress the same external result twice.
+        blob_headers = httpx2.head(source.decode(), timeout=30.0).headers
+        assert "X-VGI-Content-Encoding" not in blob_headers
+        assert blob_headers.get("Content-Encoding") == (None if compression == "none" else compression)
+
 
 @pytest.mark.parametrize("compression", ["none", "zstd", "gzip"])
 def test_demo_input_upload_url_then_exchange(compression: str) -> None:
@@ -317,12 +321,7 @@ def test_demo_input_upload_url_then_exchange(compression: str) -> None:
     # threshold, so a value below the state-token size would 413 every
     # exchange before any user payload is even considered.
     threshold_bytes = 16 * 1024
-    port = _free_port()
-    base_url = f"http://127.0.0.1:{port}"
-
-    with _run_demo_http_server(port=port, threshold_bytes=threshold_bytes):
-        _wait_for_http_server(base_url)
-
+    with _run_demo_http_server(threshold_bytes=threshold_bytes) as base_url:
         caps = http_capabilities(base_url=base_url)
         assert caps.upload_url_support
         assert caps.max_upload_bytes == threshold_bytes
@@ -386,12 +385,7 @@ def test_demo_capabilities_advertised() -> None:
     from vgi_rpc.http import http_capabilities
 
     threshold_bytes = 8192
-    port = _free_port()
-    base_url = f"http://127.0.0.1:{port}"
-
-    with _run_demo_http_server(port=port, threshold_bytes=threshold_bytes):
-        _wait_for_http_server(base_url)
-
+    with _run_demo_http_server(threshold_bytes=threshold_bytes) as base_url:
         caps = http_capabilities(base_url=base_url)
         assert caps.upload_url_support is True
         assert caps.max_upload_bytes == threshold_bytes
@@ -402,11 +396,31 @@ def test_demo_blob_404() -> None:
     """GET for a nonexistent blob should return 404."""
     pytest.importorskip("vgi_rpc.http")
 
-    port = _free_port()
-    base_url = f"http://127.0.0.1:{port}"
-
-    with _run_demo_http_server(port=port, threshold_bytes=4096):
-        _wait_for_http_server(base_url)
-
+    with _run_demo_http_server(threshold_bytes=4096) as base_url:
         resp = httpx2.get(f"{base_url}/__blobs__/nonexistent.arrow", timeout=10.0)
         assert resp.status_code == 404
+
+
+def test_demo_servers_reserve_distinct_bound_ports() -> None:
+    """Concurrent demo workers retain separate listener and capability identities."""
+    from vgi_rpc.http import http_capabilities
+
+    with (
+        _run_demo_http_server(threshold_bytes=8192) as first,
+        _run_demo_http_server(threshold_bytes=16384) as second,
+    ):
+        assert first != second
+        assert http_capabilities(base_url=first).max_upload_bytes == 8192
+        assert http_capabilities(base_url=second).max_upload_bytes == 16384
+
+
+def test_demo_startup_rejects_an_occupied_port() -> None:
+    """An existing server cannot make a child that failed to bind look ready."""
+    with _run_demo_http_server(threshold_bytes=8192) as first:
+        port = urlsplit(first).port
+        assert port is not None
+        with (
+            pytest.raises(RuntimeError, match="HTTP worker exited"),
+            _run_demo_http_server(port=port, threshold_bytes=16384),
+        ):
+            pytest.fail("a child that did not bind must never become ready")

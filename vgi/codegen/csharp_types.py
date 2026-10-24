@@ -51,6 +51,7 @@ from vgi_rpc.rpc._types import MethodType, rpc_methods  # type: ignore[attr-defi
 from vgi_rpc.utils import _annotation_details
 
 from vgi.catalog.attach_option import AttachOptionSpec
+from vgi.catalog.contract import catalog_contract_hash
 from vgi.catalog.secret_type import SecretTypeSpec
 from vgi.catalog.setting import SettingSpec
 from vgi.codegen._common import (
@@ -348,6 +349,8 @@ def _map(dtype: pa.DataType, annotation: object, *, model: _Model, origin: str, 
     base, _ = _base(annotation)
 
     if pa.types.is_dictionary(dtype):
+        if dtype.equals(pa.dictionary(pa.int32(), pa.binary())):
+            return _Mapped("byte[]", (_ATTR_DICT,), False, "[]")
         if not (dtype.index_type.equals(pa.int16()) and dtype.value_type.equals(pa.string()) and not dtype.ordered):
             raise GeneratorError(f"{origin}: only dictionary<int16, utf8> is expressible in C#, got {dtype}.")
         if isinstance(base, type) and issubclass(base, enum.Enum):
@@ -657,6 +660,10 @@ def emit(out: TextIO, *, namespace: str = DEFAULT_NAMESPACE) -> None:
     body.write("#nullable enable\n")
     body.write("\n")
     body.write(f"namespace {namespace};\n")
+    body.write(
+        "\n/// <summary>Canonical nested catalog wire contract.</summary>\npublic static class CatalogWireContract\n{\n"
+    )
+    body.write(f'    public const string Hash = "{catalog_contract_hash()}";\n}}\n')
     blocks = [_render_enum(model.enums[n]) for n in sorted(model.enums)]
     blocks += [_render_record(model.records[n]) for n in sorted(model.records)]
     for block in blocks:

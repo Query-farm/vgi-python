@@ -1,6 +1,6 @@
 [project]
 name = "vgi-python"
-version = "0.43.1"
+version = "0.47.0"
 description = "Vector Gateway Interface - Connect DuckDB to external programs via Apache Arrow"
 readme = "README.md"
 keywords = [
@@ -40,7 +40,7 @@ dependencies = [
     "pyarrow",
     "typer>=0.9",
     "platformdirs",
-    "vgi-rpc>=0.50.0",
+    "vgi-rpc>=0.52.0",
     "httpx2>=2.12.0",
 ]
 
@@ -58,6 +58,9 @@ dependencies = [
 haybarn = ["haybarn==1.5.5rc1"]
 duckdb = ["duckdb==1.5.5"]
 http = ["vgi-rpc[http]"]
+# Publishing and resolving immutable external catalog results needs the RPC
+# download/compression dependencies on every transport, including subprocess.
+external = ["vgi-rpc[external]"]
 iroh = ["vgi-rpc[http,iroh]"]
 # transport="launch": vgi_rpc.launcher imports filelock unconditionally at
 # module level, which lives behind vgi-rpc's own `cli` extra (alongside

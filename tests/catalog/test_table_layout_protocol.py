@@ -214,8 +214,9 @@ def test_legacy_projection_and_capability_scoped_etags(backend: TableLayoutWorke
             assert not legacy.not_modified and legacy.etag != full.etag
             assert proxy.catalog_contents(attach_opaque_data=old, if_none_match=legacy.etag).not_modified
         from vgi.catalog import TableInfo
+        from vgi.catalog.contents_codec import decode_collection
 
-        assert TableInfo.deserialize_from_bytes(legacy.schemas[0].tables[0]).layout is None
+        assert decode_collection(TableInfo, legacy.tables)[0].layout is None
 
 
 def test_missing_profiles_and_mode_downgrade_never_call_provider(

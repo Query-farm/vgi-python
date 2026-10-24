@@ -164,9 +164,10 @@ def test_metadata_and_etags_are_scoped_to_agreement_even_with_provider_cache(bac
     assert not legacy_contents.not_modified
     assert full_contents.etag != legacy_contents.etag
     from vgi.catalog import SchemaInfo
+    from vgi.catalog.contents_codec import decode_collection
 
-    assert SchemaInfo.deserialize_from_bytes(full_contents.schemas[0].schema).options is not None
-    assert SchemaInfo.deserialize_from_bytes(legacy_contents.schemas[0].schema).options is None
+    assert decode_collection(SchemaInfo, full_contents.schemas)[0].options is not None
+    assert decode_collection(SchemaInfo, legacy_contents.schemas)[0].options is None
     assert backend.catalog_contents(full.attach_opaque_data, if_none_match=full_contents.etag).not_modified
     assert backend.catalog_contents(legacy.attach_opaque_data, if_none_match=legacy_contents.etag).not_modified
 

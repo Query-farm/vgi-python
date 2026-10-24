@@ -33,12 +33,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Checkout unreleased vgi-rpc identity layer
+      - name: Checkout vgi-rpc (Identity.v2)
         uses: actions/checkout@v7
         with:
           repository: Query-farm/vgi-rpc-python
           path: .tailnet/vgi-rpc
-          ref: 04f19147625b4f643b38a687151d8233daa8997c
+          ref: e04ddfa56c19b4cd7cc1e3729d165c763b0d98c7  # v0.52.0 (Identity.v2)
 
       - name: Check kernel networking support
         run: |

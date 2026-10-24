@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import Any, ClassVar
 
 import pyarrow as pa
+from vgi_rpc.errors import Code
 
 from vgi.catalog._descriptor_spec import _DescriptorBase, _extract_specs, _SpecBase
 
@@ -156,10 +157,12 @@ class MissingAttachOptionsError(ValueError):
 
     Attributes:
         missing: Names of the required options that were not supplied.
+        error_code: ``INVALID_ARGUMENT``.
 
     """
 
     missing: list[str]
+    error_code: ClassVar[Code] = Code.INVALID_ARGUMENT
 
     def __init__(self, catalog_name: str, missing: list[str]) -> None:
         """Build the error from the catalog name and the missing option names."""

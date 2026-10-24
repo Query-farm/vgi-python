@@ -22,12 +22,14 @@ Protocol `vgi.reports.v1`, version `1.0.0`.
 | `get_folder` | `folder_id` | `FolderRecord` | `result: binary` (IPC record) | Function |
 | `get_report` | `report_id`, `revision_id` | `ReportResult` | `result: binary` (IPC record) | Function |
 | `get_report_service_info` | — | `ReportsInfo` | `result: binary` (IPC record) | Function; table `info` |
-| `list_folders` | `parent_folder_id`, `recursive` | `FolderRecord` | Producer batches | Function; table `folders` |
-| `list_reports` | `query`, `folder_id`, `recursive`, `tags`, `owned_by_me`, `published_only` | `ReportRow` | Producer batches | Function; table `reports` |
-| `list_revisions` | `report_id` | `RevisionRow` | Producer batches | Function |
+| `list_folders` | `parent_folder_id`, `recursive`, `query`, `ownership_scope`, `owner`, `parent_owner`, `limit`, `order_by` | `FolderRecord` | Producer batches | Function |
+| `list_reports` | `query`, `folder_id`, `recursive`, `tags`, `ownership_scope`, `published_only`, `owner`, `parent_owner`, `limit`, `order_by` | `ReportSummary` | Producer batches | Function |
+| `list_revisions` | `report_id`, `before_revision`, `limit` | `RevisionRow` | Producer batches | Function |
 | `move_report` | `report_id`, `expected_version`, `request_id`, `folder_id` | `ReportRow` | `result: binary` (IPC record) | — |
 | `publish` | `report_id`, `revision_id`, `expected_published_revision_id`, `request_id` | `ReportResult` | `result: binary` (IPC record) | — |
 | `redact_revision` | `report_id`, `revision_id`, `expected_version`, `request_id`, `reason` | `RevisionRow` | `result: binary` (IPC record) | — |
+| `scan_folders` | `parent_folder_id`, `recursive`, `query`, `ownership_scope`, `owner`, `parent_owner`, `limit`, `order_by` | `FolderRecord` | Producer batches | Function; table `folders` |
+| `scan_reports` | `query`, `folder_id`, `recursive`, `tags`, `ownership_scope`, `published_only`, `owner`, `parent_owner`, `limit`, `order_by` | `ReportRow` | Producer batches | Function; table `reports` |
 | `set_folder_ownership` | `folder_id`, `expected_version`, `request_id`, `ownership` | `FolderRecord` | `result: binary` (IPC record) | — |
 | `set_ownership` | `report_id`, `expected_version`, `request_id`, `ownership` | `ReportResult` | `result: binary` (IPC record) | — |
 | `update_folder` | `folder_id`, `expected_version`, `request_id`, `name`, `parent_folder_id` | `FolderRecord` | `result: binary` (IPC record) | — |
@@ -58,8 +60,11 @@ from vgi.reporting._metadata import FetchedColumn, sql_read
 from vgi.reporting.common import (
     Ack,
     DataSource,
+    OwnerKey,
     Ownership,
+    OwnershipCapabilities,
     OwnershipInput,
+    OwnershipScope,
     ParameterSpec,
     PrincipalRef,
     ResourceMeta,
@@ -94,6 +99,19 @@ class ReportRow(ResourceMeta):
     revision_served: str
     revision_number: int
     envelope: ReportEnvelope | None
+    body_sha256: str | None
+    redacted: bool
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ReportSummary(ResourceMeta):
+    """Lightweight visible revision metadata without bindings, parameter options or body."""
+
+    report_id: str
+    folder_id: str | None
+    title: str | None
+    body_format: str | None
+    revision_served: str
     body_sha256: str | None
     redacted: bool
 
@@ -142,6 +160,7 @@ class FolderRecord(ResourceMeta):
 class ReportsInfo(ServiceInfo):
     """Report store formats, limits and caller-specific root actions."""
 
+    ownership: OwnershipCapabilities
     body_formats: Annotated[list[str], non_null_list(pa.string())]
     root_allowed_actions: Annotated[list[str], non_null_list(pa.string())]
 
@@ -152,6 +171,11 @@ class ReportsProtocol(Protocol):
     Workers may define and enforce policies on folders and reports. The protocol
     exposes permission hints and standard refusals; policy implementation and
     inheritance are worker choices.
+
+    OwnershipCapabilities defines all list/scan scope semantics. Exact owner
+    cannot be combined with a non-all ownership_scope. parent_owner matches
+    only the recorded direct management parent; folder recursion never expands
+    directory ancestry. Filters select authorized resources and never grant access.
     """
 
     protocol_name: ClassVar[str] = "vgi.reports.v1"
@@ -163,26 +187,53 @@ class ReportsProtocol(Protocol):
         ...
 
     @sql_read(
-        row_type=ReportRow,
-        table="reports",
+        row_type=ReportSummary,
         fetched_columns=(
-            FetchedColumn(
-                column="body",
-                method="get_report",
-                arguments=(("report_id", "report_id"), ("revision_id", "revision_served")),
-            ),
+            FetchedColumn("body", "get_report", (("report_id", "report_id"), ("revision_id", "revision_served"))),
         ),
     )
     def list_reports(
         self,
         query: str = "",
         folder_id: str | None = None,
+        recursive: bool = False,
+        tags: Annotated[list[str], non_null_list(pa.string())] | None = None,
+        ownership_scope: OwnershipScope = "all",
+        published_only: bool = False,
+        owner: OwnerKey | None = None,
+        parent_owner: OwnerKey | None = None,
+        limit: int | None = None,
+        order_by: str = "id",
+    ) -> Stream[ProducerState]:
+        """Browse visible summaries, direct children by default, with AND-combined filters.
+
+        Order by id, title or updated_desc, breaking ties by report_id.
+        Owner keys are exact and a non-all ownership_scope cannot be combined with owner. limit bounds the
+        entire stream; snapshots and authorization checks survive continuation.
+        """
+        ...
+
+    @sql_read(
+        table="reports",
+        row_type=ReportRow,
+        fetched_columns=(
+            FetchedColumn("body", "get_report", (("report_id", "report_id"), ("revision_id", "revision_served"))),
+        ),
+    )
+    def scan_reports(
+        self,
+        query: str = "",
+        folder_id: str | None = None,
         recursive: bool = True,
         tags: Annotated[list[str], non_null_list(pa.string())] | None = None,
-        owned_by_me: bool = False,
+        ownership_scope: OwnershipScope = "all",
         published_only: bool = False,
+        owner: OwnerKey | None = None,
+        parent_owner: OwnerKey | None = None,
+        limit: int | None = None,
+        order_by: str = "id",
     ) -> Stream[ProducerState]:
-        """Visible reports beneath folder_id; None selects root, recursive=False selects direct children."""
+        """Explicit full metadata export/SQL table, recursively by default; bodies remain fetched lazily."""
         ...
 
     @sql_read()
@@ -195,8 +246,10 @@ class ReportsProtocol(Protocol):
         ...
 
     @sql_read(row_type=RevisionRow)
-    def list_revisions(self, report_id: str) -> Stream[ProducerState]:
-        """History, newest first, tombstones included."""
+    def list_revisions(
+        self, report_id: str, before_revision: int | None = None, limit: int | None = None
+    ) -> Stream[ProducerState]:
+        """Newest revision first, tombstones included; before_revision is exclusive, limit is total."""
         ...
 
     def create_report(
@@ -250,9 +303,23 @@ class ReportsProtocol(Protocol):
         """Transfer management ownership; preserve author and execution credentials."""
         ...
 
-    @sql_read(row_type=FolderRecord, table="folders")
-    def list_folders(self, parent_folder_id: str | None = None, recursive: bool = True) -> Stream[ProducerState]:
-        """Visible child folders, including empty ones; None selects root, recursive=True includes descendants."""
+    @sql_read(row_type=FolderRecord)
+    def list_folders(
+        self,
+        parent_folder_id: str | None = None,
+        recursive: bool = False,
+        query: str = "",
+        ownership_scope: OwnershipScope = "all",
+        owner: OwnerKey | None = None,
+        parent_owner: OwnerKey | None = None,
+        limit: int | None = None,
+        order_by: str = "id",
+    ) -> Stream[ProducerState]:
+        """Visible direct children by default; name substring query and id/name/updated_desc ordering.
+
+        All filters combine with AND. Stable folder_id breaks ties; explicit
+        total limits and parent authorization apply across every continuation.
+        """
         ...
 
     @sql_read()
@@ -284,5 +351,20 @@ class ReportsProtocol(Protocol):
         self, folder_id: str, expected_version: int, request_id: str, ownership: Ownership
     ) -> FolderRecord:
         """Transfer folder management; preserve descendants, their explicit ownership and all report content."""
+        ...
+
+    @sql_read(row_type=FolderRecord, table="folders")
+    def scan_folders(
+        self,
+        parent_folder_id: str | None = None,
+        recursive: bool = True,
+        query: str = "",
+        ownership_scope: OwnershipScope = "all",
+        owner: OwnerKey | None = None,
+        parent_owner: OwnerKey | None = None,
+        limit: int | None = None,
+        order_by: str = "id",
+    ) -> Stream[ProducerState]:
+        """Full-tree SQL/export scan using the same filters and ordering as list_folders."""
         ...
 ```

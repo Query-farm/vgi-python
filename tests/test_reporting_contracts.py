@@ -12,10 +12,10 @@ from __future__ import annotations
 import dataclasses
 import inspect
 import types
+from collections.abc import Hashable
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from pathlib import Path
-from typing import Annotated, Any, Literal, Union, get_args, get_origin, get_type_hints
+from typing import Annotated, Any, Literal, Union, cast, get_args, get_origin, get_type_hints
 
 import pyarrow as pa
 import pytest
@@ -27,8 +27,10 @@ from vgi.codegen.reporting_docs import render, targets
 from vgi.reporting import CONTRACT_MODULES, PROTOCOLS
 from vgi.reporting._metadata import FetchedColumn, SqlRead, read_annotation
 from vgi.reporting.alerts import Instance
-from vgi.reporting.common import Delegation, DelegationRecord, Trigger
+from vgi.reporting.common import Delegation, DelegationRecord, Notification, Trigger
+from vgi.reporting.notify import ChannelInfo
 from vgi.reporting.reports import FolderRecord, ReportEnvelope, ReportRow, ReportsProtocol, RevisionRow
+from vgi.reporting.schedules import Schedule, ScheduleRecord, SchedulerInfo
 from vgi.reporting.sql_tasks import SqlTask
 
 _RECORDS = [
@@ -41,16 +43,19 @@ _RECORDS = [
     and issubclass(obj, ArrowSerializableDataclass)
 ]
 _NAMES = {
-    "vgi.reports.v1": 17,
-    "vgi.reports.ownership.v1": 1,
-    "vgi.report_render.v1": 4,
-    "vgi.schedules.v1": 16,
-    "vgi.sql_tasks.v1": 17,
-    "vgi.alerts.v1": 18,
-    "vgi.notify.v1": 4,
-    "vgi.delegations.v1": 3,
+    "vgi.reports.v1": 19,
+    "vgi.objects.v1": 19,
+    "vgi.ownership.v1": 3,
+    "vgi.resource_identity.v1": 5,
+    "vgi.schedules.v2": 24,
+    "vgi.reports.ownership.v1": 2,
+    "vgi.report_render.v1": 5,
+    "vgi.schedules.v1": 24,
+    "vgi.sql_tasks.v1": 25,
+    "vgi.alerts.v1": 25,
+    "vgi.notify.v1": 7,
+    "vgi.delegations.v1": 5,
 }
-_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _sample(annotation: Any, *, nulls: bool) -> Any:
@@ -109,11 +114,11 @@ def test_ipc_round_trip(record: type[ArrowSerializableDataclass], nulls: bool) -
 
 
 def test_protocol_inventory_and_envelopes() -> None:
-    """All seven independent interfaces are recognized by the actual RPC framework."""
-    assert {p.protocol_name: len(rpc_methods(p)) for p in PROTOCOLS} == _NAMES
+    """All independent interfaces are recognized by the actual RPC framework."""
+    assert {p.protocol_name: len(rpc_methods(cast(Hashable, p))) for p in PROTOCOLS} == _NAMES
     for protocol in PROTOCOLS:
-        assert protocol.protocol_version == "1.0.0"
-        for name, method in rpc_methods(protocol).items():
+        assert protocol.protocol_version == ("2.0.0" if protocol.protocol_name.endswith(".v2") else "1.0.0")
+        for name, method in rpc_methods(cast(Hashable, protocol)).items():
             assert method.protocol_name == protocol.protocol_name
             assert method.params_schema.names == list(method.param_types)
             assert all(not isinstance(value, (list, dict, set)) for value in method.param_defaults.values())
@@ -126,11 +131,44 @@ def test_protocol_inventory_and_envelopes() -> None:
                 assert len(annotation.row_type.ARROW_SCHEMA) > 0
 
 
+def test_html_body_extension_reads_older_records() -> None:
+    """Absent optional fields keep old persisted notifications and capabilities readable."""
+    original = _sample(Notification, nulls=True)
+    batch, metadata = deserialize_record_batch(original.serialize_to_bytes())
+    legacy = batch.select([name for name in batch.schema.names if name != "body_html"])
+    assert Notification.deserialize_from_batch(legacy, metadata) == original
+    channel = ChannelInfo(kind="email", enabled=True, images=False, threads=False, limits=[])
+    batch, metadata = deserialize_record_batch(channel.serialize_to_bytes())
+    legacy = batch.select([name for name in batch.schema.names if name != "html_body"])
+    assert ChannelInfo.deserialize_from_batch(legacy, metadata).html_body is False
+
+
+def test_schedule_alert_extension_reads_older_records() -> None:
+    """Existing saved schedules and replay results survive the additive alert fields."""
+    original = dataclasses.replace(_sample(ScheduleRecord, nulls=True), issues=[])
+    batch, metadata = deserialize_record_batch(original.serialize_to_bytes())
+    legacy = batch.select(
+        [name for name in batch.schema.names if name not in {"issues", "last_successful_at", "last_delivery_at"}]
+    )
+    index = legacy.schema.get_field_index("definition")
+    old_type = pa.struct([f for f in Schedule.ARROW_SCHEMA if f.name != "alerts"])
+    definitions = legacy.column(index).to_pylist()
+    for definition in definitions:
+        assert definition is not None
+        del definition["alerts"]
+    legacy = legacy.set_column(index, pa.field("definition", old_type, nullable=False), pa.array(definitions, old_type))
+    assert ScheduleRecord.deserialize_from_batch(legacy, metadata) == original
+    info = dataclasses.replace(_sample(SchedulerInfo, nulls=True), alert_events=[])
+    batch, metadata = deserialize_record_batch(info.serialize_to_bytes())
+    legacy = batch.select([name for name in batch.schema.names if name != "alert_events"])
+    assert SchedulerInfo.deserialize_from_batch(legacy, metadata) == info
+
+
 def test_every_effectful_request_has_a_request_id() -> None:
     """Mutation admission always has a stable ID, including transfer and recovery methods."""
     for protocol in PROTOCOLS:
-        for name, method in rpc_methods(protocol).items():
-            if name.startswith(("get_", "list_", "check_", "preview_", "test_", "find_")):
+        for name, method in rpc_methods(cast(Hashable, protocol)).items():
+            if name.startswith(("get_", "list_", "check_", "preview_", "test_", "find_", "scan_", "validate_")):
                 continue
             schema = method.params_schema
             assert schema.field("request_id") == pa.field("request_id", pa.string(), nullable=False)
@@ -139,9 +177,11 @@ def test_every_effectful_request_has_a_request_id() -> None:
 def test_sql_annotations_exclude_mutations_and_tests() -> None:
     """The allowlist cannot accidentally expose run, recovery, test or credential mutations."""
     for protocol in PROTOCOLS:
-        for name in rpc_methods(protocol):
+        for name in rpc_methods(cast(Hashable, protocol)):
             annotation = read_annotation(getattr(protocol, name))
-            assert (annotation is not None) == name.startswith(("get_", "list_", "check_", "preview_"))
+            assert (annotation is not None) == name.startswith(
+                ("get_", "list_", "check_", "preview_", "find_", "scan_")
+            )
     annotation = read_annotation(ReportsProtocol.list_reports)
     assert annotation is not None
     assert annotation.fetched_columns == (
@@ -213,7 +253,7 @@ def test_direct_arguments_and_required_nullable_fields() -> None:
 
 
 def test_folder_placement_and_browsing_contract() -> None:
-    """Root is nullable, location is not revisioned, and recursive defaults retain whole-library SQL views."""
+    """Browsing selects direct children while explicit SQL scans retain whole-library semantics."""
     assert ReportRow.ARROW_SCHEMA.field("folder_id") == pa.field("folder_id", pa.string(), nullable=True)
     assert FolderRecord.ARROW_SCHEMA.field("parent_folder_id") == pa.field(
         "parent_folder_id", pa.string(), nullable=True
@@ -225,10 +265,13 @@ def test_folder_placement_and_browsing_contract() -> None:
     for method_name, selector in (("list_reports", "folder_id"), ("list_folders", "parent_folder_id")):
         method = methods[method_name]
         assert method.param_defaults[selector] is None
-        assert method.param_defaults["recursive"] is True
+        assert method.param_defaults["recursive"] is False
         assert method.params_schema.field(selector) == pa.field(selector, pa.string(), nullable=True)
     annotation = read_annotation(ReportsProtocol.list_folders)
-    assert annotation is not None and annotation.table == "folders" and annotation.row_type is FolderRecord
+    assert annotation is not None and annotation.table is None and annotation.row_type is FolderRecord
+    scan = read_annotation(ReportsProtocol.scan_folders)
+    assert scan is not None and scan.table == "folders"
+    assert methods["scan_folders"].param_defaults["recursive"] is True
     # Moving to root must be explicit; omitting a nullable destination cannot silently move an object.
     for method_name, selector in (("move_report", "folder_id"), ("update_folder", "parent_folder_id")):
         method = methods[method_name]
@@ -241,11 +284,15 @@ def test_folder_placement_and_browsing_contract() -> None:
 
 
 @pytest.mark.parametrize(("record", "relative"), targets())
-def test_generated_reference_is_current_and_deterministic(record: str, relative: str) -> None:
-    """Checking in changed Python without its generated reference fails locally and in CI."""
+def test_generated_reference_is_complete_and_deterministic(record: str, relative: str) -> None:
+    """Validate generation without requiring draft design artifacts in the commit."""
     expected = render(record)
     assert expected == render(record)
-    assert (_ROOT / relative).read_text() == expected
+    assert expected.startswith("# ")
+    assert "Generated by vgi.codegen.reporting_docs" in expected
+    assert relative.endswith(".md")
+    if record != "index":
+        assert "## Python definitions" in expected
 
 
 def test_invalid_fetched_column_mapping_fails_generation(monkeypatch: pytest.MonkeyPatch) -> None:

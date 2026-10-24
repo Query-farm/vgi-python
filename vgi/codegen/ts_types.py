@@ -118,6 +118,8 @@ def _ts_type(dtype: pa.DataType, origin: str) -> str:
         return "string"
     if pa.types.is_dictionary(dtype) and pa.types.is_string(dtype.value_type):
         return "string"
+    if pa.types.is_dictionary(dtype) and pa.types.is_binary(dtype.value_type):
+        return "Uint8Array"
     if pa.types.is_binary(dtype) or pa.types.is_large_binary(dtype) or pa.types.is_fixed_size_binary(dtype):
         return "Uint8Array"
     if pa.types.is_timestamp(dtype):

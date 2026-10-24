@@ -4,7 +4,7 @@
   "status": "in_progress",
   "version_decision": {
     "status": "major_required_final_number_and_diff_pending_P1_P2",
-    "published_protocol": "vgi.v2/2.1.0",
+    "published_protocol": "vgi.v2/2.2.0",
     "breaking_candidates": [
       "Raw column paths replacing flat/dotted targets",
       "Shared constraint definitions replacing index-based groups",
@@ -12,9 +12,10 @@
     ],
     "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
     "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the successor schema inventory; required canonical table constraint lists replace the legacy parent arrays and revision-checked catalog_table_constraints_apply joins the public method surface; typed index definitions/options replace legacy index fields and add catalog_index_option_definitions; required semantic ALTER flags and raw subject/dependent column paths extend embedded dependency records; SET DEFAULT requires binary SqlExpression IPC and USING accepts nullable binary IPC; CREATE/ADD defaults use the canonical field codec, without new capability negotiation; CatalogAttachResult.default_schema becomes nullable UTF-8, preserving no implicit default independently of an explicit raw schema name; MacroInfo and MacroCreateRequest require nonempty overloads and remove legacy parent parameters/definition/parameter_default_values/arguments_schema; canonical families need no overload read/create opt-in; existing column comment/tags Arrow metadata gains strict shared validation and preservation on CREATE/ADD/discovery, with no record/RPC change; generated-column authoring/discovery/CREATE consistently use the existing canonical SqlExpression/category metadata, replacing legacy generated_expression strings without a new RPC or record layout; BindResponse adds optional projection_expression_profiles and table_function_projection adds structured early subset acceptance with canonical expressions and exact appended Arrow fields; BindResponse appends required repeatability enum UNKNOWN/STABLE_WITHIN_QUERY, with bounded native1.5 and SDK qualification",
-    "version_requirement": "The existing breaking changes already require a major version and matching routing name. Final number and complete generated diff remain P1/P2 work; the historical additive 2.2.0 candidate is superseded.",
-    "planned_diff": "Included before freeze: broader production-provider/adapter acceptance and release gates. Bounded scalar projection, bind-specific repeatability and Go wrapped IPC qualification pass on the pinned1.5 build. Python generic RPC outer framing/raw-size rejection, paired Go dependency publication/pinning and remaining transports still require qualification. No protocol freeze or public version transition yet.",
-    "historical_additive_candidate": "vgi.v2/2.2.0"
+    "version_requirement": "The existing breaking changes require a major version and matching routing name. Published main is now vgi.v2/2.2.0; retaining that development placeholder does not make the successor compatible with published 2.2. The earlier additive2.2 successor proposal is historical and superseded. Final number and complete generated diff remain P1/P2 work.",
+    "planned_diff": "Included before freeze: broader production-provider/adapter acceptance and release gates. Bounded scalar projection, bind-specific repeatability and Go wrapped IPC qualification pass on the pinned 1.5 build. Python generic RPC outer framing/raw-size rejection, paired Go dependency publication/pinning and remaining transports still require qualification. No protocol freeze or public version transition yet.",
+    "historical_additive_candidate": "vgi.v2/2.2.0",
+    "development_placeholder": "vgi.v2/2.2.0; unpublished incompatible successor; final major and routing unresolved"
   },
   "sources": {
     "native_revision": "1a0a059",
@@ -23,7 +24,8 @@
     "duckdb_upstream": "c65ca930b9fe39b2e8d8ed8821018dca650965f4",
     "audit_path": "docs/duckdb-2.0-catalog-audit.md",
     "audit_sha256": "72f4fc9d8e63a0e98e6ab0caa6dc5d7ee2db1c50bfff6c6c9b94c9c568ba5139",
-    "plan_path": "docs/duckdb-2.0-plan.md"
+    "plan_path": "docs/duckdb-2.0-plan.md",
+    "provenance": "Historical original field-audit pins. Current integration refs and qualification are in main_integration_checkpoint_2026_10_24; original audit identity/hash remains authoritative for field mappings."
   },
   "shared_representations": {
     "identity": "Raw components and attachment-relative CatalogObjectRef; no local aliases, pointers or OIDs. Full identity in all caches.",
@@ -11179,14 +11181,15 @@
     ]
   },
   "automatic_query_pushdown_plan_2026_10_24": {
-    "status": "initial_native2_compile_inventory_recorded_automatic_not_implemented",
+    "status": "main_refreshed_native2_compile_inventory_recorded_automatic_not_implemented",
     "design": "docs/protocol/vgi-catalog-query-pushdown-design.md#implementation-checkpoint--october-24-2026",
     "review_inputs": {
       "native": "38fe3c775bd332b9cd4b845f3518631ee6070955",
       "python": "0566afd7f12a93dc8441db930ae85d764d35b570",
       "engine_15": "105edd31b57fe7e6d32ee648efad562e45a9f908",
       "engine_20_source_audit": "e1784fa4231072d7152b8aaa20977bdb8ff4ace3",
-      "haybarn_head_observed_not_substituted_for_audit": "5ab8a76db12ad1ad63c4e4997bce37602a9d0b43"
+      "haybarn_head_observed_not_substituted_for_audit": "5ab8a76db12ad1ad63c4e4997bce37602a9d0b43",
+      "provenance": "Historical source review before the latest-main integration; see main_integration_checkpoint_2026_10_24 for merged inputs."
     },
     "wire_decision": "Reuse existing automatic query records and prepare/release plus TABLE execution. No new wire change demonstrated by this review.",
     "route": "Whole-SELECT early bound-plan optimizer using LogicalPlanSQLExporter::Export; preserve original plan until replacement validation. Parsed RemoteExecute remains disabled. ExportWithSources is conditional because it materializes replacement sources.",
@@ -11211,7 +11214,9 @@
           "configure_exit": 0,
           "build_exit": 1
         },
-        "limits": "Compiler inventory only, first 12 errors per unit; shared declarations mask later failures. No engine/loadable link or runtime qualification. Full M0 remains open."
+        "limits": "Compiler inventory only, first 12 errors per unit; shared declarations mask later failures. No engine/loadable link or runtime qualification. Full M0 remains open.",
+        "historical": true,
+        "superseded_by": "main_integration_checkpoint_2026_10_24.native20_refresh"
       },
       {
         "id": "A1",
@@ -11284,7 +11289,7 @@
         10
       ],
       "parallelism": "A2 can overlap A0/A1/A3; the first demonstration is an intermediate A2-A4 result, not additional effort.",
-      "latest_evidence": "A0 configuration passed and all 107 native C++ sources were attempted (53 compiled / 54 failed); 27 failed sources first encounter shared catalog/index declaration errors. The initial range remains provisional until shared declarations and the read path compile/run; source counts are not a completion percentage."
+      "latest_evidence": "After latest-main integration, all 110 native C++ sources were attempted: 54 compiled / 56 failed, plus generated describe.c compiled. The original 107 / 53 / 54 inventory remains historical. See main_integration_checkpoint_2026_10_24.native20_refresh. Estimates remain provisional; counts are not a completion percentage."
     },
     "provider_evidence_limits": [
       "Finite explicit reference accepts six exact SQL strings over immutable data and creates fresh preparation/start connections; transaction token does not prove shared mutable data visibility.",
@@ -11300,13 +11305,361 @@
       "New transaction framework, savepoints, durable replay/status services, query coordinator or separate snapshot registry",
       "Protocol freeze, public version transition or completed P1-P3 qualification"
     ],
-    "validation": "Initial audited-pin EC2 compile inventory now exists; no automatic 2.0 runtime evidence. See native:docs/duckdb-2.0-a0-diagnostics.md and its JSON source inventory.",
+    "validation": "Original and refreshed audited-pin EC2 compile inventories exist; no automatic 2.0 runtime evidence. See native:docs/duckdb-2.0-a0-diagnostics.md and docs/duckdb-2.0-a0-main-sync.json.",
     "enablement": {
       "worker_opt_in": "ClientQueryCapabilities offers encoding/profiles and client engine build; worker QueryCapabilities selects automatic mode and vgi.duckdb.relational.v1 only when compatible and transaction support exists.",
       "client_default": "Qualified 2.0 adapter automatically considers eligible queries when compatible automatic support is discovered. No user/session control; the current 1.5 explicit-query gate does not govern the future automatic path.",
       "absent_or_explicit_only": "Keep ordinary local plans and send no automatic preparation RPC.",
       "wire_change": "None; reuse the existing capability offer/selection and per-query preparation decision.",
       "per_query_decision": "Eligibility checks and provider preparation acceptance remain mandatory; a valid decline retains the original local plan."
+    }
+  },
+  "main_integration_checkpoint_2026_10_24": {
+    "status": "integrated_with_known_preexisting_native15_limitation",
+    "summary": "Merged published main into the combined successor work without changing the pinned 1.5 engine or implementing automatic whole-query pushdown.",
+    "document": "docs/protocol/duckdb-2.0-main-integration-2026-10-24.md",
+    "published_baseline": "vgi.v2/2.2.0",
+    "development_placeholder": "vgi.v2/2.2.0; incompatible unpublished successor, not a compatible published 2.2 update",
+    "final_major_and_routing": "unresolved; major-required decision and coordinated release gates unchanged",
+    "merged_refs": {
+      "vgi": {
+        "base": "e1dc7520d28dec8cc7414bb65e227e565b6ff560",
+        "main": "454fefa50b11f8bfe3065fb11aebf8f5761d7b3d"
+      },
+      "vgi-python": {
+        "base": "7dc87f44bb73c723b3cac13f059af50338fdd284",
+        "main": "fd4f5b97a41972475d93e627c1688b4e75712f6d"
+      },
+      "vgi-go": {
+        "base": "ad5f89701ef0bc20845ae95bf1cffe0f8e6cbed8",
+        "main": "ca85f8cfef3eb8c17bbbb6a13f8a48bf1956670e"
+      },
+      "vgi-rust": {
+        "base": "2f0c343ebf010f1cbf6b37f0d084ab8a7ccca338",
+        "main": "89f3cf651badf1f9caccc89f43f208fa34770e59"
+      },
+      "vgi-typescript": {
+        "base": "977b667f49c924f912127eae2c8957d3d0658fa6",
+        "main": "412384aa56d96d19fdbc88de42a94d994b70ca88"
+      },
+      "vgi-java": {
+        "base": "10613b873996fb8bf755a21c80ffd0bab713ec69",
+        "main": "074ec2fc13973479504bec12f07fb7a597c5343e"
+      },
+      "vgi-csharp": {
+        "base": "d77b0b209a8db9fecb220d7d575932d51b54106d",
+        "main": "15d3cae296d9082e68ad36c058731cb7d8bde7ff"
+      },
+      "vgi-cpp": {
+        "base": "1da952dd328578ee9695f50e3ae719e9e57a511f",
+        "main": "0c5e24522690119bc002f423130be266c8a010a5"
+      },
+      "vgi-rpc-go": {
+        "base": "2921723df8246e8715785ffccae4b1a0912d2550",
+        "main": "688ba348b67c47125953e98ee74847efc279cd87"
+      },
+      "vgi-rpc-java": {
+        "base": "30c84da7fc20b38f7c59aae5d2beb5ee483be6a1",
+        "main": "3a8a300a10226be1b56e0458e81ffa3212b73f1d",
+        "tag": "v0.33.1"
+      },
+      "vgi-rpc-c++": {
+        "base": "08951ccd7ebd4661655765e733388ce371894a7a",
+        "main": "25fad89ed4bc7746e2958537752a00fe0a707ecd",
+        "tag": "v0.11.0"
+      }
+    },
+    "backup_ref": "codex/pre-main-sync-20261024-kmz7l4hp",
+    "dependency_versions": {
+      "python": {
+        "vgi-rpc": "0.52.0",
+        "source": "published locked package"
+      },
+      "typescript": {
+        "vgi-rpc": "0.29.2",
+        "flechette": "2.7.1",
+        "apache-arrow": "21.1.1",
+        "source": "published packages"
+      },
+      "rust": {
+        "vgi-rpc": "0.32.0",
+        "vgi-rpc-client": "0.32.0",
+        "vgi-rpc-macros": "0.32.0",
+        "source": "published crates"
+      },
+      "go": {
+        "vgi-rpc-go": "0.35.0",
+        "source": "isolated merged source replacement; retained wrapped-request framing patch still requires a published/pinned release"
+      },
+      "java": {
+        "vgirpc": "0.33.1",
+        "source": "isolated tag merge retaining the annotated String dictionary fix"
+      },
+      "csharp": {
+        "QueryFarm.VgiRpc": "0.18.1",
+        "source": "published NuGet package; tests use -p:VgiRpcCSharpRoot=/nonexistent to bypass the unrelated old 0.16.0 EC2 sibling"
+      },
+      "cpp": {
+        "vgi_rpc": "0.11.0",
+        "source": "isolated tag merge retaining local strict decoding fixes"
+      }
+    },
+    "reconciled_overlaps": [
+      "Six catalog-wide metadata streams retain complete canonical constraints, typed index definitions, macro overload families, schema options and column metadata; SchemaInfo attachment state is constructor-only, not on the wire.",
+      "Python selected capability projection participates in cached inventory, publication identity and derived etags; unscoped validator shortcuts cannot answer projected inventory. SnapshotRequest.capability_projection is internal only, not a new wire field.",
+      "Generated C++ request/response codecs replace duplicate hand-maintained schema inventories while retaining successor methods and strict nested semantics.",
+      "Published Identity.v2 timestamp signatures and continued table-in-out output coexist with successor projection/repeatability/query contracts.",
+      "Java bulk metadata uses canonical IndexInfo and retains explicit annotated String dictionaries alongside upstream binary dictionaries. All three newly merged bulk SDK codecs retain canonical table column validation.",
+      "C# unpublished local main ce20f46 snapshot work is covered by pinned origin/main including 1badcaf and later fixes; no duplicate cherry-pick was needed."
+    ],
+    "validation": {
+      "artifacts": "logs/main-sync-20261024-kmz7l4hp",
+      "sdk": {
+        "typescript": {
+          "arrowjs": {
+            "passed": 738,
+            "skipped": 68,
+            "log": "sdk/typescript-unit-final.log"
+          },
+          "flechette": {
+            "passed": 739,
+            "skipped": 67,
+            "log": "sdk/typescript-flechette-1.log"
+          },
+          "production_build": "passed sdk/typescript-build-1.log",
+          "common_projection_subprocess": 27,
+          "common_projection_signed_http": 27
+        },
+        "java": {
+          "core": {
+            "passed": 739,
+            "skipped": 2
+          },
+          "examples": {
+            "passed": 61
+          },
+          "rpc": {
+            "passed": 681
+          },
+          "logs": [
+            "sdk/java-full-3.log",
+            "sdk/java-rpc.log"
+          ],
+          "common_projection_subprocess": 27,
+          "common_projection_signed_http": 27
+        },
+        "csharp": {
+          "passed": 764,
+          "skipped": 0,
+          "log": "sdk/csharp-full-3.log",
+          "common_projection_subprocess": 27,
+          "common_projection_signed_http": 27
+        },
+        "go": {
+          "passed": 881,
+          "skipped": 1,
+          "skip": "TestCfDoStorage_Live",
+          "log": "sdk/go-tests-final.jsonl",
+          "vet": "passed",
+          "common_projection_subprocess": 27,
+          "common_projection_http": 27
+        },
+        "go_rpc": {
+          "passed": 766,
+          "environment_skips": 17,
+          "log": "sdk/rpc-go-tests.jsonl",
+          "python_enabled_reference_subset_passed": 36,
+          "python_to_go_server_conformance_passed": 1696,
+          "additional_logs": [
+            "sdk/rpc-go-python-final.jsonl",
+            "sdk/rpc-go-conformance-final.log"
+          ],
+          "vet": "passed"
+        },
+        "rust": {
+          "passed": 664,
+          "ignored": 4,
+          "test_binaries": 45,
+          "log": "sdk/rust-tests-built-example.log",
+          "common_projection_subprocess": 27
+        },
+        "cpp": {
+          "ctest_passed": 89,
+          "ctest_total": 89,
+          "log": "sdk/cpp-tests-final.log",
+          "common_projection_subprocess": 27
+        }
+      },
+      "native15": {
+        "engine": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+        "build": "static extension, loadable extension, shell, unittest, catalog tests and HTTP tests passed",
+        "artifact": "native-merge-evidence.json",
+        "contracts": {
+          "cases": 74,
+          "assertions": 1542
+        },
+        "http": {
+          "cases": 8,
+          "assertions": 265
+        },
+        "catalog_multibatch": {
+          "cases": 6,
+          "assertions": 380
+        },
+        "continuation": {
+          "cases": 5,
+          "assertions": 473
+        },
+        "discovery_reflection": {
+          "cases": 8,
+          "assertions": 221
+        },
+        "copy": {
+          "cases": 2,
+          "assertions": 41
+        },
+        "live_repeatability_cases": 5,
+        "live_projection_cases": 12,
+        "live_explicit_query_cases": 18,
+        "six_sdk_native_projection": {
+          "sdks": 6,
+          "queries_per_sdk": 5,
+          "rows_per_sdk": 42,
+          "accepted_plan_copy": "passed for all six"
+        },
+        "full_subprocess_integration": {
+          "status": "completed_one_preexisting_failure",
+          "current_tracked_files": 379,
+          "passed": 346,
+          "skipped": 32,
+          "failed": 1,
+          "log": "native-full.log",
+          "summary": "native-full.csv",
+          "raw_run": {
+            "files": 380,
+            "passed": 347,
+            "skipped": 32,
+            "failed": 1,
+            "seconds": 500.8
+          },
+          "inventory_note": "Raw run also executed the retired parallel_2gb.test_slow (passed). Main renamed it to parallel_spill_stream.test_slow. The exact old file was archived outside the source tree; counts above exclude it.",
+          "known_failure": {
+            "test": "test/sql/integration/schema_reconcile.test:40",
+            "error": "native1.5 does not support nested constraint column paths",
+            "status": "reproduced_preexisting_adapter_limitation",
+            "confirmation_log": "schema-reconcile-confirmation/result.log",
+            "evidence": [
+              "Premerge native e1dc752 already rejects constraint paths with more than one component.",
+              "Premerge Python 7dc87f44 schema_reconcile fixture already publishes nested.a NOT_NULL.",
+              "SQL test unchanged; prior matching runtime failure documented in native docs/duckdb-2.0-plan.md."
+            ],
+            "limits": "No new nested-constraint support or fixture weakening was included in this integration."
+          }
+        }
+      },
+      "python": {
+        "status": "passed",
+        "initial_full": {
+          "passed": 4596,
+          "skipped": 129,
+          "failed": 4,
+          "log": "python-full-1.log"
+        },
+        "fixed_followups": [
+          "Docstring-only gate: 1 pass python-docstrings.log",
+          "Protocol inventory, native registry and browser regression: 13 passed",
+          "Mypy: 235 source files passed"
+        ],
+        "final_full": {
+          "passed": 4602,
+          "skipped": 129,
+          "failed": 0,
+          "warnings": 6,
+          "seconds": 79.54,
+          "log": "python-full-final.log"
+        },
+        "http_fixture_regression": {
+          "cause": "Test server advertised a free port before binding; parallel startup could query another server. Bind port 0 before publishing its port and check child liveness.",
+          "targeted_passed": 19,
+          "repeated_parallel_passed": 57,
+          "logs": [
+            "demo-storage-fixed-1.log",
+            "demo-storage-repeat-1.log",
+            "demo-storage-repeat-2.log",
+            "demo-storage-repeat-3.log"
+          ]
+        },
+        "mypy": {
+          "source_files": 235,
+          "status": "passed",
+          "log": "python-mypy-final.log"
+        }
+      },
+      "generation": {
+        "status": "passed",
+        "all_repositories_required": true,
+        "log": "generation-check.log"
+      },
+      "inventory": {
+        "status": "passed",
+        "audit_rows": 151,
+        "contract_areas": 20,
+        "unresolved_scope_reviews": 0,
+        "log": "manifest-final.log",
+        "limits": "Coverage and selected scope decisions, not phase completion or protocol freeze."
+      }
+    },
+    "native20_refresh": {
+      "status": "compile_inventory_recorded_link_blocked",
+      "native_cpp_sources": 110,
+      "compiled": 54,
+      "failed": 56,
+      "not_attempted": 0,
+      "additional_generated_c_units_compiled": 1,
+      "captured_capped_errors": 415,
+      "artifacts": [
+        "native:docs/duckdb-2.0-a0-main-sync.json",
+        "native:docs/duckdb-2.0-a0-diagnostics.md#main-integration-refresh--october-24-2026"
+      ],
+      "changes": [
+        "Two new native codec sources compile.",
+        "New http_params fails FileOpener setting overrides.",
+        "Existing input_dedup now fails removed DataChunk::SetCapacity.",
+        "Other existing source statuses unchanged."
+      ],
+      "historical_original": {
+        "native_cpp_sources": 107,
+        "compiled": 53,
+        "failed": 54
+      },
+      "limits": "Compile inventory only; capped errors are not independent fixes. No engine/loadable link, native 2 runtime or automatic optimizer qualification.",
+      "engine_revision": "e1784fa4231072d7152b8aaa20977bdb8ff4ace3",
+      "source_manifest_sha256": "7cd27e1f647d1cd52eddfe724e76f26c6d08429864889a2df6570db4627e80de"
+    },
+    "protocol_hash": "41f61f37c7ce42f63f3ca47f8861508f3f356d2422a5b8a0bab48ff92c0857a8",
+    "protocol_methods": 85,
+    "hash_limits": "Endpoint hash does not cover every nested binary record or semantic metadata rule.",
+    "browser_sha256": "2b49411f93ff4f538dcbec6c767c663c56026b11f5e5595c0fb749e4743dc6e8",
+    "historical_evidence_policy": "Earlier dated checkpoints, version fields, source revisions and initial A0 counts describe their original inputs. They are retained as historical evidence and are not silently requalified by this merge.",
+    "remaining": [
+      "Existing native 1.5 schema reconciliation failure with nested constraint paths remains; separately qualify any adapter change.",
+      "Native 2.0 read-path port after refreshed compile inventory",
+      "General SQL provider, shared mutable snapshot and active-SQL cancellation proof",
+      "Automatic whole-query eligibility/export/replacement; no new wire requirement demonstrated",
+      "Paired dependency publication/pinning, remaining transports/platforms and P1-P3 release qualification"
+    ],
+    "gate_effect": "Integration checkpoint only; no release, freeze, full DuckDB 2 support or automatic whole-query implementation claim.",
+    "merged_commits_except_this_document": {
+      "vgi-go": "136f1e9777953de31de1da6264565f8e148ebb68",
+      "vgi-rust": "d8de99d4fbd5e40c72cff4d18f0fadb95300da75",
+      "vgi-typescript": "d6fbcd2350b2706b97e8994aae40ee07e8280d0d",
+      "vgi-java": "14f141c0dedf38359fc727d010511deb3dbb5f74",
+      "vgi-csharp": "9af874c5aeda84845208a7c7d8ca5a7287d3bf94",
+      "vgi-cpp": "50c5bc93ee2343c88324995dba89d41e31a15aec",
+      "vgi-rpc-go": "47f03a9f054dd0b2424817221c6f800f5427c445",
+      "vgi-rpc-java": "3c9ed089f0d197ed7691e724dcfb52a5ca554ea5",
+      "vgi-rpc-c++": "3ee63c04a32b1bad75d722467ada25760c16ba7d",
+      "vgi": "95df719667a5e226f6c82cc13d643a2a13207d08"
     }
   }
 }

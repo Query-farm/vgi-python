@@ -70,6 +70,14 @@ _RPC_ALLOWLIST: dict[str, tuple[str, ...] | NotExposed] = {
             "Covered by C++ integration/table_function paths."
         )
     ),
+    "table_function_projection": NotExposed(
+        reason=(
+            "Planner-side scalar expression pushdown. The Python Client executes "
+            "table functions directly without rewriting a logical projection. "
+            "Covered by tests/test_projection_expressions.py and native "
+            "test/run_projection_pushdown.py."
+        )
+    ),
     "table_function_plan": NotExposed(
         reason=(
             "Engine-side scan planning: splits the scan into named, independently "

@@ -50,6 +50,7 @@ from typing import Any
 
 import pyarrow as pa
 
+from vgi.catalog.contract import catalog_contract_hash
 from vgi.codegen import java_types
 from vgi.codegen._common import GeneratorError
 from vgi.codegen._registry import (
@@ -340,6 +341,8 @@ def _render_body(model: Sequence[RegistryMethod]) -> str:
     lines.append("")
     lines.append("    /** The protocol's semver, stamped on every request by a client of this interface. */")
     lines.append(f'    String PROTOCOL_VERSION = "{version}";')
+    lines.append("    /** Canonical fingerprint of the nested catalog wire schemas. */")
+    lines.append(f'    String CATALOG_CONTRACT_HASH = "{catalog_contract_hash()}";')
     for jm in methods:
         lines.append("")
         lines += _render_method(jm)

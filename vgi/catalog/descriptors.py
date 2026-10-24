@@ -718,15 +718,15 @@ class View:
     Attributes:
         name: View name.
         definition: SQL definition of the view.
-        security: ``regular`` or ``barrier``; an executing reader must enforce
-            the optimization barrier or reject the view.
-        aliases: Ordered raw output identifiers, including any literal dots or quotes.
         comment: Optional view comment.
         column_comments: Optional mapping of view output column name to comment.
             The extension aligns these by name against the columns DuckDB binds
             from the view's query, so only the names that actually appear in the
             result need entries; unmatched names are ignored.
         tags: Optional metadata tags.
+        aliases: Ordered raw output identifiers, including any literal dots or quotes.
+        security: ``regular`` or ``barrier``; an executing reader must enforce
+            the optimization barrier or reject the view.
 
     """
 
@@ -767,9 +767,9 @@ class Macro:
             description. Keys must appear in ``parameters``. Descriptions become
             canonical MacroParameter documentation. Empty/default = no docs.
         definition: SQL expression (scalar) or query (table).
-        evaluation_context: Explicit owner context used by the local single-definition adapter.
         comment: Optional macro comment.
         tags: Optional metadata tags.
+        evaluation_context: Explicit owner context used by the local single-definition adapter.
 
     """
 
@@ -880,6 +880,9 @@ class Schema:
     def to_schema_info(self, attach_opaque_data: AttachOpaqueData) -> SchemaInfo:
         """Convert to [`SchemaInfo`][] for catalog response.
 
+        ``attach_opaque_data`` is accepted for compatibility and discarded;
+        schema metadata does not contain attachment state.
+
         Populates ``estimated_object_count`` from the declared population so
         the C++ extension's eager-load gate can choose between bulk
         ``LoadEntries`` and per-name single-entry RPCs without an extra round
@@ -904,7 +907,6 @@ class Schema:
         for func in self.functions:
             function_counts[func.get_metadata().function_type] += 1
         return SchemaInfo(
-            attach_opaque_data=attach_opaque_data,
             path=list(self.path),
             comment=self.comment,
             tags=dict(self.tags),

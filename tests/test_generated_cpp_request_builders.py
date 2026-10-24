@@ -48,12 +48,19 @@ def test_native_runtime_registry_covers_protocol_requests_and_responses() -> Non
     if not path.exists():
         pytest.skip(f"native runtime registry not found at {path}")
     source = path.read_text()
-    responses, requests = source.split("const RequestSchemaEntry kRequestSchemas[]", 1)
+    # The dispatcher now derives both contracts from the generated method table;
+    # only response policies (dynamic, opaque record, item lists) are handwritten.
+    assert "for (const auto &method : AllMethodSchemas())" in source
+    assert "entry.request_schema = method.params;" in source
+    assert "entry.schema = method.result;" in source
+    assert "m.emplace(method.method, std::move(entry));" in source
+    records = (path.parent / "generated" / "vgi_protocol_records.cpp").read_text()
+    method_table = records.split("&AllMethodSchemas()", 1)[1].split("return methods;", 1)[0]
     declared = {method.name for method in registry_methods()}
-    response_names = set(re.findall(r'"([a-z_]+)"', responses))
-    request_names = set(re.findall(r'\{"([a-z_]+)",\s*&\w+ParamsSchema\}', requests))
-    assert declared <= response_names, f"Native response contracts missing: {declared - response_names}"
-    assert declared <= request_names, f"Native request contracts missing: {declared - request_names}"
+    registered = set(re.findall(r'\{"([a-z_]+)",\s*\w+ParamsSchema\(\),', method_table))
+    assert registered == declared, (
+        f"Native method contracts missing: {declared - registered}; stale: {registered - declared}"
+    )
 
 
 def test_generator_is_deterministic() -> None:

@@ -1012,9 +1012,8 @@ def _with_sorted_maps(info: Any) -> Any:
     Arrow writes a map column in the dict's iteration order, so two equal
     items whose ``tags`` (or ``estimated_object_count``, ``column_comments``,
     ...) were filled in different orders would encode to different bytes.
-    Catalog items must encode deterministically: ``catalog_contents`` promises
-    items byte-identical to the per-schema RPCs, its content-hash etag hashes
-    them, and every other VGI SDK sorts map keys the same way.
+    Catalog items must encode deterministically: catalog content hashes depend
+    on stable bytes, and every VGI SDK sorts map keys the same way.
 
     Args:
         info: The catalog item (a frozen dataclass).
@@ -1213,25 +1212,22 @@ class SchemaContents(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CatalogContentsResponse(ArrowSerializableDataclass):
-    """Response for `catalog_contents()`: the whole catalog in one result.
+    """Whole catalog as six nullable, typed Arrow IPC collection streams.
 
-    Attributes:
-        catalog_version: The catalog version the snapshot was taken at. Worker-defined
-            and only meaningful within the session that requested it.
-        etag: Opaque validator for this snapshot, to send back as
-            ``if_none_match``. Null means the worker does not revalidate (and
-            ignores ``if_none_match``).
-        not_modified: ``True`` when the request's ``if_none_match`` equals the
-            current ``etag``: ``schemas`` is then empty and the client keeps the
-            contents it has.
-        schemas: One [`SchemaContents`][] struct per schema, parents before
-            children. Empty when ``not_modified``.
+    Each non-null category contains every object of that type across schemas,
+    potentially in multiple record batches. Null means empty. A not-modified
+    answer has six null categories and an ETag matching the request.
     """
 
     catalog_version: int
     etag: str | None = None
     not_modified: bool = False
-    schemas: list[SchemaContents] = field(default_factory=list)
+    schemas: bytes | None = None
+    tables: bytes | None = None
+    views: bytes | None = None
+    functions: bytes | None = None
+    macros: bytes | None = None
+    indexes: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1776,6 +1772,30 @@ def _merge_parent_rows(
     return merged
 
 
+# Continued output (table-in-out exchange). A reply carrying
+# ``vgi.status: HAVE_MORE_OUTPUT`` has more output for the same input batch: the
+# client sends a *tick* -- a zero-row input batch carrying ``vgi.status: CONTINUE``
+# -- and the worker answers it with the next batch, through ``resume()``. Every
+# reply's ``parent_rows`` index the last real (non-tick) input batch.
+STATUS_KEY = b"vgi.status"
+HAVE_MORE_OUTPUT = b"HAVE_MORE_OUTPUT"
+CONTINUE = b"CONTINUE"
+
+
+def _merge_more_output(*, more: bool, metadata: dict[str, str] | None) -> dict[str, str] | None:
+    """Fold ``more=True`` into the emit metadata as ``vgi.status: HAVE_MORE_OUTPUT``."""
+    if not more:
+        return metadata
+    merged: dict[str, str] = dict(metadata) if metadata else {}
+    merged[STATUS_KEY.decode()] = HAVE_MORE_OUTPUT.decode()
+    return merged
+
+
+def _is_tick(metadata: pa.KeyValueMetadata | None) -> bool:
+    """Whether an exchange input batch is a continuation tick, not real input."""
+    return metadata is not None and metadata.get(STATUS_KEY) == CONTINUE
+
+
 def _decode_parent_rows(
     metadata: pa.KeyValueMetadata | None,
     *,
@@ -1888,6 +1908,9 @@ class VgiOutputCollector(Protocol):
     the base ``OutputCollector`` type cannot carry the wider signature
     without breaking ``process()`` override compatibility across every
     fixture.
+
+    ``more=True`` (table-in-out only) says this input batch has more output:
+    the framework calls the function's ``resume()`` for the next batch.
     """
 
     def emit(
@@ -1898,6 +1921,7 @@ class VgiOutputCollector(Protocol):
         metadata: dict[str, str] | None = None,
         cache_control: CacheControl | None = None,
         parent_rows: list[int] | None = None,
+        more: bool = False,
     ) -> None: ...
 
     def finish(self) -> None: ...
@@ -1917,7 +1941,12 @@ class _FilteringOutputCollector:
 
     __slots__ = ("_inner", "_func_cls", "_filters")
 
-    def __init__(self, inner: _TrackingOutputCollector, func_cls: type[TableFunctionBase[Any]], filters: Any) -> None:
+    def __init__(
+        self,
+        inner: _TrackingOutputCollector,
+        func_cls: type[TableFunctionBase[Any]],
+        filters: Any,
+    ) -> None:
         self._inner = inner
         self._func_cls = func_cls
         self._filters = filters
@@ -1930,8 +1959,15 @@ class _FilteringOutputCollector:
         metadata: dict[str, str] | None = None,
         cache_control: CacheControl | None = None,
         parent_rows: list[int] | None = None,
+        more: bool = False,
     ) -> None:
-        filtered = self._func_cls._apply_pushdown_filter(batch, self._filters)
+        if parent_rows is not None and batch.num_rows > 0 and self._filters:
+            # Provenance is per output row, so it must lose the rows the filter does.
+            mask = self._filters.evaluate(batch)
+            filtered: pa.RecordBatch = pc.filter(batch, mask)  # type: ignore[call-overload]
+            parent_rows = cast("list[int]", pc.filter(pa.array(parent_rows, type=pa.int32()), mask).to_pylist())
+        else:
+            filtered = self._func_cls._apply_pushdown_filter(batch, self._filters)
         self._inner.emit(
             filtered,
             batch_index=batch_index,
@@ -1939,6 +1975,7 @@ class _FilteringOutputCollector:
             metadata=metadata,
             cache_control=cache_control,
             parent_rows=parent_rows,
+            more=more,
         )
 
     def emit_pydict(self, data: dict[str, Any], schema: pa.Schema | None = None) -> None:
@@ -1983,6 +2020,9 @@ class _TrackingOutputCollector:
         "_partition_fields",
         "_partition_kind",
         "_batches_emitted",
+        "_continuation",
+        "_allows_more",
+        "more",
         "total_rows",
         "total_bytes",
     )
@@ -1993,6 +2033,8 @@ class _TrackingOutputCollector:
         supports_batch_index: bool = False,
         partition_fields: list[pa.Field[Any]] | None = None,
         partition_kind: PartitionKind = PartitionKind.NOT_PARTITIONED,
+        continuation: bool = False,
+        allows_more: bool = False,
     ) -> None:
         self._inner = inner
         self._supports_batch_index = supports_batch_index
@@ -2001,6 +2043,13 @@ class _TrackingOutputCollector:
         self._partition_fields = partition_fields or []
         self._partition_kind = partition_kind
         self._batches_emitted = 0
+        # True when this collector answers a tick: its batch continues an earlier
+        # reply, so it is never the input's first batch.
+        self._continuation = continuation
+        # Only a table-in-out exchange can continue its output; anywhere else the
+        # client would never send the tick.
+        self._allows_more = allows_more
+        self.more = False
         self.total_rows = 0
         self.total_bytes = 0
 
@@ -2012,7 +2061,10 @@ class _TrackingOutputCollector:
         metadata: dict[str, str] | None = None,
         cache_control: CacheControl | None = None,
         parent_rows: list[int] | None = None,
+        more: bool = False,
     ) -> None:
+        if more and not self._allows_more:
+            raise ValueError("emit(more=True) is only valid in a table-in-out function's process() or resume()")
         merged_metadata = _merge_batch_index(
             supports_batch_index=self._supports_batch_index,
             batch_index=batch_index,
@@ -2033,8 +2085,10 @@ class _TrackingOutputCollector:
         merged_metadata = _merge_cache_control(
             cache_control=cache_control,
             metadata=merged_metadata,
-            is_first_batch=(self._batches_emitted == 0),
+            is_first_batch=(self._batches_emitted == 0 and not self._continuation),
         )
+        merged_metadata = _merge_more_output(more=more, metadata=merged_metadata)
+        self.more = more
         self._batches_emitted += 1
         self.total_rows += batch.num_rows
         self.total_bytes += _batch_bytes(batch)
@@ -2342,8 +2396,10 @@ class TableInOutExchangeState(_VgiCallStateHolder, ExchangeState):
 
     The init request, init response, and attach plaintext live in the
     stream's :class:`VgiCallState`, which the transport seals once at init.
-    What remains here is the cursor: ``_user_state_bytes``, and nothing
-    else.  Transient fields are restored via ``rehydrate()``.
+    What remains here is the cursor: ``_user_state_bytes``, ``_more_pending``
+    (whether the last reply said more, so the next input must be a tick), and
+    the dynamic-filter history.  Transient fields are restored via
+    ``rehydrate()``.
 
     ``_user_state`` is serialized when it is an ``ArrowSerializableDataclass``,
     allowing iteration state to survive HTTP round-trips.
@@ -2360,6 +2416,8 @@ class TableInOutExchangeState(_VgiCallStateHolder, ExchangeState):
     # _record_filter_delta, and the live predicate order they rebuild.
     _filter_delta_history: list[bytes] = field(default_factory=list, repr=False)
     _filter_predicate_order: list[str] = field(default_factory=list, repr=False)
+    # Whether the last reply said HAVE_MORE_OUTPUT, so a continuation tick is valid.
+    _more_pending: bool = field(default=False, repr=False)
     _vgi_tracer: Annotated[VgiTracer, Transient()] = field(default_factory=get_noop_tracer, repr=False)
 
     def __post_init__(self) -> None:
@@ -2482,19 +2540,33 @@ class TableInOutExchangeState(_VgiCallStateHolder, ExchangeState):
             self._call.init_call.bind_call.function_type.value,
             self._call.init_response.execution_id,
         )
+        # A tick asks for the next batch of the last input's output (see STATUS_KEY),
+        # and is the only valid input while that output is pending.
+        tick = _is_tick(input.custom_metadata)
+        name = self._call.init_call.bind_call.function_name
+        if tick and not self._more_pending:
+            raise RuntimeError(f"{name}: continuation tick received, but no output is pending")
+        if tick and input.batch.num_rows != 0:
+            raise RuntimeError(f"{name}: a continuation tick must have no rows, got {input.batch.num_rows}")
+        if not tick and self._more_pending:
+            raise RuntimeError(f"{name}: input received while output is pending; expected a continuation tick")
         with timer:
             tracking_out = _TrackingOutputCollector(
                 out,
                 supports_batch_index=self._func_cls._supports_batch_index(),
                 partition_fields=_partition_fields_from_schema(self._call.init_call.output_schema),
                 partition_kind=self._func_cls._partition_kind(),
+                continuation=tick,
+                allows_more=True,
             )
+            target: Any = tracking_out
             if self._auto_apply and self._pushdown_filters is not None:
-                filtered_out = _FilteringOutputCollector(tracking_out, self._func_cls, self._pushdown_filters)
-                self._func_cls.process(params, self._user_state, input.batch, filtered_out)  # type: ignore[arg-type]
-                filtered_out.propagate()
+                target = _FilteringOutputCollector(tracking_out, self._func_cls, self._pushdown_filters)
+            if tick:
+                self._func_cls.resume(params, self._user_state, target)
             else:
-                self._func_cls.process(params, self._user_state, input.batch, tracking_out)  # type: ignore[arg-type]
+                self._func_cls.process(params, self._user_state, input.batch, target)
+            self._more_pending = tracking_out.more
             timer.record(
                 input_rows=input.batch.num_rows,
                 output_rows=tracking_out.total_rows,
@@ -3374,17 +3446,15 @@ class VgiProtocol(Protocol):
 
     Bump rules:
 
-    - **Major** — any backwards-incompatible change: removing a method,
-      renaming a method/parameter, changing a parameter or return type,
-      adding a required parameter.
-    - **Minor** — additive: a new method, a new optional parameter, or a new
-      optional response column.
-    - **Patch** — worker-side bug fixes that do not touch the surface.
+    - **Major** — a new routing namespace and migration boundary.
+    - **Minor** — a coordinated wire-contract revision, including additive or
+      breaking method and schema changes. Exact major/minor matching protects
+      incompatible consumers; clients and workers must be upgraded together.
+    - **Patch** — fixes that do not change the wire contract.
 
-    Because Arrow's column-count check in the C++ consumer rejects
-    return-schema drift today, even "minor" additive bumps force clients to
-    rebuild in practice. Bump major when the surface changes and you want all
-    deployed clients to refuse to talk to the new server until rebuilt.
+    Never publish different wire contracts under the same major/minor pair.
+    A minor revision retains the protocol route; separate deployment URLs are
+    needed to serve incompatible minor revisions during migration.
 
     Cross-language consumers (Rust / Go workers) read ``vgi/protocol_version.txt``
     (generated, committed). The C++ DuckDB extension reads
@@ -3413,7 +3483,7 @@ class VgiProtocol(Protocol):
     # ``VgiProtocol``, Java and C# ``VgiService``, Go the framework default
     # ``Service``, TypeScript ``vgi`` -- so no client could address them all.
     protocol_name: ClassVar[str] = "vgi.v2"
-    protocol_version: ClassVar[str] = "2.1.0"
+    protocol_version: ClassVar[str] = "2.2.0"
 
     def bind(self, request: BindRequest) -> BindResponse:
         """Resolve output schema and validate arguments."""

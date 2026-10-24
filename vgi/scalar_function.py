@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Any, cast, final, get_args, get_origin, get_ty
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
+from vgi_rpc.errors import Code
 from vgi_rpc.rpc import AuthContext, CallContext
 
 import vgi.function
@@ -70,7 +71,7 @@ from vgi.invocation import (
     GlobalInitResponse,
 )
 from vgi.schema_utils import schema
-from vgi.table_function import SecretsAccessor, _struct_scalar_to_dict
+from vgi.table_function import SecretsAccessor
 
 if TYPE_CHECKING:
     from vgi.protocol import BindRequest, InitRequest
@@ -438,6 +439,10 @@ class TypeMismatchError(TypeError):
         expected_type: The declared Arrow type.
         actual_type: The actual Arrow type found.
         function_name: Name of the function class.
+        error_code: ``INVALID_ARGUMENT`` for an input parameter the caller
+            supplied with the wrong type; ``None`` (sent as ``UNKNOWN``) for
+            ``param_name == "return"``, where the worker's own output is wrong
+            -- a bug, which must keep its traceback and not read as bad input.
 
     """
 
@@ -445,6 +450,7 @@ class TypeMismatchError(TypeError):
     expected_type: pa.DataType | None
     actual_type: pa.DataType | None
     function_name: str
+    error_code: Code | None
 
     def __init__(
         self,
@@ -469,6 +475,7 @@ class TypeMismatchError(TypeError):
         self.expected_type = expected_type
         self.actual_type = actual_type
         self.function_name = function_name
+        self.error_code = None if param_name == "return" else Code.INVALID_ARGUMENT
 
         if expected_type is not None and actual_type is not None:
             full_message = self._build_detailed_message(message, param_name, expected_type, actual_type)
@@ -1160,29 +1167,12 @@ class ScalarFunction(ScalarFunctionGenerator):
                 kwargs[name] = bind_call.settings.column(col_idx)[0] if col_idx >= 0 else None
 
         # Secret params: extract dict[str, pa.Scalar] from secrets RecordBatch.
-        # Secrets are keyed by secret NAME (not type), so match the requested
-        # secret_type on each resolved secret's serialized "type" field. The
-        # first secret of that type wins (use the scope-aware accessors on a
-        # table function's params.secrets to disambiguate several of one type).
+        # Secrets are keyed by secret NAME (not type); ResolvedSecrets.lookup
+        # picks the one each annotation's (type, name, scope) refers to.
         if bind_call.secrets is not None and cls._secret_params:
-            by_type: dict[str, dict[str, Any]] = {}
-            by_col: dict[str, dict[str, Any]] = {}
-            names = bind_call.secrets.schema.names
-            for i in range(bind_call.secrets.num_columns):
-                scalar = bind_call.secrets.column(i)[0]
-                if not scalar.is_valid:
-                    continue
-                fields = _struct_scalar_to_dict(scalar)
-                t = fields.get("type")
-                t = t.as_py() if t is not None and hasattr(t, "as_py") else t
-                if t is not None and str(t) not in by_type:
-                    by_type[str(t)] = fields
-                by_col.setdefault(names[i], fields)
+            resolved = SecretsAccessor(bind_call.secrets).to_dict()
             for name, secret in cls._secret_params.items():
-                chosen = by_type.get(secret.secret_type)
-                if chosen is None:
-                    chosen = by_col.get(secret.secret_type)
-                kwargs[name] = chosen
+                kwargs[name] = resolved.lookup(secret.secret_type, name=secret.name, scope=secret.scope)
 
         # OutputLength param: pass the batch row count
         if cls._output_length_param is not None:

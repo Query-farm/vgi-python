@@ -1884,6 +1884,345 @@ class BlendedExplodeFunction(RowTransformFunction[_ExplodeArgs]):
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class _PagedArgs:
+    """One positional fan-out count, and how many output rows each reply carries."""
+
+    n: Annotated[int, Arg(0, doc="Fan-out count: emit rows 0..n-1 for this input row")]
+    page_size: Annotated[int, Arg("page_size", doc="Output rows per reply", default=2)] = 2
+    cache_ttl: Annotated[
+        int, Arg("cache_ttl", doc="When > 0, advertise vgi.cache.ttl on the first reply", default=0)
+    ] = 0
+    fail_on_page: Annotated[
+        int, Arg("fail_on_page", doc="When > 0, fail instead of sending that (1-based) reply", default=0)
+    ] = 0
+    revalidate: Annotated[
+        bool, Arg("revalidate", doc="Answer conditional requests with changed, paged output", default=False)
+    ] = False
+    not_modified_more: Annotated[
+        bool,
+        Arg(
+            "not_modified_more",
+            doc="With revalidate, answer a conditional request with an empty not_modified reply that says more",
+            default=False,
+        ),
+    ] = False
+
+
+@dataclass(kw_only=True)
+class _PagedState(ArrowSerializableDataclass):
+    """Where the next reply resumes: the input's fan-out counts and a position in them."""
+
+    counts: list[int] | None = None
+    row: int = 0
+    offset: int = 0
+    call_rows: int = 0  # blended_sliced: the input rows of the current call
+    page: int = 0  # replies sent for the current input
+    empty_first: bool = False  # not_modified_more: the first reply is empty and says more
+    bump: int = 0  # added to every output value (revalidate: the data changed)
+
+
+class BlendedPagedFunction(RowTransformFunction[_PagedArgs, _PagedState]):
+    """Blended 1->N fan-out returned across several replies, ``page_size`` rows each.
+
+    Same output as ``blended_explode`` (rows ``0..n-1`` per input row, with
+    ``parent_rows`` provenance), but one input batch's output is split into pages:
+    ``process()`` emits the first with ``more=True`` and ``resume()`` the rest, the
+    way a function backed by a paged API would. The state holds only the counts
+    and a position, never output rows, so it stays small in an HTTP state token.
+    ``cache_ttl > 0`` makes the first reply cacheable, for the result-cache tests.
+    ``fail_on_page`` and ``revalidate`` are described at :func:`_paged_begin`.
+    """
+
+    class Meta:
+        name = "blended_paged"
+        description = "Blended 1->N fan-out (emit 0..n-1 per input row), page_size rows per reply"
+        categories = ["blended", "test"]
+
+    @classmethod
+    def on_bind(cls, params: BindParams[_PagedArgs]) -> BindResponse:
+        if params.args.page_size < 1:
+            raise ValueError(f"page_size must be at least 1, got {params.args.page_size}")
+        if params.args.cache_ttl < 0:
+            raise ValueError(f"cache_ttl must not be negative, got {params.args.cache_ttl}")
+        return BindResponse(output_schema=schema({"i": pa.int64()}))
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[_PagedArgs]) -> _PagedState:
+        return _PagedState()
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_PagedArgs],
+        state: _PagedState,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        ttl = params.args.cache_ttl
+        cc = _paged_begin(params, state, batch.column("n").to_pylist(), CacheControl(ttl=ttl) if ttl > 0 else None)
+        cls._emit_page(params, state, out, cc)
+
+    @classmethod
+    def resume(cls, params: ProcessParams[_PagedArgs], state: _PagedState, out: OutputCollector) -> None:
+        cls._emit_page(params, state, out, None)
+
+    @classmethod
+    def _emit_page(
+        cls,
+        params: ProcessParams[_PagedArgs],
+        state: _PagedState,
+        out: OutputCollector,
+        cache_control: CacheControl | None,
+    ) -> None:
+        out_vals, parent_rows, more = _paged_next(params, state)
+        cast("VgiOutputCollector", out).emit(
+            pa.record_batch({"i": pa.array(out_vals, type=pa.int64())}),
+            parent_rows=parent_rows,
+            cache_control=cache_control,
+            more=more,
+        )
+
+
+def _paged_begin(
+    params: ProcessParams[Any], state: _PagedState, counts: list[Any], cache_control: CacheControl | None
+) -> CacheControl | None:
+    """Start a new input for ``blended_paged`` / ``paged_explode``; return its first reply's cache control.
+
+    ``revalidate`` makes the output depend on the request alone. A plain request
+    gets the whole output in one reply, cacheable but immediately stale
+    (``ttl=0``, etag ``v1``, revalidatable), so the client stores it and revalidates
+    every repeat. A conditional request (the client sends ``if_none_match``) is
+    told the data changed: every value is 1000 larger, the etag is ``v2``, and the
+    output is paged by ``page_size``. A client must then return the new pages and
+    store nothing, since that output continued.
+
+    ``not_modified_more`` (with ``revalidate``) breaks the protocol on purpose: a
+    conditional request is answered with an empty ``not_modified`` reply (etag
+    ``v1``) that also says more, then the changed pages. A 304 stands for an input's
+    whole stored output, so a client must refuse it rather than serve its entry.
+    """
+    state.counts = [0 if n is None or n < 0 else int(n) for n in counts]
+    state.row = 0
+    state.offset = 0
+    state.page = 0
+    state.bump = 0
+    state.empty_first = False
+    if not params.args.revalidate:
+        return cache_control
+    if params.if_none_match is None:
+        state.bump = -1  # one reply: the whole output
+        return CacheControl(ttl=0, etag="v1", revalidatable=True)
+    state.bump = 1000
+    if params.args.not_modified_more:
+        state.empty_first = True
+        return CacheControl(not_modified=True, ttl=0, etag="v1", revalidatable=True)
+    return CacheControl(ttl=0, etag="v2", revalidatable=True)
+
+
+def _paged_next(params: ProcessParams[Any], state: _PagedState) -> tuple[list[int], list[int], bool]:
+    """The next reply of ``blended_paged`` / ``paged_explode``, or the failure ``fail_on_page`` asks for."""
+    state.page += 1
+    if state.page == params.args.fail_on_page:
+        raise RuntimeError(f"failing on page {state.page} as asked")
+    if state.page == 1 and state.empty_first:
+        return [], [], True
+    if state.bump < 0:
+        return _next_page(state, sys.maxsize)
+    out_vals, parent_rows, more = _next_page(state, params.args.page_size)
+    return [v + state.bump for v in out_vals], parent_rows, more
+
+
+def _next_page(state: _PagedState, page_size: int) -> tuple[list[int], list[int], bool]:
+    """The next ``page_size`` rows of ``blended_paged``'s output, and whether more follow.
+
+    Rows are ``0..n-1`` for each input row in order, so a page may span input rows.
+    Input rows with no output after the last non-empty page are skipped, so the
+    last page is never followed by an empty one.
+    """
+    counts = state.counts or []
+    out_vals: list[int] = []
+    parent_rows: list[int] = []
+    while state.row < len(counts) and len(out_vals) < page_size:
+        take = min(counts[state.row] - state.offset, page_size - len(out_vals))
+        out_vals.extend(range(state.offset, state.offset + take))
+        parent_rows.extend([state.row] * take)
+        state.offset += take
+        if state.offset == counts[state.row]:
+            state.row += 1
+            state.offset = 0
+    while state.row < len(counts) and counts[state.row] == 0:
+        state.row += 1
+    return out_vals, parent_rows, state.row < len(counts)
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class _SlicedArgs:
+    """One positional fan-out count, and how many output rows each reply carries."""
+
+    n: Annotated[int, Arg(0, doc="Fan-out count: emit rows 0..n-1 for this input row")]
+    page_size: Annotated[int, Arg("page_size", doc="Output rows per reply", default=1_000_000)] = 1_000_000
+    cache_ttl: Annotated[int, Arg("cache_ttl", doc="If > 0, per-value cacheable for this many seconds", default=0)] = 0
+
+
+class BlendedSlicedFunction(RowTransformFunction[_SlicedArgs, _PagedState]):
+    """``blended_paged`` that takes at most 3 input rows per call, and says how many it got.
+
+    Declares ``Meta.input_rows_per_call = 3``, so the client must split every input
+    chunk into calls of at most 3 rows. Each output row carries ``call_rows``, the
+    row count of the call that produced it, so a test can see the split. Output is
+    otherwise ``blended_paged``'s (rows ``0..n-1`` per input row, ``page_size``
+    rows per reply), which covers a split chunk whose calls also continue.
+    ``cache_ttl > 0`` advertises per-value caching on each call's first reply, so the
+    client stores each call's values for reuse.
+    """
+
+    class Meta:
+        name = "blended_sliced"
+        description = "Blended 1->N fan-out taking at most 3 input rows per call, reporting each call's size"
+        categories = ["blended", "test"]
+        input_rows_per_call = 3
+
+    @classmethod
+    def on_bind(cls, params: BindParams[_SlicedArgs]) -> BindResponse:
+        if params.args.page_size < 1:
+            raise ValueError(f"page_size must be at least 1, got {params.args.page_size}")
+        if params.args.cache_ttl < 0:
+            raise ValueError(f"cache_ttl must not be negative, got {params.args.cache_ttl}")
+        return BindResponse(output_schema=schema({"i": pa.int64(), "call_rows": pa.int64()}))
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[_SlicedArgs]) -> _PagedState:
+        return _PagedState()
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_SlicedArgs],
+        state: _PagedState,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        if batch.num_rows > 3:
+            raise RuntimeError(f"blended_sliced declares input_rows_per_call = 3 but got {batch.num_rows} rows")
+        state.counts = [0 if n is None or n < 0 else int(n) for n in batch.column("n").to_pylist()]
+        state.row = 0
+        state.offset = 0
+        state.call_rows = batch.num_rows
+        ttl = params.args.cache_ttl
+        cls._emit_page(params, state, out, CacheControl(ttl=ttl, per_value=True) if ttl > 0 else None)
+
+    @classmethod
+    def resume(cls, params: ProcessParams[_SlicedArgs], state: _PagedState, out: OutputCollector) -> None:
+        cls._emit_page(params, state, out, None)
+
+    @classmethod
+    def _emit_page(
+        cls,
+        params: ProcessParams[_SlicedArgs],
+        state: _PagedState,
+        out: OutputCollector,
+        cache_control: CacheControl | None,
+    ) -> None:
+        out_vals, parent_rows, more = _next_page(state, params.args.page_size)
+        cast("VgiOutputCollector", out).emit(
+            pa.record_batch(
+                {
+                    "i": pa.array(out_vals, type=pa.int64()),
+                    "call_rows": pa.array([state.call_rows] * len(out_vals), type=pa.int64()),
+                }
+            ),
+            parent_rows=parent_rows,
+            cache_control=cache_control,
+            more=more,
+        )
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class _PagedTableArgs:
+    """An input table whose first column is the fan-out count, and the page size."""
+
+    data: Annotated[TableInput, Arg(0, doc="Input table; its first column is the fan-out count")]
+    page_size: Annotated[int, Arg("page_size", doc="Output rows per reply", default=2)] = 2
+    cache_ttl: Annotated[
+        int, Arg("cache_ttl", doc="When > 0, advertise vgi.cache.ttl on the first reply", default=0)
+    ] = 0
+    fail_on_page: Annotated[
+        int, Arg("fail_on_page", doc="When > 0, fail instead of sending that (1-based) reply", default=0)
+    ] = 0
+    revalidate: Annotated[
+        bool, Arg("revalidate", doc="Answer conditional requests with changed, paged output", default=False)
+    ] = False
+    not_modified_more: Annotated[
+        bool,
+        Arg(
+            "not_modified_more",
+            doc="With revalidate, answer a conditional request with an empty not_modified reply that says more",
+            default=False,
+        ),
+    ] = False
+
+
+class PagedExplodeFunction(TableInOutGenerator[_PagedTableArgs, _PagedState]):
+    """Classic (TABLE-input) table-in-out continuing its output across replies.
+
+    For each input row with count ``n`` (the table's first column), emits rows
+    ``i = 0..n-1``, ``page_size`` per reply, with ``more=True`` on every reply but
+    an input batch's last. The classic counterpart of ``blended_paged``: it runs
+    through the extension's stock in-out path, on a per-substream connection.
+    ``cache_ttl > 0`` makes each input's first reply cacheable. ``fail_on_page`` and
+    ``revalidate`` are described at :func:`_paged_begin`.
+    """
+
+    class Meta:
+        name = "paged_explode"
+        description = "Classic table-in-out 1->N fan-out, page_size rows per reply"
+        categories = ["table_in_out", "test"]
+
+    @classmethod
+    def on_bind(cls, params: BindParams[_PagedTableArgs]) -> BindResponse:
+        if params.args.page_size < 1:
+            raise ValueError(f"page_size must be at least 1, got {params.args.page_size}")
+        if params.args.cache_ttl < 0:
+            raise ValueError(f"cache_ttl must not be negative, got {params.args.cache_ttl}")
+        return BindResponse(output_schema=schema({"i": pa.int64()}))
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[_PagedTableArgs]) -> _PagedState:
+        return _PagedState()
+
+    @classmethod
+    def process(
+        cls,
+        params: ProcessParams[_PagedTableArgs],
+        state: _PagedState,
+        batch: pa.RecordBatch,
+        out: OutputCollector,
+    ) -> None:
+        counts = batch.column(0).to_pylist() if batch.num_columns else []
+        ttl = params.args.cache_ttl
+        cls._emit_page(
+            params, state, out, _paged_begin(params, state, counts, CacheControl(ttl=ttl) if ttl > 0 else None)
+        )
+
+    @classmethod
+    def resume(cls, params: ProcessParams[_PagedTableArgs], state: _PagedState, out: OutputCollector) -> None:
+        cls._emit_page(params, state, out, None)
+
+    @classmethod
+    def _emit_page(
+        cls,
+        params: ProcessParams[_PagedTableArgs],
+        state: _PagedState,
+        out: OutputCollector,
+        cache_control: CacheControl | None,
+    ) -> None:
+        out_vals, _parent_rows, more = _paged_next(params, state)
+        cast("VgiOutputCollector", out).emit(
+            pa.record_batch({"i": pa.array(out_vals, type=pa.int64())}), cache_control=cache_control, more=more
+        )
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class _AnyArgs:
     """One positional ANY-typed input column."""
 

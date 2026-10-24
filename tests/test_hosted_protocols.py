@@ -38,7 +38,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 _EXTRAS = ["vgi_test.Echo.v1", "vgi_test.Counter.v1"]
 _EXPECTED = ["vgi.v2", *_EXTRAS, "vgi_rpc.Reflection.v1"]
-_IDENTITY = "vgi_rpc.Identity.v1"
+_IDENTITY = "vgi_rpc.Identity.v2"
 
 # Protocol classes are abstract to mypy; the connect helpers want concrete types.
 _REFLECTION: type[Any] = Reflection
@@ -49,7 +49,7 @@ _POSIX_ONLY = pytest.mark.skipif(sys.platform == "win32", reason="AF_UNIX launch
 
 
 class _IdentityHostingWorker(HostingWorker):
-    """Opts into ``vgi_rpc.Identity.v1`` as well."""
+    """Opts into ``vgi_rpc.Identity.v2`` as well."""
 
     @classmethod
     def resolve_token(cls, token: str) -> TokenIdentity | None:

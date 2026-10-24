@@ -125,6 +125,9 @@ from vgi.invocation import (
     GlobalInitResponse,
 )
 from vgi.protocol import (
+    CONTINUE,
+    HAVE_MORE_OUTPUT,
+    STATUS_KEY,
     BindRequest,
     CopyFromContext,
     CopyToContext,
@@ -632,14 +635,9 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 ``bearer_token``/``oauth``/``oauth_refresh_token`` and is
                 used verbatim; supply this when you need mTLS or a custom
                 auth scheme. Not the canonical path.
-            external_location: HTTP-only. ``ExternalLocationConfig`` that
-                controls how the client fetches pointer batches (workers
-                that externalize large outputs via demo storage / S3 return
-                empty batches carrying ``vgi_rpc.location`` metadata).
-                Defaults to a vanilla ``ExternalLocationConfig()`` for HTTP
-                transport so pointer batches are resolved automatically.
-                Subprocess transport ignores this — subprocess workers
-                don't return pointer batches.
+            external_location: ``ClientExternalConfig`` controlling published
+                result downloads on every transport, including subprocess.
+                Defaults to the standard HTTPS-only download policy.
             accepted_max_response_bytes: HTTP-only hard limit for decoded
                 response bodies, advertised to the worker on every RPC request.
                 Defaults to 256 MiB. Pass ``None`` to omit the negotiation
@@ -774,14 +772,12 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         # is therefore responsible for closing it on ``stop()``. False when
         # the caller passed ``httpx_client=`` — ownership stays with them.
         self._httpx_client_owned = False
-        # Auto-enable pointer-batch resolution for HTTP/TCP/launch unless the
-        # caller asked for something different — all three are ordinary RPC
-        # transports a worker can externalize batches over, unlike subprocess
-        # (which never returns pointer batches). See ``external_location`` docs above.
-        if transport in ("http", "tcp", "iroh", "httpi", "launch") and external_location is None:
-            from vgi_rpc.external import ExternalLocationConfig
+        # Pre-published results can arrive on every transport, including stdio.
+        self._external_location_owned = external_location is None
+        if external_location is None:
+            from vgi_rpc.external import ClientExternalConfig
 
-            external_location = ExternalLocationConfig()
+            external_location = ClientExternalConfig()
         self._external_location = external_location
         # HTTP server capabilities cache. Populated lazily by
         # ``_get_http_capabilities`` — a single round-trip per Client that
@@ -1290,6 +1286,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 VgiProtocol,  # type: ignore[type-abstract]
                 cmd,
                 on_log=self._on_worker_log,
+                external_location=self._external_location,
             )
             proxy = ctx.__enter__()
             _logger.debug("worker_borrowed worker_index=%s", worker_index)
@@ -1333,6 +1330,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             VgiProtocol,  # type: ignore[type-abstract]
             transport,
             on_log=self._on_worker_log,
+            external_location=self._external_location,
         )
         proxy = connection.__enter__()
 
@@ -1595,6 +1593,9 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             if stderr_thread.is_alive():
                 _logger.warning("stderr_thread_did_not_terminate")
         self._stderr_threads = []
+
+        if self._external_location_owned and self._external_location is not None:
+            self._external_location.fetch_config.close()
 
         # Close the shared httpx2.Client if we created it ourselves.
         if self._httpx_client_owned and self._httpx_client is not None:
@@ -2151,9 +2152,10 @@ class Client(CatalogClientMixin, AggregateClientMixin):
     ) -> tuple[list[pa.RecordBatch], list[list[int]] | None]:
         """Send a batch to a worker and collect all output batches.
 
-        Sends the input batch via stream.exchange(), then checks the vgi.status
-        metadata. If the worker returns HAVE_MORE_OUTPUT, sends the same input
-        again. Continues until NEED_MORE_INPUT or no status (scalar functions).
+        Sends the input batch via stream.exchange(), then checks the reply's
+        vgi.status. While the worker returns HAVE_MORE_OUTPUT, sends a zero-row tick
+        (``vgi.status: CONTINUE``) for its next batch. Stops at NEED_MORE_INPUT
+        or no status (scalar functions).
 
         Args:
             worker: The worker connection to use. Must have stream initialized.
@@ -2185,17 +2187,26 @@ class Client(CatalogClientMixin, AggregateClientMixin):
 
         output_batches: list[pa.RecordBatch] = []
         parent_rows_batches: list[list[int]] | None = [] if decode_parent_rows else None
+        tick = False
 
         while True:
             _logger.debug(
-                "sending_batch_to_worker worker_index=%s batch_index=%s num_rows=%s",
+                "sending_batch_to_worker worker_index=%s batch_index=%s num_rows=%s tick=%s",
                 worker.worker_index,
                 batch_index,
                 input_batch.num_rows,
+                tick,
             )
 
             try:
-                annotated = self._maybe_externalize_input_batch(input_batch)
+                if tick:
+                    # More output for the same input: ask for it with a zero-row tick.
+                    annotated = AnnotatedBatch(
+                        batch=input_batch.slice(0, 0),
+                        custom_metadata=pa.KeyValueMetadata({STATUS_KEY: CONTINUE}),
+                    )
+                else:
+                    annotated = self._maybe_externalize_input_batch(input_batch)
                 output = worker.stream.exchange(annotated)
             except RpcError as e:
                 raise ClientError.from_rpc_error(e) from e
@@ -2220,13 +2231,13 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 except RuntimeError as e:
                     raise ClientError(str(e)) from e
 
-            # Check vgi.status for table-in-out status
+            # HAVE_MORE_OUTPUT: this input has more output, fetched with a tick.
             status = None
             if output.custom_metadata:
-                status = output.custom_metadata.get(b"vgi.status")
+                status = output.custom_metadata.get(STATUS_KEY)
 
-            # status is None for scalar functions (no status metadata)
-            if status == b"HAVE_MORE_OUTPUT":
+            if status == HAVE_MORE_OUTPUT:
+                tick = True
                 continue
             elif status == b"NEED_MORE_INPUT" or status is None:
                 break

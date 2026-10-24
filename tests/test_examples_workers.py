@@ -141,6 +141,46 @@ def test_filter_worker_table_in_out() -> None:
     assert kept == [5, 9]
 
 
+def test_paged_api_worker_replies_one_page_at_a_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each API page is its own reply, and every order maps back to its customer's row."""
+    import paged_api_worker as m
+
+    replies: list[int] = []
+    original = Client._process_batch_on_worker
+
+    def counting(self: Client, *args: Any, **kwargs: Any) -> Any:
+        outputs, parent_rows = original(self, *args, **kwargs)
+        replies.append(len(outputs))
+        return outputs, parent_rows
+
+    monkeypatch.setattr(Client, "_process_batch_on_worker", counting)
+    customers = [1, 2, 0, 3]  # 7, 14, 0 and 21 orders: 2 + 3 + 0 + 5 pages
+    parent_rows: list[int] = []
+    with _spawn("paged_api_worker.py") as client:
+        out = list(
+            client.table_in_out_function(
+                function_name="orders",
+                schema_path=["main"],
+                input=iter([pa.record_batch({"customer_id": pa.array(customers, type=pa.int64())})]),
+                parent_row_callback=parent_rows.extend,
+            )
+        )
+    order_ids = [v for b in out for v in b.column("order_id").to_pylist()]
+    expected = [o["order_id"] for c in customers if c > 0 for o in _all_orders(m, c)]
+    assert order_ids == expected
+    assert [customers[r] for r in parent_rows] == [oid // 1000 for oid in order_ids]
+    assert replies == [10]
+
+
+def _all_orders(m: Any, customer_id: int) -> list[dict[str, Any]]:
+    orders: list[dict[str, Any]]
+    orders, cursor = m.fetch_orders_page(customer_id, "")
+    while cursor:
+        page, cursor = m.fetch_orders_page(customer_id, cursor)
+        orders += page
+    return orders
+
+
 def test_sum_worker_aggregate_phases() -> None:
     """The aggregate worker accumulates per-group totals through its phases.
 

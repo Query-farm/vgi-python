@@ -1201,7 +1201,7 @@ class TestSchemaDescriptor:
         info = schema.to_schema_info(attach_opaque_data)
         assert isinstance(info, SchemaInfo)
         assert info.path == ["main"]
-        assert info.attach_opaque_data == attach_opaque_data
+        assert "attach_opaque_data" not in pa.ipc.open_stream(info.serialize_to_bytes()).schema.names
         assert info.comment == "Main schema"
         assert info.tags == {"type": "core"}
 

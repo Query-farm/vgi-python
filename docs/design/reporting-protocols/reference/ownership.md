@@ -6,7 +6,7 @@
 
 Source: `vgi/reporting/ownership.py`. Edit the Python module and regenerate this page.
 
-[Behavior specification](../ownership.md) · [Shared records](common.md)
+[Behavior specification](../reports.md) · [Shared records](common.md)
 
 Protocol `vgi.reports.ownership.v1`, version `1.0.0`.
 
@@ -14,7 +14,8 @@ Protocol `vgi.reports.ownership.v1`, version `1.0.0`.
 
 | Method | Arguments | Result / stream row | RPC result envelope | SQL read |
 | --- | --- | --- | --- | --- |
-| `find_owners` | `resource_kind`, `resource_id`, `query`, `limit` | `OwnershipOptions` | `result: binary` (IPC record) | — |
+| `find_owners` | `resource_kind`, `resource_id`, `query`, `limit` | `OwnershipCandidate` | Producer batches | Function |
+| `get_ownership_capabilities` | `resource_kind`, `resource_id` | `OwnerDiscoveryCapabilities` | `result: binary` (IPC record) | Function |
 
 ## Python definitions
 
@@ -30,9 +31,11 @@ from typing import Annotated, ClassVar, Literal, Protocol
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass, ArrowType
+from vgi_rpc.rpc import ProducerState, Stream
 
-from vgi.reporting._arrow import non_null_list
+from vgi.reporting._metadata import sql_read
 from vgi.reporting.common import Ownership
+from vgi.reporting.discovery import OwnerDiscoveryCapabilities
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -46,15 +49,6 @@ class OwnershipCandidate(ArrowSerializableDataclass):
     label: str
     description: str
     ownership: Ownership
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class OwnershipOptions(ArrowSerializableDataclass):
-    """Bounded, resource-specific results; an empty list is a valid answer."""
-
-    query_hint: str
-    candidates: Annotated[list[OwnershipCandidate], non_null_list(pa.struct(OwnershipCandidate.ARROW_SCHEMA))]
-    has_more: bool
 
 
 class ReportOwnershipProtocol(Protocol):
@@ -71,19 +65,24 @@ class ReportOwnershipProtocol(Protocol):
     protocol_name: ClassVar[str] = "vgi.reports.ownership.v1"
     protocol_version: ClassVar[str] = "1.0.0"
 
+    @sql_read()
+    def get_ownership_capabilities(self, resource_kind: str, resource_id: str) -> OwnerDiscoveryCapabilities:
+        """Authorize the resource and describe accepted search input and limits."""
+        ...
+
+    @sql_read(row_type=OwnershipCandidate)
     def find_owners(
         self,
         resource_kind: Annotated[Literal["report", "folder"], ArrowType(pa.string())],
         resource_id: str,
         query: str = "",
         limit: int = 20,
-    ) -> OwnershipOptions:
-        """Return up to limit candidates (1–100); has_more asks the user to refine query.
+    ) -> Stream[ProducerState]:
+        """Stream at most limit candidates across all continuations.
 
-        An empty query may return suggestions or no results. query_hint explains
-        the worker's accepted search input, including exact-only lookup policies.
-        Invalid limits/identifiers use INVALID_ARGUMENT; authorization follows
-        the report store's standard permission/not-found disclosure rules.
+        Search policy and query hints come from get_ownership_capabilities.
+        Empty queries require suggestion support. Exact-only clients use the
+        resource identity companion. Reaching the limit invites query refinement.
         """
         ...
 ```

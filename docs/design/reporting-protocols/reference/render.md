@@ -15,6 +15,7 @@ Protocol `vgi.report_render.v1`, version `1.0.0`.
 | Method | Arguments | Result / stream row | RPC result envelope | SQL read |
 | --- | --- | --- | --- | --- |
 | `cancel_render` | `job_id`, `expected_version`, `request_id` | `RenderJob` | `result: binary` (IPC record) | — |
+| `check_sources` | `sources` | `SourceCheck` | Producer batches | Function |
 | `get_render` | `job_id` | `RenderJob` | `result: binary` (IPC record) | Function |
 | `get_renderer_info` | — | `RendererInfo` | `result: binary` (IPC record) | Function; table `info` |
 | `start_render` | `request_id`, `request` | `RenderJob` | `result: binary` (IPC record) | — |
@@ -33,10 +34,11 @@ Behavior and worker policy are documented in docs/design/reporting-protocols/.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Annotated, ClassVar, Protocol
+from typing import Annotated, ClassVar, Literal, Protocol
 
 import pyarrow as pa
-from vgi_rpc import ArrowSerializableDataclass
+from vgi_rpc import ArrowSerializableDataclass, ArrowType
+from vgi_rpc.rpc import ProducerState, Stream
 
 from vgi.reporting._arrow import Instant, non_null_list
 from vgi.reporting._enums import RenderStatus
@@ -49,6 +51,7 @@ from vgi.reporting.common import (
     RunError,
     ServiceInfo,
 )
+from vgi.reporting.discovery import CheckState
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -88,11 +91,32 @@ class RenderJob(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RendererInfo(ServiceInfo):
-    """Supported formats, outputs, limits and authorized source locations."""
+    """Formats and source policy; explicit_list requires a list, dynamic requires None.
+
+    An explicit empty list permits no locations. None means the policy cannot be
+    enumerated; check_sources remains available. Limits include max_source_checks.
+    """
 
     body_formats: Annotated[list[str], non_null_list(pa.string())]
     output_media_types: Annotated[list[str], non_null_list(pa.string())]
-    allowed_source_locations: Annotated[list[str], non_null_list(pa.string())]
+    source_policy: Annotated[Literal["explicit_list", "dynamic"], ArrowType(pa.string())]
+    allowed_source_locations: Annotated[list[str], non_null_list(pa.string())] | None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SourceCheck(ArrowSerializableDataclass):
+    """Renderer outbound-policy decision, not a credential or query authorization.
+
+    Exactly one row per input_index on successful EOS, in any completion order.
+    Unknown/unfinished checks cannot be treated as permission. Dynamic policy
+    need not disclose the complete permitted set of locations.
+    """
+
+    input_index: int
+    source: DataSource
+    state: CheckState
+    reason_code: str | None
+    message: str | None
 
 
 class ReportRenderProtocol(Protocol):
@@ -104,6 +128,13 @@ class ReportRenderProtocol(Protocol):
     @sql_read(table="info")
     def get_renderer_info(self) -> RendererInfo:
         """Body formats, output media types, timeout ceiling, allowed source locations."""
+        ...
+
+    @sql_read(row_type=SourceCheck)
+    def check_sources(
+        self, sources: Annotated[list[DataSource], non_null_list(pa.struct(DataSource.ARROW_SCHEMA))]
+    ) -> Stream[ProducerState]:
+        """Check supplied references without user SQL; enforce max_source_checks and recheck at execution."""
         ...
 
     def start_render(self, request_id: str, request: RenderRequest) -> RenderJob:
