@@ -99,6 +99,8 @@ from vgi.metadata import (
 from vgi.protocol import (
     BindRequest,
     InitRequest,
+    TableFunctionProjectionRequest,
+    TableFunctionProjectionResponse,
     VgiOutputCollector,
 )
 from vgi.scalar_function import (
@@ -132,6 +134,8 @@ from vgi.worker import Worker
 from vgi.write_results import WriteOperation, WriteResultMode, write_changes_batch, write_result_schema
 
 __all__ = [
+    "TableFunctionProjectionRequest",
+    "TableFunctionProjectionResponse",
     "AggregateBindParams",
     "AggregateFunction",
     "WriteOperation",

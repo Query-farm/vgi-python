@@ -11,9 +11,9 @@
       "Overload collections replacing single macro definitions"
     ],
     "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
-    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the successor schema inventory; required canonical table constraint lists replace the legacy parent arrays and revision-checked catalog_table_constraints_apply joins the public method surface; typed index definitions/options replace legacy index fields and add catalog_index_option_definitions; required semantic ALTER flags and raw subject/dependent column paths extend embedded dependency records; SET DEFAULT requires binary SqlExpression IPC and USING accepts nullable binary IPC; CREATE/ADD defaults use the canonical field codec, without new capability negotiation; CatalogAttachResult.default_schema becomes nullable UTF-8, preserving no implicit default independently of an explicit raw schema name; MacroInfo and MacroCreateRequest require nonempty overloads and remove legacy parent parameters/definition/parameter_default_values/arguments_schema; canonical families need no overload read/create opt-in; existing column comment/tags Arrow metadata gains strict shared validation and preservation on CREATE/ADD/discovery, with no record/RPC change; generated-column authoring/discovery/CREATE consistently use the existing canonical SqlExpression/category metadata, replacing legacy generated_expression strings without a new RPC or record layout",
+    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the successor schema inventory; required canonical table constraint lists replace the legacy parent arrays and revision-checked catalog_table_constraints_apply joins the public method surface; typed index definitions/options replace legacy index fields and add catalog_index_option_definitions; required semantic ALTER flags and raw subject/dependent column paths extend embedded dependency records; SET DEFAULT requires binary SqlExpression IPC and USING accepts nullable binary IPC; CREATE/ADD defaults use the canonical field codec, without new capability negotiation; CatalogAttachResult.default_schema becomes nullable UTF-8, preserving no implicit default independently of an explicit raw schema name; MacroInfo and MacroCreateRequest require nonempty overloads and remove legacy parent parameters/definition/parameter_default_values/arguments_schema; canonical families need no overload read/create opt-in; existing column comment/tags Arrow metadata gains strict shared validation and preservation on CREATE/ADD/discovery, with no record/RPC change; generated-column authoring/discovery/CREATE consistently use the existing canonical SqlExpression/category metadata, replacing legacy generated_expression strings without a new RPC or record layout; BindResponse adds optional projection_expression_profiles and table_function_projection adds structured early subset acceptance with canonical expressions and exact appended Arrow fields",
     "version_requirement": "The existing breaking changes already require a major version and matching routing name. Final number and complete generated diff remain P1/P2 work; the historical additive 2.2.0 candidate is superseded.",
-    "planned_diff": "Included before freeze: projection-expression/result-slot and repeatability contracts with P1 proof, plus broader provider/adapter qualification. Canonical column expressions/metadata, bounded virtual generated CREATE/read, nullable default_schema and macro families are implemented in October23 checkpoints. Trigger CRUD/execution and optional feature families remain reviewed deferrals. No protocol freeze or public version transition yet.",
+    "planned_diff": "Included before freeze: finish projection negotiation/runtime qualification and bind-specific repeatability contract/proof, plus broader provider/adapter acceptance. Canonical column expressions/metadata, bounded virtual generated CREATE/read, nullable default_schema and macro families are implemented in October23 checkpoints. Trigger CRUD/execution and optional feature families remain reviewed deferrals. No protocol freeze or public version transition yet.",
     "historical_additive_candidate": "vgi.v2/2.2.0"
   },
   "sources": {
@@ -557,7 +557,7 @@
       "review_decision": "Retain canonical constraints and typed index wire; use the existing bounded public/reference/native1.5 checkpoints. No additional constraint or index shape is selected in this source review."
     },
     "macros": {
-      "title": "Macros — canonical families and bounded native 1.5 support",
+      "title": "Macros \u2014 canonical families and bounded native 1.5 support",
       "disposition": "include",
       "status": "canonical_family_bounded_native15_implemented_and_validated",
       "records": [
@@ -794,7 +794,7 @@
       ]
     },
     "triggers": {
-      "title": "Triggers — reviewed deferral",
+      "title": "Triggers \u2014 reviewed deferral",
       "disposition": "defer",
       "status": "reviewed_deferred_existing_coverage_retained",
       "records": [
@@ -878,7 +878,7 @@
       ]
     },
     "query": {
-      "title": "Catalog query execution — explicit 1.5 adapter implemented; automatic pending",
+      "title": "Catalog query execution \u2014 explicit 1.5 adapter implemented; automatic pending",
       "disposition": "include",
       "status": "reference_and_native_15_explicit_implemented_automatic_pending",
       "records": [
@@ -950,7 +950,7 @@
       ]
     },
     "logical_types": {
-      "title": "Logical type preservation — concrete contract and codecs implemented; adapters pending",
+      "title": "Logical type preservation \u2014 concrete contract and codecs implemented; adapters pending",
       "disposition": "include",
       "status": "reference_implemented_native_qualification_pending",
       "records": [
@@ -1013,15 +1013,17 @@
       ]
     },
     "optimizer": {
-      "title": "Optimizer and observability additions — P1 design required",
+      "title": "Optimizer and observability additions \u2014 P1 design required",
       "disposition": "include",
-      "status": "scope_reviewed_projection_repeatability_P1_contract_proof_pending",
+      "status": "bounded_projection_native15_and_sdk_reference_qualified_repeatability_release_pending",
       "records": [
         "FunctionInfo",
         "BindResponse",
         "TableFunctionPlanRequest",
         "InitRequest",
-        "TableFunctionDynamicToStringResponse"
+        "TableFunctionDynamicToStringResponse",
+        "TableFunctionProjectionRequest",
+        "TableFunctionProjectionResponse"
       ],
       "existing_methods": [
         "table_function_plan",
@@ -1029,12 +1031,14 @@
         "table_function_statistics",
         "table_function_dynamic_to_string"
       ],
-      "new_methods": [],
+      "new_methods": [
+        "table_function_projection"
+      ],
       "scope": [
         "Include scalar projection/result mapping and bind-specific repeatability; reuse diagnostics, split selection and parallelism; defer new typed metrics",
         "Prove support decisions before optimizer replacement, exact result types/slots, local residuals and query-scoped repeatability. Filter v2 currently describes Boolean predicates. Existing monotonicity/runtime filters are retained; no speculative metrics or partition-ID fields."
       ],
-      "capability_contract": "Existing filter semantics/runtime-algorithm offers, split tokens, max_workers and diagnostic strings remain. Include a closed negotiated scalar projection profile and conservative bind-specific repeatability claim, absent/unknown by default; exact grammar, fields, acceptance timing and mutable-provider guarantee require P1 proof before freeze. Neither is advertised. Do not infer scalar projection support from Boolean Filter v2 or retry permission from repeatability.",
+      "capability_contract": "BindResponse.projection_expression_profiles defaults empty independently of existing column-selection projection_pushdown. table_function_projection is pure pre-optimizer negotiation; empty accepted_indices/null bind_result declines; a validated subset returns a complete replacement bind result with unchanged source prefix and exact appended fields. Unsupported expressions stay local. Repeatability remains a separate P1 contract/proof; neither acceptance nor result caching grants retry permission.",
       "gates": [
         "P1",
         "P2",
@@ -1045,19 +1049,23 @@
           "status": "source_review_2026_10_23",
           "source": "docs/protocol/shared-catalog-values.md#combined-protocol-review--october-23-2026",
           "limits": "P0 scope mapping only; projection and repeatability design/proof remain explicit P1 blockers."
+        },
+        {
+          "status": "bounded_projection_checkpoint_2026_10_23",
+          "source": "docs/protocol/projection-expressions.md",
+          "checkpoint": "projection_expressions_2026_10_23",
+          "limits": "Repeatability, broader projection shapes/grammar/cache/split identity, Go outer framing qualification, production-provider/release gates and native2 port remain open."
         }
       ],
-      "proposed_records": [
-        "ProjectionExpression"
-      ],
-      "record_inventory_status": "Existing carriers listed separately from one provisional projection carrier. Exact added fields and acceptance lifecycle remain P1 blockers; no TypedMetric, RepeatabilityInfo or generic ResultMapping record selected.",
+      "proposed_records": [],
+      "record_inventory_status": "Canonical SqlExpression payloads, bind-specific profile offers and the explicit TableFunctionProjectionRequest/Response replace the provisional ProjectionExpression. Append-only result slots use ordered accepted_indices; no separate ResultMapping or preparation-ticket record.",
       "implementation_work": [
-        "Exact scalar grammar and result type inference, including CAST versus TRY_CAST, length, NULL, overflow, collation, timezone and unsupported logical types",
-        "Closed advertised subset/local acceptance versus a remote pre-replacement decline; no execute-then-fallback",
-        "Original source indices, nested raw paths, reordered projections, residual predicates, runtime filters, virtual columns and result slots must share an explicit mapping",
-        "Consistent projection identity in bind copies, split fingerprints, cache keys and secondary init; cannot reuse an unprojected schema/cache entry",
-        "Whole-expression decline preserves local evaluation and needed input columns; malformed accepted results are errors",
-        "A DuckDB 1.5 protocol reference can exercise the new carrier without falsely advertising a 2.0 native optimizer callback",
+        "Bounded proposal/partial-decline/result-schema and native1.5 optimizer proof passed; qualify broader production providers and transport boundaries before freeze.",
+        "Go vgi-rpc-go outer wrapped-request decoder validates row/schema but unwraps the first IPC batch before SDK code; strict trailing/extra-batch/raw-size rejection requires dependency qualification before release. New nested bind/expression records are checked strictly.",
+        "Broaden scalar grammar only with error-order, context, NULL, overflow and logical-type equivalence; throwing expressions stay local.",
+        "Qualify direct function calls, generated/nested/rowid/delegated/partitioned scans and filter/runtime-hint coordinates before enabling them.",
+        "Qualify expanded-schema cache/split identity before enabling those paths; disabled accepted paths must not silently reactivate.",
+        "Native DuckDB2 optimizer API integration remains separate from the pinned1.5 proof.",
         "Whether a provider can guarantee repeatability for a prepared bind reused by later executions without a new query identity; otherwise it must decline the claim",
         "Same bind copies versus separately bound equivalent calls, mutable backend snapshots, sampling, dynamic filters, cancellation and token expiry",
         "Read-only/scalar CONSISTENT, max_workers, catalog version and split TTL cannot manufacture this guarantee",
@@ -1067,16 +1075,15 @@
         "recommended_scope": "Retain projection-expression and repeatability design in the combined package; mark P0 scope reviewed and P1 contract/implementation proof outstanding. Reuse existing transport for metrics, partition selection and parallelism unless a concrete missing datum is demonstrated.",
         "projection": {
           "existing": "FunctionInfo.projection_pushdown and InitRequest/TableFunctionPlanRequest.projection_ids only select existing columns. InitRequest.output_schema is already an exact execution output contract. Filter v2 provides bounded expression grammar, typed literal/type payloads and evaluation context, but its root is BOOLEAN and all current Call nodes are typed BOOLEAN.",
-          "justified_new_information": "A negotiated scalar projection profile plus accepted expression-to-original-column/result-slot mapping and exact result field identity. Proposed ProjectionExpression is meaningful; a separate general ResultMapping record is not yet justified if the pinned callback only replaces one existing scan column. Do not add arbitrary output identity machinery until the supported mapping requires it.",
-          "minimal_candidate": "Use a closed, explicitly negotiated scalar projection subset so the native optimizer callback can decide supported expressions locally. Start with ordinary cast of a real source column; add length only with a specified scalar function identity/result type. Keep TRY_CAST distinct and unsupported until its error/NULL behavior is specified. Carry accepted expressions and deterministic slot mapping through existing scan plan/init requests, with existing output_schema authoritative for batches. Unsupported expressions stay local with their inputs retained. Bind data owns the accepted projection plan; no execution or effects during optimizer negotiation.",
-          "lifecycle_gap": "Current native table_function_plan is called during global initialization, after optimizer replacement, so returning acceptance only in PlanResponse is too late. If support is bind-dependent and cannot be decided from an exact advertised subset, a pure pre-execution projection preparation round trip is required; decide whether existing bind can safely rebind with prior state or a narrow preparation method is necessary. Do not silently repurpose split planning as optimizer acceptance.",
+          "justified_new_information": "Implemented TableFunctionProjectionRequest/Response and per-bind projection_expression_profiles; canonical SqlExpression records parallel an exact Arrow result_schema; accepted_indices map appended output fields without source renumbering.",
+          "minimal_candidate": "Selected append-only subset acceptance before optimizer replacement. Native1.5 first proof targets total INTEGER-to-BIGINT casts over ordinary non-generated catalog tables, preserving local expressions/filters. Accepted bind bytes and output schema flow through existing init; no execution resources or release RPC. Direct function calls and broader expression/scan shapes remain unqualified.",
+          "lifecycle_gap": "Addressed by pure table_function_projection after ordinary bind and before any local expression is replaced. Existing table_function_plan remains execution-time split enumeration. Native accepted plans require copy/serialization preservation and exclude cache/splits/hints not qualified for the expanded schema.",
           "remaining_P1_questions": [
-            "Exact scalar grammar and result type inference, including CAST versus TRY_CAST, length, NULL, overflow, collation, timezone and unsupported logical types",
-            "Closed advertised subset/local acceptance versus a remote pre-replacement decline; no execute-then-fallback",
-            "Original source indices, nested raw paths, reordered projections, residual predicates, runtime filters, virtual columns and result slots must share an explicit mapping",
-            "Consistent projection identity in bind copies, split fingerprints, cache keys and secondary init; cannot reuse an unprojected schema/cache entry",
-            "Whole-expression decline preserves local evaluation and needed input columns; malformed accepted results are errors",
-            "A DuckDB 1.5 protocol reference can exercise the new carrier without falsely advertising a 2.0 native optimizer callback"
+            "Bounded proposal/partial-decline/result-schema and native1.5 optimizer proof passed; qualify broader production providers and transport boundaries before freeze.",
+            "Broaden scalar grammar only with error-order, context, NULL, overflow and logical-type equivalence; throwing expressions stay local.",
+            "Qualify direct function calls, generated/nested/rowid/delegated/partitioned scans and filter/runtime-hint coordinates before enabling them.",
+            "Qualify expanded-schema cache/split identity before enabling those paths; disabled accepted paths must not silently reactivate.",
+            "Native DuckDB2 optimizer API integration remains separate from the pinned1.5 proof."
           ],
           "evidence": [
             "python:vgi/protocol.py:275,319,507,553",
@@ -10869,5 +10876,107 @@
     "native_mapping": "Set generated category before physical indices; normalize logical scan IDs through existing table_entry at init, independently support engine-side projection when worker declines projection, map hidden rowid once, and expose a typed EMPTY virtual for count/constant scans. No new bind-data or cache identity field.",
     "optimizer_limit": "Generated-table filter/order/column-statistics/late-materialization pushdown remains disabled; local SQL evaluation is qualified. Projection to a capable worker remains physical. Broader optimizer contracts are the next checkpoint.",
     "gate_effect": "Closes the bounded canonical virtual CREATE/discovery/read checkpoint and shared generated-metadata migration. Optimizer proof, remaining provider/adapter acceptance, P1-P3 freeze/release and M0-M4 native2 remain open."
+  },
+  "projection_expressions_2026_10_23": {
+    "status": "implemented_bounded_native15_and_all_sdk_reference_qualified_release_pending",
+    "contract": "docs/protocol/projection-expressions.md",
+    "scope": "Optional bound offer, pure proposal before optimizer replacement, per-expression decline, exact append-only result fields and complete replacement bind state.",
+    "wire": {
+      "records": [
+        "TableFunctionProjectionRequest",
+        "TableFunctionProjectionResponse"
+      ],
+      "method": "table_function_projection",
+      "offer": "BindResponse.projection_expression_profiles",
+      "expressions": "Existing SqlExpression IPC; no custom scalar AST or metadata-only execution instruction.",
+      "mapping": "Strictly increasing accepted_indices select result_schema fields appended after unchanged source fields."
+    },
+    "fallback": "No offer or valid decline keeps original scan/local expressions; malformed acceptance/RPC/execution failure is an error, with no execute-then-local retry.",
+    "native_boundary": "Ordinary non-generated catalog table scans and total INTEGER-to-BIGINT casts on pinned1.5; broader source shapes/expressions, cache/split identity and native2 APIs remain unqualified.",
+    "evidence": [
+      {
+        "kind": "python",
+        "broad_passed": 1500,
+        "broad_skipped": 8,
+        "final_focused_passed": 188,
+        "quality": "Ruff and mypy passed; final generation/schema/inventory checks retained in task logs."
+      },
+      {
+        "kind": "native_projection",
+        "cases": 4,
+        "assertions": 52,
+        "live_scenarios": 12,
+        "scope": "Actual accepted/partial/declined/unoffered traces, residual/reordered results, unsafe/context local fallback, malformed-before-init, no execution retry, fresh prepared execution, EXPLAIN with no scan, copied/serialized accepted state and stale-state rejection."
+      },
+      {
+        "kind": "native_regressions",
+        "contract_cases": 21,
+        "contract_assertions": 245,
+        "sql_cases": 5,
+        "sql_assertions": 204,
+        "scope": "Prepared query, column/default/metadata/generated contracts; existing generated/projection/filter/cache SQL. No skips."
+      },
+      {
+        "kind": "shared_public_rpc",
+        "cases_per_worker": 17,
+        "workers": [
+          "python",
+          "go",
+          "rust",
+          "typescript",
+          "java",
+          "csharp",
+          "cpp"
+        ],
+        "additional_transport": "TypeScript HTTP also passes17. Signed Python HTTP continuation covered by focused suite.",
+        "scope": "Typed exact metadata/results, partial/complete/context decline, accepted-state reuse, independent ordinary rebind,11 malformed request cases. Not complete transport framing conformance."
+      },
+      {
+        "kind": "native_sdk_integration",
+        "workers": [
+          "go",
+          "rust",
+          "typescript",
+          "java",
+          "csharp",
+          "cpp"
+        ],
+        "queries_per_worker": 5,
+        "scope": "Widening results, residual/reordered/duplicate projections, local expression, two prepared executions, ordinary rebind; targeted catalog discovery avoids unrelated existing constraint enumeration failures."
+      },
+      {
+        "kind": "sdk_regressions",
+        "details": "Java full664tests/2skips plus focused portable-state/outer checks; C# full670passed plus final295schema/hash/projection checks; Go contract/reflection/schema tests; Rust2projection+24client scans; TS types and focused Arrow/Flechette tests; C++10projection assertions. See sdk logs for exact final commands."
+      },
+      {
+        "kind": "native_sdk_copy",
+        "workers": [
+          "go",
+          "rust",
+          "typescript",
+          "java",
+          "csharp",
+          "cpp"
+        ],
+        "status": "all_passed",
+        "scope": "Actual LogicalOperator::Copy serializes/deserializes accepted scans; retains schema/opaque state, cache/split exclusions and rejects stale original state. Final examples use targeted discovery to exclude unrelated existing constraints."
+      }
+    ],
+    "artifacts": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC/logs/expression-pushdown-20261023-VQa0w4",
+    "remaining": [
+      "Go outer wrapped IPC framing/raw-size dependency qualification; no broad RPC dependency changes included here.",
+      "Bind-specific repeatability and mutable-provider proof",
+      "Broader projection adapter/grammar/identity qualification",
+      "Remaining P1-P3 provider/release gates",
+      "M0-M4 native DuckDB2 port"
+    ],
+    "published_protocol_unchanged": "vgi.v2/2.1.0",
+    "engine_pin_unchanged": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "native_revision": "e9bf8019ead7d01ab94f886b9a0ffd23af7e2257",
+    "protocol_hash": "41f61f37c7ce42f63f3ca47f8861508f3f356d2422a5b8a0bab48ff92c0857a8",
+    "protocol_methods": 85,
+    "browser_sha256": "6cca300e3de26d60eca2eb7a3f0449edf7875d6c1d9d4f7b8784bbad89ad9b77",
+    "native_lifetime": "Known offers disable prepared bind reuse before optimization. Copy retains accepted schema/state; serialized restore requires byte-identical original bind call and bind response, including opaque state. Java offered original binds now use stable invocation-scoped portable state rather than random pending-bind handles.",
+    "known_external_regression": "Existing unrelated catalog constraint/nullability enumeration mismatch remains separate. Native SDK queries/copy probes select the projection fixture without bulk catalog enumeration."
   }
 }

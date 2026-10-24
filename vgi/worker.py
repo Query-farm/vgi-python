@@ -202,6 +202,8 @@ from vgi.protocol import (
     TableFunctionDynamicToStringRequest,
     TableFunctionDynamicToStringResponse,
     TableFunctionPlanRequest,
+    TableFunctionProjectionRequest,
+    TableFunctionProjectionResponse,
     TableFunctionStatisticsRequest,
     TableInOutExchangeState,
     TableProducerState,
@@ -3288,6 +3290,31 @@ class Worker:
                 transaction_plaintext=self._unwrap_transaction_for(request),
             )
         return instance.bind(request, ctx=ctx, attach_plaintext=attach_plaintext)  # type: ignore[attr-defined, no-any-return]
+
+    def table_function_projection(
+        self, request: TableFunctionProjectionRequest, ctx: CallContext
+    ) -> TableFunctionProjectionResponse:
+        """Validate a pure optional projection proposal before any plan rewrite."""
+        request.__post_init__()
+        attach_plaintext = self._unwrap_attach_full(request.bind_call.attach_opaque_data)
+        func_cls = self._resolve_function(request.bind_call)
+        self._validate_required_settings(func_cls, request.bind_call)
+        self._validate_bind_shape(func_cls, request.bind_call)
+        if not issubclass(func_cls, TableFunctionGenerator):
+            raise ValueError("scalar projection only applies to ordinary source table functions")
+        params = func_cls._make_bind_params(
+            request.bind_call,
+            auth_context=ctx.auth,
+            attach_plaintext=attach_plaintext,
+            transaction_plaintext=self._unwrap_transaction_for(request),
+        )
+        result = func_cls.on_projection(params, request)
+        if params.secrets.needs_resolution:
+            raise ValueError("scalar projection cannot initiate secret resolution")
+        if not isinstance(result, TableFunctionProjectionResponse):
+            raise TypeError("on_projection must return TableFunctionProjectionResponse")
+        result.validate_request(request)
+        return result
 
     def _validate_bind_shape(self, func_cls: type[Function], request: BindRequest) -> None:
         """Reject a bind() call whose input_schema doesn't match the function's shape.

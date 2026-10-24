@@ -48,6 +48,7 @@ from vgi_rpc.rpc import (
 from vgi.arguments import Arguments
 from vgi.cache_control import CACHE_SCOPE_CATALOG, CacheControl
 from vgi.catalog.capabilities import (
+    ROW_SCALAR_EXPRESSION,
     CatalogCapabilities,
 )
 from vgi.catalog.catalog_interface import (
@@ -68,11 +69,13 @@ from vgi.catalog.catalog_interface import (
 from vgi.catalog.column_metadata import validate_column_metadata
 from vgi.catalog.constraints import ConstraintsApplyRequest, ConstraintSnapshot, constraint_definitions
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot
+from vgi.catalog.evaluation_context import _SqlRecord
 from vgi.catalog.indexes import IndexDefinition
 from vgi.catalog.layout import TableLayout
 from vgi.catalog.macros import MAX_MACRO_BYTES, MacroOverload, validate_macro_family
 from vgi.catalog.options import OptionDefinitions
 from vgi.catalog.query import CatalogQueryPrepareRequest, CatalogQueryPrepareResult, ClientQueryCapabilities
+from vgi.catalog.sql import SqlExpression
 from vgi.filter_v2 import delta_revisions, replaying_accepted_state
 from vgi.function import StreamStateCodec, _is_state_codec
 from vgi.function_storage import BoundStorage, FrameworkNS, attach_catalog_bytes
@@ -98,6 +101,8 @@ from vgi.typed_values import TypedValueBatch
 
 __all__ = [
     "BindRequest",
+    "TableFunctionProjectionRequest",
+    "TableFunctionProjectionResponse",
     "ClientCapabilities",
     "CatalogAttachRequest",
     "CatalogCreateRequest",
@@ -254,6 +259,105 @@ class BindRequest(ArrowSerializableDataclass):
     schema_path: SchemaPath | None = None
 
     argument_names: Annotated[list[str | None] | None, ArrowType(pa.list_(pa.string()))] = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class TableFunctionProjectionRequest(_SqlRecord):
+    """Propose pure scalar outputs after bind, before modifying an execution plan.
+
+    Expressions address the complete original worker output schema. Their result
+    fields are parallel by index; accepted fields append to that schema. Planning
+    allocates no execution resources and cannot consume rows or produce effects.
+    """
+
+    bind_call: Annotated[BindRequest, ArrowType(pa.binary())]
+    bind_result: Annotated[BindResponse, ArrowType(pa.binary())]
+    expressions: Annotated[list[bytes], ArrowType(pa.list_(pa.large_binary()))]
+    result_schema: Annotated[pa.Schema, ArrowType(pa.binary())]
+
+    def __post_init__(self) -> None:
+        """Validate the source contract, offered profiles, owner and scalar records."""
+        if not isinstance(self.bind_call, BindRequest) or self.bind_call.function_type != FunctionType.TABLE:
+            raise ValueError("scalar projection requires an ordinary table bind")
+        if self.bind_call.input_schema is not None or self.bind_call.schema_path is None:
+            raise ValueError("scalar projection requires a source table and explicit owner schema")
+        if not isinstance(self.bind_result, BindResponse):
+            raise TypeError("scalar projection requires the original BindResponse")
+        self.bind_result.__post_init__()
+        if any((self.bind_result.lookup_secret_types, self.bind_result.lookup_scopes, self.bind_result.lookup_names)):
+            raise ValueError("scalar projection cannot use a secret-scope bind response")
+        if not isinstance(self.expressions, list) or not 1 <= len(self.expressions) <= 1024:
+            raise ValueError("scalar projection requires between one and 1024 expressions")
+        if not isinstance(self.result_schema, pa.Schema) or len(self.result_schema) != len(self.expressions):
+            raise ValueError("scalar projection result fields must match its expressions")
+        if self.result_schema.metadata:
+            raise ValueError("scalar projection result schema cannot replace source schema metadata")
+        source = self.bind_result.output_schema
+        ascii_fold = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+        names = [name.translate(ascii_fold) for name in [*source.names, *self.result_schema.names]]
+        if any(not name or "\0" in name for name in names) or len(set(names)) != len(names):
+            raise ValueError("scalar projection requires unique unambiguous source and result names")
+        context = None
+        for expression in self.expression_records():
+            expression.validate_owner(self.bind_call.schema_path)
+            if (
+                expression.profile != ROW_SCALAR_EXPRESSION
+                or expression.profile not in self.bind_result.projection_expression_profiles
+            ):
+                raise ValueError("scalar projection expression profile was not offered by this bind")
+            if context is not None and context != expression.evaluation_context:
+                raise ValueError("scalar projection expressions must share one evaluation context")
+            context = expression.evaluation_context
+
+    def expression_records(self) -> list[SqlExpression]:
+        """Decode the canonical, bounded scalar records without interpreting SQL."""
+        return [SqlExpression.deserialize_from_bytes(value) for value in self.expressions]
+
+
+@dataclass(frozen=True, kw_only=True)
+class TableFunctionProjectionResponse(_SqlRecord):
+    """Accept an ordered subset of proposed outputs, or decline without effects."""
+
+    accepted_indices: list[int] = field(default_factory=list)
+    bind_result: Annotated[BindResponse | None, ArrowType(pa.binary())] = None
+
+    def __post_init__(self) -> None:
+        """Reject contradictory acceptance and malformed output indices."""
+        indices = self.accepted_indices
+        if (
+            not isinstance(indices, list)
+            or len(indices) > 1024
+            or any(type(index) is not int or index < 0 for index in indices)
+        ):
+            raise ValueError("invalid accepted projection indices")
+        if indices != sorted(set(indices)):
+            raise ValueError("accepted projection indices must be strictly increasing")
+        if bool(indices) != (self.bind_result is not None):
+            raise ValueError("accepted projection indices and replacement bind result must occur together")
+        if self.bind_result is not None:
+            self.bind_result.__post_init__()
+            if any(
+                (self.bind_result.lookup_secret_types, self.bind_result.lookup_scopes, self.bind_result.lookup_names)
+            ):
+                raise ValueError("accepted scalar projection cannot request secret resolution")
+
+    def validate_request(self, request: TableFunctionProjectionRequest) -> None:
+        """Check the complete append-only replacement before optimizer changes."""
+        self.__post_init__()
+        request.__post_init__()
+        if self.bind_result is None:
+            return
+        if any(index >= len(request.expressions) for index in self.accepted_indices):
+            raise ValueError("accepted projection index is outside the proposal")
+        if self.bind_result.projection_expression_profiles != request.bind_result.projection_expression_profiles:
+            raise ValueError("accepted scalar projection cannot change the bind profile offer")
+        source = request.bind_result.output_schema
+        expected = pa.schema(
+            [*source, *(request.result_schema.field(index) for index in self.accepted_indices)],
+            metadata=cast(Any, source.metadata),
+        )
+        if not self.bind_result.output_schema.equals(expected, check_metadata=True):
+            raise ValueError("accepted scalar projection output schema differs from the requested append-only contract")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -3311,6 +3415,10 @@ class VgiProtocol(Protocol):
 
     def bind(self, request: BindRequest) -> BindResponse:
         """Resolve output schema and validate arguments."""
+        ...
+
+    def table_function_projection(self, request: TableFunctionProjectionRequest) -> TableFunctionProjectionResponse:
+        """Accept optional scalar outputs before optimizer rewrite, or decline normally."""
         ...
 
     def init(self, request: InitRequest) -> Stream[ProcessState, GlobalInitResponse]:

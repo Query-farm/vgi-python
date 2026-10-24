@@ -567,6 +567,17 @@ class MetaWorker:
         msg = f"Unknown function '{fn_name}'"
         raise ValueError(msg)
 
+    def table_function_projection(self, request: Any, ctx: CallContext) -> Any:
+        """Route an optional pure projection proposal to the source's owner."""
+        patched, worker = self._unwrap_bind_call_attach_opaque_data(request, method_name="table_function_projection")
+        if worker is not None:
+            return worker.table_function_projection(patched, ctx=ctx)
+        fn_name = request.bind_call.function_name
+        for candidate in self._workers:
+            if fn_name in type(candidate)._build_registry():
+                return candidate.table_function_projection(request, ctx=ctx)
+        raise ValueError(f"Unknown function '{fn_name}'")
+
     def table_function_plan(self, request: Any, ctx: CallContext) -> Any:
         """Dispatch scan planning to the right worker."""
         patched, worker = self._unwrap_bind_call_attach_opaque_data(

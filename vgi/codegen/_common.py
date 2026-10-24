@@ -95,6 +95,7 @@ from vgi.protocol import (
     TableFunctionCardinalityRequest,
     TableFunctionDynamicToStringRequest,
     TableFunctionPlanRequest,
+    TableFunctionProjectionRequest,
     TableFunctionStatisticsRequest,
     VgiProtocol,
 )
@@ -210,6 +211,7 @@ REQUEST_TYPES: tuple[type, ...] = (
     TableFunctionCardinalityRequest,
     TableFunctionDynamicToStringRequest,
     TableFunctionPlanRequest,
+    TableFunctionProjectionRequest,
     TableFunctionStatisticsRequest,
 )
 

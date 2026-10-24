@@ -15,6 +15,7 @@ Request types ([`BindRequest`][], [`InitRequest`][]) are in ``vgi.protocol``.
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
@@ -85,6 +86,23 @@ class BindResponse(ArrowSerializableDataclass):
     lookup_secret_types: list[str] = field(default_factory=list)
     lookup_scopes: list[str] = field(default_factory=list)
     lookup_names: list[str] = field(default_factory=list)
+    projection_expression_profiles: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        """Validate the per-bind offer without granting projection acceptance."""
+        profiles = self.projection_expression_profiles
+        if (
+            not isinstance(profiles, list)
+            or len(profiles) > 64
+            or any(
+                not isinstance(profile, str)
+                or len(profile) > 256
+                or re.fullmatch(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*\.v[1-9][0-9]*", profile) is None
+                for profile in profiles
+            )
+            or len(set(profiles)) != len(profiles)
+        ):
+            raise ValueError("invalid projection expression profile offer")
 
     @property
     def is_secret_scope_request(self) -> bool:

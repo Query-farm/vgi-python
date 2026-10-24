@@ -53,7 +53,7 @@ from vgi.invocation import (
 
 if TYPE_CHECKING:
     from vgi.catalog.catalog_interface import ColumnStatistics
-    from vgi.protocol import BindRequest, InitRequest
+    from vgi.protocol import BindRequest, InitRequest, TableFunctionProjectionRequest, TableFunctionProjectionResponse
     from vgi.table_filter_pushdown import PushdownFilters
 
 _ON_CANCEL_CAVEATS = """\
@@ -1230,6 +1230,21 @@ class TableFunctionBase[TArgs](vgi.function.Function):
             return BindResponse.secret_scope_request(params.secrets.pending_lookups)
 
         return result
+
+    @classmethod
+    def on_projection(
+        cls, params: BindParams[TArgs], request: TableFunctionProjectionRequest
+    ) -> TableFunctionProjectionResponse:
+        """Decline optional scalar outputs unless the provider explicitly qualifies them.
+
+        Overrides must bind without fetching rows or allocating execution resources.
+        Accepted opaque data replaces the complete prior bind state and follows
+        ordinary init/stream lifetime. A later execution error never permits a
+        fallback retry. Unaccepted expressions and filters remain client-owned.
+        """
+        from vgi.protocol import TableFunctionProjectionResponse
+
+        return TableFunctionProjectionResponse()
 
     @classmethod
     def on_init(

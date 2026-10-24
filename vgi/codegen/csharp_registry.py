@@ -78,6 +78,10 @@ CSHARP_RAW_RESULTS: dict[str, str] = {
 #: The C# type a stream method returns (inside its ``Task``).
 CSHARP_STREAM_TYPE = "RpcStream<StreamState>"
 
+#: Preserve canonical projection-envelope bytes until the service validates its
+#: exact schema, single row/batch and complete framing. The wire stays binary.
+CSHARP_RAW_PARAMS = {("table_function_projection", "request")}
+
 _CTX = "ICallContext? ctx = null"
 
 _GENERIC_NS = "global::System.Collections.Generic."
@@ -135,14 +139,19 @@ def _param(m: RegistryMethod, p: RegistryParam, model: csharp_types._Model) -> C
         raise GeneratorError(f"{origin}: C# parameter {name} does not convert back to its wire name")
     nullable = "?" if p.field.nullable else ""
     token = f"<c>{csharp_types._xml_text(str(p.field.type))}</c>{', nullable' if p.field.nullable else ''}"
-    if p.record is not None:
+    if (m.name, p.name) in CSHARP_RAW_PARAMS:
+        require_binary(p.field, origin, "a canonical record's raw envelope")
+        clr = "byte[]"
+        doc = f"The packed <c>{p.record}</c> envelope, validated by the service ({token})."
+        attrs: tuple[str, ...] = ()
+    elif p.record is not None:
         require_binary(p.field, origin, "a record's column")
         record = csharp_types.csharp_name(p.record)
         if record not in model.records:
             raise GeneratorError(f"{origin}: {record} is not a generated C# record")
         clr = record
         doc = f"The packed <c>{p.record}</c> ({token})."
-        attrs: tuple[str, ...] = ()
+        attrs = ()
     else:
         mapped = csharp_types._map(p.field.type, p.annotation, model=model, origin=origin)
         clr = mapped.clr.replace(_GENERIC_NS, "")
