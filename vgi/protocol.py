@@ -3657,7 +3657,7 @@ class VgiProtocol(Protocol):
         ...
 
     def catalog_query_prepare(self, request: CatalogQueryPrepareRequest) -> CatalogQueryPrepareResult:
-        """Authorize and describe a read-only query without executing its results."""
+        """Authorize and describe the negotiated query or statement without executing it."""
         ...
 
     def catalog_query_release(

@@ -1,6 +1,6 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
-"""Negotiated, read-only catalog query preparation and result contracts.
+"""Negotiated catalog query and explicit statement preparation contracts.
 
 SQL encoding, semantic equivalence, and authorization are separate concerns.
 These records never execute SQL. A decline is a decision made before execution;
@@ -25,7 +25,10 @@ from vgi.typed_values import TypedValueBatch
 QUERY_ENCODING = "duckdb.sql.v1"
 QUERY_EXPLICIT = "vgi.remote.readonly.v1"
 QUERY_AUTOMATIC = "vgi.duckdb.relational.v1"
+QUERY_STATEMENT = "vgi.remote.statement.v1"
 QUERY_EXECUTOR = "__vgi_catalog_query"
+STATEMENT_RESULT_KEY = b"vgi.statement.result.v1"
+_MODE_PROFILES = {"explicit": QUERY_EXPLICIT, "automatic": QUERY_AUTOMATIC, "statement": QUERY_STATEMENT}
 MAX_QUERY_BYTES = 1024 * 1024
 MAX_QUERY_REQUEST_BYTES = 8 * 1024 * 1024
 MAX_QUERY_SCHEMA_BYTES = 1024 * 1024
@@ -65,6 +68,28 @@ def read_query_schema(payload: bytes | None) -> pa.Schema:
     if source.tell() != len(payload):
         raise ValueError("query schema has trailing data")
     return result
+
+
+def statement_result_kind(schema: pa.Schema) -> str:
+    """Validate a statement's fixed result contract before execution.
+
+    A command produces exactly one completion row: nullable int64 affected_rows
+    (NULL for DDL). RETURNING produces rows of its declared schema, possibly none.
+    Stream EOS establishes statement completion, never transaction commit.
+    """
+    if not schema.equals(schema.with_metadata(schema.metadata), check_metadata=True):
+        raise ValueError("statement output schema metadata keys must be unique")
+    kind = (schema.metadata or {}).get(STATEMENT_RESULT_KEY)
+    if kind == b"command":
+        expected = pa.schema([pa.field("affected_rows", pa.int64())])
+        if not schema.remove_metadata().equals(expected, check_metadata=True):
+            raise ValueError("statement command requires nullable int64 affected_rows")
+    elif kind == b"rows":
+        if not len(schema):
+            raise ValueError("statement rows require a nonempty output schema")
+    else:
+        raise ValueError("statement output requires command or rows result metadata")
+    return kind.decode("ascii")
 
 
 class _QueryRecord(ArrowSerializableDataclass):
@@ -141,11 +166,10 @@ class QueryCapabilities(_QueryRecord):
             raise ValueError("unknown selected query encoding")
         _names(self.semantic_profiles, "selected query profiles")
         _names(self.execution_modes, "query execution modes")
-        if not set(self.semantic_profiles) <= {QUERY_EXPLICIT, QUERY_AUTOMATIC}:
+        if not set(self.semantic_profiles) <= set(_MODE_PROFILES.values()):
             raise ValueError("unknown selected query profile")
-        required = {"explicit": QUERY_EXPLICIT, "automatic": QUERY_AUTOMATIC}
         if set(self.execution_modes) != {
-            mode for mode, profile in required.items() if profile in self.semantic_profiles
+            mode for mode, profile in _MODE_PROFILES.items() if profile in self.semantic_profiles
         }:
             raise ValueError("query modes must match selected semantic profiles")
         for label in ["backend_engine", "backend_version", "capability_revision"]:
@@ -168,13 +192,13 @@ class QueryCapabilities(_QueryRecord):
         profiles = set(self.semantic_profiles) & set(offer.semantic_profiles)
         if not supports_transactions:
             profiles.discard(QUERY_AUTOMATIC)
+            profiles.discard(QUERY_STATEMENT)
         if not profiles:
             return None
-        modes = {"explicit": QUERY_EXPLICIT, "automatic": QUERY_AUTOMATIC}
         return replace(
             self,
             semantic_profiles=sorted(profiles),
-            execution_modes=sorted(mode for mode, profile in modes.items() if profile in profiles),
+            execution_modes=sorted(mode for mode, profile in _MODE_PROFILES.items() if profile in profiles),
             max_query_bytes=min(self.max_query_bytes, offer.max_query_bytes),
         )
 
@@ -222,7 +246,7 @@ class CatalogQueryPrepareRequest(_QueryRecord):
             _token(self.transaction_opaque_data, "query transaction")
         if self.encoding != QUERY_ENCODING:
             raise ValueError("unknown selected query encoding")
-        if {"explicit": QUERY_EXPLICIT, "automatic": QUERY_AUTOMATIC}.get(self.mode) != self.semantic_profile:
+        if _MODE_PROFILES.get(self.mode) != self.semantic_profile:
             raise ValueError("query mode and semantic profile disagree")
         _text(self.capability_revision, "query capability revision")
         _text(self.query, "SQL query", maximum=MAX_QUERY_BYTES)
@@ -260,6 +284,8 @@ class CatalogQueryPrepareRequest(_QueryRecord):
                 raise ValueError("automatic v1 requires a nonempty table-only object manifest")
         elif self.referenced_objects:
             raise ValueError("explicit query resolves its own objects and requires an empty manifest")
+        if self.mode == "statement" and self.transaction_opaque_data is None:
+            raise ValueError("statement execution requires a transaction")
 
     def validate_agreement(self, selected: QueryCapabilities) -> None:
         """Require the immutable encoding, mode, context and policy revision."""
@@ -274,7 +300,7 @@ class CatalogQueryPrepareRequest(_QueryRecord):
             raise ValueError("query preparation does not match the attachment agreement")
         if len(self.query.encode("utf-8")) > selected.max_query_bytes:
             raise ValueError("query exceeds the selected SQL size limit")
-        if self.mode == "explicit" and self.evaluation_context != selected.default_evaluation_context:
+        if self.mode in {"explicit", "statement"} and self.evaluation_context != selected.default_evaluation_context:
             raise ValueError("explicit query must use the attachment's provider evaluation context")
 
 
@@ -346,6 +372,10 @@ class CatalogQueryPrepareResult(_QueryRecord):
             raise ValueError("query preparation lost required ordering")
         if request.mode == "automatic" and self.validated_catalog_version is None:
             raise ValueError("accepted automatic query requires a validated metadata version")
+        if request.mode == "statement":
+            statement_result_kind(read_query_schema(self.output_schema))
+        elif STATEMENT_RESULT_KEY in (read_query_schema(self.output_schema).metadata or {}):
+            raise ValueError("statement result metadata requires the statement profile")
         if request.expected_output_schema is not None:
             actual = read_query_schema(self.output_schema)
             expected = read_query_schema(request.expected_output_schema)

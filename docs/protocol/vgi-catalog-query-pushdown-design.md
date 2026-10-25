@@ -4,9 +4,11 @@
 SDK codecs and the opt-in native 1.5 explicit adapter are implemented on the preparation
 branch. Native adapter validation is recorded separately in the manifest; automatic 2.0
 integration remains open.
-**Updated:** 2026-10-24. **Original proposal:** 2026-09-13.
+**Updated:** 2026-10-25. **Original proposal:** 2026-09-13.
 **Scope:** optional, read-only catalog query execution; Python SDK; DuckDB 1.5 explicit-query adapter;
-DuckDB 2.0-development automatic-pushdown adapter.
+DuckDB 2.0-development automatic-pushdown adapter. The October25 bounded Python
+statement profile extends the shared execution lifecycle; native entry points
+and automatic pushdown remain read-only.
 
 The implementation belongs to the **combined successor protocol release**, alongside the
 catalog/type changes in the [manifest](duckdb-2.0-manifest.json). It does not reserve a separate
@@ -33,6 +35,48 @@ below records the original design survey, not current implementation heads.
 
 “DuckDB 2.0” means the inspected development API, not a released upstream compatibility claim.
 Wire versions, SDK package versions, and the two engine targets are separate version axes.
+
+## Explicit statement reuse audit — October 25, 2026
+
+The user reopened bounded explicit remote DML/DDL and retained the named-type /
+ENUM deferral. The normative extension is [explicit transactional statements](shared-catalog-values.md#explicit-transactional-statements--october-25-2026).
+It reuses preparation/release, typed parameters, transaction handles and the
+existing TABLE stream. One profile/mode pair and fixed result-schema metadata
+are sufficient for the bounded proof; there is no new RPC or record field.
+The read-only scope of automatic whole-query pushdown remains unchanged.
+
+The source audit used native `6476b97473ff`, its retained 1.5 engine
+`105edd31b57f`, and local Haybarn2 `74a0e809885f`. The latter is newer than the
+October 24 audited `e1784fa42310` pin and is not a runtime-qualified VGI engine.
+
+| Finding | Evidence and consequence |
+| --- | --- |
+| Transport and ownership already exist | `vgi/query_execution.py` and `vgi/query_provider.py` already route prepare, resolve, start, read, close and release with attachment/transaction ownership. Keep those methods. |
+| Current explicit contract is read-only | `vgi/catalog/query.py` and native `src/vgi_query_rpc.cpp` select fixed profile/mode pairs. Add optional statement semantics rather than reinterpret readonly. |
+| Result layout is fixed before effects | Every batch is checked against prepared schema including metadata. Put result kind in that schema and command counts in its row. Read DDL versions through existing catalog RPCs. |
+| TABLE scans can disappear | Native `src/vgi_query_function.cpp` executes only at init; Haybarn2 `pushdown_limit.cpp`, `pushdown_filter.cpp` and unused SELECT CTE handling can eliminate its GET. Disabling filter/projection pushdown does not establish mutation execution. |
+| Transaction transport is sufficient | The native binder already obtains `VgiTransaction`; normal commit/rollback participation exists. A mutation route still needs modified-database registration, valid-transaction checks and provider completion enforcement. |
+| DDL needs local cache clearing | Native `VgiCatalog::DropSchema` clears transaction/schema caches; explicit query execution does not. A new-transaction version check alone cannot refresh subsequent lookups within the current transaction. |
+| CALL / RemoteExecute alone are insufficient | The 1.5 CALL binder rewrites to SELECT. Haybarn2 `Catalog::RemoteExecute` returns TableRef and the remote optimizer wraps it in SELECT (`remote_pushdown_optimizer.cpp:1842`). Neither source fact qualifies safe mutation execution. |
+
+Keep native `vgi_query` read-only. A possible later route is a dedicated top-level
+extension statement with a private executor: 1.5's `ParserExtensionPlanResult`
+already has `modified_databases`, `requires_valid_transaction` and `return_type`.
+It must keep preparation effect-free, fully drain/validate execution before
+success, preserve existing rollback/error behavior and clear caches. This is a
+source-backed candidate, not an implemented or tested native entry point.
+
+The finite Python proof uses real transaction-owned DuckDB connections and the
+ordinary public signed-HTTP RPC/client path. It must demonstrate DML counts,
+RETURNING, transactional DDL/readback, commit/rollback, incomplete/failed commit
+rejection, cancellation and no automatic retry after ambiguous init. The fixture
+is single-process and finite; it does not qualify distributed connection routing,
+active-SQL cancellation, a general SQL sandbox or native execution. Final EC2 validation passes 4,646 Python tests (129 skips), all 18 existing
+native read-query scenarios, strict generated-artifact checks for every SDK,
+Ruff and focused mypy. The separate-process localhost HTTP example also passes.
+Only Python implements the statement profile; the other SDK changes update
+generated service descriptions. Evidence is recorded in
+`explicit_statement_checkpoint_2026_10_25`.
 
 ## Implementation checkpoint — October 24, 2026
 

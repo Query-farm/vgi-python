@@ -3219,6 +3219,11 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         retry or local fallback. Releasing the preparation is a separate action;
         it may be reused with new values of exactly the same parameter schema.
         Closing this generator early cancels its execution.
+
+        Explicit statement preparations reuse this method. The caller must
+        consume the stream to EOS before reporting statement success or calling
+        commit. Constructing this lazy generator alone executes nothing.
+        Statement cancellation/failure requires whole-transaction rollback.
         """
         prepared.__post_init__()
         if prepared.status != "accepted" or prepared.prepared_query_token is None:

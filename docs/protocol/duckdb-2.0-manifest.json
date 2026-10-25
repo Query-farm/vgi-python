@@ -11,7 +11,7 @@
       "Overload collections replacing single macro definitions"
     ],
     "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
-    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the successor schema inventory; required canonical table constraint lists replace the legacy parent arrays and revision-checked catalog_table_constraints_apply joins the public method surface; typed index definitions/options replace legacy index fields and add catalog_index_option_definitions; required semantic ALTER flags and raw subject/dependent column paths extend embedded dependency records; SET DEFAULT requires binary SqlExpression IPC and USING accepts nullable binary IPC; CREATE/ADD defaults use the canonical field codec, without new capability negotiation; CatalogAttachResult.default_schema becomes nullable UTF-8, preserving no implicit default independently of an explicit raw schema name; MacroInfo and MacroCreateRequest require nonempty overloads and remove legacy parent parameters/definition/parameter_default_values/arguments_schema; canonical families need no overload read/create opt-in; existing column comment/tags Arrow metadata gains strict shared validation and preservation on CREATE/ADD/discovery, with no record/RPC change; generated-column authoring/discovery/CREATE consistently use the existing canonical SqlExpression/category metadata, replacing legacy generated_expression strings without a new RPC or record layout; BindResponse adds optional projection_expression_profiles and table_function_projection adds structured early subset acceptance with canonical expressions and exact appended Arrow fields; BindResponse appends required repeatability enum UNKNOWN/STABLE_WITHIN_QUERY, with bounded native1.5 and SDK qualification",
+    "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the successor schema inventory; required canonical table constraint lists replace the legacy parent arrays and revision-checked catalog_table_constraints_apply joins the public method surface; typed index definitions/options replace legacy index fields and add catalog_index_option_definitions; required semantic ALTER flags and raw subject/dependent column paths extend embedded dependency records; SET DEFAULT requires binary SqlExpression IPC and USING accepts nullable binary IPC; CREATE/ADD defaults use the canonical field codec, without new capability negotiation; CatalogAttachResult.default_schema becomes nullable UTF-8, preserving no implicit default independently of an explicit raw schema name; MacroInfo and MacroCreateRequest require nonempty overloads and remove legacy parent parameters/definition/parameter_default_values/arguments_schema; canonical families need no overload read/create opt-in; existing column comment/tags Arrow metadata gains strict shared validation and preservation on CREATE/ADD/discovery, with no record/RPC change; generated-column authoring/discovery/CREATE consistently use the existing canonical SqlExpression/category metadata, replacing legacy generated_expression strings without a new RPC or record layout; BindResponse adds optional projection_expression_profiles and table_function_projection adds structured early subset acceptance with canonical expressions and exact appended Arrow fields; BindResponse appends required repeatability enum UNKNOWN/STABLE_WITHIN_QUERY, with bounded native1.5 and SDK qualification; optional explicit transactional DML/DDL statement profile and fixed command/RETURNING output-schema metadata reuse existing query and transaction RPCs, with no new record fields",
     "version_requirement": "The existing breaking changes require a major version and matching routing name. Published main is now vgi.v2/2.2.0; retaining that development placeholder does not make the successor compatible with published 2.2. The earlier additive2.2 successor proposal is historical and superseded. Final number and complete generated diff remain P1/P2 work.",
     "planned_diff": "Included before freeze: broader production-provider/adapter acceptance and release gates. Bounded scalar projection, bind-specific repeatability and Go wrapped IPC qualification pass on the pinned 1.5 build. Python generic RPC outer framing/raw-size rejection, paired Go dependency publication/pinning and remaining transports still require qualification. No protocol freeze or public version transition yet.",
     "historical_additive_candidate": "vgi.v2/2.2.0",
@@ -1234,7 +1234,7 @@
       "reason": "Neither is required merely to port the 1.5 VGI behavior to 2.0. Sequence semantics require allocation authority and a genuine engine extension point, not discovery fields. Named-type identity/ENUM domain is a real schema-fidelity feature, but resolved Arrow storage is the currently supported interoperability boundary; the 2.0 constructor callback addition is not transferable metadata.",
       "later_release_cost": "Sequence list/get/create/drop/allocate and type list/get/create/drop would normally be additive methods, but require another coordinated SDK/client/worker update under exact version matching. Type identity/domain annotations must be negotiated; redefining existing unannotated dictionary/string semantics would be breaking and should be avoided.",
       "record_inventory_status": "Only already-existing reusable carriers remain in records. Deferred candidate names are excluded from the included freeze inventory; they are not implemented APIs.",
-      "review_decision": "Defer remote sequence lifecycle/allocation and named-type catalog CRUD; keep existing supported resolved Arrow type transport. Split these two different features in the review record.",
+      "review_decision": "October25 user explicitly retained named-type and ENUM deferral. Remote sequence lifecycle/allocation remains deferred; keep existing supported resolved Arrow transport.",
       "business_cost_of_deferral": "Clients cannot use a remote catalog sequence as normal nextval/currval or allocate keys uniformly across clients. Schema migration/ORM tooling cannot discover/recreate named aliases/ENUMs, and CAST to a remote named type is unavailable. Ordinary supported primitive/nested Arrow value exchange continues; this must not be described as named-type or ENUM semantic coverage.",
       "reopening_proof": [
         "Sequence: real custom-catalog nextval adapter against pinned engine; two concurrent clients produce no duplicates; explicit rollback/gap policy, overflow/cycle/restart behavior, and ambiguous allocation failure without retry.",
@@ -1338,19 +1338,30 @@
     },
     "statements": {
       "title": "Raw SQL CONNECT and statement execution",
-      "disposition": "defer",
-      "status": "reviewed_deferred_existing_coverage_retained",
+      "disposition": "include",
+      "status": "bounded_statement_profile_python_reference_qualified_native_entry_pending",
       "records": [
-        "SqlStatement",
         "CatalogQueryPrepareRequest",
+        "CatalogQueryPrepareResult",
+        "ClientQueryCapabilities",
+        "QueryCapabilities",
         "QueryParameters"
       ],
-      "existing_methods": [],
+      "existing_methods": [
+        "catalog_query_prepare",
+        "catalog_query_release",
+        "bind",
+        "init",
+        "catalog_transaction_begin",
+        "catalog_transaction_commit",
+        "catalog_transaction_rollback",
+        "catalog_version"
+      ],
       "new_methods": [],
       "scope": [
         "Review alongside read-query preparation, but specify writes/DDL, session state, result kinds, transaction effects, and retry rules separately. The read-query contract does not imply these capabilities."
       ],
-      "capability_contract": "No new capability selected or advertised for this deferred feature family. Keep existing explicit read-query preparation/typed parameters/execution; defer remote DML/DDL statement execution and raw CONNECT session routing. Native remote-query opt-in remains a separately qualified engine adapter.",
+      "capability_contract": "Optional vgi.remote.statement.v1 selects statement mode only by explicit client/provider intersection with transaction support. Every request carries the existing transaction handle and provider-default evaluation context. Same prepare/release and TABLE execution RPCs; static vgi.statement.result.v1 output-schema metadata distinguishes command completion/count rows from RETURNING rows. Native vgi_query remains readonly; raw CONNECT and nontransactional/session effects remain deferred.",
       "gates": [],
       "evidence": [
         {
@@ -1362,20 +1373,27 @@
             "engine:src/include/duckdb/catalog/catalog.hpp:88-104 and 414-420 defines independent IS_REMOTE/EXECUTE_QUERY_NODE/EXECUTE_STATEMENT/CONNECT capabilities."
           ],
           "limits": "Deliberate scope deferral, not implemented or qualified feature coverage."
+        },
+        {
+          "status": "bounded_statement_reference_qualified_2026_10_25",
+          "sources": [
+            "python:vgi/catalog/query.py new optional statement profile and fixed result contract",
+            "python:vgi/query_execution.py existing executor command/EOS validation",
+            "python:tests/catalog/statement_reference.py finite real DuckDB transaction owner",
+            "python:tests/catalog/test_statement_protocol.py lifecycle and rollback tests",
+            "python:tests/catalog/test_statement_socket.py separate-process localhost HTTP example",
+            "native:docs/duckdb-2.0-plan.md October25 native statement boundary"
+          ],
+          "limits": "Python real DuckDB1.5.5 finite provider over signed in-process HTTP plus separate-process localhost HTTP passes; no native mutation enablement or executable statement provider in the other six SDKs."
         }
       ],
-      "deferred_candidate_records": [
-        "StatementRequest",
-        "StatementResult"
-      ],
-      "deferred_candidate_methods": [
-        "catalog_statement_execute"
-      ],
-      "reason": "SqlStatement is a representation only; neither it nor a TABLE result grants mutation rights. The current query agreement deliberately selects only explicit/automatic read modes. Generic SQL sessions add result kinds, side effects, transaction-control and pooling rules that typed catalog DDL and existing write RPCs intentionally avoid.",
-      "later_release_cost": "A future single-statement prepare/execute entry point and result-kind capability would be additive but still force a coordinated SDK/version update. Reusing current read-only preparation with mutating semantics would be breaking and unsafe. SqlStatement, typed parameter batches and existing transaction/result streams can be reused, so a new statement coordinator or recovery service is unnecessary.",
-      "record_inventory_status": "Only already-existing reusable carriers remain in records. Deferred candidate names are excluded from the included freeze inventory; they are not implemented APIs.",
-      "review_decision": "Keep existing explicit read-query preparation/typed parameters/execution; defer remote DML/DDL statement execution and raw CONNECT session routing. Native remote-query opt-in remains a separately qualified engine adapter.",
-      "business_cost_of_deferral": "Users cannot send arbitrary backend SQL writes/DDL or use CONNECT as a full remote SQL session. They retain explicit read queries, catalog DDL and supported table writes. Backend-specific operations absent from those typed APIs require provider-specific functions, not a false claim that read-query execution supports statements.",
+      "deferred_candidate_records": [],
+      "deferred_candidate_methods": [],
+      "reason": "The user requested an executable proof of existing remote-execution reuse. Real transactional DML/DDL can use the current preparation, parameter, transaction and TABLE-result carriers; a new execution framework is not justified. Native TABLE optimization/completion/cache semantics require a separate adapter.",
+      "later_release_cost": "The selected profile and reserved output-schema metadata change semantic protocol support without changing record layouts or endpoint schema hash. They remain in the unpublished coordinated successor. Raw sessions would need separate lifetime/routing qualification and possibly later contracts.",
+      "record_inventory_status": "Only existing records and methods are included; removed speculative StatementRequest/StatementResult/catalog_statement_execute proposals. The Python client catalog_query_execute helper is not a wire method.",
+      "review_decision": "October25 user retained named-type/ENUM deferral and reopened bounded explicit DML/DDL reuse proof. Extend existing profile/mode and result-schema semantics; no new RPC or request/response field. Keep mutation-aware native statement entry, raw CONNECT, scripts, transaction control and session routing unimplemented.",
+      "business_cost_of_deferral": "The bounded Python reference can exercise explicit transactional DML/DDL through current RPCs. Native SQL mutation delegation, full CONNECT sessions, scripts and a general production SQL provider remain unavailable.",
       "reopening_proof": [
         "Start with explicit one-statement provider-dialect DML/DDL only; forbid scripts, ATTACH/DETACH, transaction-control and session mutations until explicitly modeled.",
         "Prove zero/count/row result modes, finite and streaming results, rollback on body/finalize failure, cancellation, ambiguous-dispatch no retry, and no read-result cache reuse for mutations.",
@@ -6799,9 +6817,18 @@
             "engine:src/include/duckdb/catalog/catalog.hpp:88-104 and 414-420 defines independent IS_REMOTE/EXECUTE_QUERY_NODE/EXECUTE_STATEMENT/CONNECT capabilities."
           ],
           "limits": "Existing representation does not enable the deferred lifecycle/execution feature."
+        },
+        {
+          "status": "statement_reuse_audit_2026_10_25",
+          "sources": [
+            "native:src/vgi_query_function.cpp binding/init and ordinary TABLE registration",
+            "native:src/vgi_query_rpc.cpp readonly-only offer and validation",
+            "python:docs/protocol/vgi-catalog-query-pushdown-design.md October25 audit"
+          ],
+          "limits": "Native modification registration, complete draining and same-transaction cache invalidation remain open."
         }
       ],
-      "decision": "Existing explicit read-query RPC is usable; automatic query-node adapter still needs native qualification. EXECUTE_STATEMENT and raw CONNECT stay false and are explicitly deferred, not covered by read capability."
+      "decision": "Read-query RPC remains usable; optional statement profile now has a bounded Python reuse implementation. Native automatic query-node and mutation entry points still need qualification; EXECUTE_STATEMENT and raw CONNECT remain false in native VGI."
     },
     {
       "id": "audit-414",
@@ -11928,5 +11955,65 @@
     ],
     "gate_effect": "No main merge or release approval. Breaking successor version/routing decision, P1-P3 release qualification, native2 M0-M4 and automatic whole-query implementation remain open.",
     "diagnostic_scope": "Required-filter hostile metadata covers get/list paths. View security covers get/list and bulk: direct diagnostics for malformed collection schema/nullability, seeded materialization for semantic barrier/unknown modes. No required-filter bulk qualification claim."
+  },
+  "explicit_statement_checkpoint_2026_10_25": {
+    "status": "bounded_python_reference_and_existing_native_read_regression_qualified",
+    "workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+    "host": "ec2-user@18.234.89.245",
+    "logs": "logs/remote-statements-20261025-2ka4f9jv",
+    "wire_delta": "New optional vgi.remote.statement.v1 / statement profile and vgi.statement.result.v1 schema metadata. Existing command affected_rows Arrow row and RETURNING output stream; no RPC or record-layout changes. Generated service descriptions updated across six SDKs; executable statement implementation only in Python reference.",
+    "native_boundary": "Native vgi_query retains readonly-only negotiation; no SQL mutation entry point or DuckDB2 adapter enablement.",
+    "qualification_limits": [
+      "Finite eight-statement DuckDB1.5.5 reference in one provider process; no general SQL sandbox or cross-process transaction owner routing.",
+      "Cancellation tests occur after backend materialization; active-SQL interruption is unqualified.",
+      "Lost-init test simulates an application boundary failure, not packet loss or crash recovery.",
+      "Expiry is exercised through explicit or request-time sweep; no unattended production reaper.",
+      "Automatic query pushdown, native mutation scheduling/cache invalidation, full transport/platform matrix, protocol version/freeze/release remain open.",
+      "Other SDKs received generated service description/content-hash updates only; their full unit and language SQL matrices were not repeated. Prior October24 language qualification remains historical. No native code or engine pin changed."
+    ],
+    "validation": {
+      "python_full": {
+        "passed": 4646,
+        "skipped": 129,
+        "warnings": 8,
+        "command": "pytest -q -n 8",
+        "log": "python-full-qualified.log"
+      },
+      "native_read_queries": {
+        "passed_scenarios": 18,
+        "command": "make test_queries",
+        "log": "native-read-query.log"
+      },
+      "real_socket_example": {
+        "passed": true,
+        "command": "pytest -q tests/catalog/test_statement_socket.py",
+        "log": "socket-example.log"
+      },
+      "generated_artifacts": {
+        "status": "pass",
+        "command": "python scripts/regen_generated.py --check --require-all --root vgi-c++=$VGI_CPP_ROOT",
+        "log": "generated-check-qualified.log"
+      },
+      "mypy": {
+        "status": "pass",
+        "source_files": 3,
+        "log": "mypy.log"
+      },
+      "ruff": {
+        "status": "pass",
+        "formatted_files": 9
+      },
+      "manifest": {
+        "audit_rows": 151,
+        "areas": 20,
+        "unresolved_scope_decisions": 0
+      },
+      "protocol": {
+        "methods": 85,
+        "endpoint_schema_hash": "41f61f37c7ce42f63f3ca47f8861508f3f356d2422a5b8a0bab48ff92c0857a8",
+        "schema_change": false
+      }
+    },
+    "diagnostics": "Earlier python-full.log reports six generated service file-content hash mismatches; exact rendered documentation headers were corrected. Final full suite and strict generator check pass. These file-content hashes are distinct from the unchanged endpoint schema hash."
   }
 }

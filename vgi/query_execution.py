@@ -21,12 +21,15 @@ from vgi.catalog.query import (
     QUERY_AUTOMATIC,
     QUERY_EXECUTOR,
     QUERY_EXPLICIT,
+    QUERY_STATEMENT,
+    STATEMENT_RESULT_KEY,
     CatalogQueryPrepareRequest,
     CatalogQueryPrepareResult,
     ClientQueryCapabilities,
     QueryCapabilities,
     _QueryRecord,
     read_query_schema,
+    statement_result_kind,
 )
 from vgi.exceptions import CatalogCapabilityError, OpaqueDataNotRecognizedError
 from vgi.invocation import BindResponse, FunctionType, GlobalInitResponse
@@ -116,7 +119,10 @@ def _current(
     available = provider.capabilities(owner=owner, offer=offer)
     if (
         available is None
-        or available.select(offer, supports_transactions=QUERY_AUTOMATIC in selected.semantic_profiles) != selected
+        or available.select(
+            offer, supports_transactions=bool({QUERY_AUTOMATIC, QUERY_STATEMENT} & set(selected.semantic_profiles))
+        )
+        != selected
     ):
         raise CatalogCapabilityError("catalog query agreement changed; reattach", QUERY_EXPLICIT)
     return provider, owner, selected
@@ -398,7 +404,17 @@ def executor_type(worker: Worker) -> type[TableFunctionGenerator[Any, Any]]:
                 ):
                     raise ValueError("catalog query executor rejects dynamic filters and result-cache validators")
                 batch = provider.read(owner=owner, handle=ticket.handle, position=state.position)
+                # The result kind is fixed by preparation and carried by the
+                # existing Arrow schema. No trailer, alternate RPC or mutable
+                # schema metadata is needed for command completion.
+                statement = (
+                    QUERY_STATEMENT in selected.semantic_profiles
+                    and (params.output_schema.metadata or {}).get(STATEMENT_RESULT_KEY) is not None
+                )
+                command = statement and statement_result_kind(params.output_schema) == "command"
                 if batch is None:
+                    if command and state.position != 1:
+                        raise ValueError("statement command requires exactly one completion row")
                     provider.close(owner=owner, handle=ticket.handle, reason="eos")
                     state.closed = True
                     out.finish()
@@ -408,6 +424,12 @@ def executor_type(worker: Worker) -> type[TableFunctionGenerator[Any, Any]]:
                 ):
                     raise ValueError("query result batch changed the accepted schema")
                 batch.validate(full=True)
+                if command:
+                    if state.position != 0 or batch.num_rows != 1:
+                        raise ValueError("statement command requires exactly one completion row")
+                    count = batch.column(0)[0].as_py()
+                    if count is not None and count < 0:
+                        raise ValueError("statement affected_rows must not be negative")
                 require_logical_batch(
                     batch,
                     selected_profiles=worker._effective_catalog_capabilities(call.attach_opaque_data).read,

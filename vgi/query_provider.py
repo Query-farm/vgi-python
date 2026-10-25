@@ -79,6 +79,16 @@ class CatalogQueryProvider:
     Transaction end, attachment revocation, normal EOS, errors and cancellation
     close executions. Since cancellation is best effort, expired resources must
     also be reclaimed without requiring a well-behaved client.
+
+    The optional vgi.remote.statement.v1 profile reuses this lifecycle for one
+    explicitly requested transactional DML/DDL statement. Preparation and bind
+    remain effect-free. Providers must reject scripts, transaction/session
+    control and nontransactional effects before execution. Statement execution
+    and result failures, cancellation and owner loss invalidate the entire
+    transaction; commit must also reject an execution that has not reached EOS.
+    A normal EOS completes the statement but does not commit its transaction.
+    Providers own these checks and backend rollback through the existing
+    transaction methods; the generic executor cannot infer backend effects.
     """
 
     def capabilities(self, *, owner: QueryOwner, offer: ClientQueryCapabilities) -> QueryCapabilities | None:

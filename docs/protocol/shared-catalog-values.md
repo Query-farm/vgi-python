@@ -763,6 +763,60 @@ provider authorization/snapshot integration, a scheduled production janitor,
 native explicit/automatic adapters and performance qualification remain open.
 
 
+## Explicit transactional statements — October 25, 2026
+
+This bounded extension reuses `catalog_query_prepare`, `catalog_query_release`,
+`__vgi_catalog_query` bind/init/stream, typed parameter batches and the existing
+transaction RPCs. It adds no method or request/response field. It adds negotiated
+semantics and reserved result-schema metadata to the unpublished successor.
+`vgi.remote.readonly.v1` and automatic read-query semantics remain unchanged.
+
+`vgi.remote.statement.v1` selects execution mode `statement`. Selection requires
+an explicit client offer and provider transaction support. Every request must
+carry a nonempty existing transaction handle and the exact provider-default
+evaluation context. It has no automatic object manifest. The provider admits
+one explicitly requested DML or transactional DDL statement in its qualified
+SQL subset. Scripts, transaction control, ATTACH/DETACH, session mutations,
+COPY/external effects and nontransactional DDL are outside this profile.
+Unsupported syntax/semantics decline before effects; authorization, malformed
+requests and backend failures remain errors. Merely naming a backend DuckDB
+does not establish support. The initial provider is a finite test reference.
+
+Preparation and bind do not execute mutations or infer types by running them.
+Accepted `output_schema` carries exactly one semantic result-kind value under
+`vgi.statement.result.v1`:
+
+| Value | Fixed Arrow result contract |
+| --- | --- |
+| `command` | Exactly one batch containing one row and one nullable int64 field named `affected_rows`. DML supplies a nonnegative affected-row count (including zero); DDL supplies NULL. Field metadata is empty. |
+| `rows` | Nonempty declared output schema for RETURNING; zero or more result batches/rows. Empty results still require successful EOS. |
+
+The metadata and schema are fixed at preparation and retained on every batch.
+The reserved key is rejected on read-profile preparations. A count row alone
+is not completion: successful EOS completes the statement, not the transaction.
+There is no separate completion RPC, trailer or durable receipt/replay service.
+Result validation failures and early cancellation invalidate the entire existing
+transaction. Providers reject commit while a statement is incomplete or failed;
+transaction end, owner loss and expiry reclaim executions and roll back as
+needed. No retry or local fallback follows an ambiguous execution failure.
+An explicit caller must consume to EOS; constructing a lazy Python generator
+alone executes nothing. Reusing a preparation for an intentional new execution
+is distinct from retrying an ambiguous old one.
+
+The command response does not need a post-execution catalog-version field.
+After DDL, clients use existing `catalog_version` and catalog discovery under
+the same transaction, then refresh after commit. `validated_catalog_version`
+in preparation remains a pre-execution observation and must never be rewritten
+as the post-DDL version. Native statement adapters must invalidate local caches
+conservatively before another lookup in the same transaction.
+
+Python implements the profile validation and command-result shape checks. The
+six other worker SDKs retain compatible data-only query records and default
+UNIMPLEMENTED query handlers; they do not gain executable statement support.
+The native 1.5 `vgi_query` offer/validator still admits only read-only queries.
+A dedicated mutation-aware native statement entry point is unimplemented.
+Runtime evidence and limits belong to the companion manifest checkpoint.
+
 ## Combined protocol review — October 23, 2026
 
 This source review reconciles the complete field inventory with the implemented
