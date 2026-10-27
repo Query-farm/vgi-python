@@ -120,8 +120,18 @@ dependency on this limit interface, so shipping it requires the corresponding
 RPC dependency release/pin. The dependency tests and all 27 public-RPC cases
 pass over subprocess and HTTP. Java, C#, Rust and TypeScript also received
 narrow request-local framing fixes.
-Python's generic RPC wrapper still unwraps only the first outer batch before
-its typed validator runs: the extra-batch probe fails, while its 19 required
-semantic cases pass. Python outer framing/raw-size qualification remains a
-release prerequisite. This checkpoint does not claim complete transport
-conformance or protocol freeze.
+The Python RPC fix, qualified on October 27, calls the request type's existing
+byte decoder rather than unwrapping only its first batch. This restores the
+raw 8 MiB limit before decoding; no new size-limit interface is needed. The
+default decoder checks the entire single-batch value and retains valid physical
+EOF and legacy/modern EOS. Both it and VGI's custom typed-value decoder classify
+truncated in-memory bodies as malformed input. Streaming RPC framing is unchanged.
+
+The public Python runner passes all 27 standard cases and 37 extended cases over
+subprocess and real localhost HTTP. The extended cases cover every incomplete
+modern/legacy EOS prefix, and HTTP probes verify malformed requests return 400.
+Full RPC and VGI Python suites pass. The exact tested RPC commit is `99b3090` on
+`codex/single-record-ipc-framing`; see the manifest's
+`python_rpc_framing_checkpoint_2026_10_27` for evidence and counts. Publishing and
+pinning the paired Python/Go dependencies remains a release prerequisite. These
+bounded checks do not claim complete transport conformance or protocol freeze.
