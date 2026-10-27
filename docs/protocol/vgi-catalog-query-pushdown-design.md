@@ -1,4 +1,4 @@
-# VGI 2 catalog query pushdown
+# VGI catalog query pushdown
 
 **Status:** engine integration design; the Python preparation/execution lifecycle and shared
 SDK codecs and the opt-in native 1.5 explicit adapter are implemented on the preparation
@@ -12,9 +12,10 @@ and automatic pushdown remain read-only.
 
 The implementation belongs to the **combined successor protocol release**, alongside the
 catalog/type changes in the [manifest](duckdb-2.0-manifest.json). It does not reserve a separate
-minor release. Published main now uses `vgi.v2` / `2.2.0`; the merged development branch
-retains those labels only as an unpublished incompatible placeholder. The final successor
-major version and routing transition remain unresolved. See the
+minor release. Published main now uses `vgi.v2` / `2.2.0`; the prepared successor
+now uses `vgi.v3` / `3.0.0`. Separate versioned endpoints/processes, draining old
+sessions, and reattaching/repreparing remain the migration policy. Coordinated
+release qualification is still required. See the
 [latest-main integration checkpoint](duckdb-2.0-main-integration-2026-10-24.md).
 
 The current wire authority is [prepared read queries and typed parameters](shared-catalog-values.md#prepared-read-queries-and-typed-parameters)
@@ -472,8 +473,8 @@ reference or evaluation-context record. Existing attachment/transaction tokens r
 output/object schemas use Arrow IPC schema serialization, not an IPC table. Null and empty are
 distinct. The existing outer `CatalogAttachRequest.client_capabilities` IPC encoding is unchanged.
 
-Route preparation, bind, and init through `VGI_MAIN_PROTOCOL` with generated name `vgi.v2` and the
-selected surface version. HTTP preparation uses `{base}/vgi.v2/catalog_query_prepare`; raw
+Route preparation, bind, and init through `VGI_MAIN_PROTOCOL` with generated name `vgi.v3` and the
+selected surface version. HTTP preparation uses `{base}/vgi.v3/catalog_query_prepare`; raw
 transports carry `vgi_rpc.protocol`. The SDK-owned executor name is a function argument to normal
 `bind`/`init`, not a server-level reserved RPC: the `__transport_options__` routing exception must
 not apply to it. Register the new method in request/response schema validation and tracing.
@@ -1188,7 +1189,7 @@ ordinary functions.
 
 Update `vgi/codegen/_common.py`'s inventories and generated protocol/schema artifacts for C++,
 TypeScript, Rust, Go, Java, and C#. Regenerate the existing typed model/builders as well as schemas,
-protocol versions, and protocol-name artifacts; preserve the routing name `vgi.v2`. Extend
+protocol versions, and protocol-name artifacts; use the successor routing name `vgi.v3`. Extend
 inventory, nested-schema/type parity, protocol-name/version, catalog-auth-binding, and client-catalog
 tests. Add a Python client query convenience method that uses the same preparation and TABLE path;
 do not bypass the public client lifecycle with a private standalone HTTP call.
@@ -1284,7 +1285,7 @@ including omitted/explicit-only capabilities and per-query declines.
 - Capability absent, empty intersections, unknown selected IDs, version mismatch, size limits,
   malformed nested structs/schema IPC, duplicate/invalid fields, null versus empty, and invalid
   status unions. Check typed models/builders as well as schemas across all six worker SDKs.
-- `vgi.v2` routing on raw transports and HTTP; new-method schema registration; protocol-name and
+- `vgi.v3` routing on raw transports and HTTP; new-method schema registration; protocol-name and
   surface-version mismatch; the reserved executor still using normal routed `bind`/`init`.
 - Bulk metadata enabled/disabled, version 0 with/without etag, stale snapshot retry, etag
   not-modified, transaction-local DDL, and two attachments with coincidentally equal versions.
@@ -1359,10 +1360,10 @@ universal speedup percentage; establish budgets from these measurements before d
 
 ## 13. Compatibility, alternatives, and launch gates
 
-Published main now uses **2.2.0** under **`vgi.v2`**. The merged Python SDK and extension
-retain those labels only as an unpublished development placeholder.
+Published main now uses **2.2.0** under **`vgi.v2`**. The prepared Python SDK, other SDKs and extension
+use **3.0.0** under **`vgi.v3`**.
 The query capability, preparation/release RPCs and parameter metadata join the combined breaking
-successor contract. Freeze the major version and routing/migration policy with that package;
+successor contract. The selected major version and routing/migration policy apply to that package;
 do not publish this development surface as a compatible 2.2.0 update.
 
 The framework enforces exact major/minor compatibility. Some catalog-item decoders tolerate

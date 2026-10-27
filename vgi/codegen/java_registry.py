@@ -1,6 +1,6 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
-r"""Emit vgi-java's ``VgiService``: the whole ``vgi.v2`` registry, for vgi-java.
+r"""Emit vgi-java's ``VgiService``: the whole ``vgi.v3`` registry, for vgi-java.
 
 vgi-rpc-java registers a protocol by reflecting over a Java interface: every
 public method is a wire method, its parameters derive the params schema
@@ -11,7 +11,7 @@ column, and ``@StreamHeader`` names a stream's header record. So the interface
 :class:`vgi.protocol.VgiProtocol` (see :mod:`vgi.codegen._registry` for the
 model and the reasons):
 
-- every ``vgi.v2`` method, with types chosen so the derivation reproduces the
+- every ``vgi.v3`` method, with types chosen so the derivation reproduces the
   reference schemas exactly;
 - a ``default`` body on every method that throws vgi-rpc-java's
   ``MethodNotImplementedError`` -- ``UNIMPLEMENTED`` /
@@ -193,7 +193,7 @@ def _result(m: RegistryMethod) -> tuple[str, tuple[str, ...]]:
 
 
 def java_methods(methods: Sequence[RegistryMethod] | None = None) -> list[JavaMethod]:
-    """Every ``vgi.v2`` method as vgi-java declares it."""
+    """Every ``vgi.v3`` method as vgi-java declares it."""
     methods = registry_methods() if methods is None else methods
     check_record_table(JAVA_TYPES, methods, what="JAVA_TYPES", headers=True)
     check_raw_results(JAVA_RAW_RESULTS, methods, what="JAVA_RAW_RESULTS")
@@ -257,7 +257,7 @@ def _render_method(jm: JavaMethod) -> list[str]:
 
 _CLASS_DOC = """\
 /**
- * The {@code vgi.v2} protocol: every method a VGI worker serves, generated from
+ * The {@code vgi.v3} protocol: every method a VGI worker serves, generated from
  * the reference ({@code vgi.protocol.VgiProtocol} in vgi-python).
  *
  * <p>vgi-rpc-java reflects over this interface to register the protocol, so the
@@ -265,7 +265,7 @@ _CLASS_DOC = """\
  * {@code @Nullable} derive its params-schema column, the return type derives the
  * {@code result} column, and {@code @StreamHeader} names a stream's header. They
  * reproduce the reference's schemas exactly, which is what makes
- * {@code vgi_rpc.Reflection.v1} report one {@code vgi.v2} hash in every SDK. The
+ * {@code vgi_rpc.Reflection.v1} report one {@code vgi.v3} hash in every SDK. The
  * protocol is the unit of optionality: every method is registered, whether or not
  * this worker implements it.</p>
  *
@@ -435,7 +435,7 @@ class JavaRegistry(RegistryBackend):
             if ret.startswith("RpcStream<"):
                 kind = MethodKind.STREAM
                 if hm := re.search(r"@StreamHeader\((\w+)\.class\)", method_ann):
-                    expect(hm.group(1) in headers, f"{name}: @StreamHeader({hm.group(1)}) is no vgi.v2 header")
+                    expect(hm.group(1) in headers, f"{name}: @StreamHeader({hm.group(1)}) is no vgi.v3 header")
                     header = headers[hm.group(1)]
                 result = None
             elif ret == "void":

@@ -3,7 +3,7 @@
   "objective": "Complete P0-P3 and M0-M4 of the VGI DuckDB 2.0 plan, preparing the combined protocol on the 1.5 engine before the separate native port.",
   "status": "in_progress",
   "version_decision": {
-    "status": "major_required_final_number_and_diff_pending_P1_P2",
+    "status": "major_and_routing_selected_release_qualification_pending",
     "published_protocol": "vgi.v2/2.2.0",
     "breaking_candidates": [
       "Raw column paths replacing flat/dotted targets",
@@ -12,10 +12,11 @@
     ],
     "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
     "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the successor schema inventory; required canonical table constraint lists replace the legacy parent arrays and revision-checked catalog_table_constraints_apply joins the public method surface; typed index definitions/options replace legacy index fields and add catalog_index_option_definitions; required semantic ALTER flags and raw subject/dependent column paths extend embedded dependency records; SET DEFAULT requires binary SqlExpression IPC and USING accepts nullable binary IPC; CREATE/ADD defaults use the canonical field codec, without new capability negotiation; CatalogAttachResult.default_schema becomes nullable UTF-8, preserving no implicit default independently of an explicit raw schema name; MacroInfo and MacroCreateRequest require nonempty overloads and remove legacy parent parameters/definition/parameter_default_values/arguments_schema; canonical families need no overload read/create opt-in; existing column comment/tags Arrow metadata gains strict shared validation and preservation on CREATE/ADD/discovery, with no record/RPC change; generated-column authoring/discovery/CREATE consistently use the existing canonical SqlExpression/category metadata, replacing legacy generated_expression strings without a new RPC or record layout; BindResponse adds optional projection_expression_profiles and table_function_projection adds structured early subset acceptance with canonical expressions and exact appended Arrow fields; BindResponse appends required repeatability enum UNKNOWN/STABLE_WITHIN_QUERY, with bounded native1.5 and SDK qualification; optional explicit transactional DML/DDL statement profile and fixed command/RETURNING output-schema metadata reuse existing query and transaction RPCs, with no new record fields",
-    "version_requirement": "The existing breaking changes require a major version and matching routing name. Published main is now vgi.v2/2.2.0; retaining that development placeholder does not make the successor compatible with published 2.2. The earlier additive2.2 successor proposal is historical and superseded. Final number and complete generated diff remain P1/P2 work.",
-    "planned_diff": "Included before freeze: broader production-provider/adapter acceptance and release gates. Bounded scalar projection, bind-specific repeatability and Go/Python wrapped IPC qualification pass on the pinned1.5 build. Python RPC0.52.3 and Go RPC0.36.0 are merged, published and selected by the VGI dependency requirements/locks; registry/module installs are qualified without RPC source overrides. Final successor version/routing, remaining transports and provider acceptance still require qualification.",
+    "version_requirement": "The breaking successor uses major version 3.0.0 and routing name vgi.v3 across the extension and all seven SDKs. Published vgi.v2/2.2.0 remains incompatible. Exact major/minor matching remains in force; final coordinated candidate qualification and rollout proof are outstanding.",
+    "planned_diff": "Included before freeze: broader production-provider/adapter acceptance and release gates. Bounded scalar projection, bind-specific repeatability and Go/Python wrapped IPC qualification pass on the pinned1.5 build. Python RPC0.52.3 and Go RPC0.36.0 are merged, published and selected by the VGI dependency requirements/locks; registry/module installs are qualified without RPC source overrides. The successor identity is selected as vgi.v3/3.0.0; remaining transports, provider acceptance and coordinated candidate release gates still require qualification.",
     "historical_additive_candidate": "vgi.v2/2.2.0",
-    "development_placeholder": "vgi.v2/2.2.0; unpublished incompatible successor; final major and routing unresolved"
+    "development_placeholder": "retired: vgi.v2/2.2.0 development placeholder replaced by unpublished vgi.v3/3.0.0",
+    "successor_protocol": "vgi.v3/3.0.0"
   },
   "sources": {
     "native_revision": "1a0a059",
@@ -12214,5 +12215,83 @@
     "gate_effect": "Closes the Python/Go RPC publication and reproducible dependency blockers. RPC repositories alone were merged/released; VGI preparation branches remain unmerged. Final VGI major version/routing and its coordinated candidate validation remain outstanding; no native DuckDB 2 enablement.",
     "diagnostics": "Initial isolated Python checkout lacked sibling SDK paths, causing 19 additional generated-artifact skips; sibling source links restored the final 4661/129 coverage. An initial standalone projection harness lacked VGI_PROJECTION_COMMON=1; final run passed with the intended fixture. No production change was required for either setup correction. Plain Go make test initially passed 350 files/skipped 40; restoring the eight attach-options, schema-reconciliation and versioned-HTTP fixture cases recovered the final 358/32 coverage without changing skip policy.",
     "environment_followup": "Owned default Python environment upgraded only vgi-rpc 0.52.0 to 0.52.3. Owned environment.sh now exports GOWORK=off; historical state/go.work is preserved as evidence and no longer selected by default."
+  },
+  "protocol_identity_checkpoint_2026_10_27": {
+    "status": "implemented_focused_validation_passed",
+    "protocol_name": "vgi.v3",
+    "protocol_version": "3.0.0",
+    "protocol_hash": "50e9404173bee3262e96b8939eb5c425463336abca2a17916812d68b6e0f6cad",
+    "catalog_contract_hash": "1d12ce672b43ca1510721f89637bb374d27693b100d357ac2ead99fcddc27e9f",
+    "host": "ec2-user@54.224.166.207",
+    "artifacts": "qualification/protocol-v3-20261027-Szrx1e",
+    "scope": "Protocol identity, generated artifacts, current consumers/reflection fixtures and publication namespaces. SDK package versions, independent auxiliary protocols and the unchanged catalog stream digest domain are not coupled to this major. DuckDB 1.5 engine pin is unchanged.",
+    "gate_effect": "Closes the final protocol identity choice and its focused consistency checks. No VGI merge, public release, final full-language integration matrix or native DuckDB 2 qualification is claimed.",
+    "validation": {
+      "generated_artifacts": "All eight repository roots present; strict regeneration check passes with zero drift, including protocol_version.txt in the required generation inventory.",
+      "python": {
+        "focused_passed": 350,
+        "lint": "Ruff check and format pass",
+        "types": "mypy passes 235 source files",
+        "log": "python-focused.log"
+      },
+      "go": {
+        "focused_passed": 38,
+        "log": "go-rust-csharp/go-focused.jsonl"
+      },
+      "rust": {
+        "focused_passed": 13,
+        "log_directory": "go-rust-csharp"
+      },
+      "typescript": {
+        "passed_per_backend": 88,
+        "assertions_per_backend": 298,
+        "backends": [
+          "arrow-js",
+          "flechette"
+        ],
+        "declaration_build": "passed",
+        "log_directory": "ts-java-cpp"
+      },
+      "java": {
+        "focused_passed": 19,
+        "failed": 0,
+        "skipped": 0,
+        "log": "ts-java-cpp/java-summary.json"
+      },
+      "csharp": {
+        "focused_passed": 118,
+        "rpc_dependency": "NuGet QueryFarm.VgiRpc 0.18.1 selected explicitly with VgiRpcCSharpUseSource=false",
+        "log": "go-rust-csharp/csharp-focused-published.log"
+      },
+      "native": {
+        "artifact_tests": 6,
+        "http_test_cases": 8,
+        "http_assertions": 265,
+        "subprocess_sql_files": 4,
+        "http_sql_files": 2,
+        "cli_reflection": "vgi.v3 / 3.0.0",
+        "engine_revision": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+        "engine_version": "v1.5.6-dev149",
+        "binary_hashes": "native-binary-sha256.txt",
+        "log_prefix": "native-"
+      },
+      "cpp": {
+        "focused_cases": 4,
+        "assertions": 549,
+        "transports": [
+          "stdio",
+          "Unix socket",
+          "HTTP"
+        ],
+        "worker_rebuilt": true,
+        "log_directory": "ts-java-cpp"
+      }
+    },
+    "diagnostics": [
+      "The initial Python HTTP rejection assertion omitted the test-client headers argument; corrected the assertion and all 350 focused tests pass.",
+      "The existing write-finalization probe needed two formatting-only changes for the current Ruff check.",
+      "The initial C# command selected a historical sibling RPC checkout and failed unrelated IdentityFixture API compilation. The final focused run uses the checked-in published NuGet dependency and passes; both logs are retained."
+    ],
+    "review": "Independent read-only cross-repository review found no material issue in active routing, versions, hashes, generated references, publication identities or auxiliary-protocol independence."
   }
 }

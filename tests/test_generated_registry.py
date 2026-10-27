@@ -1,6 +1,6 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
-"""The generated ``vgi.v2`` registries reproduce the reference protocol hash.
+"""The generated ``vgi.v3`` registries reproduce the reference protocol hash.
 
 One parametrization runs over every backend of the registry generator
 (:data:`vgi.codegen._registry_backend.REGISTRY_BACKENDS`). The meaningful
@@ -65,10 +65,10 @@ def test_model_reproduces_the_live_hash() -> None:
 
 @pytest.mark.parametrize("backend", _BACKENDS, ids=_IDS)
 def test_registry_derives_the_live_hash(backend: RegistryBackend) -> None:
-    """The rendered registry, read back as the SDK's vgi-rpc port reads it, is the reference vgi.v2."""
+    """The rendered registry, read back as the SDK's vgi-rpc port reads it, is the reference vgi.v3."""
     derived = backend.derived_methods()
     assert sorted(m.name for m in derived) == sorted(m.name for m in registry_methods()), (
-        f"{backend.language}: rendered method set differs from vgi.v2"
+        f"{backend.language}: rendered method set differs from vgi.v3"
     )
     assert preimage_hash(protocol_name(), derived) == _live_hash()
 

@@ -4,8 +4,8 @@ Status: development contract for the combined successor protocol. The wire
 records use one canonical overload-family representation while builds remain
 on DuckDB 1.5. Native SQL CREATE MACRO remains unsupported; creation through
 the catalog API and native discovery/execution are distinct paths.
-Existing `vgi.v2` spelling does not declare
-this breaking development diff compatible with released implementations.
+The breaking successor uses `vgi.v3` / `3.0.0`; it is incompatible with
+released `vgi.v2` implementations.
 
 The [October 23 combined review](shared-catalog-values.md#combined-protocol-review--october-23-2026)
 selects a single overload-family representation for the successor freeze.

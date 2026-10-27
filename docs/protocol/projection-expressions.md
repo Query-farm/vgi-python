@@ -1,8 +1,9 @@
 # Optional scalar projection expressions
 
 This contract is part of the combined, unpublished DuckDB 2.0 protocol
-transition. It can be implemented and tested while the native adapter still
-builds against DuckDB 1.5. It does not change the published protocol version.
+transition, identified as `vgi.v3` / `3.0.0`. It can be implemented and tested
+while the native adapter still builds against DuckDB 1.5. The successor is
+unpublished and still requires coordinated release qualification.
 
 ## Offer and proposal
 

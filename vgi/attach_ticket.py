@@ -667,7 +667,7 @@ class AttachTicketsImpl:
         """Build the implementation.
 
         Args:
-            worker: The ``Worker`` or ``MetaWorker`` serving ``vgi.v2``.
+            worker: The ``Worker`` or ``MetaWorker`` serving ``vgi.v3``.
             max_ttl_seconds: Lifetime ceiling, or ``None`` for no maximum.
 
         """

@@ -1,6 +1,6 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
-r"""Emit vgi-csharp's ``IVgiService``: the whole ``vgi.v2`` registry, for vgi-csharp.
+r"""Emit vgi-csharp's ``IVgiService``: the whole ``vgi.v3`` registry, for vgi-csharp.
 
 vgi-rpc-csharp registers a protocol by reflecting over a C# interface: every
 method is a wire method (``BindAsync`` is ``bind``), its parameters derive the
@@ -11,7 +11,7 @@ stream's header record. So the interface *is* the registration table, and this
 module generates it from :class:`vgi.protocol.VgiProtocol` (see
 :mod:`vgi.codegen._registry` for the model and the reasons):
 
-- every ``vgi.v2`` method, typed with the records and enums
+- every ``vgi.v3`` method, typed with the records and enums
   :mod:`vgi.codegen.csharp_types` already generates, so the derivation
   reproduces the reference schemas exactly;
 - a default interface method body on every one that throws vgi-csharp's
@@ -192,7 +192,7 @@ def _method_name(wire: str) -> str:
 
 
 def csharp_methods(methods: Sequence[RegistryMethod] | None = None) -> list[CSharpMethod]:
-    """Every ``vgi.v2`` method as vgi-csharp declares it."""
+    """Every ``vgi.v3`` method as vgi-csharp declares it."""
     methods = registry_methods() if methods is None else methods
     model = csharp_types.build_model()
     check_raw_results(CSHARP_RAW_RESULTS, methods, what="CSHARP_RAW_RESULTS")
@@ -241,7 +241,7 @@ def _render_method(cm: CSharpMethod) -> list[str]:
 
 _INTERFACE_DOC = """\
 /// <summary>
-/// The <c>vgi.v2</c> protocol: every method a VGI worker serves, generated from the reference
+/// The <c>vgi.v3</c> protocol: every method a VGI worker serves, generated from the reference
 /// (<c>vgi.protocol.VgiProtocol</c> in vgi-python).
 /// </summary>
 /// <remarks>
@@ -249,7 +249,7 @@ _INTERFACE_DOC = """\
 /// below <em>are</em> the wire contract: a parameter's CLR type and nullability derive its
 /// params-schema column, the return type derives the <c>result</c> column, and
 /// <c>[StreamHeader]</c> names a stream's header. They reproduce the reference's schemas exactly,
-/// which is what makes <c>vgi_rpc.Reflection.v1</c> report one <c>vgi.v2</c> hash in every SDK. The
+/// which is what makes <c>vgi_rpc.Reflection.v1</c> report one <c>vgi.v3</c> hash in every SDK. The
 /// protocol is the unit of optionality: every method is registered, whether or not this worker
 /// implements it.</para>
 /// <para>Every method has a default body that answers <c>UNIMPLEMENTED</c> /
@@ -374,7 +374,7 @@ class CSharpRegistry(RegistryBackend):
             elif inner.startswith("RpcStream<"):
                 kind = MethodKind.STREAM
                 if hm := re.search(r"\[StreamHeader\(typeof\((\w+)\)\)\]", attrs):
-                    expect(hm.group(1) in headers, f"{name}: [StreamHeader] {hm.group(1)} is no vgi.v2 header")
+                    expect(hm.group(1) in headers, f"{name}: [StreamHeader] {hm.group(1)} is no vgi.v3 header")
                     header = headers[hm.group(1)]
             else:
                 kind = MethodKind.UNARY

@@ -133,7 +133,7 @@ class VgiSecretProtocol(Protocol):
             enforced as an exact major+minor match at the dispatch boundary.
     """
 
-    # Its own name and its own major, independent of ``vgi.v2``: this contract
+    # Its own name and its own major, independent of ``vgi.v3``: this contract
     # versions on a separate cadence, which is why ``protocol_version_override``
     # exists on the client side at all.
     protocol_name: ClassVar[str] = "vgi.secret.v1"

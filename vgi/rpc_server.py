@@ -11,7 +11,7 @@ which transport" a single decision rather than five.
 
 What a server hosts, in reflection order:
 
-1. The worker's own protocol (``vgi.v2``, or the worker's ``protocol_class``).
+1. The worker's own protocol (``vgi.v3``, or the worker's ``protocol_class``).
 2. The worker's [`hosted_protocols`][vgi.worker.Worker.hosted_protocols], in
    the order returned — on **every** transport.
 3. ``vgi_rpc.Reflection.v1`` — on every transport unless ``describe=False``
@@ -22,9 +22,9 @@ What a server hosts, in reflection order:
    configured explicitly *and* the worker can issue grants. See
    [`vgi.attach_ticket`][vgi.attach_ticket].
 
-Extra protocols cannot change ``vgi.v2`` behaviour: vgi-rpc routes every
+Extra protocols cannot change ``vgi.v3`` behaviour: vgi-rpc routes every
 request on its ``vgi_rpc.protocol`` key, with no fallback to the primary, so a
-client that only ever names ``vgi.v2`` (the DuckDB extension) dispatches
+client that only ever names ``vgi.v3`` (the DuckDB extension) dispatches
 exactly as it would against a single-protocol server.
 """
 

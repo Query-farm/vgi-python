@@ -145,9 +145,7 @@ class _ProbeWrite(TableInOutGenerator[None, None]):
         _event(params, "input_init")
 
     @classmethod
-    def process(
-        cls, params: ProcessParams[None], state: None, batch: pa.RecordBatch, out: OutputCollector
-    ) -> None:
+    def process(cls, params: ProcessParams[None], state: None, batch: pa.RecordBatch, out: OutputCollector) -> None:
         del state
         mode = _parse_write_options(params)["result_mode"]
         _event(params, "input", rows=batch.num_rows, result_mode=mode)
@@ -193,9 +191,7 @@ class _FinalizingWrite(_ProbeWrite):
             _event(params, "finalize_raise")
             raise RuntimeError("write_finalize_probe: finalize raised")
         result = (
-            pa.RecordBatch.from_pylist(rows, schema=_ROWS)
-            if cls.case == "deferred_returning"
-            else _count(len(rows))
+            pa.RecordBatch.from_pylist(rows, schema=_ROWS) if cls.case == "deferred_returning" else _count(len(rows))
         )
         _event(params, "finalize_return", rows=result.num_rows, columns=result.schema.names)
         return [result]

@@ -55,7 +55,7 @@ class CounterImpl:
 
 
 class HostingWorker(Worker):
-    """Hosts `EchoProtocol` then `CounterProtocol` beside ``vgi.v2``."""
+    """Hosts `EchoProtocol` then `CounterProtocol` beside ``vgi.v3``."""
 
     functions = []
 

@@ -6,7 +6,7 @@ and surfaces errors as `ClientError`. It is the pure-Python counterpart to the D
 ## Discovering hosted protocols
 
 Every worker hosts the vgi-rpc reflection protocol, `vgi_rpc.Reflection.v1`, on every transport.
-`Client.list_protocols()` asks it what the worker hosts, in the worker's order: `vgi.v2` first,
+`Client.list_protocols()` asks it what the worker hosts, in the worker's order: `vgi.v3` first,
 then any protocols the worker adds through `Worker.hosted_protocols()`, then the framework's own.
 Each entry is a `HostedProtocol` (vgi-rpc's, re-exported from `vgi.client`) with `name`,
 `version`, `hash`, `deprecated`, `deprecation_message` and `features`. The hash is a SHA-256 hex digest of the
@@ -27,7 +27,7 @@ with Client("vgi-fixture-worker") as client:
 A worker that does not host reflection (one built before it existed answers `UNIMPLEMENTED` /
 `protocol_not_supported`, which vgi-rpc raises as `ReflectionNotSupportedError`) is not an
 error for `list_protocols()`. It returns the single entry
-`HostedProtocol("vgi.v2", "", "")`, because `vgi.v2` is the one protocol every worker hosts. The
+`HostedProtocol("vgi.v3", "", "")`, because `vgi.v3` is the one protocol every worker hosts. The
 empty hash marks the entry as inferred rather than reported.
 
 Both calls use the client's primary connection. Do not call them while a stream is open on

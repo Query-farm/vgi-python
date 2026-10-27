@@ -1,7 +1,7 @@
 # VGI Attach Tickets
 
 **Status:** Normative. Reference implementation: vgi-python `vgi/attach_ticket.py`.
-**Protocol:** `vgi.attach_tickets.v1`, version `2.0.0`. No change to `vgi.v2`.
+**Protocol:** `vgi.attach_tickets.v1`, version `2.0.0`. No change to `vgi.v3`.
 **Revision 2026-10-17 (`2.0.0`):** `AttachTicket.expires_at` changed from
 `float64` unix seconds (`+inf` = no expiry) to nullable
 `timestamp[us, tz="UTC"]` (null = no expiry). The sealed payload (§2) is
@@ -136,7 +136,7 @@ from `vgi_rpc.Reflection.v1` `list_protocols`):
    (`VGI_RPC_GRANT_KEYS`) or the worker supplies its own `mint_grant`. A ticket
    is useless without a grant.
 
-It is hosted beside `vgi.v2` and never changes how a `vgi.v2` request is
+It is hosted beside `vgi.v3` and never changes how a `vgi.v3` request is
 dispatched. Wire name `vgi.attach_tickets.v1`, `protocol_version = "2.0.0"`.
 
 ### 5.2 Shapes
@@ -204,7 +204,7 @@ A worker MAY refuse by policy with `action_denied`.
 
 ## 6. Redeeming: what `catalog_attach` does
 
-When a `vgi.v2` `catalog_attach` request's options contain a key equal,
+When a `vgi.v3` `catalog_attach` request's options contain a key equal,
 case-insensitively, to `vgi_attach_ticket`, the SDK framework, before any
 catalog code:
 

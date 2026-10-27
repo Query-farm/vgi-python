@@ -1576,7 +1576,7 @@ class Worker:
         result is hosted on every transport this worker serves (stdin/stdout,
         AF_UNIX or named pipe, TCP, the Iroh raw upstream and HTTP), after the
         worker's own protocol and in the order returned, so reflection's
-        ``list_protocols`` reports ``vgi.v2`` first and then these.
+        ``list_protocols`` reports ``vgi.v3`` first and then these.
 
         Called **once**, when the server is built (see
         [`build_rpc_server`][vgi.rpc_server.build_rpc_server]). It may consult
@@ -1596,7 +1596,7 @@ class Worker:
         error naming this method.
 
         Requests are routed on their ``vgi_rpc.protocol`` key, so hosting more
-        protocols never changes how a ``vgi.v2`` request is dispatched.
+        protocols never changes how a ``vgi.v3`` request is dispatched.
 
         Returns:
             The pairs to host; empty by default.

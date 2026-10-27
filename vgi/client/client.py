@@ -242,7 +242,7 @@ def _validate_accepted_max_response_bytes(value: int | None) -> int | None:
 
 
 #: Wire name of the primary VGI protocol, the first protocol every worker hosts.
-VGI_PROTOCOL_NAME = "vgi.v2"
+VGI_PROTOCOL_NAME = VgiProtocol.protocol_name
 
 
 @dataclass
@@ -1643,7 +1643,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
 
         Calls ``vgi_rpc.Reflection.v1.list_protocols`` through
         ``vgi_rpc.list_protocols`` on the primary worker's connection, whatever
-        the transport, without opening a new one. ``vgi.v2`` is always first; a
+        the transport, without opening a new one. ``vgi.v3`` is always first; a
         worker's extra protocols (``Worker.hosted_protocols()``) follow, then
         the framework's own. Use it to discover an optional protocol before
         calling it, rather than calling it and reading an error.
@@ -1653,7 +1653,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
 
         A worker that does not host reflection (vgi-rpc raises
         ``ReflectionNotSupportedError``) is not an error: the result is a single
-        ``HostedProtocol("vgi.v2", "", "")``, since ``vgi.v2`` is the one
+        ``HostedProtocol("vgi.v3", "", "")``, since ``vgi.v3`` is the one
         protocol every worker hosts. The empty hash marks the entry as inferred.
 
         Returns:

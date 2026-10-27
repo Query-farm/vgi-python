@@ -57,10 +57,10 @@ The rules:
 - **The protocol is the unit of optionality.** There is no way to host part of a protocol. Make
   an optional capability its own protocol, and include it or leave it out.
 - **Names are routing keys.** Each protocol needs a distinct `protocol_name`. A repeated name, the
-  worker's own `vgi.v2`, or the reserved `vgi_rpc.` prefix stops the worker at startup, and the
+  worker's own `vgi.v3`, or the reserved `vgi_rpc.` prefix stops the worker at startup, and the
   error names `hosted_protocols()`.
-- **`vgi.v2` is unaffected.** vgi-rpc routes each request on its `vgi_rpc.protocol` key and never
-  falls back to the primary protocol. A client that only speaks `vgi.v2`, such as the DuckDB
+- **`vgi.v3` is unaffected.** vgi-rpc routes each request on its `vgi_rpc.protocol` key and never
+  falls back to the primary protocol. A client that only speaks `vgi.v3`, such as the DuckDB
   extension, sees exactly the behaviour it saw before.
 
 A `MetaWorker` (`vgi.meta_worker`) hosts the concatenation of its children's lists, in
@@ -72,7 +72,7 @@ overriding the same hook stop it at startup.
 
 Reflection (`list_protocols`) reports protocols in this order:
 
-| Transport | `vgi.v2` | `hosted_protocols()` | `vgi_rpc.Reflection.v1` | `vgi_rpc.Identity.v2` |
+| Transport | `vgi.v3` | `hosted_protocols()` | `vgi_rpc.Reflection.v1` | `vgi_rpc.Identity.v2` |
 | --- | --- | --- | --- | --- |
 | stdin/stdout | yes | yes | yes | no |
 | AF_UNIX / named pipe | yes | yes | yes | no |

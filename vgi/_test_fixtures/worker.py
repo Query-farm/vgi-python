@@ -2219,7 +2219,7 @@ class ExampleWorker(Worker):
 
     @classmethod
     def hosted_protocols(cls) -> Sequence[tuple[type, object]]:
-        """Host ``conformance.Secondary.v1`` beside ``vgi.v2``, on every transport.
+        """Host ``conformance.Secondary.v1`` beside ``vgi.v3``, on every transport.
 
         The cross-SDK hosted-protocols group (``vgi-rpc-test-hosted``) expects
         every SDK fixture worker to host the vgi-rpc reference secondary. Only

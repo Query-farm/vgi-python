@@ -8,7 +8,7 @@
 #   unix   vgi-fixture-worker --unix <sock>         (the DuckDB launcher path)
 #   http   vgi-fixture-http --identity              (+ the Identity.v2 groups)
 #
-# Every worker must host, in order, vgi.v2 then conformance.Secondary.v1.
+# Every worker must host, in order, vgi.v3 then conformance.Secondary.v1.
 #
 # Usage: scripts/hosted_protocols_conformance.sh [stdio|unix|http ...]
 # Default: all three. Runs from the project env (`uv run --no-sync`), which
@@ -17,7 +17,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-EXPECT="vgi.v2,conformance.Secondary.v1"
+EXPECT="vgi.v3,conformance.Secondary.v1"
 RUN=(uv run --no-sync)
 BIN="$(dirname "$("${RUN[@]}" python -c 'import sys; print(sys.executable)')")"
 TRANSPORTS=("$@")

@@ -1,6 +1,6 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
-r"""Emit vgi-go's ``vgi.v2`` registry: the service interface, its UNIMPLEMENTED base and the method table.
+r"""Emit vgi-go's ``vgi.v3`` registry: the service interface, its UNIMPLEMENTED base and the method table.
 
 vgi-rpc-go registers a method explicitly -- ``vgirpc.Unary[P, R](s, name,
 handler)`` -- and derives its schemas by reflection over the Go types: the
@@ -18,7 +18,7 @@ nullable). So for Go the registry is three generated pieces (see
   vgi-rpc-go unwraps the request into); the generated file gives that struct
   its ``VgiRpcParamsSchema()``, the way ``stringer`` adds ``String()`` to a
   hand-written type, so the advertised ``request: binary`` comes from here.
-- **``vgiService``**, every ``vgi.v2`` method with its exact params and result
+- **``vgiService``**, every ``vgi.v3`` method with its exact params and result
   types, and **``unimplementedVgiService``**, whose every method answers
   ``methodNotImplemented`` -- ``UNIMPLEMENTED`` / ``method_not_implemented`` /
   ``"<method> is not implemented by this worker"``. vgi-go's concrete service
@@ -120,7 +120,7 @@ _IDENT = re.compile(r"^[A-Z][A-Za-z0-9]*$")
 
 @dataclass(frozen=True)
 class GoMethod:
-    """One ``vgi.v2`` method as vgi-go declares and registers it."""
+    """One ``vgi.v3`` method as vgi-go declares and registers it."""
 
     method: RegistryMethod
     #: The Go method name (``CatalogSchemas``).
@@ -208,7 +208,7 @@ def header_var(m: RegistryMethod) -> str:
 
 
 def go_methods(methods: Sequence[RegistryMethod] | None = None) -> tuple[list[GoMethod], pa.Field[Any]]:
-    """Every ``vgi.v2`` method as vgi-go declares it, and the shared ``request`` column."""
+    """Every ``vgi.v3`` method as vgi-go declares it, and the shared ``request`` column."""
     methods = registry_methods() if methods is None else methods
     _check_tables(methods)
     names = identifiers((m.name for m in methods), go_types.go_field_name, what="Go method")
@@ -222,7 +222,7 @@ def go_methods(methods: Sequence[RegistryMethod] | None = None) -> tuple[list[Go
         hv = header_var(m) if m.header_schema is not None else None
         out.append(GoMethod(m, pascal, params_type, struct, _result(m), hv))
     if not request_field:
-        raise GeneratorError("no vgi.v2 method carries a packed request")
+        raise GeneratorError("no vgi.v3 method carries a packed request")
     return out, request_field[0]
 
 
@@ -275,7 +275,7 @@ def _schema_var(name: str, fields: list[pa.Field[Any]], origin: str) -> list[str
 def _struct(r: go_types.GoRecord) -> list[str]:
     lines = _comment(
         [
-            f"{r.name} is the params of vgi.v2 {r.py_name}: one field per params-schema column, in order. "
+            f"{r.name} is the params of vgi.v3 {r.py_name}: one field per params-schema column, in order. "
             "vgi-rpc-go derives the advertised schema from these tags."
         ]
     )
@@ -310,9 +310,9 @@ def _registration(gm: GoMethod) -> str:
 
 
 _SERVICE_DOC = [
-    "vgiService is the vgi.v2 protocol: every method a VGI worker serves, generated from the "
+    "vgiService is the vgi.v3 protocol: every method a VGI worker serves, generated from the "
     "reference (vgi.protocol.VgiProtocol in vgi-python).",
-    "registerVgiService hosts every method, so vgi_rpc.Reflection.v1 reports the same vgi.v2 hash "
+    "registerVgiService hosts every method, so vgi_rpc.Reflection.v1 reports the same vgi.v3 hash "
     "from every SDK: the params and result types below derive the reference's schemas exactly. The "
     "protocol is the unit of optionality -- every method is registered whether or not this worker "
     "implements it. An implementation embeds unimplementedVgiService and defines the methods it "
@@ -359,7 +359,7 @@ def _render_body(model: Sequence[RegistryMethod]) -> str:
         if gm.header_var is not None and header is not None:
             lines.append("")
             record = gm.method.header_type.__name__  # type: ignore[union-attr]
-            lines += _comment([f"{gm.header_var} is the header of the vgi.v2 {gm.method.name} stream ({record})."])
+            lines += _comment([f"{gm.header_var} is the header of the vgi.v3 {gm.method.name} stream ({record})."])
             lines += _schema_var(gm.header_var, list(header), gm.method.name)
 
     # VgiRpcParamsSchema on each wrapped record struct, once per Go type.
@@ -379,7 +379,7 @@ def _render_body(model: Sequence[RegistryMethod]) -> str:
             lines.append("")
         lines += _comment(
             [
-                f"VgiRpcParamsSchema advertises the wrapped protocol shape of vgi.v2 {', '.join(names)}: "
+                f"VgiRpcParamsSchema advertises the wrapped protocol shape of vgi.v3 {', '.join(names)}: "
                 f"one `request` column; vgi-rpc-go unwraps it into {go_type}'s fields."
             ]
         )
@@ -399,14 +399,14 @@ def _render_body(model: Sequence[RegistryMethod]) -> str:
         if i:
             lines.append("")
         kind = "stream" if gm.method.is_stream else "unary"
-        lines += _comment([f"{gm.name} is vgi.v2 {gm.method.name} ({kind}). {_doc(gm.method)}"], "\t")
+        lines += _comment([f"{gm.name} is vgi.v3 {gm.method.name} ({kind}). {_doc(gm.method)}"], "\t")
         lines.append(f"\t{_signature(gm, named=True)}")
     lines.append("}")
 
     lines.append("")
     lines += _comment(
         [
-            "unimplementedVgiService answers every vgi.v2 method with UNIMPLEMENTED / "
+            "unimplementedVgiService answers every vgi.v3 method with UNIMPLEMENTED / "
             'method_not_implemented ("<method> is not implemented by this worker"). Embed it in a '
             "vgiService and define the methods the worker serves."
         ]
@@ -415,7 +415,7 @@ def _render_body(model: Sequence[RegistryMethod]) -> str:
     for gm in methods:
         m = gm.method
         lines.append("")
-        lines += _comment([f"{gm.name} answers UNIMPLEMENTED: vgi.v2 {m.name} is not implemented by this worker."])
+        lines += _comment([f"{gm.name} answers UNIMPLEMENTED: vgi.v3 {m.name} is not implemented by this worker."])
         lines.append(f"func (unimplementedVgiService) {_signature(gm, named=False)} {{")
         if m.is_stream:
             lines.append(f'\treturn nil, {NOT_IMPLEMENTED}("{m.name}")')
@@ -428,7 +428,7 @@ def _render_body(model: Sequence[RegistryMethod]) -> str:
     lines.append("")
     lines += _comment(
         [
-            "registerVgiService hosts every vgi.v2 method on s, each dispatched to svc. The table is "
+            "registerVgiService hosts every vgi.v3 method on s, each dispatched to svc. The table is "
             "the protocol's whole method set: a method svc does not implement still registers, and "
             "answers UNIMPLEMENTED."
         ]

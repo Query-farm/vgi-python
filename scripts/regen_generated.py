@@ -38,6 +38,7 @@ from pathlib import Path
 #: ``vgi-java`` lives at ``~/vgi-java`` for some checkouts and beside the other
 #: SDKs for others; both are probed.
 _TARGETS: list[tuple[str, str, str]] = [
+    ("vgi.codegen.protocol_version", "vgi/protocol_version.txt", "vgi-python"),
     ("vgi.codegen.cpp_schemas", "src/generated/vgi_protocol_schemas.hpp", "vgi"),
     ("vgi.codegen.cpp_request_builders", "src/generated/vgi_request_builders.hpp", "vgi"),
     ("vgi.codegen.cpp_constants", "src/generated/vgi_protocol_constants.hpp", "vgi"),
@@ -103,7 +104,7 @@ _TARGETS += [
 ]
 
 
-# The vgi.v2 registries: one generator, one backend per SDK (see
+# The vgi.v3 registries: one generator, one backend per SDK (see
 # vgi.codegen._registry). Each declares its own target, checkout and override.
 _REGISTRY_BACKENDS = importlib.import_module("vgi.codegen._registry_backend").registry_backends()
 _TARGETS += [(b.module, b.target, b.repo) for b in _REGISTRY_BACKENDS]

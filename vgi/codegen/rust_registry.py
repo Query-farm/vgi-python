@@ -1,6 +1,6 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
-r"""Emit vgi-rust's ``vgi_service.rs``: the whole ``vgi.v2`` registry, for vgi-rust.
+r"""Emit vgi-rust's ``vgi_service.rs``: the whole ``vgi.v3`` registry, for vgi-rust.
 
 vgi-rpc-rust registers a protocol explicitly: one ``MethodInfo`` per method,
 each carrying its params / result / header Arrow schemas and a handler closure
@@ -8,7 +8,7 @@ over the raw ``Request``. Nothing is derived by reflection, so the generated
 file carries all three pieces of the registry (see :mod:`vgi.codegen._registry`
 for the model and the reasons):
 
-- ``trait VgiService`` -- one method per ``vgi.v2`` method, each with a default
+- ``trait VgiService`` -- one method per ``vgi.v3`` method, each with a default
   body answering vgi-rpc-rust's ``RpcError::method_not_implemented``
   (``UNIMPLEMENTED`` / ``method_not_implemented`` / ``"<method> is not
   implemented by this worker"``). vgi-rust's ``Dispatcher`` implements it and
@@ -29,7 +29,7 @@ sealed opaque values in the batch. So, unlike Java and C#, there is no
 hand-maintained type table here: nothing in a Rust signature can change a
 schema, because the schemas are in the table, not derived from the signature.
 
-The one Rust-only choice is the stream kind: every ``vgi.v2`` stream registers
+The one Rust-only choice is the stream kind: every ``vgi.v3`` stream registers
 as ``MethodType::Dynamic`` (the handler's ``StreamResult`` picks producer or
 exchange per call). The protocol hash records only ``"stream"``, so this is
 wire-identical.
@@ -67,7 +67,7 @@ from vgi.codegen._registry_backend import (
 #: The generated module, relative to the vgi-rust checkout.
 TARGET = "vgi/src/protocol/vgi_service.rs"
 
-#: The ``MethodType`` every ``vgi.v2`` stream registers with (see module doc).
+#: The ``MethodType`` every ``vgi.v3`` stream registers with (see module doc).
 RUST_STREAM_KIND = "MethodType::Dynamic"
 
 
@@ -188,14 +188,14 @@ def _trait_method(m: RegistryMethod) -> list[str]:
 
 
 _TRAIT_DOC = """\
-/// The `vgi.v2` protocol: every method a VGI worker serves, generated from the
+/// The `vgi.v3` protocol: every method a VGI worker serves, generated from the
 /// reference (`vgi.protocol.VgiProtocol` in vgi-python).
 ///
 /// Every method has a default body answering `UNIMPLEMENTED` /
 /// `method_not_implemented` with `"<method> is not implemented by this worker"`;
 /// an implementation overrides the methods it serves. [`register`] hosts every
 /// method, implemented or not, with the reference's schemas: the protocol is the
-/// unit of optionality, and `vgi_rpc.Reflection.v1` reports one `vgi.v2` hash in
+/// unit of optionality, and `vgi_rpc.Reflection.v1` reports one `vgi.v3` hash in
 /// every SDK.
 ///
 /// Each method receives the raw request, whose batch matches the method's params
@@ -274,7 +274,7 @@ def _render_body(methods: Sequence[RegistryMethod]) -> str:
         lines.append("use vgi_rpc::{CallContext, MethodInfo, Request, Result, RpcError, RpcServer};")
     lines.append("")
     lines += [
-        "/// Every `vgi.v2` method's wire name, sorted.",
+        "/// Every `vgi.v3` method's wire name, sorted.",
         "pub const METHOD_NAMES: &[&str] = &[",
         *[f'    "{m.name}",' for m in methods],
         "];",
@@ -300,7 +300,7 @@ def _render_body(methods: Sequence[RegistryMethod]) -> str:
         "    Arc::new(Schema::new(fields))",
         "}",
         "",
-        "/// Register every `vgi.v2` method on `srv`, each delegating to `svc`.",
+        "/// Register every `vgi.v3` method on `srv`, each delegating to `svc`.",
         "///",
         "/// Methods `svc` does not override answer `UNIMPLEMENTED`, but are still",
         "/// registered with their full schemas, so the protocol hash is the reference's.",

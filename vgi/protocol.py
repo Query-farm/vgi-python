@@ -3474,7 +3474,7 @@ class VgiProtocol(Protocol):
     # The wire name carries the major version, so an incompatible major is a
     # *different* protocol and therefore a 404 -- an answer every proxy, WAF and
     # load balancer understands without an Arrow parser, and one that lets
-    # ``vgi.v2`` and a future ``vgi.v3`` be served side by side while clients
+    # ``vgi.v2`` and ``vgi.v3`` be served side by side while clients
     # migrate. That matters here specifically: the DuckDB extension ships to
     # users and cannot be flag-dayed.
     #
@@ -3482,8 +3482,8 @@ class VgiProtocol(Protocol):
     # name, which left the six implementations disagreeing four ways -- Python
     # ``VgiProtocol``, Java and C# ``VgiService``, Go the framework default
     # ``Service``, TypeScript ``vgi`` -- so no client could address them all.
-    protocol_name: ClassVar[str] = "vgi.v2"
-    protocol_version: ClassVar[str] = "2.2.0"
+    protocol_name: ClassVar[str] = "vgi.v3"
+    protocol_version: ClassVar[str] = "3.0.0"
 
     def bind(self, request: BindRequest) -> BindResponse:
         """Resolve output schema and validate arguments."""
