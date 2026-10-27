@@ -110,14 +110,14 @@ that promise. Projection acceptance preserves it; accepting an expression does
 not itself grant it.
 
 The Go SDK's RPC dependency unwraps the outer request before the SDK handler
-receives it. The isolated dependency now rejects trailing data, extra batches,
+receives it. The published dependency now rejects trailing data, extra batches,
 truncated messages and requests exceeding the raw outer 8 MiB limit. It preserves
 valid physical-EOF and explicit-EOS stream endings under the
 [Arrow streaming format](https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format).
 The projection parameter type opts into a raw-byte limit before Arrow decoding;
 other methods retain their existing size policy. The SDK has a compile-time
-dependency on this limit interface, so shipping it requires the corresponding
-RPC dependency release/pin. The dependency tests and all 27 public-RPC cases
+dependency on this limit interface, supplied by its published RPC dependency
+pin, Go RPC 0.36.0. The dependency tests and all 27 public-RPC cases
 pass over subprocess and HTTP. Java, C#, Rust and TypeScript also received
 narrow request-local framing fixes.
 The Python RPC fix, qualified on October 27, calls the request type's existing
@@ -132,6 +132,9 @@ subprocess and real localhost HTTP. The extended cases cover every incomplete
 modern/legacy EOS prefix, and HTTP probes verify malformed requests return 400.
 Full RPC and VGI Python suites pass. The exact tested RPC commit is `99b3090` on
 `codex/single-record-ipc-framing`; see the manifest's
-`python_rpc_framing_checkpoint_2026_10_27` for evidence and counts. Publishing and
-pinning the paired Python/Go dependencies remains a release prerequisite. These
-bounded checks do not claim complete transport conformance or protocol freeze.
+`python_rpc_framing_checkpoint_2026_10_27` for the initial evidence and counts.
+The fixes are now merged and published as Python RPC 0.52.3 and Go RPC 0.36.0;
+the VGI SDK requirements and locks select those releases. The follow-up
+`rpc_publication_checkpoint_2026_10_27` verifies the downloaded packages without
+RPC source overrides. These bounded checks do not claim complete transport
+conformance or protocol freeze.

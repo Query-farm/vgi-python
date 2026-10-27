@@ -13,7 +13,7 @@
     "publication_policy": "One coordinated public transition after qualification; no intermediate stable feature releases.",
     "current_diff": "breaking: existing flat column targets become raw component lists; ADD/type change gain required targets; required_filters becomes raw three-level path groups; view metadata carries required aliases and security mode; view creation carries comments/tags/column comments and adds a view-column comment mutation; shared CatalogMetadataChanges and catalog_schema_alter_metadata add atomic schema comment/tag mutation; dependency identity/graph records and catalog_dependencies add complete transaction-visible graph discovery; negotiated query offer/selection, preparation/release RPCs, and typed parameter batch metadata join the combined successor transition; macro family records and recursive tuple/variant metadata profiles join the combined successor transition; required shared SQL/macro context and canonical constraint records join the successor schema inventory; required canonical table constraint lists replace the legacy parent arrays and revision-checked catalog_table_constraints_apply joins the public method surface; typed index definitions/options replace legacy index fields and add catalog_index_option_definitions; required semantic ALTER flags and raw subject/dependent column paths extend embedded dependency records; SET DEFAULT requires binary SqlExpression IPC and USING accepts nullable binary IPC; CREATE/ADD defaults use the canonical field codec, without new capability negotiation; CatalogAttachResult.default_schema becomes nullable UTF-8, preserving no implicit default independently of an explicit raw schema name; MacroInfo and MacroCreateRequest require nonempty overloads and remove legacy parent parameters/definition/parameter_default_values/arguments_schema; canonical families need no overload read/create opt-in; existing column comment/tags Arrow metadata gains strict shared validation and preservation on CREATE/ADD/discovery, with no record/RPC change; generated-column authoring/discovery/CREATE consistently use the existing canonical SqlExpression/category metadata, replacing legacy generated_expression strings without a new RPC or record layout; BindResponse adds optional projection_expression_profiles and table_function_projection adds structured early subset acceptance with canonical expressions and exact appended Arrow fields; BindResponse appends required repeatability enum UNKNOWN/STABLE_WITHIN_QUERY, with bounded native1.5 and SDK qualification; optional explicit transactional DML/DDL statement profile and fixed command/RETURNING output-schema metadata reuse existing query and transaction RPCs, with no new record fields",
     "version_requirement": "The existing breaking changes require a major version and matching routing name. Published main is now vgi.v2/2.2.0; retaining that development placeholder does not make the successor compatible with published 2.2. The earlier additive2.2 successor proposal is historical and superseded. Final number and complete generated diff remain P1/P2 work.",
-    "planned_diff": "Included before freeze: broader production-provider/adapter acceptance and release gates. Bounded scalar projection, bind-specific repeatability and Go/Python wrapped IPC qualification pass on the pinned 1.5 build. Publish/pin the paired Python and Go RPC fixes and qualify remaining transports before release. No protocol freeze or public version transition yet.",
+    "planned_diff": "Included before freeze: broader production-provider/adapter acceptance and release gates. Bounded scalar projection, bind-specific repeatability and Go/Python wrapped IPC qualification pass on the pinned1.5 build. Python RPC0.52.3 and Go RPC0.36.0 are merged, published and selected by the VGI dependency requirements/locks; registry/module installs are qualified without RPC source overrides. Final successor version/routing, remaining transports and provider acceptance still require qualification.",
     "historical_additive_candidate": "vgi.v2/2.2.0",
     "development_placeholder": "vgi.v2/2.2.0; unpublished incompatible successor; final major and routing unresolved"
   },
@@ -1096,6 +1096,12 @@
           "source": "docs/protocol/projection-expressions.md",
           "checkpoint": "python_rpc_framing_checkpoint_2026_10_27",
           "limits": "Single-value IPC and public projection requests qualified over subprocess and localhost HTTP. Publish/pin the tested Python and Go RPC dependencies; broader transports, provider lifetime and native2 integration remain open."
+        },
+        {
+          "status": "published_rpc_dependency_checkpoint_2026_10_27",
+          "checkpoint": "rpc_publication_checkpoint_2026_10_27",
+          "source": "docs/protocol/projection-expressions.md",
+          "limits": "RPC fixes released and VGI dependencies pinned; source overrides are no longer required. Final VGI protocol identity, remaining provider/transport qualification and native2 integration remain open."
         }
       ],
       "proposed_records": [],
@@ -1107,7 +1113,7 @@
         "Qualify expanded-schema cache/split identity before enabling those paths; disabled accepted paths must not silently reactivate.",
         "Native DuckDB2 optimizer API integration remains separate from the pinned1.5 proof.",
         "Bounded repeatability proof passed on native1.5 and SDK references; qualify shipping provider state lifetime and native2 sampling/dynamic-filter/scan-classifier behavior.",
-        "Go and Python wrapped IPC qualification passed; publish/pin their paired RPC dependencies before release."
+        "Go and Python wrapped IPC fixes are published/pinned as RPC-Go0.36.0 and PythonRPC0.52.3; published-dependency qualification is recorded in rpc_publication_checkpoint_2026_10_27."
       ],
       "review_decisions": {
         "recommended_scope": "Retain projection-expression and repeatability design in the combined package; mark P0 scope reviewed and P1 contract/implementation proof outstanding. Reuse existing transport for metrics, partition selection and parallelism unless a concrete missing datum is demonstrated.",
@@ -12116,6 +12122,97 @@
       "Only Python SDK/native Python-worker integration is repeated for this dependency fix; the October24 other-language SQL matrix remains historical.",
       "Bounded single-value decoding and projection request checks are qualified on Linux ARM64 with the recorded Arrow versions. This is not a complete platform/transport matrix.",
       "Final successor protocol identity, remaining P1-P3 release/provider gates and native2 M0-M4 remain open."
-    ]
+    ],
+    "publication_followup": "Completed by rpc_publication_checkpoint_2026_10_27; this earlier source-override checkpoint remains historical evidence."
+  },
+  "rpc_publication_checkpoint_2026_10_27": {
+    "status": "rpc_fixes_merged_released_and_sdk_dependencies_pinned",
+    "host": "ec2-user@54.224.166.207",
+    "workspace": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC",
+    "python": {
+      "package": "vgi-rpc",
+      "version": "0.52.3",
+      "pull_request": "https://github.com/Query-farm/vgi-rpc-python/pull/76",
+      "release": "https://github.com/Query-farm/vgi-rpc-python/releases/tag/v0.52.3",
+      "merge_revision": "2daca0968af44c8d503d2568ada8a79362f265cd",
+      "sdk_pin_revision": "2bd835c8d7e1686d4ba18e41de94d5db20af5c11",
+      "ci": "Linux/macOS/Windows tests, lint, docs and CodeQL passed before merge; PyPI publication workflow 40568100712 and post-merge CI 40568112064 passed.",
+      "artifacts": "qualification/rpc-release-python-20261027",
+      "installed_wheel_regressions": {
+        "passed": 112,
+        "log": "pypi-tests.log"
+      },
+      "sdk_full": {
+        "passed": 4661,
+        "skipped": 129,
+        "warnings": 4,
+        "log": "sdk-full-final.log"
+      },
+      "sdk_slt": {
+        "passed_files": 356,
+        "expected_skips": 33,
+        "crash_recovery_passed": 2,
+        "log": "native-python-slt.log"
+      },
+      "native_query_scenarios": {
+        "passed": 18,
+        "log": "native-queries.log"
+      },
+      "public_projection": {
+        "standard_per_transport": 27,
+        "extended_per_transport": 37,
+        "transports": [
+          "subprocess",
+          "real HTTP"
+        ],
+        "http_status_checks": 26,
+        "log": "public-projection-final.log"
+      },
+      "dependency_proof": "Fresh VGI environment resolved 0.52.3 from PyPI with frozen updated uv.lock; RPC imports from site-packages, no direct_url.json and no PYTHONPATH override. Only the RPC package version changed; Arrow 25.0.1 and DuckDB 1.5.5 remain pinned.",
+      "wheel_sha256": "c1d71f126901cc5afce9f515fdfa8c9c487faf6003a6a59bbcdec3ba18a997af"
+    },
+    "go": {
+      "module": "github.com/Query-farm/vgi-rpc-go",
+      "version": "v0.36.0",
+      "pull_request": "https://github.com/Query-farm/vgi-rpc-go/pull/7",
+      "release": "https://github.com/Query-farm/vgi-rpc-go/releases/tag/v0.36.0",
+      "merge_revision": "42e784e66625fa46c37a0a8f9a1765b969696b43",
+      "sdk_pin_revision": "4863c12e1d380efb196f9851ffb75ff4c601fccb",
+      "module_sum": "h1:uzvZxIxATT1r++HC1OnsqShiNEINObF7uGMJX+79LJ0=",
+      "ci": "All four PR gates passed: minimum Go 1.26, lint, conformance, and full hosted race gate (11m16s). Post-merge CI 40568818497 also passed.",
+      "artifacts": "qualification/rpc-release-go-20261027-Nm0pra",
+      "sdk_units": {
+        "passed": 908,
+        "skipped": 1,
+        "packages": 18,
+        "log": "logs/sdk-unit.jsonl"
+      },
+      "public_projection": {
+        "cases_per_transport": 27,
+        "transports": [
+          "subprocess",
+          "real HTTP"
+        ],
+        "python_client_rpc": "published PyPI 0.52.3",
+        "log": "logs/sdk-projection.log"
+      },
+      "dependency_proof": "GOWORK=off, no RPC replacement; proxy.golang.org module download, checksum and release origin 42e784e verified before building/testing.",
+      "race_qualification_limit": "Parallel ARM64 resource-soak RSS slope exceeded its budget on both unchanged upstream 688ba34 and the candidate; descriptors/threads/children remained flat and no data race was reported. No budget was relaxed or test skipped. Hosted full race gate passed before release, and the extra serial EC2 race run passed 1696 cases. Preserve failing baseline/candidate logs alongside passing runs.",
+      "sdk_slt": {
+        "passed_files": 358,
+        "expected_skips": 32,
+        "failed": 0,
+        "selected": 390,
+        "gate_status": "original coverage floor and skip allowlist passed with all earlier fixture variables restored",
+        "log": "logs/sdk-slt-full-fixtures.log"
+      },
+      "serial_ec2_race": {
+        "passed": 1696,
+        "status": "passed without changed limits or exclusions"
+      }
+    },
+    "gate_effect": "Closes the Python/Go RPC publication and reproducible dependency blockers. RPC repositories alone were merged/released; VGI preparation branches remain unmerged. Final VGI major version/routing and its coordinated candidate validation remain outstanding; no native DuckDB 2 enablement.",
+    "diagnostics": "Initial isolated Python checkout lacked sibling SDK paths, causing 19 additional generated-artifact skips; sibling source links restored the final 4661/129 coverage. An initial standalone projection harness lacked VGI_PROJECTION_COMMON=1; final run passed with the intended fixture. No production change was required for either setup correction. Plain Go make test initially passed 350 files/skipped 40; restoring the eight attach-options, schema-reconciliation and versioned-HTTP fixture cases recovered the final 358/32 coverage without changing skip policy.",
+    "environment_followup": "Owned default Python environment upgraded only vgi-rpc 0.52.0 to 0.52.3. Owned environment.sh now exports GOWORK=off; historical state/go.work is preserved as evidence and no longer selected by default."
   }
 }
