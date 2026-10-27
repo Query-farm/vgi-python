@@ -10,7 +10,8 @@ from dataclasses import replace
 import pyarrow as pa
 import pytest
 from vgi_rpc.http._testing import _SyncTestClient
-from vgi_rpc.rpc import AuthContext, CallContext, RpcError
+from vgi_rpc.rpc import AuthContext, CallContext, RpcError, rpc_methods
+from vgi_rpc.wire import write_request
 
 from vgi.arguments import Arguments
 from vgi.catalog.capabilities import ROW_SCALAR_EXPRESSION
@@ -24,6 +25,7 @@ from vgi.protocol import (
     InitRequest,
     TableFunctionProjectionRequest,
     TableFunctionProjectionResponse,
+    VgiProtocol,
 )
 from vgi.serve import create_app
 from vgi.table_function import TableFunctionBase
@@ -201,6 +203,27 @@ def client():
             create_app(ProjectionReferenceWorker, describe=False, signing_key=b"projection-test-signing-key")
         ),
     )
+
+
+def test_http_truncated_projection_body_is_a_bad_request():
+    """A truncated custom-codec value must be rejected as malformed input."""
+    transport = _SyncTestClient(
+        create_app(ProjectionReferenceWorker, describe=False, signing_key=b"projection-test-signing-key")
+    )
+    payload = request('CAST("n" AS BIGINT)').serialize_to_bytes()
+    body = write_request(
+        "table_function_projection",
+        rpc_methods(VgiProtocol)["table_function_projection"].params_schema,
+        {"request": payload[:-9]},
+        protocol=VgiProtocol.protocol_name,
+        protocol_version=VgiProtocol.protocol_version,
+    )
+    response = transport.post(
+        f"http://vgi.test/{VgiProtocol.protocol_name}/table_function_projection",
+        content=body,
+        headers={"content-type": "application/vnd.apache.arrow.stream"},
+    )
+    assert response.status_code == 400
 
 
 def scan(proxy, call, bound):

@@ -52,6 +52,34 @@ def test_empty_values_are_one_row() -> None:
     assert restored.schema.metadata == values.schema.metadata
 
 
+@pytest.mark.parametrize("ending", [b"", b"\0" * 4, b"\xff" * 4 + b"\0" * 4])
+def test_complete_arrow_stream_endings_remain_valid(ending: bytes) -> None:
+    values = TypedValueBatch(pa.record_batch({"x": [1]}))
+    payload = values.serialize_to_bytes()
+    restored = TypedValueBatch.deserialize_from_bytes(payload[:-8] + ending)
+    assert restored.batch.equals(values.batch, check_metadata=True)
+
+
+@pytest.mark.parametrize("length", range(1, 8))
+def test_truncated_modern_eos_is_a_value_error(length: int) -> None:
+    payload = TypedValueBatch(pa.record_batch({"x": [1]})).serialize_to_bytes()
+    with pytest.raises(ValueError):
+        TypedValueBatch.deserialize_from_bytes(payload[:-8] + payload[-8:][:length])
+
+
+@pytest.mark.parametrize("length", range(1, 4))
+def test_truncated_legacy_eos_is_a_value_error(length: int) -> None:
+    payload = TypedValueBatch(pa.record_batch({"x": [1]})).serialize_to_bytes()
+    with pytest.raises(ValueError):
+        TypedValueBatch.deserialize_from_bytes(payload[:-8] + b"\0" * length)
+
+
+def test_truncated_body_is_a_value_error() -> None:
+    payload = TypedValueBatch(pa.record_batch({"x": [1]})).serialize_to_bytes()
+    with pytest.raises(ValueError):
+        TypedValueBatch.deserialize_from_bytes(payload[:-9])
+
+
 @pytest.mark.parametrize("names", [["x", "x"], [""], ["a\x00b"]])
 def test_ambiguous_field_names_reject(names: list[str]) -> None:
     batch = pa.RecordBatch.from_arrays([pa.array([1])] * len(names), names=names)

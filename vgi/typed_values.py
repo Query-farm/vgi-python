@@ -107,19 +107,24 @@ class TypedValueBatch:
         Transport request-size budgets remain the caller's responsibility.
         """
         source = pa.BufferReader(payload)
-        with pa.ipc.open_stream(source) as reader:
-            try:
-                batch = reader.read_next_batch()
-            except StopIteration as exc:
-                raise ValueError("typed value IPC contains no batch") from exc
-            try:
-                reader.read_next_batch()
-            except StopIteration:
-                pass
-            else:
-                raise ValueError("typed value IPC must contain exactly one batch")
-            if source.tell() != len(payload):
-                raise ValueError("typed value IPC has trailing data")
+        try:
+            with pa.ipc.open_stream(source) as reader:
+                try:
+                    batch = reader.read_next_batch()
+                except StopIteration as exc:
+                    raise ValueError("typed value IPC contains no batch") from exc
+                try:
+                    reader.read_next_batch()
+                except StopIteration:
+                    pass
+                else:
+                    raise ValueError("typed value IPC must contain exactly one batch")
+                if source.tell() != len(payload):
+                    raise ValueError("typed value IPC has trailing data")
+        except OSError as exc:
+            # PyArrow can report a truncated in-memory IPC body as OSError.
+            # This is malformed caller data, not a filesystem/server failure.
+            raise ValueError("typed value IPC is malformed or truncated") from exc
         return cls(batch)
 
     @classmethod
