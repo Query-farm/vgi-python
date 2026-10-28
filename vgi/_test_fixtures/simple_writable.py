@@ -337,6 +337,7 @@ class SimpleScan(TableFunctionGenerator[None, "_ScanState"]):
         state.cursor = len(state.rows)
         arrow_arrays = [pa.array(col, type=state.schema.field(i).type) for i, col in enumerate(col_arrays)]
         out.emit(pa.RecordBatch.from_arrays(arrow_arrays, schema=state.schema))
+        out.finish()
 
 
 @dataclass(kw_only=True)
