@@ -175,6 +175,98 @@ def _emit_field(field: pa.Field[Any], *, origin: str) -> str:
     return f'arrow::field("{field.name}", {type_expr}, /*nullable=*/{nullable})'
 
 
+# --------------------------------------------------------------------------- #
+# nanoarrow backend: pyarrow DataType -> vgi::type DSL (vgi_arrow.hpp)
+# --------------------------------------------------------------------------- #
+
+_NA_SCALAR_MAP: dict[Any, str] = {
+    pa.null(): "type::Null()",
+    pa.bool_(): "type::Bool()",
+    pa.int8(): "type::Int8()",
+    pa.int16(): "type::Int16()",
+    pa.int32(): "type::Int32()",
+    pa.int64(): "type::Int64()",
+    pa.uint8(): "type::UInt8()",
+    pa.uint16(): "type::UInt16()",
+    pa.uint32(): "type::UInt32()",
+    pa.uint64(): "type::UInt64()",
+    pa.float32(): "type::Float32()",
+    pa.float64(): "type::Float64()",
+    pa.string(): "type::Utf8()",
+    pa.binary(): "type::Binary()",
+    pa.large_string(): "type::LargeUtf8()",
+    pa.large_binary(): "type::LargeBinary()",
+}
+
+
+def _na_emit_type(dtype: pa.DataType, *, origin: str) -> str:
+    """Render a pyarrow DataType as a ``vgi::type`` expression (the nanoarrow backend)."""
+    for proto, expr in _NA_SCALAR_MAP.items():
+        if dtype.equals(proto):
+            return expr
+    if pa.types.is_list(dtype) or pa.types.is_large_list(dtype):
+        value_field = dtype.value_field
+        if value_field.name != "item":
+            raise GeneratorError(f"list at {origin} names its item {value_field.name!r}; only 'item' is supported")
+        inner = _na_emit_type(value_field.type, origin=f"{origin}[list item]")
+        ctor = "type::LargeList" if pa.types.is_large_list(dtype) else "type::List"
+        nullable = "true" if value_field.nullable else "false"
+        return f"{ctor}({inner}, /*item_nullable=*/{nullable})"
+    if pa.types.is_map(dtype):
+        key_field = dtype.key_field
+        item_field = dtype.item_field
+        if key_field.name != "key" or item_field.name != "value" or key_field.nullable is not False:
+            raise GeneratorError(f"Map at {origin} uses non-default child fields")
+        if not _uses_default_map_field_name(dtype):
+            raise GeneratorError(f"Map at {origin} uses a non-default entries field")
+        key = _na_emit_type(dtype.key_type, origin=f"{origin}[map key]")
+        item = _na_emit_type(dtype.item_type, origin=f"{origin}[map value]")
+        nullable = "true" if item_field.nullable else "false"
+        return f"type::Map({key}, {item}, /*value_nullable=*/{nullable})"
+    if pa.types.is_dictionary(dtype):
+        if dtype.ordered:
+            raise GeneratorError(f"ordered dictionary at {origin} is not supported")
+        index = _na_emit_type(dtype.index_type, origin=f"{origin}[dict index]")
+        value = _na_emit_type(dtype.value_type, origin=f"{origin}[dict value]")
+        return f"type::Dictionary({index}, {value})"
+    if pa.types.is_struct(dtype):
+        children = [
+            _na_emit_field(dtype.field(i), origin=f"{origin}[struct child {i}]") for i in range(dtype.num_fields)
+        ]
+        return "type::Struct({" + ", ".join(children) + "})"
+    if pa.types.is_timestamp(dtype):
+        units = {"s": "s", "ms": "m", "us": "u", "ns": "n"}
+        if dtype.unit not in units:
+            raise GeneratorError(f"timestamp at {origin} has unknown unit {dtype.unit!r}")
+        tz = dtype.tz or ""
+        return f"type::Timestamp('{units[dtype.unit]}', \"{tz}\")"
+    raise GeneratorError(f"vgi.codegen.cpp_schemas (nanoarrow): unsupported Arrow type {dtype!r} at {origin}")
+
+
+def _na_emit_field(field: pa.Field[Any], *, origin: str) -> str:
+    """Render a pyarrow Field as a named ``vgi::VgiField`` expression."""
+    if field.metadata:
+        raise GeneratorError(f"field metadata at {origin} is not supported by the nanoarrow backend")
+    type_expr = _na_emit_type(field.type, origin=f"{origin}[{field.name}]")
+    nullable = "true" if field.nullable else "false"
+    return f'{type_expr}.Named("{field.name}", /*nullable=*/{nullable})'
+
+
+def _na_emit_factory(es: EmittedSchema) -> str:
+    if es.schema.metadata:
+        raise GeneratorError(f"schema metadata on {es.name} is not supported by the nanoarrow backend")
+    body = f"// Origin: {es.origin}\ninline const VgiSchemaPtr &{es.name}Schema() {{\n"
+    if len(es.schema) == 0:
+        body += "\tstatic const auto schema = MakeSchema({});\n"
+    else:
+        body += "\tstatic const auto schema = MakeSchema({\n"
+        lines = ["\t    " + _na_emit_field(f, origin=f"{es.name}.{f.name}") for f in es.schema]
+        body += ",\n".join(lines) + ",\n"
+        body += "\t});\n"
+    body += "\treturn schema;\n}\n"
+    return body
+
+
 def _emit_factory(es: EmittedSchema) -> str:
     body = f"// Origin: {es.origin}\ninline const std::shared_ptr<arrow::Schema> &{es.name}Schema() {{\n"
     if len(es.schema) == 0:
@@ -206,23 +298,42 @@ def emit_schemas(
     generator_command: str,
     regen_command_lines: list[str],
     namespace: list[str] | None = None,
+    backend: str = "arrow",
 ) -> None:
     """Render a list of EmittedSchema records as a C++ schema-factory header.
+
+    ``backend`` is ``"arrow"`` (Arrow C++ factories; vgi-c++, vgi-sqlite) or
+    ``"nanoarrow"`` (``VgiSchemaPtr`` factories over ``vgi_arrow.hpp``; the DuckDB
+    extension).
 
     Shared by the main protocol generator and the secret protocol generator;
     only the schema set and the provenance banner differ.
     """
+    if backend == "nanoarrow":
+        regen_command_lines = [
+            "uv run --project ~/Development/vgi-python python scripts/regen_generated.py --native-cpp-backend nanoarrow"
+        ]
     if namespace is None:
         namespace = parse_cpp_namespace(DEFAULT_CPP_NAMESPACE)
     body = io.StringIO()
+    if backend not in ("arrow", "nanoarrow"):
+        raise GeneratorError(f"unknown C++ schema backend {backend!r}")
     body.write("#pragma once\n\n")
-    body.write("#include <arrow/api.h>\n")
+    if backend == "arrow":
+        body.write("#include <arrow/api.h>\n")
+    else:
+        body.write('#include "vgi_arrow.hpp"\n')
     body.write("#include <memory>\n\n")
     body.write(open_namespace(namespace))
     body.write("\n")
+    if backend == "nanoarrow":
+        body.write("using ::duckdb::vgi::MakeSchema;\n")
+        body.write("using ::duckdb::vgi::VgiSchemaPtr;\n")
+        body.write("namespace type = ::duckdb::vgi::type;\n\n")
 
+    factory = _emit_factory if backend == "arrow" else _na_emit_factory
     for es in schemas:
-        body.write(_emit_factory(es))
+        body.write(factory(es))
         body.write("\n")
 
     body.write(close_namespace(namespace))
@@ -242,8 +353,8 @@ def emit_schemas(
     out.write(body.getvalue())
 
 
-def emit(out: TextIO, namespace: list[str] | None = None) -> None:
-    """Emit the generated C++ schemas header to *out*."""
+def emit(out: TextIO, namespace: list[str] | None = None, backend: str = "arrow") -> None:
+    """Emit the generated C++ schemas header to *out* (``backend="nanoarrow"``: the nanoarrow backend)."""
     emit_schemas(
         out,
         # The request records are included so the C++ client can be CHECKED
@@ -259,6 +370,7 @@ def emit(out: TextIO, namespace: list[str] | None = None) -> None:
             "  > ~/Development/vgi/src/generated/vgi_protocol_schemas.hpp",
         ],
         namespace=namespace,
+        backend=backend,
     )
 
 

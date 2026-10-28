@@ -139,7 +139,7 @@ def _repo_root(name: str, roots: dict[str, str]) -> Path | None:
     return None
 
 
-def _render(module_name: str) -> str:
+def _render(module_name: str, native_cpp_backend: str | None = None) -> str:
     """Render one artifact into memory. Raises if the generator fails.
 
     ``module:record`` renders one file of a generator that emits several
@@ -148,10 +148,10 @@ def _render(module_name: str) -> str:
     module_name, _, record = module_name.partition(":")
     module = importlib.import_module(module_name)
     buf = io.StringIO()
-    if record:
-        module.emit(buf, record=record)
-    else:
-        module.emit(buf)
+    kwargs = {"record": record} if record else {}
+    if native_cpp_backend is not None:
+        kwargs["backend"] = native_cpp_backend
+    module.emit(buf, **kwargs)
     text = buf.getvalue()
     if not text.strip():
         raise RuntimeError(f"{module_name}.emit() produced no output")
@@ -185,6 +185,12 @@ def main() -> int:
         action="store_true",
         help="fail before writing if any selected repository is missing",
     )
+    parser.add_argument(
+        "--native-cpp-backend",
+        choices=("arrow", "nanoarrow"),
+        default="arrow",
+        help="native extension runtime only; standalone C++ SDK stays Arrow C++",
+    )
     args = parser.parse_args()
     known = {repo for _, _, repo in _TARGETS}
     unknown = set(args.only) - known
@@ -215,7 +221,19 @@ def main() -> int:
             continue
         dest = root / relative
         try:
-            text = _render(module_name)
+            native_runtime_modules = {
+                "vgi.codegen.cpp_schemas",
+                "vgi.codegen.cpp_request_builders",
+                "vgi.codegen.cpp_records",
+                "vgi.codegen.cpp_secret_schemas",
+                "vgi.codegen.cpp_secret_request_builders",
+            }
+            backend = (
+                args.native_cpp_backend
+                if repo == "vgi" and module_name.partition(":")[0] in native_runtime_modules
+                else None
+            )
+            text = _render(module_name, backend) if backend is not None else _render(module_name)
         except Exception as exc:  # noqa: BLE001 - report every failure, don't stop
             failed.append(f"{module_name}: {exc}")
             continue

@@ -617,14 +617,21 @@ def _factory_names() -> set[str]:
 _REGEN = ["uv run --project ~/Development/vgi-python python scripts/regen_generated.py"]
 
 
-def emit(out: TextIO, record: str = "hpp", namespace: list[str] | None = None) -> None:
+def emit(out: TextIO, record: str = "hpp", namespace: list[str] | None = None, backend: str = "arrow") -> None:
     """Emit the records header (``record="hpp"``) or source (``record="cpp"``) to *out*."""
     ns = namespace if namespace is not None else parse_cpp_namespace(DEFAULT_CPP_NAMESPACE)
     model = build_model()
+    if backend == "nanoarrow":
+        from vgi.codegen.cpp_records_nano import _render_header as render_header
+        from vgi.codegen.cpp_records_nano import _render_source as render_source
+    elif backend == "arrow":
+        render_header, render_source = _render_header, _render_source
+    else:
+        raise GeneratorError(f"unknown C++ record backend {backend!r}")
     if record == "hpp":
-        body = _render_header(model, ns)
+        body = render_header(model, ns)
     elif record == "cpp":
-        body = _render_source(model, ns)
+        body = render_source(model, ns)
     else:
         raise GeneratorError(f"cpp_records: unknown output {record!r} (expected 'hpp' or 'cpp').")
     out.write(
@@ -632,7 +639,9 @@ def emit(out: TextIO, record: str = "hpp", namespace: list[str] | None = None) -
             generator_module="vgi.codegen.cpp_records",
             generator_command="python -m vgi.codegen.cpp_records",
             generator_version=GENERATOR_VERSION,
-            regen_command_lines=_REGEN,
+            regen_command_lines=[line + " --native-cpp-backend nanoarrow" for line in _REGEN]
+            if backend == "nanoarrow"
+            else _REGEN,
             body=body,
         )
     )
