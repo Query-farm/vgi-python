@@ -3,6 +3,8 @@
 
 """Arguments retain Arrow metadata through binding, init, and HTTP transport."""
 
+from __future__ import annotations
+
 from dataclasses import replace
 
 import pyarrow as pa
