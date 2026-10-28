@@ -1113,6 +1113,12 @@ def _render_filters_canonical(filters: PushdownFilters | None) -> str:
     for c in columns:
         bounds = filters.get_column_bounds(c)
         if bounds is None:
+            # DuckDB 2.0 can send an exact IN set without redundant range
+            # predicates. Render its integer envelope in the same canonical form.
+            values = filters.get_column_values(c)
+            discrete = [] if values is None else [_bound_as_int(value) for value in values if value.is_valid]
+            if discrete:
+                parts.extend((f"{c}>={min(discrete)}", f"{c}<={max(discrete)}"))
             continue
         # Normalized to INCLUSIVE integer bounds, because that is the only form
         # every SDK can produce: Rust's ColumnBounds is integer-coerced and
