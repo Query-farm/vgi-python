@@ -114,7 +114,7 @@ def render(record: str = "index") -> str:
             f"| [{title}](reference/{name}.md) | `vgi/reporting/{name}.py` |" for name, title in _TITLES.items()
         )
         parts.append(
-            "\nSee [wire behavior](wire-contracts.md) for lifecycle, errors, encoding rules and "
+            "\nSee [wire behavior](README.md#shared-conventions) for lifecycle, errors, encoding rules and "
             "worker policy. Regenerate these pages with "
             "`uv run python scripts/regen_generated.py --only vgi-python`.\n"
         )
@@ -125,7 +125,7 @@ def render(record: str = "index") -> str:
     parts = [
         f"# {title}: Python reference\n",
         generated,
-        "[All protocols](../python-contracts.md) · [Wire behavior](../wire-contracts.md)\n",
+        "[All protocols](../python-contracts.md) · [Wire behavior](../README.md#shared-conventions)\n",
         f"Source: `vgi/reporting/{record}.py`. Edit the Python module and regenerate this page.\n",
     ]
     if not any(p.__module__ == module.__name__ for p in PROTOCOLS):
@@ -143,7 +143,12 @@ def render(record: str = "index") -> str:
             "resource_ownership": "objects",
             "schedules_v2": "schedules",
         }.get(record, record)
-        parts.append(f"[Behavior specification](../{spec}.md) · [Shared records](common.md)\n")
+        # These newer contracts currently have API references but no separate
+        # behavior specification. Keep generated links limited to existing pages.
+        if spec in {"objects", "resource_identity"}:
+            parts.append("[Shared records](common.md)\n")
+        else:
+            parts.append(f"[Behavior specification](../{spec}.md) · [Shared records](common.md)\n")
         protocol = next(p for p in PROTOCOLS if p.__module__ == module.__name__)
         parts.append(f"Protocol `{protocol.protocol_name}`, version `{protocol.protocol_version}`.\n")
         parts.append("## Methods\n")

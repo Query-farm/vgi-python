@@ -24,4 +24,4 @@ Methods take direct named arguments, with dataclasses for structured values such
 | [Notifications](reference/notify.md) | `vgi/reporting/notify.py` |
 | [Delegations](reference/delegations.md) | `vgi/reporting/delegations.py` |
 
-See [wire behavior](wire-contracts.md) for lifecycle, errors, encoding rules and worker policy. Regenerate these pages with `uv run python scripts/regen_generated.py --only vgi-python`.
+See [wire behavior](README.md#shared-conventions) for lifecycle, errors, encoding rules and worker policy. Regenerate these pages with `uv run python scripts/regen_generated.py --only vgi-python`.
