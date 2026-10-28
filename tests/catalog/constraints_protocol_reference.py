@@ -13,21 +13,26 @@ from __future__ import annotations
 import os
 import sqlite3
 import uuid
+from collections.abc import Sequence
 from contextlib import closing
 from dataclasses import replace
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal, overload
 
 import pyarrow as pa
 
 from vgi.catalog import (
     AttachOpaqueData,
     CatalogAttachResult,
+    FunctionInfo,
+    IndexInfo,
+    MacroInfo,
     OnConflict,
     ReadOnlyCatalogInterface,
     SchemaInfo,
     SchemaObjectType,
     TableInfo,
     TransactionOpaqueData,
+    ViewInfo,
 )
 from vgi.catalog.capabilities import (
     CONSTRAINT_CREATE,
@@ -38,7 +43,7 @@ from vgi.catalog.capabilities import (
     TRANSACTION_DDL,
     CatalogCapabilities,
 )
-from vgi.catalog.catalog_interface import CatalogContentsResult, SchemaContentsInfo
+from vgi.catalog.catalog_interface import CatalogContentsResult, SchemaContentsInfo, SerializedSchema
 from vgi.catalog.constraints import (
     ConstraintChange,
     ConstraintDefinition,
@@ -50,6 +55,7 @@ from vgi.catalog.constraints import (
     ConstraintValidation,
 )
 from vgi.catalog.dependencies import CatalogObjectRef
+from vgi.schema_path import SchemaPath
 from vgi.worker import Worker
 
 from .constraints_reference import ConstraintCatalog, _schema
@@ -111,7 +117,7 @@ class ConstraintProvider(ReadOnlyCatalogInterface):
         return TableInfo(
             name=snapshot.table.name,
             schema_path=snapshot.table.schema_path,
-            columns=_schema(record).serialize().to_pybytes(),
+            columns=SerializedSchema(_schema(record).serialize().to_pybytes()),
             constraints=snapshot.constraints,
             definition_revision=snapshot.definition_revision,
             comment=None,
@@ -144,6 +150,60 @@ class ConstraintProvider(ReadOnlyCatalogInterface):
                 return None
             return self._info(record)
 
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: SchemaPath,
+        type: Literal[SchemaObjectType.TABLE],
+    ) -> Sequence[TableInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: SchemaPath,
+        type: Literal[SchemaObjectType.VIEW],
+    ) -> Sequence[ViewInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: SchemaPath,
+        type: Literal[
+            SchemaObjectType.SCALAR_FUNCTION,
+            SchemaObjectType.TABLE_FUNCTION,
+            SchemaObjectType.AGGREGATE_FUNCTION,
+        ],
+    ) -> Sequence[FunctionInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: SchemaPath,
+        type: Literal[SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO],
+    ) -> Sequence[MacroInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: SchemaPath,
+        type: Literal[SchemaObjectType.INDEX],
+    ) -> Sequence[IndexInfo]: ...
+
     def schema_contents(
         self,
         *,
@@ -151,7 +211,7 @@ class ConstraintProvider(ReadOnlyCatalogInterface):
         transaction_opaque_data: bytes | None,
         path: list[str],
         type: SchemaObjectType,
-    ) -> list[TableInfo]:
+    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo]:
         _, infos = self._snapshot_infos(attach_opaque_data, transaction_opaque_data)
         return [info for info in infos if info.schema_path == path] if type == SchemaObjectType.TABLE else []
 
@@ -188,7 +248,7 @@ class ConstraintProvider(ReadOnlyCatalogInterface):
         self.authority.create(
             attach_opaque_data,
             CatalogObjectRef(kind="table", schema_path=schema_path, name=name),
-            pa.ipc.read_schema(pa.BufferReader(columns)),
+            pa.ipc.read_schema(pa.py_buffer(columns)),
             [ConstraintDefinition.deserialize_from_bytes(value) for value in constraint_definitions],
             tx=transaction_opaque_data,
         )

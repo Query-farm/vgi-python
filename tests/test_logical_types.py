@@ -3,6 +3,11 @@
 
 """Canonical Arrow Variant transport and distinct tuple identity."""
 
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import cast
+
 import pyarrow as pa
 import pytest
 
@@ -36,14 +41,16 @@ PRESENT_METADATA = bytes.fromhex("0101000770726573656e74")
 PRESENT_NULL = bytes.fromhex("020100000100")
 
 
-def values(field, value, *, metadata=None):
+def values(
+    field: pa.Field[pa.DataType], value: object, *, metadata: dict[bytes | str, bytes | str] | None = None
+) -> TypedValueBatch:
     """Construct an explicit one-row Arrow carrier, with no variant encoder."""
     return TypedValueBatch(
         pa.RecordBatch.from_arrays([pa.array([value], type=field.type)], schema=pa.schema([field], metadata=metadata))
     )
 
 
-def test_variant_field_uses_the_canonical_arrow_extension():
+def test_variant_field_uses_the_canonical_arrow_extension() -> None:
     field = variant_field("v")
     assert field.metadata == {EXTENSION_NAME_KEY: VARIANT_EXTENSION_NAME, EXTENSION_METADATA_KEY: b""}
     assert field.type == pa.struct([pa.field("metadata", pa.binary(), nullable=False), pa.field("value", pa.binary())])
@@ -55,7 +62,7 @@ def test_variant_field_uses_the_canonical_arrow_extension():
 @pytest.mark.parametrize(
     "metadata,payload", [(EMPTY_METADATA, NULL_VALUE), (EMPTY_METADATA, EMPTY_OBJECT), (PRESENT_METADATA, PRESENT_NULL)]
 )
-def test_standard_variant_bytes_and_metadata_survive_arrow_ipc(metadata, payload):
+def test_standard_variant_bytes_and_metadata_survive_arrow_ipc(metadata: bytes, payload: bytes) -> None:
     original = values(variant_field("v", metadata={b"owner": b"preserved"}), {"metadata": metadata, "value": payload})
     restored = TypedValueBatch.deserialize_from_bytes(original.serialize_to_bytes())
     validate_logical_values(restored, selected_profiles=[VARIANT_PROFILE])
@@ -63,7 +70,7 @@ def test_standard_variant_bytes_and_metadata_survive_arrow_ipc(metadata, payload
     assert restored.batch.column(0)[0].as_py() == {"metadata": metadata, "value": payload}
 
 
-def test_outer_sql_null_present_variant_null_and_absent_member_remain_distinct():
+def test_outer_sql_null_present_variant_null_and_absent_member_remain_distinct() -> None:
     field = variant_field("v")
     batch = pa.RecordBatch.from_arrays(
         [
@@ -88,7 +95,7 @@ def test_outer_sql_null_present_variant_null_and_absent_member_remain_distinct()
 
 @pytest.mark.parametrize("binary_type", [pa.binary(), pa.large_binary(), pa.binary_view()])
 @pytest.mark.parametrize("reverse", [False, True])
-def test_canonical_binary_layouts_and_field_order(binary_type, reverse):
+def test_canonical_binary_layouts_and_field_order(binary_type: pa.DataType, reverse: bool) -> None:
     fields = [pa.field("metadata", binary_type, nullable=False), pa.field("value", binary_type)]
     if reverse:
         fields.reverse()
@@ -99,7 +106,8 @@ def test_canonical_binary_layouts_and_field_order(binary_type, reverse):
 
 
 @pytest.mark.parametrize("encoded", ["dictionary", "run_end"])
-def test_canonical_metadata_encoding_wrappers(encoded):
+def test_canonical_metadata_encoding_wrappers(encoded: str) -> None:
+    metadata: pa.Array[pa.Scalar[pa.DataType]]
     if encoded == "dictionary":
         metadata = pa.DictionaryArray.from_arrays(pa.array([0], type=pa.int8()), pa.array([EMPTY_METADATA]))
     else:
@@ -118,23 +126,23 @@ def test_canonical_metadata_encoding_wrappers(encoded):
 class CanonicalVariantType(pa.ExtensionType):
     """Represent an already registered canonical type without a value decoder."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Declare the canonical storage without a binary value decoder."""
         super().__init__(variant_field("v").type, "arrow.parquet.variant")
 
-    def __arrow_ext_serialize__(self):
+    def __arrow_ext_serialize__(self) -> bytes:
         """Return the canonical empty extension metadata."""
         return b""
 
     @classmethod
-    def __arrow_ext_deserialize__(cls, storage_type, serialized):
+    def __arrow_ext_deserialize__(cls, storage_type: pa.DataType, serialized: bytes) -> CanonicalVariantType:
         """Restore the canonical schema, preserving the standard marker."""
         assert serialized == b""
         assert storage_type == variant_field("v").type
         return cls()
 
 
-def test_registered_extension_and_dictionary_wrapping_do_not_bypass_negotiation():
+def test_registered_extension_and_dictionary_wrapping_do_not_bypass_negotiation() -> None:
     dtype = CanonicalVariantType()
     storage = pa.array([{"metadata": EMPTY_METADATA, "value": NULL_VALUE}], type=dtype.storage_type)
     extension = pa.ExtensionArray.from_storage(dtype, storage)
@@ -145,7 +153,7 @@ def test_registered_extension_and_dictionary_wrapping_do_not_bypass_negotiation(
         require_logical_batch(batch, selected_profiles=[VARIANT_PROFILE])
 
 
-def test_variant_nested_in_tuple_requires_both_profiles():
+def test_variant_nested_in_tuple_requires_both_profiles() -> None:
     field = tuple_field("pair", [variant_field("ignored")])
     original = values(field, {"element1": {"metadata": EMPTY_METADATA, "value": NULL_VALUE}})
     with pytest.raises(ValueError, match="variant.*not negotiated"):
@@ -153,13 +161,13 @@ def test_variant_nested_in_tuple_requires_both_profiles():
     validate_logical_values(original, selected_profiles=LOGICAL_TYPE_PROFILES)
 
 
-def test_variant_payload_semantics_remain_the_backends_responsibility():
+def test_variant_payload_semantics_remain_the_backends_responsibility() -> None:
     # This helper deliberately does not pretend to implement a Parquet decoder.
     opaque = values(variant_field("v"), {"metadata": b"not-decoded-here", "value": b"opaque-bytes"})
     validate_logical_values(opaque, selected_profiles=[VARIANT_PROFILE])
 
 
-def test_missing_required_metadata_fails_before_output():
+def test_missing_required_metadata_fails_before_output() -> None:
     field = variant_field("v")
     batch = pa.RecordBatch.from_arrays(
         [
@@ -175,13 +183,13 @@ def test_missing_required_metadata_fails_before_output():
 
 
 @pytest.mark.parametrize("row", [{"metadata": EMPTY_METADATA, "value": None}, {"metadata": b"", "value": b""}])
-def test_carrier_preserves_nullable_value_and_opaque_empty_bytes(row):
+def test_carrier_preserves_nullable_value_and_opaque_empty_bytes(row: dict[str, bytes | None]) -> None:
     original = values(variant_field("v"), row)
     require_logical_values(original, selected_profiles=[VARIANT_PROFILE])
     assert original.batch.column(0)[0].as_py() == row
 
 
-def test_present_variant_byte_budget_applies_to_both_binary_fields():
+def test_present_variant_byte_budget_applies_to_both_binary_fields() -> None:
     field = variant_field("v")
     large = values(field, {"metadata": EMPTY_METADATA, "value": b"x" * MAX_VARIANT_BYTES})
     with pytest.raises(ValueError, match="byte budget"):
@@ -211,7 +219,7 @@ def test_present_variant_byte_budget_applies_to_both_binary_fields():
         ),
     ],
 )
-def test_invalid_or_shredded_canonical_storage_is_rejected(storage):
+def test_invalid_or_shredded_canonical_storage_is_rejected(storage: pa.DataType) -> None:
     field = pa.field("v", storage, metadata=variant_field("v").metadata)
     with pytest.raises(ValueError):
         validate_logical_schema(pa.schema([field]), selected_profiles=[VARIANT_PROFILE])
@@ -220,23 +228,27 @@ def test_invalid_or_shredded_canonical_storage_is_rejected(storage):
 @pytest.mark.parametrize(
     "kind", [b"variant", b"hugeint", b"uhugeint", b"bignum", b"bit", b"uuid", b"time_tz", b"interval", b"geometry"]
 )
-def test_removed_vgi_scalar_and_variant_annotations_are_not_accepted(kind):
+def test_removed_vgi_scalar_and_variant_annotations_are_not_accepted(kind: bytes) -> None:
     field = pa.field("v", pa.binary(), metadata={LOGICAL_TYPE_KEY: kind})
     with pytest.raises(ValueError, match="unsupported logical type annotation"):
         require_logical_profiles(pa.schema([field]), selected_profiles=LOGICAL_TYPE_PROFILES)
 
 
-def test_nonempty_extension_metadata_and_duplicate_tags_are_rejected():
+def test_nonempty_extension_metadata_and_duplicate_tags_are_rejected() -> None:
     field = variant_field("v")
+    # PyArrow accepts duplicate-preserving metadata pairs; its stubs only declare dictionaries.
+    with_metadata = cast(
+        "Callable[[dict[bytes, bytes] | list[tuple[bytes, bytes]]], pa.Field[pa.DataType]]", field.with_metadata
+    )
     for metadata in (
         {EXTENSION_NAME_KEY: VARIANT_EXTENSION_NAME, EXTENSION_METADATA_KEY: b"{}"},
         [(EXTENSION_NAME_KEY, VARIANT_EXTENSION_NAME), (EXTENSION_NAME_KEY, VARIANT_EXTENSION_NAME)],
     ):
         with pytest.raises(ValueError):
-            validate_logical_schema(pa.schema([field.with_metadata(metadata)]), selected_profiles=[VARIANT_PROFILE])
+            validate_logical_schema(pa.schema([with_metadata(metadata)]), selected_profiles=[VARIANT_PROFILE])
 
 
-def test_tuple_identity_is_distinct_from_struct_and_survives_nested_ipc():
+def test_tuple_identity_is_distinct_from_struct_and_survives_nested_ipc() -> None:
     child = tuple_field("pair", [pa.field("", pa.int32()), pa.field("", pa.string())])
     field = pa.field("outer", pa.list_(child))
     original = values(field, [{"element1": 12, "element2": None}])
@@ -248,26 +260,30 @@ def test_tuple_identity_is_distinct_from_struct_and_survives_nested_ipc():
         validate_logical_schema(restored.schema)
 
 
-def test_empty_tuple_and_legacy_types_remain_distinct():
+def test_empty_tuple_and_legacy_types_remain_distinct() -> None:
     original = values(tuple_field("value", []), {})
     validate_logical_values(original, selected_profiles=[TUPLE_PROFILE])
-    assert original.schema.field(0).metadata[LOGICAL_TYPE_KEY] == b"tuple"
+    metadata = original.schema.field(0).metadata
+    assert metadata is not None
+    assert metadata[LOGICAL_TYPE_KEY] == b"tuple"
     legacy = pa.schema([pa.field("legacy", pa.map_(pa.string(), pa.int32()))])
     assert not require_logical_profiles(legacy)
-    annotated = pa.schema([pa.field("legacy", pa.map_(pa.string(), tuple_field("value", [])))])
+    # Arrow accepts a Field here to retain child metadata; the stub only accepts DataType.
+    map_with_field = cast("Callable[[pa.DataType, pa.Field[pa.DataType]], pa.DataType]", pa.map_)
+    annotated = pa.schema([pa.field("legacy", map_with_field(pa.string(), tuple_field("value", [])))])
     with pytest.raises(ValueError, match="not negotiated"):
         require_logical_profiles(annotated)
     require_logical_profiles(annotated, selected_profiles=[TUPLE_PROFILE])
 
 
-def test_profile_selection_excludes_the_removed_custom_encoding():
+def test_profile_selection_excludes_the_removed_custom_encoding() -> None:
     assert select_logical_type_profiles([], LOGICAL_TYPE_PROFILES) == []
     assert select_logical_type_profiles(
         ["vgi.type.variant.arrow.v1", VARIANT_PROFILE, TUPLE_PROFILE], LOGICAL_TYPE_PROFILES
     ) == sorted(LOGICAL_TYPE_PROFILES)
 
 
-def test_output_carrier_respects_nonnullable_value_declaration():
+def test_output_carrier_respects_nonnullable_value_declaration() -> None:
     field = variant_field("v")
     field = field.with_type(pa.struct([field.type.field("metadata"), field.type.field("value").with_nullable(False)]))
     batch = pa.RecordBatch.from_arrays(

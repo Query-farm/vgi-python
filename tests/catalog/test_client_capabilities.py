@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import asdict, replace
-from typing import Any
+from typing import Any, cast
 
 import pyarrow as pa
 import pytest
@@ -25,9 +25,11 @@ from vgi.catalog import (
 )
 from vgi.client import Client
 from vgi.meta_worker import MetaWorker
-from vgi.protocol import CatalogAttachRequest, ClientCapabilities
+from vgi.protocol import CatalogAttachRequest, ClientCapabilities, VgiProtocol
 from vgi.serve import create_app
 from vgi.worker import Worker
+
+from .typing_helpers import present
 
 _SIGNING_KEY = b"client-capabilities-test-key"
 _NATIVE = ClientCapabilities(
@@ -99,7 +101,7 @@ def test_python_client_forwards_capabilities_over_http(capabilities: ClientCapab
             client_capabilities=capabilities,
         )
         schemas = client.schemas(attach_opaque_data=attach.attach_opaque_data)
-        assert json.loads(schemas[0].comment) == (asdict(capabilities) if capabilities is not None else None)
+        assert json.loads(present(schemas[0].comment)) == (asdict(capabilities) if capabilities is not None else None)
 
 
 def test_capabilities_survive_reconnect_without_cross_attachment_leakage() -> None:
@@ -117,13 +119,17 @@ def test_capabilities_survive_reconnect_without_cross_attachment_leakage() -> No
         ]
         for attach, offer in zip(attachments, (_NATIVE, _LIMITED, None), strict=True):
             snapshot = client.load_catalog(attach=attach)
-            assert json.loads(snapshot.schemas[0].schema.comment) == (asdict(offer) if offer is not None else None)
+            assert json.loads(present(snapshot.schemas[0].schema.comment)) == (
+                asdict(offer) if offer is not None else None
+            )
 
     restarted_app = create_app(_CapabilityWorker, describe=False, signing_key=_SIGNING_KEY)
     with Client.from_http("http://vgi.test", httpx_client=_SyncTestClient(restarted_app)) as client:
         for attach, offer in zip(attachments, (_NATIVE, _LIMITED, None), strict=True):
             snapshot = client.load_catalog(attach=attach)
-            assert json.loads(snapshot.schemas[0].schema.comment) == (asdict(offer) if offer is not None else None)
+            assert json.loads(present(snapshot.schemas[0].schema.comment)) == (
+                asdict(offer) if offer is not None else None
+            )
 
 
 @pytest.mark.parametrize("use_meta_worker", [False, True])
@@ -154,5 +160,5 @@ def test_ticket_redemption_preserves_redeeming_client_capabilities(
         client_capabilities=capabilities,
     )
     attach = worker.catalog_attach(CatalogAttachRequest.deserialize_from_bytes(request.serialize_to_bytes()))
-    schemas = worker.catalog_schemas(attach_opaque_data=attach.attach_opaque_data).to_infos()
-    assert json.loads(schemas[0].comment) == (asdict(capabilities) if capabilities is not None else None)
+    schemas = cast(VgiProtocol, worker).catalog_schemas(attach_opaque_data=attach.attach_opaque_data).to_infos()
+    assert json.loads(present(schemas[0].comment)) == (asdict(capabilities) if capabilities is not None else None)

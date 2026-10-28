@@ -29,6 +29,7 @@ from vgi._test_fixtures.writable.generic import GenericTableInsert
 from vgi._test_fixtures.writable.table import transactor_proxy
 from vgi._test_fixtures.writable.worker import WritableWorker
 from vgi.arguments import Arguments
+from vgi.catalog.catalog_interface import AttachOpaqueData
 from vgi.client import Client
 from vgi.client.catalog_mixin import CatalogClientError
 from vgi.client.errors import ClientError
@@ -39,7 +40,8 @@ from vgi.rpc_server import build_rpc_server
 from vgi.serve import create_app
 
 _KEY = b"writable-signed-transaction-test-key"
-_ROWS = pa.schema([("id", pa.int64()), ("name", pa.string())])
+_ROW_FIELDS: list[pa.Field[Any]] = [pa.field("id", pa.int64()), pa.field("name", pa.string())]
+_ROWS = pa.schema(_ROW_FIELDS)
 _COUNT = pa.schema([pa.field("count", pa.int64(), nullable=False)])
 
 
@@ -176,7 +178,7 @@ def test_signed_http_write_commit_and_rollback(service: SQLiteTransactorService,
         owner = next(iter(service.paths))
         with _client(app, sealed_attach) as writer:
             for operation, start in [("commit", 1), ("rollback", 3)]:
-                sealed_tx = catalog.catalog_transaction_begin(attach_opaque_data=sealed_attach)
+                sealed_tx = catalog.catalog_transaction_begin(attach_opaque_data=AttachOpaqueData(sealed_attach))
                 assert sealed_tx is not None
                 plaintext = service.calls[-1][2]
                 assert sealed_tx != plaintext
@@ -204,7 +206,7 @@ def test_signed_http_wrong_attachment_rejected_before_service(service: SQLiteTra
     with _client(app) as catalog:
         owner = _attach(catalog)
         other = _attach(catalog)
-        tx = catalog.catalog_transaction_begin(attach_opaque_data=owner)
+        tx = catalog.catalog_transaction_begin(attach_opaque_data=AttachOpaqueData(owner))
         assert tx is not None
         before = list(service.calls)
         with _client(app, other) as writer, pytest.raises(ClientError, match="transaction_opaque_data"):
@@ -214,8 +216,8 @@ def test_signed_http_wrong_attachment_rejected_before_service(service: SQLiteTra
             assert service.committed_rows(attach) == []
         for operation in (catalog.catalog_transaction_commit, catalog.catalog_transaction_rollback):
             with pytest.raises(CatalogClientError, match="transaction_opaque_data"):
-                operation(attach_opaque_data=other, transaction_opaque_data=tx)
-        catalog.catalog_transaction_rollback(attach_opaque_data=owner, transaction_opaque_data=tx)
+                operation(attach_opaque_data=AttachOpaqueData(other), transaction_opaque_data=tx)
+        catalog.catalog_transaction_rollback(attach_opaque_data=AttachOpaqueData(owner), transaction_opaque_data=tx)
         assert not service.transactions
 
 
@@ -238,6 +240,7 @@ def test_signed_http_callback_token_survives_init_continuation_and_finalize(
         if phase in {"process", "finalize"}:
             state = VgiCallState(init_call=params.init_call, init_response=params.init_response)
             raw = state.serialize_to_bytes()
+            assert plaintext is not None and sealed is not None
             assert plaintext not in raw
             assert sealed in raw
 
@@ -269,12 +272,14 @@ def test_signed_http_callback_token_survives_init_continuation_and_finalize(
         app = create_app(WritableWorker, describe=False, signing_key=_KEY)
     with _client(app) as catalog:
         attach = _attach(catalog)
-        sealed = catalog.catalog_transaction_begin(attach_opaque_data=attach)
+        sealed = catalog.catalog_transaction_begin(attach_opaque_data=AttachOpaqueData(attach))
         assert sealed is not None
         plaintext = service.calls[-1][2]
         with _client(app, attach) as writer:
             assert _write(writer, sealed, "count", has_finalize=True) == [{"count": 1}, {"count": 1}]
-        catalog.catalog_transaction_rollback(attach_opaque_data=attach, transaction_opaque_data=sealed)
+        catalog.catalog_transaction_rollback(
+            attach_opaque_data=AttachOpaqueData(attach), transaction_opaque_data=sealed
+        )
     phases = [phase for phase, _ in seen]
     assert phases.count("bind") >= 1
     assert phases.count("init") >= 1

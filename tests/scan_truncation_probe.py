@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from vgi._test_fixtures.table.sequence import NestedSequenceFunction
 from vgi._test_fixtures.table.splits import SplitPaginatedFunction
@@ -44,9 +45,11 @@ def _process_split(cls: type[Any], params: Any, state: Any, out: Any) -> None:
 
 def main() -> None:
     """Apply failure injection only inside this separately launched test worker."""
-    NestedSequenceFunction.process = classmethod(_process)  # type: ignore[method-assign]
-    SplitPaginatedFunction.process = classmethod(_process_split)  # type: ignore[method-assign]
-    fixture_main()
+    with (
+        patch.object(NestedSequenceFunction, "process", classmethod(_process)),
+        patch.object(SplitPaginatedFunction, "process", classmethod(_process_split)),
+    ):
+        fixture_main()
 
 
 if __name__ == "__main__":

@@ -3,13 +3,17 @@
 
 """Macro declaration fidelity and atomic create/discovery reference behavior."""
 
+from __future__ import annotations
+
 from dataclasses import replace
+from typing import Any, NotRequired, TypedDict
 
 import duckdb
 import pyarrow as pa
 import pytest
 
 from vgi.argument_spec import macro_arguments_schema
+from vgi.catalog import MacroType
 from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.layout import SqlExpression
 from vgi.catalog.macros import (
@@ -24,14 +28,22 @@ from vgi.catalog.macros import (
 )
 from vgi.typed_values import TypedValueBatch
 
+from .typing_helpers import present
 
-def literal(name="x", value=None, dtype=None, *, metadata=None):
+
+def literal(
+    name: str = "x",
+    value: object = None,
+    dtype: pa.DataType | None = None,
+    *,
+    metadata: dict[bytes | str, bytes | str] | None = None,
+) -> TypedValueBatch:
     dtype = dtype if dtype is not None else pa.int64()
     schema = pa.schema([pa.field(name, dtype, metadata={b"logical": b"keep"})], metadata=metadata)
     return TypedValueBatch(pa.RecordBatch.from_arrays([pa.array([value], type=dtype)], schema=schema))
 
 
-def overload(parameters=None, **changes):
+def overload(parameters: list[MacroParameter] | None = None, **changes: Any) -> MacroOverload:
     return MacroOverload(
         evaluation_context=changes.pop("evaluation_context", QueryEvaluationContext()),
         parameters=parameters if parameters is not None else [MacroParameter(name="x")],
@@ -43,26 +55,26 @@ def overload(parameters=None, **changes):
     )
 
 
-def fields(**changes):
+def fields(**changes: Any) -> dict[str, Any]:
     return dict(macro_type="scalar", schema_path=["a.b", "nested"], parameters=[], definition="", **changes)
 
 
-def test_parameter_preserves_declared_type_and_recursive_metadata_without_inference():
+def test_parameter_preserves_declared_type_and_recursive_metadata_without_inference() -> None:
     schema = pa.schema(
         [pa.field("x", pa.struct([pa.field("a", pa.int64(), metadata={b"nested": b"identity"})]))],
         metadata={b"schema": b"identity"},
     )
     parameter = MacroParameter(name="x", declared_type=schema, default_value=literal(value=None))
     restored = MacroParameter.deserialize_from_bytes(parameter.serialize_to_bytes())
-    assert restored.declared_type.equals(schema, check_metadata=True)
-    assert restored.default_value.schema.equals(parameter.default_value.schema, check_metadata=True)
+    assert present(restored.declared_type).equals(schema, check_metadata=True)
+    assert present(restored.default_value).schema.equals(present(parameter.default_value).schema, check_metadata=True)
     assert restored.has_default
-    assert restored.default_value.batch.column(0)[0].as_py() is None
+    assert present(restored.default_value).batch.column(0)[0].as_py() is None
     assert MacroParameter(name="x", default_value=literal(value=7)).declared_type is None
     assert not MacroParameter(name="x").has_default
 
 
-def test_expression_default_and_body_keep_raw_nested_owner_and_order():
+def test_expression_default_and_body_keep_raw_nested_owner_and_order() -> None:
     expression = SqlExpression(
         evaluation_context=QueryEvaluationContext(),
         sql="40 + 2",
@@ -90,12 +102,12 @@ def test_expression_default_and_body_keep_raw_nested_owner_and_order():
         {"documentation": "bad\0doc"},
     ],
 )
-def test_invalid_parameter_contracts_reject(changes):
+def test_invalid_parameter_contracts_reject(changes: dict[str, Any]) -> None:
     with pytest.raises((ValueError, TypeError)):
         replace(MacroParameter(name="x"), **changes)
 
 
-def test_default_value_and_expression_cannot_coexist():
+def test_default_value_and_expression_cannot_coexist() -> None:
     expression = SqlExpression(
         evaluation_context=QueryEvaluationContext(), sql="NULL", profile=MACRO_DEFAULT_PROFILE, schema_path=["main"]
     )
@@ -103,7 +115,7 @@ def test_default_value_and_expression_cannot_coexist():
         MacroParameter(name="x", default_value=literal(), default_expression=expression)
 
 
-def test_unknown_default_profile_rejects_before_provider_evaluation():
+def test_unknown_default_profile_rejects_before_provider_evaluation() -> None:
     with pytest.raises(ValueError, match="unsupported"):
         MacroParameter(
             name="x",
@@ -129,12 +141,12 @@ def test_unknown_default_profile_rejects_before_provider_evaluation():
         {"parameters": [MacroParameter(name="x", default_value=literal()), MacroParameter(name="y")]},
     ],
 )
-def test_invalid_overload_contracts_reject(changes):
+def test_invalid_overload_contracts_reject(changes: dict[str, Any]) -> None:
     with pytest.raises((ValueError, TypeError)):
         replace(overload(), **changes)
 
 
-def test_default_expression_cannot_rebind_to_another_owner():
+def test_default_expression_cannot_rebind_to_another_owner() -> None:
     with pytest.raises(ValueError, match="owner schema"):
         overload(
             [
@@ -160,14 +172,14 @@ def test_default_expression_cannot_rebind_to_another_owner():
         {"arguments_schema": pa.schema([])},
     ],
 )
-def test_dual_legacy_and_new_forms_reject_even_if_first_overload_matches(changes):
+def test_dual_legacy_and_new_forms_reject_even_if_first_overload_matches(changes: dict[str, Any]) -> None:
     args = fields(overloads=[overload()])
     args.update(changes)
     with pytest.raises(ValueError, match="conflicts"):
         validate_macro_overloads(**args)
 
 
-def test_collection_is_complete_nonempty_homogeneous_and_owner_relative():
+def test_collection_is_complete_nonempty_homogeneous_and_owner_relative() -> None:
     for collection in [[], [overload(macro_type="table")], [overload(schema_path=["other"])]]:
         with pytest.raises(ValueError):
             validate_macro_overloads(**fields(overloads=collection))
@@ -179,9 +191,20 @@ def test_collection_is_complete_nonempty_homogeneous_and_owner_relative():
     assert len(copied[1].parameters) == 1
 
 
-def test_legacy_upgrade_preserves_typed_null_defaults_without_declaring_their_types():
+class _LegacyMacroArgs(TypedDict):
+    """Legacy macro fields used together during upgrade checks."""
+
+    macro_type: str
+    schema_path: list[str]
+    parameters: list[str]
+    definition: str
+    parameter_default_values: NotRequired[pa.RecordBatch]
+    arguments_schema: NotRequired[pa.Schema]
+
+
+def test_legacy_upgrade_preserves_typed_null_defaults_without_declaring_their_types() -> None:
     defaults = literal("optional", None, metadata={b"source": b"legacy"}).batch
-    args = dict(
+    args: _LegacyMacroArgs = dict(
         macro_type="scalar",
         schema_path=["a.b", "nested"],
         parameters=["required", "optional"],
@@ -198,18 +221,19 @@ def test_legacy_upgrade_preserves_typed_null_defaults_without_declaring_their_ty
     assert restored["parameters"] == args["parameters"]
 
 
-def test_legacy_documentation_schema_cannot_sneak_in_a_declared_type_or_drop_metadata():
-    args = dict(macro_type="scalar", schema_path=["main"], parameters=["x"], definition="x")
+def test_legacy_documentation_schema_cannot_sneak_in_a_declared_type_or_drop_metadata() -> None:
+    args: _LegacyMacroArgs = dict(macro_type="scalar", schema_path=["main"], parameters=["x"], definition="x")
     for schema in [
         pa.schema([pa.field("x", pa.int64())]),
         pa.schema([pa.field("x", pa.null())], metadata={b"unknown": b"preserve"}),
     ]:
+        args["arguments_schema"] = schema
         with pytest.raises(ValueError, match="unsupported or inconsistent"):
-            normalize_macro_overloads(**args, arguments_schema=schema, evaluation_context=QueryEvaluationContext())
+            normalize_macro_overloads(**args, evaluation_context=QueryEvaluationContext())
 
 
 @pytest.mark.parametrize("kind", ["family", "declared", "expression", "empty_doc"])
-def test_legacy_downgrade_fails_closed_instead_of_losing_information(kind):
+def test_legacy_downgrade_fails_closed_instead_of_losing_information(kind: str) -> None:
     family = [overload()]
     if kind == "family":
         family.append(overload([], definition="42"))
@@ -237,7 +261,7 @@ def test_legacy_downgrade_fails_closed_instead_of_losing_information(kind):
         legacy_macro_fields(family)
 
 
-def test_macro_ipc_requires_exactly_one_complete_record():
+def test_macro_ipc_requires_exactly_one_complete_record() -> None:
     valid = overload().serialize_to_bytes()
     with pytest.raises(ValueError, match="trailing"):
         MacroOverload.deserialize_from_bytes(valid + b"extra")
@@ -253,20 +277,29 @@ def test_macro_ipc_requires_exactly_one_complete_record():
         MacroOverload.deserialize_from_bytes(sink.getvalue().to_pybytes())
 
 
-def test_serialization_revalidates_mutated_parameter_collection():
+def test_serialization_revalidates_mutated_parameter_collection() -> None:
     value = overload()
     value.parameters.append(MacroParameter(name="X"))
     with pytest.raises(ValueError, match="unique"):
         value.serialize_to_bytes()
 
 
+class _FamilyArgs(TypedDict):
+    """Common create/discovery fields whose mutable family is revalidated."""
+
+    name: str
+    schema_path: list[str]
+    macro_type: MacroType
+    overloads: list[MacroOverload]
+
+
 @pytest.mark.parametrize("kind", ["info", "create"])
-def test_parent_serialization_revalidates_mutated_nested_family(kind):
+def test_parent_serialization_revalidates_mutated_nested_family(kind: str) -> None:
     from vgi.catalog import MacroInfo, MacroType, OnConflict
     from vgi.protocol import MacroCreateRequest
 
     member = overload()
-    common = dict(
+    common: _FamilyArgs = dict(
         name="m",
         schema_path=member.schema_path,
         macro_type=MacroType.SCALAR,
@@ -283,7 +316,7 @@ def test_parent_serialization_revalidates_mutated_nested_family(kind):
         parent.serialize_to_bytes()
 
 
-def test_create_discovery_copy_resolves_default_once_with_duckdb_15():
+def test_create_discovery_copy_resolves_default_once_with_duckdb_15() -> None:
     """A finite reference binds a known constant and stores its resolved value."""
     owner = ["main"]
     expression = SqlExpression(
@@ -299,9 +332,9 @@ def test_create_discovery_copy_resolves_default_once_with_duckdb_15():
     calls = []
     with duckdb.connect() as connection:
 
-        def resolve(item, parameter):
+        def resolve(item: MacroOverload, parameter: MacroParameter) -> TypedValueBatch:
             assert item.schema_path == owner
-            assert parameter.default_expression.sql == "40 + 2"
+            assert present(parameter.default_expression).sql == "40 + 2"
             calls.append(parameter.name)
             # This finite reference evaluates only its one whitelisted constant;
             # a general provider must use the engine's constant-expression binder.
@@ -313,7 +346,7 @@ def test_create_discovery_copy_resolves_default_once_with_duckdb_15():
         discovered = [MacroOverload.deserialize_from_bytes(data) for data in stored]
         copied = normalize_macro_overloads(**{**fields(overloads=discovered), "schema_path": owner})
         assert copied[0].parameters[0].default_expression is None
-        assert copied[0].parameters[0].default_value.batch.column(0)[0].as_py() == 42
+        assert present(copied[0].parameters[0].default_value).batch.column(0)[0].as_py() == 42
         assert calls == ["x"]
         assert family[0].parameters[0].default_expression is not None
         assert copied[0].serialize_to_bytes() == stored[0]
@@ -322,11 +355,11 @@ def test_create_discovery_copy_resolves_default_once_with_duckdb_15():
         assert connection.sql("SELECT original_macro(), copied_macro()").fetchone() == (43, 43)
 
 
-def test_default_resolution_failure_does_not_publish_partial_replacement():
+def test_default_resolution_failure_does_not_publish_partial_replacement() -> None:
     family = [overload([MacroParameter(name="x", default_value=literal(value=1))])]
     existing = [item.serialize_to_bytes() for item in family]
 
-    def reject(item, parameter):
+    def reject(item: MacroOverload, parameter: MacroParameter) -> TypedValueBatch:
         raise ValueError("default cannot be implicitly cast")
 
     with pytest.raises(ValueError, match="implicitly cast"):
@@ -334,7 +367,7 @@ def test_default_resolution_failure_does_not_publish_partial_replacement():
     assert [item.serialize_to_bytes() for item in family] == existing
 
 
-def test_duckdb_15_owns_typed_overload_resolution_and_duplicate_signature_errors():
+def test_duckdb_15_owns_typed_overload_resolution_and_duplicate_signature_errors() -> None:
     with duckdb.connect() as connection:
         connection.execute("CREATE MACRO typed_macro(x INTEGER) AS x + 1, (x VARCHAR) AS x || '!' ")
         assert connection.sql("SELECT typed_macro(2::INTEGER), typed_macro('v'::VARCHAR)").fetchone() == (3, "v!")

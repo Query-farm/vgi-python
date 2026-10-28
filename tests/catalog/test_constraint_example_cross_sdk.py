@@ -2,6 +2,8 @@
 # ruff: noqa: D103
 """Exercise canonical discovery through independently built example workers."""
 
+from __future__ import annotations
+
 import json
 import os
 
@@ -34,7 +36,7 @@ def test_example_constraints_are_explicit_stable_untrusted_records(sdk: str) -> 
             assert all(item.validation == ConstraintValidation.UNVALIDATED for item in infos)
             assert not any(item.trusted for item in infos)
             validate_constraint_schema(
-                pa.ipc.read_schema(pa.BufferReader(fetched.columns)),
+                pa.ipc.read_schema(pa.py_buffer(fetched.columns)),
                 [item.definition for item in infos],
                 trusted=[],
             )

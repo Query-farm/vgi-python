@@ -9,7 +9,7 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -24,15 +24,13 @@ from vgi.invocation import BindRepeatability, BindResponse, GlobalInitResponse
 from vgi.protocol import TableFunctionProjectionRequest, TableFunctionProjectionResponse
 from vgi.table_function import BindParams, InitParams, ProcessParams, TableFunctionGenerator
 
-SOURCE = pa.schema(
-    [
-        pa.field("n", pa.int32(), metadata={b"source": b"physical"}),
-        pa.field("other", pa.int32()),
-        pa.field("text", pa.string()),
-    ],
-    metadata={b"provider": b"projection-reference"},
-)
-ROWS = [
+SOURCE_FIELDS: list[pa.Field[Any]] = [
+    pa.field("n", pa.int32(), metadata={b"source": b"physical"}),
+    pa.field("other", pa.int32()),
+    pa.field("text", pa.string()),
+]
+SOURCE = pa.schema(SOURCE_FIELDS, metadata={b"provider": b"projection-reference"})
+ROWS: list[dict[str, int | str | None]] = [
     {"n": -2147483648, "other": 2, "text": "min"},
     {"n": 0, "other": 3, "text": "zero"},
     {"n": None, "other": None, "text": None},
@@ -41,7 +39,7 @@ ROWS = [
 BASE = b"projection-reference-source-v1"
 
 
-def event(kind, function, **details):
+def event(kind: str, function: str, **details: object) -> None:
     filename = os.environ.get("VGI_PROJECTION_TRACE")
     if filename:
         with open(filename, "a") as output:
@@ -71,7 +69,7 @@ class ProjectionSource(TableFunctionGenerator[None, ProjectionState]):
     mode: ClassVar[str] = "accepted"
     repeatability: ClassVar[BindRepeatability] = BindRepeatability.UNKNOWN
     source: ClassVar[pa.Schema] = SOURCE
-    rows: ClassVar[list[dict]] = ROWS
+    rows: ClassVar[list[dict[str, int | str | None]]] = ROWS
 
     class Meta:
         name = "projection_source"
@@ -89,7 +87,7 @@ class ProjectionSource(TableFunctionGenerator[None, ProjectionState]):
         )
 
     @classmethod
-    def candidate(cls, request, index):
+    def candidate(cls, request: TableFunctionProjectionRequest, index: int) -> str | None:
         expression = request.expression_records()[index]
         if expression.evaluation_context != QueryEvaluationContext():
             return None
@@ -122,7 +120,8 @@ class ProjectionSource(TableFunctionGenerator[None, ProjectionState]):
         if not accepted:
             return TableFunctionProjectionResponse()
         schema = pa.schema(
-            [*cls.source, *(request.result_schema.field(i) for i in accepted)], metadata=cls.source.metadata
+            [*cls.source, *(request.result_schema.field(i) for i in accepted)],
+            metadata={k: v for k, v in (cls.source.metadata or {}).items()},
         )
         if cls.mode == "malformed":
             schema = schema.set(len(cls.source), schema.field(len(cls.source)).with_type(pa.string()))
@@ -139,12 +138,14 @@ class ProjectionSource(TableFunctionGenerator[None, ProjectionState]):
         )
 
     @classmethod
-    def plan(cls, params):
+    def plan(cls, params: InitParams[None] | ProcessParams[None]) -> ProjectionPlan | None:
+        assert params.init_call is not None
         payload = params.init_call.bind_opaque_data
         if payload == BASE:
             if not params.init_call.output_schema.equals(cls.source, check_metadata=True):
                 raise ValueError("ordinary source init changed its bind schema")
             return None
+        assert payload is not None
         plan = ProjectionPlan.deserialize_from_bytes(payload)
         request = TableFunctionProjectionRequest.deserialize_from_bytes(plan.request)
         result = TableFunctionProjectionResponse(
@@ -190,7 +191,9 @@ class ProjectionSource(TableFunctionGenerator[None, ProjectionState]):
         if state.request is not None:
             request = TableFunctionProjectionRequest.deserialize_from_bytes(state.request)
             for index in state.accepted_indices:
-                values.append(pc.cast(source.column(cls.candidate(request, index)), pa.int64(), safe=True))
+                name = cls.candidate(request, index)
+                assert name is not None
+                values.append(pc.cast(source.column(name), pa.int64(), safe=True))
         out.emit(pa.RecordBatch.from_arrays(values, schema=params.output_schema))
         state.offset += source.num_rows
 

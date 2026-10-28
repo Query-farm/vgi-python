@@ -3,6 +3,7 @@
 """Mode, negotiation, output and schema invariants before remote execution."""
 
 from dataclasses import replace
+from typing import Any
 
 import pyarrow as pa
 import pytest
@@ -20,6 +21,8 @@ from vgi.catalog.query import (
     QueryObjectReference,
 )
 from vgi.query_parameters import QueryParameters
+
+from .typing_helpers import present
 
 OUTPUT = pa.schema([pa.field("result", pa.int32())]).serialize().to_pybytes()
 PARAMETERS = QueryParameters.from_batch(
@@ -39,7 +42,9 @@ def capability() -> QueryCapabilities:
     )
 
 
-def request(**kwargs) -> CatalogQueryPrepareRequest:
+def request(
+    *, expected_output_schema: bytes | None = None, required_ordering: str = "unspecified"
+) -> CatalogQueryPrepareRequest:
     return CatalogQueryPrepareRequest(
         attach_opaque_data=b"attach",
         encoding=QUERY_ENCODING,
@@ -49,11 +54,14 @@ def request(**kwargs) -> CatalogQueryPrepareRequest:
         query="SELECT $1 AS result",
         parameter_schema=PARAMETERS.schema_bytes(),
         evaluation_context=QueryEvaluationContext(),
-        **kwargs,
+        expected_output_schema=expected_output_schema,
+        required_ordering=required_ordering,
     )
 
 
-def result(req=None, **kwargs) -> CatalogQueryPrepareResult:
+def result(
+    req: CatalogQueryPrepareRequest | None = None, *, validated_catalog_version: int | None = None
+) -> CatalogQueryPrepareResult:
     req = req or request()
     return CatalogQueryPrepareResult(
         status="accepted",
@@ -62,11 +70,11 @@ def result(req=None, **kwargs) -> CatalogQueryPrepareResult:
         result_ordering="query_order",
         context_digest=req.evaluation_context.digest(req.encoding, req.semantic_profile),
         expires_at_epoch_ms=2_000_000_000_000,
-        **kwargs,
+        validated_catalog_version=validated_catalog_version,
     )
 
 
-def table_ref(path=None) -> QueryObjectReference:
+def table_ref(path: list[str] | None = None) -> QueryObjectReference:
     return QueryObjectReference(
         object=CatalogObjectRef(kind="table", schema_path=path or ["a.b", "nested"], name="T"),
         expected_schema=OUTPUT,
@@ -117,11 +125,12 @@ def test_selection_limits_modes_and_size_without_inferring_engine_equivalence() 
         max_query_bytes=20,
     )
     selected = supported.select(offer, supports_transactions=False)
+    assert selected is not None
     assert selected.execution_modes == ["explicit"]
     assert selected.semantic_profiles == [QUERY_EXPLICIT]
     assert selected.max_query_bytes == 20
     supported = replace(supported, semantic_profiles=[QUERY_EXPLICIT], execution_modes=["explicit"])
-    assert supported.select(offer, supports_transactions=True).execution_modes == ["explicit"]
+    assert present(supported.select(offer, supports_transactions=True)).execution_modes == ["explicit"]
     automatic_only = replace(offer, semantic_profiles=[QUERY_AUTOMATIC])
     assert capability().select(automatic_only, supports_transactions=False) is None
 
@@ -139,7 +148,7 @@ def test_selection_limits_modes_and_size_without_inferring_engine_equivalence() 
         {"backend_version": "bad\0version"},
     ],
 )
-def test_malformed_selected_capability_rejects(change) -> None:
+def test_malformed_selected_capability_rejects(change: dict[str, Any]) -> None:
     with pytest.raises(ValueError):
         replace(capability(), **change)
 
@@ -186,7 +195,7 @@ def test_nested_records_keep_raw_identities_in_struct_fields() -> None:
         },
     ],
 )
-def test_automatic_context_requires_complete_snapshot_and_output_contract(change) -> None:
+def test_automatic_context_requires_complete_snapshot_and_output_contract(change: dict[str, Any]) -> None:
     with pytest.raises(ValueError):
         replace(automatic(), **change)
 
@@ -205,7 +214,7 @@ def test_automatic_context_requires_complete_snapshot_and_output_contract(change
         {"mode": "automatic"},
     ],
 )
-def test_invalid_preparation_rejects_before_provider_binding(change) -> None:
+def test_invalid_preparation_rejects_before_provider_binding(change: dict[str, Any]) -> None:
     with pytest.raises(ValueError):
         replace(request(), **change)
 
@@ -225,7 +234,8 @@ def test_decline_is_exclusive_and_future_reason_codes_remain_pre_execution() -> 
         ("expires_at_epoch_ms", 5),
     ]:
         with pytest.raises(ValueError, match="acceptance fields"):
-            replace(declined, **{field: value})
+            invalid: dict[str, Any] = {field: value}
+            replace(declined, **invalid)
     with pytest.raises(ValueError, match="reason code"):
         replace(declined, reason_code=None)
 
@@ -246,7 +256,7 @@ def test_decline_is_exclusive_and_future_reason_codes_remain_pre_execution() -> 
         {"estimated_bytes": -1},
     ],
 )
-def test_incomplete_or_contradictory_acceptance_rejects(change) -> None:
+def test_incomplete_or_contradictory_acceptance_rejects(change: dict[str, Any]) -> None:
     with pytest.raises(ValueError):
         replace(result(), **change)
 

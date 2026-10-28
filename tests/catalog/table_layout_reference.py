@@ -13,9 +13,10 @@ from __future__ import annotations
 import base64
 import json
 import sqlite3
+from collections.abc import Sequence
 from contextlib import closing
 from dataclasses import replace
-from typing import Any
+from typing import Any, Literal, Never, overload
 
 import duckdb
 import pyarrow as pa
@@ -33,7 +34,14 @@ from vgi.catalog.capabilities import (
     TABLE_OPTIONS_READ,
     CatalogCapabilities,
 )
-from vgi.catalog.catalog_interface import CatalogContentsResult, OnConflict, SchemaContentsInfo, SchemaObjectType
+from vgi.catalog.catalog_interface import (
+    AttachOpaqueData,
+    CatalogContentsResult,
+    OnConflict,
+    SchemaContentsInfo,
+    SchemaObjectType,
+    TransactionOpaqueData,
+)
 from vgi.catalog.layout import LayoutChangeMode, TableLayout, TableLayoutChange
 from vgi.schema_path import schema_path_key
 from vgi.worker import Worker
@@ -66,7 +74,7 @@ def _table_key(path: list[str], name: str) -> str:
 
 def arrange_rows(rows: list[dict[str, Any]], info: TableInfo) -> list[dict[str, Any]]:
     """Validate/bind keys, then partition and sort actual rows in one snapshot."""
-    columns = pa.ipc.read_schema(pa.BufferReader(info.columns))
+    columns = pa.ipc.read_schema(pa.py_buffer(info.columns))
     layout = info.layout or TableLayout()
     partitions, sorts = layout.partition_expressions(), layout.sort_keys()
     with duckdb.connect(config={"enable_external_access": False}) as connection:
@@ -101,9 +109,37 @@ class TableLayoutCatalog(SchemaOptionsCatalog):
     def _info(value: str) -> TableInfo:
         return TableInfo.deserialize_from_bytes(base64.b64decode(json.loads(value)["info"]))
 
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: list[str],
+        type: Literal[SchemaObjectType.TABLE],
+    ) -> list[TableInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: list[str],
+        type: Literal[
+            SchemaObjectType.VIEW,
+            SchemaObjectType.SCALAR_FUNCTION,
+            SchemaObjectType.TABLE_FUNCTION,
+            SchemaObjectType.AGGREGATE_FUNCTION,
+            SchemaObjectType.SCALAR_MACRO,
+            SchemaObjectType.TABLE_MACRO,
+            SchemaObjectType.INDEX,
+        ],
+    ) -> list[Never]: ...
+
     def schema_contents(
         self, *, attach_opaque_data: Any, transaction_opaque_data: Any, path: list[str], type: SchemaObjectType
-    ) -> list[TableInfo]:
+    ) -> Sequence[TableInfo]:
         if type != SchemaObjectType.TABLE:
             return []
         with closing(sqlite3.connect(self.database_path)) as db:

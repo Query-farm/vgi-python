@@ -53,7 +53,9 @@ def test_column_metadata_schema_vectors_preserve_literals_and_reject_invalid_val
         comment="A café column\x00 with a literal dot.", tags={"a.b": 'literal "value"', "": "", "雪": "\x00"}
     )
     assert restored["literal"].metadata == {b"provider": b"retained"}
-    assert restored["empty"].field(0).metadata[b"provider.note"] == b"keep me"
+    metadata = restored["empty"].field(0).metadata
+    assert metadata is not None
+    assert metadata[b"provider.note"] == b"keep me"
     for payload in fixtures["invalid"].values():
         schema = pa.ipc.read_schema(pa.py_buffer(base64.b64decode(payload)))
         with pytest.raises(ValueError, match="."):
@@ -155,14 +157,16 @@ def test_column_requests_preserve_raw_paths_and_definitions() -> None:
         assert row["column_path"] == (["a", 'b."quoted'] if nested else ["a.b"])
         assert row["transaction_opaque_data"] == (b"transaction" if nested else None)
         if "column_definition" in row:
-            definition = pa.ipc.read_schema(pa.BufferReader(row["column_definition"]))
+            definition = pa.ipc.read_schema(pa.py_buffer(row["column_definition"]))
             assert definition.field(0).name == row["column_path"][-1]
             if name.startswith("column_add_"):
                 expression = column_expressions(definition.field(0)).default
                 assert expression is not None and expression.sql == "7"
                 assert expression.schema_path == row["schema_path"]
                 assert expression.evaluation_context == QueryEvaluationContext()
-                assert b"default" not in definition.field(0).metadata
+                metadata = definition.field(0).metadata
+                assert metadata is not None
+                assert b"default" not in metadata
         if "expression" in row:
             if name == "column_type_change_literal":
                 assert row["expression"] is None

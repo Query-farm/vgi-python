@@ -319,14 +319,14 @@ def test_collections_consume_multiple_batches_and_reject_wrong_schema() -> None:
 
 
 class _S3Error(Exception):
-    def __init__(self, code: str):
+    def __init__(self, code: str) -> None:
         self.response = {"Error": {"Code": code}}
 
 
 class _S3:
     """A conditional object store fixture shared by separate repository instances."""
 
-    def __init__(self, store: _Storage):
+    def __init__(self, store: _Storage) -> None:
         self.store = store
         self.etags: dict[str, str] = {}
 

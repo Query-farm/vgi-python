@@ -7,7 +7,10 @@ not a mock SQL backend. Its one process owns transaction connections: these
 tests do not qualify portable owners, production recovery or native writes.
 """
 
+from collections.abc import Iterator
 from dataclasses import replace
+from pathlib import Path
+from typing import Any, NoReturn
 
 import pyarrow as pa
 import pytest
@@ -15,6 +18,7 @@ from vgi_rpc.http._testing import _SyncTestClient
 from vgi_rpc.rpc import AuthContext, CallContext
 
 from vgi.arguments import Arguments
+from vgi.catalog import CatalogAttachResult, TableInfo, TransactionOpaqueData
 from vgi.catalog.query import (
     QUERY_ENCODING,
     QUERY_EXECUTOR,
@@ -22,14 +26,17 @@ from vgi.catalog.query import (
     QUERY_STATEMENT,
     STATEMENT_RESULT_KEY,
     CatalogQueryPrepareRequest,
+    CatalogQueryPrepareResult,
     QueryEvaluationContext,
     read_query_schema,
 )
 from vgi.client import Client
-from vgi.invocation import FunctionType
-from vgi.protocol import BindRequest, ClientCapabilities
+from vgi.invocation import BindResponse, FunctionType
+from vgi.protocol import BindRequest, ClientCapabilities, VgiProtocol
 from vgi.query_parameters import QueryParameters
+from vgi.query_provider import QueryExecution, QueryOwner, QueryPreparation
 from vgi.serve import create_app
+from vgi.table_function import TableInOutFunctionInitPhase
 
 from .statement_reference import (
     BASELINE,
@@ -51,6 +58,7 @@ from .statement_reference import (
     StatementReferenceProvider,
     StatementReferenceWorker,
 )
+from .typing_helpers import present
 
 CAPS = ClientCapabilities(
     engine="fixture", native_formats=[], catalogs=[], can_stream=True, filter_encodings=[], query_pushdown=OFFER
@@ -59,7 +67,9 @@ CTX = CallContext(auth=AuthContext.anonymous(), emit_client_log=lambda *args, **
 
 
 @pytest.fixture
-def backend(tmp_path, monkeypatch):
+def backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[tuple[StatementReferenceWorker, StatementAuthority]]:
     authority = StatementAuthority(tmp_path / "statements.duckdb")
     monkeypatch.setattr(StatementReferenceCatalog, "authority", authority)
     worker = StatementReferenceWorker(quiet=True)
@@ -70,27 +80,34 @@ def backend(tmp_path, monkeypatch):
         authority.close()
 
 
-def client():
+def client() -> Client:
     return Client.from_http(
         "http://vgi.test",
         httpx_client=_SyncTestClient(create_app(StatementReferenceWorker, describe=False, signing_key=SIGNING_KEY)),
     )
 
 
-def attach(c, capabilities=CAPS):
+def attach(c: Client, capabilities: ClientCapabilities = CAPS) -> CatalogAttachResult:
     return c.catalog_attach(
         name="statements", data_version_spec=None, implementation_version=None, client_capabilities=capabilities
     )
 
 
-def parameters(**values):
+def parameters(**values: int | str | None) -> QueryParameters:
     if not values:
         return QueryParameters.empty(mode="named")
     schema = pa.schema([(name, pa.int64() if name == "id" else pa.string()) for name in values])
     return QueryParameters.from_batch(pa.RecordBatch.from_pylist([values], schema=schema), mode="named")
 
 
-def request(attached, tx, query, values=None, *, read_only=False):
+def request(
+    attached: CatalogAttachResult,
+    tx: bytes | None,
+    query: str,
+    values: QueryParameters | None = None,
+    *,
+    read_only: bool = False,
+) -> CatalogQueryPrepareRequest:
     return CatalogQueryPrepareRequest(
         attach_opaque_data=attached.attach_opaque_data,
         transaction_opaque_data=tx,
@@ -104,7 +121,9 @@ def request(attached, tx, query, values=None, *, read_only=False):
     )
 
 
-def bind_request(attached, tx, prepared, values):
+def bind_request(
+    attached: CatalogAttachResult, tx: bytes, prepared: CatalogQueryPrepareResult, values: QueryParameters
+) -> BindRequest:
     return BindRequest(
         function_name=QUERY_EXECUTOR,
         schema_path=[],
@@ -120,7 +139,9 @@ def bind_request(attached, tx, prepared, values):
     )
 
 
-def execute(c, attached, tx, query, values=None):
+def execute(
+    c: Client, attached: CatalogAttachResult, tx: bytes, query: str, values: QueryParameters | None = None
+) -> pa.Table:
     values = values or parameters()
     prepared = c.catalog_query_prepare(request(attached, tx, query, values, read_only=query == SELECT))
     assert prepared.status == "accepted"
@@ -132,43 +153,48 @@ def execute(c, attached, tx, query, values=None):
             transaction_opaque_data=tx,
         )
     )
-    return pa.Table.from_batches(batches, schema=read_query_schema(prepared.output_schema))
+    return pa.Table.from_batches(batches, schema=read_query_schema(present(prepared.output_schema)))
 
 
-def begin(c, attached):
-    return c.catalog_transaction_begin(attach_opaque_data=attached.attach_opaque_data)
+def begin(c: Client, attached: CatalogAttachResult) -> bytes:
+    return present(c.catalog_transaction_begin(attach_opaque_data=attached.attach_opaque_data))
 
 
-def finish(c, attached, tx, operation="rollback"):
+def finish(c: Client, attached: CatalogAttachResult, tx: bytes, operation: str = "rollback") -> None:
     getattr(c, f"catalog_transaction_{operation}")(
         attach_opaque_data=attached.attach_opaque_data, transaction_opaque_data=tx
     )
 
 
-def committed_rows(authority):
+def committed_rows(authority: StatementAuthority) -> list[tuple[Any, ...]]:
     return authority.connection.execute(SELECT).fetchall()
 
 
-def table(c, attached, tx=None):
+def table(c: Client, attached: CatalogAttachResult, tx: bytes | None = None) -> TableInfo | None:
     return c.table_get(
         attach_opaque_data=attached.attach_opaque_data,
-        transaction_opaque_data=tx,
+        transaction_opaque_data=None if tx is None else TransactionOpaqueData(tx),
         schema_path=["main"],
         name="added",
     )
 
 
-def version(c, attached, tx=None):
-    return c.catalog_version(attach_opaque_data=attached.attach_opaque_data, transaction_opaque_data=tx)
+def version(c: Client, attached: CatalogAttachResult, tx: bytes | None = None) -> int:
+    return c.catalog_version(
+        attach_opaque_data=attached.attach_opaque_data,
+        transaction_opaque_data=None if tx is None else TransactionOpaqueData(tx),
+    )
 
 
 @pytest.mark.parametrize("query", [INSERT, INSERT_RETURNING])
 @pytest.mark.parametrize("completion", ["commit", "rollback"])
-def test_typed_null_prepare_bind_release_and_real_transaction_effects(backend, query, completion):
+def test_typed_null_prepare_bind_release_and_real_transaction_effects(
+    backend: tuple[StatementReferenceWorker, StatementAuthority], query: str, completion: str
+) -> None:
     worker, authority = backend
     with client() as c:
         attached = attach(c)
-        assert attached.query_pushdown.execution_modes == ["explicit", "statement"]
+        assert present(attached.query_pushdown).execution_modes == ["explicit", "statement"]
         tx = begin(c, attached)
         values = parameters(id=10, label=None)
         prepared = c.catalog_query_prepare(request(attached, tx, query, values))
@@ -198,7 +224,7 @@ def test_typed_null_prepare_bind_release_and_real_transaction_effects(backend, q
             c.catalog_query_release(
                 attach_opaque_data=attached.attach_opaque_data,
                 transaction_opaque_data=tx,
-                prepared_query_token=prepared.prepared_query_token,
+                prepared_query_token=present(prepared.prepared_query_token),
             )
         assert not authority.preparations
         finish(c, attached, tx, completion)
@@ -213,7 +239,7 @@ def test_typed_null_prepare_bind_release_and_real_transaction_effects(backend, q
         finish(c, attached, tx)
 
 
-def test_update_delete_counts_and_empty_returning(backend):
+def test_update_delete_counts_and_empty_returning(backend: tuple[StatementReferenceWorker, StatementAuthority]) -> None:
     _, authority = backend
     with client() as c:
         attached = attach(c)
@@ -232,7 +258,9 @@ def test_update_delete_counts_and_empty_returning(backend):
 
 
 @pytest.mark.parametrize("completion", ["commit", "rollback"])
-def test_ddl_is_transactional_and_existing_version_rpc_sees_new_metadata(backend, completion):
+def test_ddl_is_transactional_and_existing_version_rpc_sees_new_metadata(
+    backend: tuple[StatementReferenceWorker, StatementAuthority], completion: str
+) -> None:
     worker, authority = backend
     with client() as c:
         attached = attach(c)
@@ -244,7 +272,7 @@ def test_ddl_is_transactional_and_existing_version_rpc_sees_new_metadata(backend
         result = execute(c, attached, tx, CREATE)
         assert result.to_pydict() == {"affected_rows": [None]}
         assert result.schema.equals(COMMAND, check_metadata=True)
-        assert table(c, attached, tx).name == "added"
+        assert present(table(c, attached, tx)).name == "added"
         assert version(c, attached, tx) == 2
         assert table(c, attached) is None and version(c, attached) == 1
         # Preparation describes the old snapshot; it is never mutated into a completion receipt.
@@ -260,7 +288,9 @@ def test_ddl_is_transactional_and_existing_version_rpc_sees_new_metadata(backend
             assert table(c, attached) is not None and version(c, attached) == 2
 
 
-def test_statement_profile_does_not_authorize_read_profile_mutation_or_scripts(backend):
+def test_statement_profile_does_not_authorize_read_profile_mutation_or_scripts(
+    backend: tuple[StatementReferenceWorker, StatementAuthority],
+) -> None:
     _, authority = backend
     with client() as c:
         attached = attach(c)
@@ -275,7 +305,9 @@ def test_statement_profile_does_not_authorize_read_profile_mutation_or_scripts(b
         finish(c, attached, tx, "commit")
 
 
-def test_unoffered_statement_and_wrong_owner_reject_before_effects(backend):
+def test_unoffered_statement_and_wrong_owner_reject_before_effects(
+    backend: tuple[StatementReferenceWorker, StatementAuthority],
+) -> None:
     _, authority = backend
     with client() as c:
         readonly = attach(c, replace(CAPS, query_pushdown=replace(OFFER, semantic_profiles=[QUERY_EXPLICIT])))
@@ -315,7 +347,9 @@ def test_unoffered_statement_and_wrong_owner_reject_before_effects(backend):
 
 
 @pytest.mark.parametrize("failure", ["cancel", "result_error", "wrong_result_schema", "expired_result"])
-def test_incomplete_result_poisons_whole_transaction_and_rollback_undoes_prior_statements(backend, failure):
+def test_incomplete_result_poisons_whole_transaction_and_rollback_undoes_prior_statements(
+    backend: tuple[StatementReferenceWorker, StatementAuthority], failure: str
+) -> None:
     _, authority = backend
     with client() as c:
         attached = attach(c)
@@ -354,7 +388,9 @@ def test_incomplete_result_poisons_whole_transaction_and_rollback_undoes_prior_s
         assert not authority.executions and not authority.preparations
 
 
-def test_backend_execution_error_requires_rollback_of_prior_dml_and_ddl(backend):
+def test_backend_execution_error_requires_rollback_of_prior_dml_and_ddl(
+    backend: tuple[StatementReferenceWorker, StatementAuthority],
+) -> None:
     _, authority = backend
     with client() as c:
         attached = attach(c)
@@ -375,12 +411,23 @@ def test_backend_execution_error_requires_rollback_of_prior_dml_and_ddl(backend)
     "malformed",
     ["missing_row", "empty_batch", "two_rows", "extra_row", "extra_empty_batch", "negative_count", "changed_schema"],
 )
-def test_malformed_command_completion_invalidates_transaction_after_real_effect(backend, monkeypatch, malformed):
+def test_malformed_command_completion_invalidates_transaction_after_real_effect(
+    backend: tuple[StatementReferenceWorker, StatementAuthority], monkeypatch: pytest.MonkeyPatch, malformed: str
+) -> None:
     _, authority = backend
     original = StatementReferenceProvider.start
 
-    def malformed_result(self, **kwargs):
-        execution = original(self, **kwargs)
+    def malformed_result(
+        self: StatementReferenceProvider,
+        *,
+        owner: QueryOwner,
+        preparation: QueryPreparation,
+        parameters: QueryParameters,
+        execution_id: bytes,
+    ) -> QueryExecution:
+        execution = original(
+            self, owner=owner, preparation=preparation, parameters=parameters, execution_id=execution_id
+        )
         result = authority.executions[execution.handle]
         valid = result.batches[0]
         variants = {
@@ -413,7 +460,9 @@ def test_malformed_command_completion_invalidates_transaction_after_real_effect(
         assert not authority.transactions and not authority.preparations
 
 
-def test_lost_init_reply_simulation_does_not_retry_and_pending_execution_prevents_commit(backend, monkeypatch):
+def test_lost_init_reply_simulation_does_not_retry_and_pending_execution_prevents_commit(
+    backend: tuple[StatementReferenceWorker, StatementAuthority], monkeypatch: pytest.MonkeyPatch
+) -> None:
     _, authority = backend
     with client() as c:
         attached = attach(c)
@@ -423,11 +472,40 @@ def test_lost_init_reply_simulation_does_not_retry_and_pending_execution_prevent
         original = c._do_init
         opened = []
 
-        def lose_reply(*args, **kwargs):
+        def lose_reply(
+            proxy: VgiProtocol,
+            bind_request: BindRequest,
+            bind_response: BindResponse,
+            *,
+            projection_ids: list[int] | None = None,
+            pushdown_filters_batch: pa.RecordBatch | None = None,
+            phase: TableInOutFunctionInitPhase | None = None,
+            execution_id: bytes | None = None,
+            init_opaque_data: bytes | None = None,
+            finalize_state_id: bytes | None = None,
+            split_tokens: list[bytes] | None = None,
+            join_keys: list[pa.RecordBatch] | None = None,
+            substream_id: bytes | None = None,
+        ) -> NoReturn:
             # Real signed-HTTP init succeeds, but the application never receives its
             # returned stream. This simulates the ambiguous client boundary, not
             # a packet-loss transport or a provider's crash recovery.
-            opened.append(original(*args, **kwargs))
+            opened.append(
+                original(
+                    proxy,
+                    bind_request,
+                    bind_response,
+                    projection_ids=projection_ids,
+                    pushdown_filters_batch=pushdown_filters_batch,
+                    phase=phase,
+                    execution_id=execution_id,
+                    init_opaque_data=init_opaque_data,
+                    finalize_state_id=finalize_state_id,
+                    split_tokens=split_tokens,
+                    join_keys=join_keys,
+                    substream_id=substream_id,
+                )
+            )
             raise OSError("simulated lost init reply")
 
         monkeypatch.setattr(c, "_do_init", lose_reply)
@@ -450,7 +528,9 @@ def test_lost_init_reply_simulation_does_not_retry_and_pending_execution_prevent
 
 
 @pytest.mark.parametrize("operation", ["commit", "rollback"])
-def test_completion_is_owner_bound_and_idempotent_without_reexecuting(backend, operation):
+def test_completion_is_owner_bound_and_idempotent_without_reexecuting(
+    backend: tuple[StatementReferenceWorker, StatementAuthority], operation: str
+) -> None:
     _, authority = backend
     with client() as c:
         attached, other = attach(c), attach(c)
@@ -469,7 +549,9 @@ def test_completion_is_owner_bound_and_idempotent_without_reexecuting(backend, o
         assert not authority.completed
 
 
-def test_parameter_and_result_budgets_reject_at_the_correct_effect_boundary(backend, monkeypatch):
+def test_parameter_and_result_budgets_reject_at_the_correct_effect_boundary(
+    backend: tuple[StatementReferenceWorker, StatementAuthority], monkeypatch: pytest.MonkeyPatch
+) -> None:
     _, authority = backend
     with client() as c:
         attached = attach(c)
@@ -492,7 +574,9 @@ def test_parameter_and_result_budgets_reject_at_the_correct_effect_boundary(back
 
 
 @pytest.mark.parametrize("cleanup", ["detach", "expiry"])
-def test_abandoned_owner_cleanup_rolls_back_real_effects(backend, cleanup):
+def test_abandoned_owner_cleanup_rolls_back_real_effects(
+    backend: tuple[StatementReferenceWorker, StatementAuthority], cleanup: str
+) -> None:
     _, authority = backend
     with client() as c:
         attached = attach(c)

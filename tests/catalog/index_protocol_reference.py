@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import uuid
+from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, replace
 from typing import Any, ClassVar
@@ -46,7 +47,7 @@ from vgi.catalog.capabilities import (
     TRANSACTION_DDL,
     CatalogCapabilities,
 )
-from vgi.catalog.catalog_interface import CatalogContentsResult, SchemaContentsInfo
+from vgi.catalog.catalog_interface import CatalogContentsResult, SchemaContentsInfo, SerializedSchema
 from vgi.catalog.dependencies import CatalogObjectRef
 from vgi.catalog.indexes import IndexConstraintType, IndexDefinition
 from vgi.catalog.options import OptionDefinitions, OptionState
@@ -57,7 +58,8 @@ from vgi.worker import Worker
 
 ALGORITHM = "SQLITE.BTREE.V1"
 TABLE = CatalogObjectRef(kind="table", schema_path=["main"], name="items")
-COLUMNS = pa.schema([pa.field("id", pa.int64()), pa.field("label", pa.string())])
+COLUMN_FIELDS: list[pa.Field[Any]] = [pa.field("id", pa.int64()), pa.field("label", pa.string())]
+COLUMNS = pa.schema(COLUMN_FIELDS)
 PROFILES = CatalogCapabilities(
     read=sorted([CONSTRAINT_RECORDS_READ, INDEX_DEFINITION_READ]),
     ddl=sorted([INDEX_DEFINITION_CREATE, INDEX_DROP]),
@@ -73,7 +75,7 @@ def _quote(name: str) -> str:
 class IndexAuthority:
     """Store real indexes and their canonical records in the same transaction."""
 
-    def __init__(self, path: str):
+    def __init__(self, path: str) -> None:
         self.path = path
         with closing(sqlite3.connect(path)) as db, db:
             db.execute("CREATE TABLE IF NOT EXISTS state (version INTEGER NOT NULL)")
@@ -98,7 +100,7 @@ class IndexAuthority:
         return token
 
     @contextmanager
-    def state(self, attach: bytes, tx: bytes | None = None):
+    def state(self, attach: bytes, tx: bytes | None = None) -> Iterator[tuple[sqlite3.Connection, str, bytes]]:
         with closing(sqlite3.connect(self.path)) as db:
             db.execute("BEGIN IMMEDIATE")
             try:
@@ -376,7 +378,7 @@ class IndexProvider(ReadOnlyCatalogInterface):
         return TableInfo(
             name=name,
             schema_path=schema_path,
-            columns=COLUMNS.serialize().to_pybytes(),
+            columns=SerializedSchema(COLUMNS.serialize().to_pybytes()),
             constraints=[],
             comment=None,
             tags={},

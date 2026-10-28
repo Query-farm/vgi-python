@@ -3,6 +3,8 @@
 
 """CLI defaults/USING reach the durable provider through real signed HTTP RPCs."""
 
+from __future__ import annotations
+
 import json
 from pathlib import Path
 
@@ -11,13 +13,15 @@ import pytest
 from click.testing import CliRunner
 from vgi_rpc.http._testing import _SyncTestClient
 
+from vgi.catalog.catalog_interface import AttachOpaqueData, SerializedSchema
 from vgi.catalog.evaluation_context import QueryEvaluationContext
-from vgi.catalog.sql import column_expressions
+from vgi.catalog.sql import SqlExpression, column_expressions
 from vgi.client import Client
 from vgi.client.cli import cli
 from vgi.serve import create_app
 
 from .column_paths_reference import ColumnPathsCatalog, ColumnPathsWorker
+from .typing_helpers import CatalogObjectArgs, CatalogObjectTransactionArgs, present
 
 
 @pytest.mark.parametrize("automatic_attach", [False, True])
@@ -39,10 +43,17 @@ def test_cli_column_expression_lifecycle(
         attached = runner.invoke(cli, ["catalog", "attach", "columns", "--worker", "unused"])
         assert attached.exit_code == 0, attached.output
         token_hex = json.loads(attached.output)["attach_opaque_data"]
-        token = bytes.fromhex(token_hex)
-        args = dict(attach_opaque_data=token, schema_path=["main"], name="cli.values")
-        client.table_create(**args, columns=pa.schema([pa.field("a.b", pa.int32())]).serialize().to_pybytes())
-        provider_args = {**args, "attach_opaque_data": backend._unwrap_attach(token), "transaction_opaque_data": None}
+        token = AttachOpaqueData(bytes.fromhex(token_hex))
+        args: CatalogObjectArgs = dict(attach_opaque_data=token, schema_path=["main"], name="cli.values")
+        client.table_create(
+            **args, columns=SerializedSchema(pa.schema([pa.field("a.b", pa.int32())]).serialize().to_pybytes())
+        )
+        provider_args: CatalogObjectTransactionArgs = dict(
+            attach_opaque_data=AttachOpaqueData(present(backend._unwrap_attach(token))),
+            schema_path=args["schema_path"],
+            name=args["name"],
+            transaction_opaque_data=None,
+        )
         backend._get_catalog().seed_rows(**provider_args, rows=[{"a.b": 3}])
         attachment = ["--catalog", "columns"] if automatic_attach else ["--attach-opaque-data", token_hex]
 
@@ -53,10 +64,10 @@ def test_cli_column_expression_lifecycle(
             )
             assert result.exit_code == 0, result.output
 
-        def default():
+        def default() -> SqlExpression | None:
             info = client.table_get(**args)
             assert info is not None
-            schema = pa.ipc.read_schema(pa.BufferReader(info.columns))
+            schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
             return column_expressions(schema.field("a.b")).default
 
         command("set-default", "main", "cli.values", "a.b", "9")

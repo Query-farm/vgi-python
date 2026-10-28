@@ -9,6 +9,8 @@ The module-level _catalog_pool is replaced with a fresh pool between tests
 to ensure each test gets a fresh worker process with a fresh InMemoryCatalog.
 """
 
+from __future__ import annotations
+
 import sys
 from collections.abc import Iterator
 
@@ -24,6 +26,8 @@ from vgi.catalog.macros import legacy_macro_fields, normalize_macro_overloads
 from vgi.client import Client
 from vgi.client import catalog_mixin as _cm
 from vgi.client.catalog_mixin import CatalogClientError
+
+from .typing_helpers import CatalogObjectArgs, CatalogPathArgs, present
 
 CATALOG_WORKER = f"{sys.executable} -m vgi._test_fixtures.catalog"
 
@@ -202,7 +206,9 @@ class TestCatalogTables:
         """An unqualified catalog cannot claim or silently ignore enforcement."""
         client = Client(CATALOG_WORKER)
         result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
-        args = dict(attach_opaque_data=result.attach_opaque_data, schema_path=["main"], name="constrained")
+        args: CatalogObjectArgs = dict(
+            attach_opaque_data=result.attach_opaque_data, schema_path=["main"], name="constrained"
+        )
         version = client.catalog_version(attach_opaque_data=result.attach_opaque_data)
         columns = pa.schema([pa.field("id", pa.int64(), nullable=False)])
         with pytest.raises(CatalogClientError, match="vgi.constraint.create.v1"):
@@ -219,7 +225,7 @@ class TestCatalogTables:
         for operation in (client.table_not_null_set, client.table_not_null_drop):
             with pytest.raises(CatalogClientError, match="vgi.constraint.mutate.v1"):
                 operation(**args, column_path=["id"])
-        assert client.table_get(**args).constraints == []
+        assert present(client.table_get(**args)).constraints == []
 
     def test_table_get_nonexistent(self) -> None:
         """Getting nonexistent table returns None."""
@@ -355,7 +361,7 @@ class TestCatalogViews:
         """Metadata-only mutations retain output identifiers."""
         client = Client(CATALOG_WORKER)
         attached = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
-        target = dict(attach_opaque_data=attached.attach_opaque_data, schema_path=["main"])
+        target: CatalogPathArgs = dict(attach_opaque_data=attached.attach_opaque_data, schema_path=["main"])
         client.view_create(**target, name="old", definition="SELECT 1 AS x", aliases=["a.b"])
         client.view_rename(**target, name="old", new_name="renamed")
         client.view_comment_set(**target, name="renamed", comment="kept")

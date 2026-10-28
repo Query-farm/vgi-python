@@ -3,9 +3,11 @@
 
 """Real RPC, durable transactions and capability isolation for schema options."""
 
+from __future__ import annotations
+
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pyarrow as pa
 import pytest
@@ -17,11 +19,12 @@ from vgi.catalog.options import OptionChanges, OptionDefinitions
 from vgi.client import Client
 from vgi.exceptions import CatalogCapabilityError, OpaqueDataNotRecognizedError
 from vgi.meta_worker import MetaWorker
-from vgi.protocol import CatalogAttachRequest, ClientCapabilities
+from vgi.protocol import CatalogAttachRequest, ClientCapabilities, VgiProtocol
 from vgi.serve import create_app
 from vgi.typed_values import TypedValueBatch
 
 from .schema_options_reference import DEFINITIONS, PROFILES, SchemaOptionsCatalog, SchemaOptionsWorker, values
+from .typing_helpers import present
 
 KEY = b"catalog-options-reference-signing-key"
 OFFER = ClientCapabilities(
@@ -78,13 +81,17 @@ def test_public_http_lifecycle_and_durable_transaction_reconnect(backend: Schema
             changes=OptionChanges(set_values=values(limit=25), reset_names=["label"]),
         )
         pending = client.schema_get(attach_opaque_data=token, path=["a.b"], transaction_opaque_data=tx)
-        assert pending.options.explicit_names == ["limit"]
-        assert pending.options.values.batch.column("label")[0].as_py() == "default"
-        assert client.schema_get(attach_opaque_data=token, path=["a.b"]).options.explicit_names == ["label"]
+        assert present(present(pending).options).explicit_names == ["limit"]
+        assert present(present(pending).options).values.batch.column("label")[0].as_py() == "default"
+        assert present(present(client.schema_get(attach_opaque_data=token, path=["a.b"])).options).explicit_names == [
+            "label"
+        ]
     with _client() as client:
         client.catalog_transaction_rollback(attach_opaque_data=token, transaction_opaque_data=tx)
         client.catalog_transaction_rollback(attach_opaque_data=token, transaction_opaque_data=tx)
-        assert client.schema_get(attach_opaque_data=token, path=["a.b"]).options.explicit_names == ["label"]
+        assert present(present(client.schema_get(attach_opaque_data=token, path=["a.b"])).options).explicit_names == [
+            "label"
+        ]
         tx = client.catalog_transaction_begin(attach_opaque_data=token)
         client.schema_alter_options(
             attach_opaque_data=token,
@@ -93,12 +100,12 @@ def test_public_http_lifecycle_and_durable_transaction_reconnect(backend: Schema
             changes=OptionChanges(set_values=values(limit=25), reset_names=["label"]),
         )
     with _client() as client:
-        client.catalog_transaction_commit(attach_opaque_data=token, transaction_opaque_data=tx)
-        client.catalog_transaction_commit(attach_opaque_data=token, transaction_opaque_data=tx)
+        client.catalog_transaction_commit(attach_opaque_data=token, transaction_opaque_data=present(tx))
+        client.catalog_transaction_commit(attach_opaque_data=token, transaction_opaque_data=present(tx))
         committed = client.schema_get(attach_opaque_data=token, path=["a.b"])
-        assert committed.options.explicit_names == ["limit"]
-        assert committed.options.values.batch.column("limit")[0].as_py() == 25
-        assert committed.options.values.schema.equals(DEFINITIONS.schema, check_metadata=True)
+        assert present(present(committed).options).explicit_names == ["limit"]
+        assert present(present(committed).options).values.batch.column("limit")[0].as_py() == 25
+        assert present(present(committed).options).values.schema.equals(DEFINITIONS.schema, check_metadata=True)
 
 
 @pytest.mark.parametrize("offer", [None, replace(OFFER, catalog=None), replace(OFFER, catalog=CatalogCapabilities())])
@@ -178,10 +185,11 @@ def test_sealed_agreement_survives_routing_and_restart(backend: SchemaOptionsWor
     attach = worker.catalog_attach(_request())
     fresh = SchemaOptionsWorker(quiet=True)
     fresh._signing_key = KEY
-    restarted = MetaWorker([fresh]) if meta else fresh
+    # MetaWorker installs protocol forwarding methods dynamically.
+    restarted = cast(VgiProtocol, MetaWorker([fresh]) if meta else fresh)
     assert fresh._catalog_agreement(attach.attach_opaque_data) == PROFILES
-    assert len(fresh._unwrap_attach_full(attach.attach_opaque_data)) == 32
-    assert len(fresh._unwrap_attach(attach.attach_opaque_data)) == 16
+    assert len(present(fresh._unwrap_attach_full(attach.attach_opaque_data))) == 32
+    assert len(present(fresh._unwrap_attach(attach.attach_opaque_data))) == 16
     restarted.catalog_schema_alter_options(
         attach_opaque_data=attach.attach_opaque_data,
         path=["main"],
@@ -229,13 +237,17 @@ def test_conflicting_commits_do_not_overwrite_other_attachment(backend: SchemaOp
     )
     backend.catalog_schema_alter_options(two, ["main"], OptionChanges(set_values=values(limit=30)).serialize_to_bytes())
     with pytest.raises(ValueError, match="conflict"):
-        backend.catalog_transaction_commit(one, tx)
+        backend.catalog_transaction_commit(one, present(tx))
     assert backend.catalog_schema_get(two, ["main"]).to_optional().options.values.batch.column("limit")[0].as_py() == 30
-    backend.catalog_transaction_rollback(one, tx)
+    backend.catalog_transaction_rollback(one, present(tx))
 
 
 def test_required_nullable_option_and_reset_without_default() -> None:
-    schema = pa.schema([pa.field("required", pa.string()), pa.field("defaulted", pa.int32(), nullable=False)])
+    fields: list[pa.Field[pa.DataType]] = [
+        pa.field("required", pa.string()),
+        pa.field("defaulted", pa.int32(), nullable=False),
+    ]
+    schema = pa.schema(fields)
     defs = OptionDefinitions(
         schema=schema,
         defaults=TypedValueBatch(

@@ -88,7 +88,7 @@ def _table_ref(record: dict[str, Any]) -> CatalogObjectRef:
 
 
 def _base_schema(record: dict[str, Any]) -> pa.Schema:
-    return pa.ipc.read_schema(pa.BufferReader(_unb64(record["schema"])))
+    return pa.ipc.read_schema(pa.py_buffer(_unb64(record["schema"])))
 
 
 def _rows(record: dict[str, Any]) -> pa.Table:
@@ -104,7 +104,10 @@ def _schema(record: dict[str, Any]) -> pa.Schema:
         for path in info.definition.column_paths
     }
     base = _base_schema(record)
-    return pa.schema([field.with_nullable(field.name not in required) for field in base], metadata=base.metadata)
+    return pa.schema(
+        [field.with_nullable(field.name not in required) for field in base],
+        metadata=None if base.metadata is None else {key: value for key, value in (base.metadata).items()},
+    )
 
 
 def _touch(record: dict[str, Any]) -> None:
@@ -203,6 +206,7 @@ class ConstraintCatalog:
         record = data.get(_table_key(table))
         if record is None:
             raise ValueError("table does not exist")
+        assert isinstance(record, dict)
         return record
 
     @staticmethod
@@ -322,7 +326,12 @@ class ConstraintCatalog:
             key = _table_key(table)
             if key in data:
                 raise ValueError("table already exists")
-            base = pa.schema([field.with_nullable(True) for field in columns], metadata=columns.metadata)
+            base = pa.schema(
+                [field.with_nullable(True) for field in columns],
+                metadata=None
+                if columns.metadata is None
+                else {key: value for key, value in (columns.metadata).items()},
+            )
             record = {
                 "table": _b64(table.serialize_to_bytes()),
                 "schema": _b64(base.serialize().to_pybytes()),

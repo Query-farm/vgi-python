@@ -39,6 +39,7 @@ from vgi.catalog.capabilities import (
     CONSTRAINT_RECORDS_READ,
     CatalogCapabilities,
 )
+from vgi.catalog.catalog_interface import SerializedSchema
 from vgi.catalog.column_metadata import column_metadata
 from vgi.catalog.constraints import (
     ConstraintDefinition,
@@ -58,7 +59,9 @@ from vgi.catalog.sql import ColumnExpressions, column_expressions, with_column_e
 from vgi.column_path import column_definition, column_path_key, replace_column_field, resolve_column_path
 from vgi.worker import Worker
 
-from .table_layout_reference import TABLE_PROFILES, TableLayoutCatalog, _table_key, _validate_expression
+from .expression_reference import validate_expression as _validate_expression
+from .table_layout_reference import TABLE_PROFILES, TableLayoutCatalog, _table_key
+from .typing_helpers import present
 
 COLUMN_PROFILES = CatalogCapabilities(
     read=sorted([*TABLE_PROFILES.read, CONSTRAINT_RECORDS_READ]),
@@ -86,7 +89,7 @@ def _eval(
     path: list[str],
     schema: pa.Schema | None = None,
     rows: list[dict[str, Any]] | None = None,
-) -> pa.Array:
+) -> pa.Array[Any]:
     expression.validate_owner(path)
     with duckdb.connect(config={"enable_external_access": False}) as connection:
         connection.execute("SET TimeZone='UTC'")
@@ -176,7 +179,7 @@ class ColumnPathsCatalog(TableLayoutCatalog):
     profiles = COLUMN_PROFILES
 
     def table_create(self, **kwargs: Any) -> None:
-        _fields(pa.ipc.read_schema(pa.BufferReader(kwargs["columns"])), kwargs["schema_path"])
+        _fields(pa.ipc.read_schema(pa.py_buffer(kwargs["columns"])), kwargs["schema_path"])
         super().table_create(**kwargs)
 
     def _create_constraints(self, args: dict[str, Any]) -> tuple[list[bytes], bytes | None]:
@@ -184,7 +187,7 @@ class ColumnPathsCatalog(TableLayoutCatalog):
         definitions = constraint_definitions(args["constraint_definitions"], table)
         if any(definition.kind != ConstraintKind.NOT_NULL for definition in definitions):
             raise NotImplementedError("column reference only enforces NOT_NULL constraints")
-        validate_constraint_schema(pa.ipc.read_schema(pa.BufferReader(args["columns"])), definitions)
+        validate_constraint_schema(pa.ipc.read_schema(pa.py_buffer(args["columns"])), definitions)
         return [
             self._not_null_info(table, definition).serialize_to_bytes() for definition in definitions
         ], uuid.uuid4().bytes
@@ -201,7 +204,7 @@ class ColumnPathsCatalog(TableLayoutCatalog):
         )
 
     def _changed_constraints(
-        self, info: TableInfo, schema: pa.Schema, operation: str, path: list[str], replacement: pa.Field | None
+        self, info: TableInfo, schema: pa.Schema, operation: str, path: list[str], replacement: pa.Field[Any] | None
     ) -> list[bytes]:
         existing = {}
         for constraint in info.constraint_infos():
@@ -234,7 +237,7 @@ class ColumnPathsCatalog(TableLayoutCatalog):
         return result
 
     def _arrange(self, rows: list[dict[str, Any]], info: TableInfo) -> list[dict[str, Any]]:
-        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))
+        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
         # Resolve defaults from the same locked snapshot that stores the rows.
         # Reading table metadata before _change would race concurrent DDL.
         rows = [_defaulted(schema, row, info.schema_path) for row in rows]
@@ -250,7 +253,7 @@ class ColumnPathsCatalog(TableLayoutCatalog):
             version, data = self._snapshot(db, args["attach_opaque_data"], args["transaction_opaque_data"])
             if key not in data:
                 if args.get("ignore_not_found"):
-                    return
+                    return None
                 raise ValueError("table does not exist")
             info = self._info(data[key])
             request = args.get("constraint_request")
@@ -264,12 +267,14 @@ class ColumnPathsCatalog(TableLayoutCatalog):
                         raise ValueError("NOT_NULL constraint already exists")
                     operation = "not_null_set"
                 else:
-                    matches = [item for item in info.constraint_infos() if item.ref.key() == change.ref.key()]
-                    if len(matches) != 1 or matches[0].definition.kind != ConstraintKind.NOT_NULL:
+                    constraint_matches = [
+                        item for item in info.constraint_infos() if item.ref.key() == change.ref.key()
+                    ]
+                    if len(constraint_matches) != 1 or constraint_matches[0].definition.kind != ConstraintKind.NOT_NULL:
                         raise ValueError("unknown NOT_NULL constraint identity")
-                    path = matches[0].definition.column_paths[0]
+                    path = constraint_matches[0].definition.column_paths[0]
                     operation = "not_null_drop"
-            schema = pa.ipc.read_schema(pa.BufferReader(info.columns))
+            schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
             parent_fields = schema if len(path) == 1 else resolve_column_path(schema, path[:-1]).type
             if not isinstance(parent_fields, pa.Schema) and not pa.types.is_struct(parent_fields):
                 raise ValueError("column path has a non-struct parent")
@@ -279,11 +284,11 @@ class ColumnPathsCatalog(TableLayoutCatalog):
             existing = matches[0] if matches else None
             if operation == "add" and existing is not None:
                 if args.get("if_column_not_exists"):
-                    return
+                    return None
                 raise ValueError("column already exists")
             if operation != "add" and existing is None:
                 if operation == "drop" and args.get("if_column_exists"):
-                    return
+                    return None
                 raise ValueError("column does not exist")
             if (
                 operation in ("drop", "rename", "type")
@@ -303,7 +308,7 @@ class ColumnPathsCatalog(TableLayoutCatalog):
                     parent = _parent(row, path)
                     if parent is not None:
                         parent[path[-1]] = (
-                            pc.cast(_eval(default, info.schema_path), replacement.type, safe=True)[0].as_py()
+                            pc.cast(_eval(default, info.schema_path), present(replacement).type, safe=True)[0].as_py()
                             if default is not None
                             else None
                         )
@@ -327,7 +332,12 @@ class ColumnPathsCatalog(TableLayoutCatalog):
                 # annotations when replacing the primitive physical type.
                 metadata = dict(existing.metadata or {})
                 metadata.update(target.metadata or {})
-                replacement = existing.with_type(target.type).with_metadata(metadata or None)
+                replacement = existing.with_type(target.type)
+                replacement = (
+                    replacement.with_metadata({k: v for k, v in metadata.items()})
+                    if metadata
+                    else replacement.remove_metadata()
+                )
                 _fields([replacement], info.schema_path)
                 if args["expression"] is not None:
                     # Bind before changes even if the table has no rows.
@@ -363,13 +373,17 @@ class ColumnPathsCatalog(TableLayoutCatalog):
                 else:
                     raise AssertionError(operation)
                 assert replacement is not None
-                replacement = replacement.with_metadata(metadata or None)
+                replacement = (
+                    replacement.with_metadata({k: v for k, v in metadata.items()})
+                    if metadata
+                    else replacement.remove_metadata()
+                )
             updated = replace_column_field(schema, path, replacement, add=operation == "add")
             constraints = self._changed_constraints(info, updated, operation, path, replacement)
             changed = not updated.equals(schema, check_metadata=True) or constraints != info.constraints
             info = replace(
                 info,
-                columns=updated.serialize().to_pybytes(),
+                columns=SerializedSchema(updated.serialize().to_pybytes()),
                 constraints=constraints,
                 definition_revision=uuid.uuid4().bytes
                 if changed and operation != "comment"
@@ -392,7 +406,9 @@ class ColumnPathsCatalog(TableLayoutCatalog):
                 db.execute("UPDATE transactions SET version=?, data=? WHERE id=?", (version + 1, json.dumps(data), tx))
             if request is not None:
                 return ConstraintSnapshot(
-                    table=request.table, definition_revision=info.definition_revision, constraints=info.constraints
+                    table=request.table,
+                    definition_revision=present(info.definition_revision),
+                    constraints=info.constraints,
                 )
         return None
 
@@ -406,8 +422,8 @@ class ColumnPathsCatalog(TableLayoutCatalog):
         if change.operation == ConstraintOperation.ADD:
             definition = change.definition
             if (
-                definition.kind != ConstraintKind.NOT_NULL
-                or definition.declared_name is not None
+                present(definition).kind != ConstraintKind.NOT_NULL
+                or present(definition).declared_name is not None
                 or change.enforcement != ConstraintEnforcement.ENFORCED
                 or change.validation != ConstraintValidation.ALL_ROWS
             ):
@@ -457,5 +473,10 @@ class ColumnPathsCatalog(TableLayoutCatalog):
 
 class ColumnPathsWorker(Worker):
     """Expose the durable column reference through the normal protocol worker."""
+
+    def _get_catalog(self) -> ColumnPathsCatalog:
+        catalog = super()._get_catalog()
+        assert isinstance(catalog, ColumnPathsCatalog)
+        return catalog
 
     catalog_interface = ColumnPathsCatalog

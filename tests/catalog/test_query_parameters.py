@@ -2,7 +2,11 @@
 # ruff: noqa: D103
 """Parameter mapping and exact rebind boundaries in the Arrow batch carrier."""
 
+from __future__ import annotations
+
+from collections.abc import Callable
 from dataclasses import replace
+from typing import Any, Literal, cast
 
 import pyarrow as pa
 import pytest
@@ -13,6 +17,7 @@ from vgi.query_parameters import (
     read_parameter_schema,
     validate_parameter_schema,
 )
+from vgi.typed_values import TypedValueBatch
 
 
 def parameters(value: int | None = None) -> QueryParameters:
@@ -44,7 +49,7 @@ def test_typed_null_values_and_recursive_metadata_survive_rebinding() -> None:
 
 
 @pytest.mark.parametrize("mode", ["named", "positional"])
-def test_zero_parameters_are_one_row_and_mode_is_retained(mode: str) -> None:
+def test_zero_parameters_are_one_row_and_mode_is_retained(mode: Literal["named", "positional"]) -> None:
     value = QueryParameters.empty(mode=mode)
     copy = QueryParameters.deserialize_from_bytes(value.serialize_to_bytes())
     assert copy.batch.num_rows == 1
@@ -111,7 +116,9 @@ def test_changed_schema_requires_new_preparation(change: str) -> None:
     elif change == "name":
         expected = expected.set(0, expected.field(0).with_name("LIMIT"))
     elif change == "order":
-        expected = pa.schema(list(reversed(expected)), metadata=expected.metadata)
+        expected = pa.schema(
+            list(reversed(list(expected))), metadata={k: v for k, v in (expected.metadata or {}).items()}
+        )
     elif change == "nullability":
         expected = expected.set(0, expected.field(0).with_nullable(False))
     elif change == "schema_metadata":
@@ -130,22 +137,25 @@ def test_conflicting_mapping_and_missing_typed_values_reject() -> None:
     with pytest.raises(ValueError, match="conflicts"):
         QueryParameters.from_batch(source.batch, mode="positional")
     with pytest.raises(TypeError, match="TypedValueBatch"):
-        replace(source, values=source.batch)
+        replace(source, values=cast(TypedValueBatch, source.batch))
     with pytest.raises(ValueError, match="exactly one row"):
         QueryParameters.from_batch(source.batch.slice(0, 0), mode="named")
 
 
 @pytest.mark.parametrize("location", ["schema", "field", "nested", "dictionary"])
 def test_duplicate_metadata_cannot_ambiguously_change_interpretation(location: str) -> None:
-    metadata = pa.KeyValueMetadata([("logical", "one"), ("logical", "two")])
-    field = pa.field("n", pa.int32(), metadata=metadata)
+    metadata = cast("Callable[..., pa.KeyValueMetadata]", pa.KeyValueMetadata)([("logical", "one"), ("logical", "two")])
+    field = cast("Callable[..., pa.Field[Any]]", pa.field)("n", pa.int32(), metadata=metadata)
     if location == "nested":
         field = pa.field("n", pa.list_(field))
     elif location == "dictionary":
-        field = pa.field("n", pa.dictionary(pa.int8(), pa.struct([field])))
+        field = pa.field("n", cast("Callable[..., pa.DataType]", pa.dictionary)(pa.int8(), pa.struct([field])))
     if location == "schema":
-        schema = pa.schema(
-            [], metadata=pa.KeyValueMetadata([(PARAMETER_MODE_KEY, b"named"), (PARAMETER_MODE_KEY, b"positional")])
+        schema = cast("Callable[..., pa.Schema]", pa.schema)(
+            [],
+            metadata=cast("Callable[..., pa.KeyValueMetadata]", pa.KeyValueMetadata)(
+                [(PARAMETER_MODE_KEY, b"named"), (PARAMETER_MODE_KEY, b"positional")]
+            ),
         )
     else:
         schema = pa.schema([field], metadata={PARAMETER_MODE_KEY: b"named"})
@@ -167,9 +177,11 @@ def test_schema_ipc_is_not_a_value_batch_and_both_reject_trailing_data() -> None
 
 
 def test_builder_rejects_duplicate_mapping_keys_before_copying_metadata() -> None:
-    schema = pa.schema(
+    schema = cast("Callable[..., pa.Schema]", pa.schema)(
         [pa.field("n", pa.int32())],
-        metadata=pa.KeyValueMetadata([(PARAMETER_MODE_KEY, b"named"), (PARAMETER_MODE_KEY, b"positional")]),
+        metadata=cast("Callable[..., pa.KeyValueMetadata]", pa.KeyValueMetadata)(
+            [(PARAMETER_MODE_KEY, b"named"), (PARAMETER_MODE_KEY, b"positional")]
+        ),
     )
     with pytest.raises(ValueError, match="metadata keys must be unique"):
         QueryParameters.from_batch(pa.record_batch([[1]], schema=schema), mode="named")

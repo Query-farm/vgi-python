@@ -3,8 +3,12 @@
 
 """Required contexts, portable column metadata and bounded deterministic role proof."""
 
+from __future__ import annotations
+
 import base64
+from collections.abc import Callable
 from dataclasses import replace
+from typing import Any, cast
 
 import pyarrow as pa
 import pytest
@@ -31,7 +35,7 @@ OWNER = ["a.b", "nested"]
 CONTEXT = QueryEvaluationContext()
 
 
-def expression(sql: str, **changes) -> SqlExpression:
+def expression(sql: str, **changes: Any) -> SqlExpression:
     return SqlExpression(
         sql=sql,
         profile=ROW_SCALAR_EXPRESSION,
@@ -41,14 +45,16 @@ def expression(sql: str, **changes) -> SqlExpression:
     )
 
 
-def test_context_is_required_and_the_query_identity_and_digest_are_unchanged():
+def test_context_is_required_and_the_query_identity_and_digest_are_unchanged() -> None:
     assert QueryContextCompatibilityImport is QueryEvaluationContext
     assert CONTEXT.digest("duckdb.sql.v1", "vgi.remote.readonly.v1").hex() == (
         "0d33dfb516d67c8096fb174f0ae08a04f028ad5669e4416cde2973a2dd352d34"
     )
     for record in [SqlExpression, SqlStatement]:
         with pytest.raises(TypeError, match="evaluation_context"):
-            record(sql="42", profile="duckdb.scalar.v1", schema_path=OWNER)
+            cast("Callable[..., SqlExpression | SqlStatement]", record)(
+                sql="42", profile="duckdb.scalar.v1", schema_path=OWNER
+            )
         definition = record(sql="42", profile="duckdb.scalar.v1", schema_path=OWNER, evaluation_context=CONTEXT)
         assert record.deserialize_from_bytes(definition.serialize_to_bytes()) == definition
         with pytest.raises(ValueError, match="trailing"):
@@ -59,7 +65,7 @@ def test_context_is_required_and_the_query_identity_and_digest_are_unchanged():
             record.deserialize_from_batch(batch.select(["sql", "profile", "schema_path"]))
 
 
-def test_macro_default_owner_and_context_must_equal_its_body_context():
+def test_macro_default_owner_and_context_must_equal_its_body_context() -> None:
     default = replace(expression("42"), profile=MACRO_DEFAULT_PROFILE)
     overload = MacroOverload(
         parameters=[MacroParameter(name="x", default_expression=default)],
@@ -76,13 +82,14 @@ def test_macro_default_owner_and_context_must_equal_its_body_context():
         replace(overload, schema_path=["other"])
 
 
-def test_column_expression_metadata_preserves_base64_ipc_and_unrelated_metadata():
+def test_column_expression_metadata_preserves_base64_ipc_and_unrelated_metadata() -> None:
     field = pa.field("a.b", pa.int64(), metadata={b"custom": "caf\u00e9".encode(), b"comment": b""})
     typed_null = ColumnExpressions(default=expression("CAST(NULL AS BIGINT)"))
     encoded = with_column_expressions(field, typed_null)
-    restored = pa.ipc.read_schema(pa.BufferReader(pa.schema([encoded]).serialize())).field(0)
+    restored = pa.ipc.read_schema(pa.py_buffer(pa.schema([encoded]).serialize())).field(0)
     assert restored.equals(encoded, check_metadata=True)
     assert column_expressions(restored) == typed_null
+    assert restored.metadata is not None
     assert restored.metadata[b"custom"] == "caf\u00e9".encode()
     assert restored.metadata[DEFAULT_EXPRESSION_KEY].isascii()
     assert typed_null.default is not None
@@ -95,7 +102,7 @@ def test_column_expression_metadata_preserves_base64_ipc_and_unrelated_metadata(
     assert column_expressions(with_column_expressions(field, generated)) == generated
 
 
-def test_column_expression_metadata_rejects_collisions_unknown_versions_and_bad_unions():
+def test_column_expression_metadata_rejects_collisions_unknown_versions_and_bad_unions() -> None:
     raw_payload = expression("42").serialize_to_bytes()
     payload = base64.b64encode(raw_payload)
     for metadata in [
@@ -106,19 +113,21 @@ def test_column_expression_metadata_rejects_collisions_unknown_versions_and_bad_
         {DEFAULT_EXPRESSION_KEY: payload, GENERATED_EXPRESSION_KEY: payload, GENERATION_KEY: b"virtual"},
         {b"vgi.column.default.v2": payload},
         {DEFAULT_EXPRESSION_KEY: base64.b64encode(raw_payload + b"extra")},
-        pa.KeyValueMetadata([(DEFAULT_EXPRESSION_KEY, payload), (DEFAULT_EXPRESSION_KEY, payload)]),
+        cast("Callable[..., pa.KeyValueMetadata]", pa.KeyValueMetadata)(
+            [(DEFAULT_EXPRESSION_KEY, payload), (DEFAULT_EXPRESSION_KEY, payload)]
+        ),
     ]:
         with pytest.raises(ValueError):
-            column_expressions(pa.field("x", pa.int64(), metadata=metadata))
+            column_expressions(cast("Callable[..., pa.Field[Any]]", pa.field)("x", pa.int64(), metadata=metadata))
 
 
 @pytest.mark.parametrize("payload", [b"AA", b"AA==\n", b"AAAA====", b"AB==", b"AA-_", b"!!!!", b"\xff"])
-def test_column_expression_metadata_rejects_noncanonical_base64(payload):
+def test_column_expression_metadata_rejects_noncanonical_base64(payload: bytes) -> None:
     with pytest.raises(ValueError, match="canonical padded base64"):
         column_expressions(pa.field("x", pa.int64(), metadata={DEFAULT_EXPRESSION_KEY: payload}))
 
 
-def test_column_expression_metadata_rejects_raw_ipc_and_bounds_both_encodings(monkeypatch):
+def test_column_expression_metadata_rejects_raw_ipc_and_bounds_both_encodings(monkeypatch: pytest.MonkeyPatch) -> None:
     raw_payload = expression("42").serialize_to_bytes()
     with pytest.raises(ValueError, match="canonical padded base64"):
         column_expressions(pa.field("x", pa.int64(), metadata={DEFAULT_EXPRESSION_KEY: raw_payload}))
@@ -130,7 +139,7 @@ def test_column_expression_metadata_rejects_raw_ipc_and_bounds_both_encodings(mo
             column_expressions(pa.field("x", pa.int64(), metadata={DEFAULT_EXPRESSION_KEY: payload}))
 
 
-def test_check_preserves_true_false_and_null_and_default_has_no_row_scope():
+def test_check_preserves_true_false_and_null_and_default_has_no_row_scope() -> None:
     table = pa.table({"n": pa.array([-1, 0, None], type=pa.int64())})
     assert evaluate_expression(expression("n >= 0"), table, OWNER, role="check").to_pylist() == [False, True, None]
     assert evaluate_expression(expression("40 + 2"), table, OWNER, role="default").to_pylist() == [42, 42, 42]
@@ -143,7 +152,7 @@ def test_check_preserves_true_false_and_null_and_default_has_no_row_scope():
     ]
 
 
-def test_generated_dependencies_bind_in_order_and_cycles_reject_before_publication():
+def test_generated_dependencies_bind_in_order_and_cycles_reject_before_publication() -> None:
     table = pa.table({"n": pa.array([2, None], type=pa.int64())})
     generated = evaluate_generated(table, {"last": expression("twice + 1"), "twice": expression("n * 2")}, OWNER)
     assert generated["last"].to_pylist() == [5, None]
@@ -153,12 +162,12 @@ def test_generated_dependencies_bind_in_order_and_cycles_reject_before_publicati
 
 
 @pytest.mark.parametrize("sql", ["random()", "(SELECT 1)", "$value", "sum(n)", "n OVER ()", "main.abs(n)"])
-def test_unqualified_expression_forms_reject(sql):
+def test_unqualified_expression_forms_reject(sql: str) -> None:
     with pytest.raises(ValueError):
         evaluate_expression(expression(sql), pa.table({"n": [1]}), OWNER, role="generated")
 
 
-def test_reference_rejects_unqualified_context_and_type_without_implicit_fallback():
+def test_reference_rejects_unqualified_context_and_type_without_implicit_fallback() -> None:
     with pytest.raises(ValueError, match="context"):
         evaluate_expression(
             replace(expression("n"), evaluation_context=replace(CONTEXT, collation="nocase")),

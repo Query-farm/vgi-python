@@ -2,8 +2,11 @@
 # ruff: noqa: D103
 """Durable cross-client dependency authority through public HTTP and sealed routing."""
 
+from __future__ import annotations
+
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pyarrow as pa
 import pytest
@@ -11,15 +14,18 @@ from vgi_rpc.http._testing import _SyncTestClient
 
 from vgi.catalog import OnConflict, SerializedSchema
 from vgi.catalog.capabilities import CATALOG_DEPENDENCIES_READ, SCHEMA_LIFECYCLE, TRANSACTION_DDL
+from vgi.catalog.catalog_interface import AttachOpaqueData
+from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot
 from vgi.client import Client
 from vgi.client.catalog_mixin import CatalogClientError
 from vgi.exceptions import CatalogCapabilityError, OpaqueDataNotRecognizedError
 from vgi.meta_worker import MetaWorker
-from vgi.protocol import CatalogAttachRequest, ClientCapabilities
+from vgi.protocol import CatalogAttachRequest, ClientCapabilities, VgiProtocol
 from vgi.serve import create_app
 
 from .dependencies_reference import DEPENDENCY_PROFILES, DependencyCatalog, DependencyWorker
 from .schema_options_reference import values
+from .typing_helpers import present
 
 KEY = b"dependency-reference-signing-key"
 OFFER = ClientCapabilities(
@@ -41,7 +47,7 @@ def backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DependencyWorker
     return worker
 
 
-def request(offer=OFFER):
+def request(offer: ClientCapabilities | None = OFFER) -> CatalogAttachRequest:
     return CatalogAttachRequest(
         name="dependencies", data_version_spec=None, implementation_version=None, client_capabilities=offer
     )
@@ -53,28 +59,39 @@ def client() -> Client:
     )
 
 
-def attach(c: Client):
+def attach(c: Client) -> AttachOpaqueData:
     return c.catalog_attach(
         name="dependencies", data_version_spec=None, implementation_version=None, client_capabilities=OFFER
     ).attach_opaque_data
 
 
-def seed(c: Client, token: bytes) -> None:
+def seed(c: Client, token: AttachOpaqueData) -> None:
     for path in [["a.b"], ["a"], ["a", "b"], ["outside"]]:
         c.schema_create(
-            attach_opaque_data=token, path=path, comment="kept", tags={"owner": "one"}, options=values(limit=25)
+            attach_opaque_data=AttachOpaqueData(token),
+            path=path,
+            comment="kept",
+            tags={"owner": "one"},
+            options=values(limit=25),
         )
-    c.table_create(attach_opaque_data=token, schema_path=["a.b"], name="t", columns=COLUMNS)
-    c.table_create(attach_opaque_data=token, schema_path=["a", "b"], name="t", columns=COLUMNS)
-    c.view_create(attach_opaque_data=token, schema_path=["outside"], name="v", definition='SELECT * FROM "a.b".t')
-    c.view_create(attach_opaque_data=token, schema_path=["outside"], name="v2", definition="SELECT * FROM v")
+    c.table_create(attach_opaque_data=AttachOpaqueData(token), schema_path=["a.b"], name="t", columns=COLUMNS)
+    c.table_create(attach_opaque_data=AttachOpaqueData(token), schema_path=["a", "b"], name="t", columns=COLUMNS)
+    c.view_create(
+        attach_opaque_data=AttachOpaqueData(token),
+        schema_path=["outside"],
+        name="v",
+        definition='SELECT * FROM "a.b".t',
+    )
+    c.view_create(
+        attach_opaque_data=AttachOpaqueData(token), schema_path=["outside"], name="v2", definition="SELECT * FROM v"
+    )
 
 
-def identities(snapshot):
+def identities(snapshot: DependencySnapshot) -> set[tuple[str, tuple[str, ...], str, str]]:
     return {r.key() for r in snapshot.object_refs()}
 
 
-def test_resolved_graph_paths_use_the_owning_schema_spelling(backend) -> None:
+def test_resolved_graph_paths_use_the_owning_schema_spelling(backend: DependencyWorker) -> None:
     with client() as c:
         token = attach(c)
         c.schema_create(attach_opaque_data=token, path=["Root"])
@@ -90,8 +107,10 @@ def test_resolved_graph_paths_use_the_owning_schema_spelling(backend) -> None:
         assert ("schema", ("Root",), "Child", "") in identities(snapshot)
         assert ("table", ("Root", "Child"), "T.A", "") in identities(snapshot)
         assert ("view", ("Root", "Child"), "V", "") in identities(snapshot)
-        assert c.schema_get(attach_opaque_data=token, path=["ROOT", "child"]).path == ["Root", "Child"]
-        assert c.table_get(attach_opaque_data=token, schema_path=["root", "child"], name="t.a").schema_path == [
+        assert present(c.schema_get(attach_opaque_data=token, path=["ROOT", "child"])).path == ["Root", "Child"]
+        assert present(
+            c.table_get(attach_opaque_data=token, schema_path=["root", "child"], name="t.a")
+        ).schema_path == [
             "Root",
             "Child",
         ]
@@ -103,7 +122,7 @@ def test_resolved_graph_paths_use_the_owning_schema_spelling(backend) -> None:
         assert c.schema_get(attach_opaque_data=token, path=["root", "child"]) is None
 
 
-def test_restrict_replace_cascade_and_literal_paths_are_atomic(backend) -> None:
+def test_restrict_replace_cascade_and_literal_paths_are_atomic(backend: DependencyWorker) -> None:
     with client() as c:
         token = attach(c)
         seed(c, token)
@@ -129,10 +148,14 @@ def test_restrict_replace_cascade_and_literal_paths_are_atomic(backend) -> None:
         assert c.schema_get(attach_opaque_data=token, path=["a", "b"]) is None
         c.schema_create(attach_opaque_data=token, path=["outside"], on_conflict=OnConflict.REPLACE)
         replaced = c.schema_get(attach_opaque_data=token, path=["outside"])
-        assert replaced.comment is None and replaced.tags == {} and replaced.options.explicit_names == []
+        assert (
+            present(replaced).comment is None
+            and present(replaced).tags == {}
+            and present(present(replaced).options).explicit_names == []
+        )
 
 
-def test_transaction_visibility_rollback_commit_and_reconnect(backend) -> None:
+def test_transaction_visibility_rollback_commit_and_reconnect(backend: DependencyWorker) -> None:
     with client() as c:
         token = attach(c)
         seed(c, token)
@@ -144,17 +167,17 @@ def test_transaction_visibility_rollback_commit_and_reconnect(backend) -> None:
         assert c.catalog_dependencies(attach_opaque_data=token) == before
     with client() as c:
         assert c.catalog_dependencies(attach_opaque_data=token, transaction_opaque_data=tx) == pending
-        c.catalog_transaction_rollback(attach_opaque_data=token, transaction_opaque_data=tx)
+        c.catalog_transaction_rollback(attach_opaque_data=token, transaction_opaque_data=present(tx))
         assert c.catalog_dependencies(attach_opaque_data=token) == before
         tx = c.catalog_transaction_begin(attach_opaque_data=token)
         c.schema_drop(attach_opaque_data=token, path=["a.b"], cascade=True, transaction_opaque_data=tx)
     with client() as c:
-        c.catalog_transaction_commit(attach_opaque_data=token, transaction_opaque_data=tx)
-        c.catalog_transaction_commit(attach_opaque_data=token, transaction_opaque_data=tx)
+        c.catalog_transaction_commit(attach_opaque_data=token, transaction_opaque_data=present(tx))
+        c.catalog_transaction_commit(attach_opaque_data=token, transaction_opaque_data=present(tx))
         assert identities(c.catalog_dependencies(attach_opaque_data=token)) == identities(pending)
 
 
-def test_discovery_does_not_reserve_or_authorize_a_later_drop(backend) -> None:
+def test_discovery_does_not_reserve_or_authorize_a_later_drop(backend: DependencyWorker) -> None:
     with client() as c, client() as other:
         token, second = attach(c), attach(other)
         c.schema_create(attach_opaque_data=token, path=["empty"])
@@ -167,25 +190,27 @@ def test_discovery_does_not_reserve_or_authorize_a_later_drop(backend) -> None:
         c.schema_drop(attach_opaque_data=token, path=["empty"], cascade=True, transaction_opaque_data=tx)
         other.table_create(attach_opaque_data=second, schema_path=["empty"], name="concurrent", columns=COLUMNS)
         with pytest.raises(CatalogClientError, match="transaction conflict"):
-            c.catalog_transaction_commit(attach_opaque_data=token, transaction_opaque_data=tx)
+            c.catalog_transaction_commit(attach_opaque_data=token, transaction_opaque_data=present(tx))
         assert c.table_get(attach_opaque_data=token, schema_path=["empty"], name="concurrent") is not None
-        c.catalog_transaction_rollback(attach_opaque_data=token, transaction_opaque_data=tx)
+        c.catalog_transaction_rollback(attach_opaque_data=token, transaction_opaque_data=present(tx))
         readonly = c.catalog_transaction_begin(attach_opaque_data=token)
         snapshot = c.catalog_dependencies(attach_opaque_data=token, transaction_opaque_data=readonly)
         other.schema_create(attach_opaque_data=second, path=["after_snapshot"])
         assert c.catalog_dependencies(attach_opaque_data=token, transaction_opaque_data=readonly) == snapshot
-        c.catalog_transaction_commit(attach_opaque_data=token, transaction_opaque_data=readonly)
+        c.catalog_transaction_commit(attach_opaque_data=token, transaction_opaque_data=present(readonly))
         assert c.schema_get(attach_opaque_data=token, path=["after_snapshot"]) is not None
 
 
 @pytest.mark.parametrize("failure", ["authorization", "after_write"])
-def test_failed_cascade_preserves_all_metadata_and_versions(backend, monkeypatch, failure: str) -> None:
+def test_failed_cascade_preserves_all_metadata_and_versions(
+    backend: DependencyWorker, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
     with client() as c:
         token = attach(c)
         seed(c, token)
         before = c.catalog_dependencies(attach_opaque_data=token)
 
-        def deny(self, ref=None):
+        def deny(self: DependencyCatalog, ref: CatalogObjectRef | None = None) -> None:
             if ref is None or ref.name == "v2":
                 raise ValueError("denied cascade member")
 
@@ -199,8 +224,10 @@ def test_failed_cascade_preserves_all_metadata_and_versions(backend, monkeypatch
 
 
 @pytest.mark.parametrize("meta", [False, True])
-def test_capability_lifecycle_guarantees_ownership_and_routing(backend, monkeypatch, meta: bool) -> None:
-    worker = MetaWorker([backend]) if meta else backend
+def test_capability_lifecycle_guarantees_ownership_and_routing(
+    backend: DependencyWorker, monkeypatch: pytest.MonkeyPatch, meta: bool
+) -> None:
+    worker = cast(VgiProtocol, MetaWorker([backend]) if meta else backend)
     legacy = worker.catalog_attach(request(None)).attach_opaque_data
     with pytest.raises(CatalogCapabilityError, match=CATALOG_DEPENDENCIES_READ):
         worker.catalog_dependencies(attach_opaque_data=legacy)
@@ -220,7 +247,7 @@ def test_capability_lifecycle_guarantees_ownership_and_routing(backend, monkeypa
         worker.catalog_dependencies(attach_opaque_data=token)
 
 
-def test_missing_and_invalid_requests_preserve_graph(backend) -> None:
+def test_missing_and_invalid_requests_preserve_graph(backend: DependencyWorker) -> None:
     with client() as c:
         token = attach(c)
         before = c.catalog_dependencies(attach_opaque_data=token)

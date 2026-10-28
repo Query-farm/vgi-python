@@ -3,9 +3,11 @@
 
 """Public table-option/layout RPCs, persistent readback and actual row rewrites."""
 
+from __future__ import annotations
+
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict, cast
 
 import pyarrow as pa
 import pytest
@@ -16,7 +18,7 @@ from vgi.catalog.capabilities import (
     TABLE_LAYOUT_ALTER_REWRITE,
     TRANSACTION_DDL,
 )
-from vgi.catalog.catalog_interface import OnConflict, SchemaObjectType
+from vgi.catalog.catalog_interface import OnConflict, SchemaObjectType, SerializedSchema, TransactionOpaqueData
 from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.layout import (
     LayoutChangeMode,
@@ -32,11 +34,13 @@ from vgi.catalog.options import OptionChanges
 from vgi.client import Client
 from vgi.exceptions import CatalogCapabilityError
 from vgi.meta_worker import MetaWorker
-from vgi.protocol import CatalogAttachRequest, ClientCapabilities, TableCreateRequest
+from vgi.protocol import CatalogAttachRequest, ClientCapabilities, TableCreateRequest, VgiProtocol
 from vgi.serve import create_app
+from vgi.typed_values import TypedValueBatch
 
 from .schema_options_reference import values
 from .table_layout_reference import TABLE_PROFILES, TableLayoutCatalog, TableLayoutWorker
+from .typing_helpers import present
 
 KEY = b"table-layout-reference-signing-key"
 COLUMNS = pa.schema([pa.field("a.b", pa.int32()), pa.field("score", pa.int64())], metadata={b"owner": b"layout"})
@@ -88,22 +92,26 @@ def args(token: bytes) -> dict[str, Any]:
 
 
 def get(c: Client, token: bytes, tx: bytes | None = None) -> Any:
-    return c.table_get(**args(token), transaction_opaque_data=tx)
+    return c.table_get(**args(token), transaction_opaque_data=TransactionOpaqueData(tx) if tx is not None else None)
 
 
 def create(c: Client, token: bytes, **kwargs: Any) -> None:
-    c.table_create(**args(token), columns=COLUMNS.serialize().to_pybytes(), **kwargs)
+    c.table_create(**args(token), columns=SerializedSchema(COLUMNS.serialize().to_pybytes()), **kwargs)
 
 
 def physical(worker: TableLayoutWorker, token: bytes, tx: bytes | None = None) -> list[dict[str, Any]]:
-    return worker._get_catalog().physical_rows(
+    catalog = worker._get_catalog()
+    assert isinstance(catalog, TableLayoutCatalog)
+    return catalog.physical_rows(
         **args(worker._unwrap_attach(token)),
         transaction_opaque_data=worker._unwrap_transaction(tx, token) if tx else None,
     )
 
 
 def seed(worker: TableLayoutWorker, token: bytes, rows: list[dict[str, Any]]) -> None:
-    worker._get_catalog().seed_rows(**args(worker._unwrap_attach(token)), transaction_opaque_data=None, rows=rows)
+    catalog = worker._get_catalog()
+    assert isinstance(catalog, TableLayoutCatalog)
+    catalog.seed_rows(**args(worker._unwrap_attach(token)), transaction_opaque_data=None, rows=rows)
 
 
 def test_create_discovery_options_and_restart(backend: TableLayoutWorker) -> None:
@@ -117,7 +125,7 @@ def test_create_discovery_options_and_restart(backend: TableLayoutWorker) -> Non
         assert info.options.explicit_names == ["label"]
         assert info.options.values.batch.column("label")[0].as_py() is None
         assert info.layout == layout()
-        assert pa.ipc.read_schema(pa.BufferReader(info.columns)).equals(COLUMNS, check_metadata=True)
+        assert pa.ipc.read_schema(pa.py_buffer(info.columns)).equals(COLUMNS, check_metadata=True)
         listed = c.schema_contents(type=SchemaObjectType.TABLE, attach_opaque_data=token, path=["main"])
         assert listed[0].layout == info.layout
         c.table_alter_options(**args(token), changes=OptionChanges(set_values=values(limit=50), reset_names=["label"]))
@@ -159,7 +167,7 @@ def test_future_writes_and_atomic_rewrite_rollback_commit(backend: TableLayoutWo
         assert [r["score"] for r in physical(backend, token, tx)[0]["rows"]] == [None, None, -5, 1, 2, 9]
         assert physical(backend, token) == before
     with client() as c:
-        c.catalog_transaction_rollback(attach_opaque_data=token, transaction_opaque_data=tx)
+        c.catalog_transaction_rollback(attach_opaque_data=token, transaction_opaque_data=present(tx))
         assert physical(backend, token) == before
         tx = c.catalog_transaction_begin(attach_opaque_data=token)
         c.table_alter_layout(
@@ -168,7 +176,7 @@ def test_future_writes_and_atomic_rewrite_rollback_commit(backend: TableLayoutWo
             changes=TableLayoutChange(mode=LayoutChangeMode.REWRITE, sorted_by=[]),
         )
     with client() as c:
-        c.catalog_transaction_commit(attach_opaque_data=token, transaction_opaque_data=tx)
+        c.catalog_transaction_commit(attach_opaque_data=token, transaction_opaque_data=present(tx))
         assert len(physical(backend, token)) == 1
         assert get(c, token).layout.coverage == LayoutCoverage.ALL_ROWS
         c.table_drop(**args(token))
@@ -219,6 +227,15 @@ def test_legacy_projection_and_capability_scoped_etags(backend: TableLayoutWorke
         assert decode_collection(TableInfo, legacy.tables)[0].layout is None
 
 
+class _CreateExtra(TypedDict, total=False):
+    """Independent create fields whose capabilities must be checked."""
+
+    options: TypedValueBatch
+    layout: TableLayout
+    comment: str
+    tags: dict[str, str]
+
+
 def test_missing_profiles_and_mode_downgrade_never_call_provider(
     backend: TableLayoutWorker, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -229,7 +246,8 @@ def test_missing_profiles_and_mode_downgrade_never_call_provider(
     ).attach_opaque_data
     calls = []
     monkeypatch.setattr(backend._get_catalog(), "table_create", lambda **kw: calls.append(kw))
-    for extra in ({"options": values(limit=1)}, {"layout": layout()}, {"comment": "c"}, {"tags": {}}):
+    extras: list[_CreateExtra] = [{"options": values(limit=1)}, {"layout": layout()}, {"comment": "c"}, {"tags": {}}]
+    for extra in extras:
         with pytest.raises(CatalogCapabilityError):
             backend.catalog_table_create(
                 TableCreateRequest(
@@ -278,14 +296,14 @@ def test_new_table_ddl_requires_transaction_guarantee(backend: TableLayoutWorker
                 layout=layout(),
             )
         )
-    backend.catalog_transaction_rollback(token, tx)
+    backend.catalog_transaction_rollback(token, present(tx))
 
 
 def test_layout_mode_and_nested_record_validation() -> None:
     with pytest.raises(ValueError):
         TableLayoutChange(mode=LayoutChangeMode.REWRITE)
     with pytest.raises(ValueError):
-        SortKey(expression=expr("score"), direction="default", null_order=NullOrder.LAST)
+        SortKey(expression=expr("score"), direction=cast(SortDirection, "default"), null_order=NullOrder.LAST)
     with pytest.raises(pa.ArrowInvalid):
         TableLayout(partition_by=[b"not IPC"])
     assert (
@@ -344,13 +362,13 @@ def test_nested_owner_paths_do_not_collapse_dotted_names(backend: TableLayoutWor
                 attach_opaque_data=token,
                 schema_path=path,
                 name="t",
-                columns=COLUMNS.serialize().to_pybytes(),
+                columns=SerializedSchema(COLUMNS.serialize().to_pybytes()),
                 layout=TableLayout(partition_by=[expr('"a.b"', path).serialize_to_bytes()]),
             )
         first = c.table_get(attach_opaque_data=token, schema_path=["one.two"], name="t")
         second = c.table_get(attach_opaque_data=token, schema_path=["one", "two"], name="t")
-        assert first.layout.partition_expressions()[0].schema_path == ["one.two"]
-        assert second.layout.partition_expressions()[0].schema_path == ["one", "two"]
+        assert present(present(first).layout).partition_expressions()[0].schema_path == ["one.two"]
+        assert present(present(second).layout).partition_expressions()[0].schema_path == ["one", "two"]
         version = c.catalog_version(attach_opaque_data=token)
         with pytest.raises(ValueError, match="owner schema"):
             backend.catalog_table_create(
@@ -368,7 +386,8 @@ def test_nested_owner_paths_do_not_collapse_dotted_names(backend: TableLayoutWor
 
 
 def test_meta_worker_routes_all_table_option_and_layout_operations(backend: TableLayoutWorker) -> None:
-    worker = MetaWorker([backend])
+    # MetaWorker installs protocol forwarding methods dynamically.
+    worker = cast(VgiProtocol, MetaWorker([backend]))
     token = worker.catalog_attach(
         CatalogAttachRequest(
             name="layout", data_version_spec=None, implementation_version=None, client_capabilities=OFFER
@@ -412,10 +431,10 @@ def test_conflicting_layout_commit_preserves_winner(backend: TableLayoutWorker) 
             transaction_opaque_data=second,
             changes=TableLayoutChange(mode=LayoutChangeMode.REWRITE, partition_by=[], sorted_by=[]),
         )
-        c.catalog_transaction_commit(attach_opaque_data=token, transaction_opaque_data=first)
+        c.catalog_transaction_commit(attach_opaque_data=token, transaction_opaque_data=present(first))
         with pytest.raises(ValueError, match="conflict"):
-            backend.catalog_transaction_commit(token, second)
+            backend.catalog_transaction_commit(token, present(second))
         assert get(c, token).layout == layout()
         assert get(c, token).options.values.batch.column("limit")[0].as_py() == 31
         assert physical(backend, token) == before
-        c.catalog_transaction_rollback(attach_opaque_data=token, transaction_opaque_data=second)
+        c.catalog_transaction_rollback(attach_opaque_data=token, transaction_opaque_data=present(second))

@@ -14,7 +14,7 @@ Tests cover:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Annotated, ClassVar
+from typing import Annotated, Any, ClassVar
 
 import pyarrow as pa
 import pytest
@@ -739,7 +739,7 @@ class TestTableToTableInfoConstraints:
             {"foreign_key": (ForeignKeyDef(columns=("id",), referenced_table="other", referenced_columns=("id",)),)},
         ],
     )
-    def test_legacy_discovery_requires_explicit_migration(self, legacy) -> None:
+    def test_legacy_discovery_requires_explicit_migration(self, legacy: dict[str, Any]) -> None:
         """Old declarations cannot invent provider identity or enforcement."""
         table = Table(name="users", columns=pa.schema([("id", pa.int64())]), **legacy)
         with pytest.raises(ValueError, match="explicit canonical"):
@@ -838,7 +838,7 @@ class TestTableDefaults:
             defaults={},
         )
         info = table.to_table_info(["main"])
-        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
         assert schema.field("id").metadata is None
 
     def test_defaults_python_str_quoted(self) -> None:
@@ -851,7 +851,7 @@ class TestTableDefaults:
             defaults={"name": "unknown"},
         )
         info = table.to_table_info(["main"])
-        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
         assert schema.field("name").metadata == {b"default": b"'unknown'"}
 
     def test_defaults_python_str_escapes_quotes(self) -> None:
@@ -864,7 +864,7 @@ class TestTableDefaults:
             defaults={"name": "it's"},
         )
         info = table.to_table_info(["main"])
-        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
         assert schema.field("name").metadata == {b"default": b"'it''s'"}
 
     def test_defaults_python_int(self) -> None:
@@ -875,7 +875,7 @@ class TestTableDefaults:
             defaults={"qty": 42},
         )
         info = table.to_table_info(["main"])
-        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
         assert schema.field("qty").metadata == {b"default": b"42"}
 
     def test_defaults_python_float(self) -> None:
@@ -886,7 +886,7 @@ class TestTableDefaults:
             defaults={"price": 9.99},
         )
         info = table.to_table_info(["main"])
-        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
         assert schema.field("price").metadata == {b"default": b"9.99"}
 
     def test_defaults_python_bool(self) -> None:
@@ -897,7 +897,7 @@ class TestTableDefaults:
             defaults={"a": True, "b": False},
         )
         info = table.to_table_info(["main"])
-        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
         assert schema.field("a").metadata == {b"default": b"true"}
         assert schema.field("b").metadata == {b"default": b"false"}
 
@@ -909,7 +909,7 @@ class TestTableDefaults:
             defaults={"val": None},
         )
         info = table.to_table_info(["main"])
-        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
         assert schema.field("val").metadata == {b"default": b"NULL"}
 
     def test_defaults_sql_expression(self) -> None:
@@ -920,7 +920,7 @@ class TestTableDefaults:
             defaults={"ts": Sql("current_timestamp")},
         )
         info = table.to_table_info(["main"])
-        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
         assert schema.field("ts").metadata == {b"default": b"current_timestamp"}
 
     def test_defaults_mixed_types(self) -> None:
@@ -937,7 +937,7 @@ class TestTableDefaults:
             defaults={"qty": 0, "name": "unknown"},
         )
         info = table.to_table_info(["main"])
-        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
         assert schema.field("qty").metadata == {b"default": b"0"}
         assert schema.field("name").metadata == {b"default": b"'unknown'"}
         assert schema.field("id").metadata is None
@@ -955,7 +955,7 @@ class TestTableDefaults:
             defaults={"row_id": 0},
         )
         info = table.to_table_info(["main"])
-        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
         metadata = schema.field("row_id").metadata
         assert metadata is not None
         assert metadata[b"is_row_id"] == b""

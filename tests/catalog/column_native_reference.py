@@ -27,13 +27,14 @@ from vgi.table_in_out_function import TableInOutGenerator
 from vgi.worker import Worker
 
 from .column_paths_reference import ColumnPathsCatalog
+from .typing_helpers import present
 
 COUNT = pa.schema([pa.field("count", pa.int64(), nullable=False)])
 
 
 def _args(params: Any) -> dict[str, Any]:
     call = params.bind_call if isinstance(params, BindParams) else params.init_call.bind_call
-    target = json.loads(call.arguments.positional[0].as_py())
+    target = json.loads(present(call.arguments.positional[0]).as_py())
     return dict(
         attach_opaque_data=params.attach_opaque_data,
         transaction_opaque_data=params.transaction_opaque_data,
@@ -62,7 +63,7 @@ class ReferenceScan(TableFunctionGenerator[None, ScanState]):
         if info is None:
             raise ValueError("table does not exist")
 
-        def data_field(field: pa.Field) -> pa.Field:
+        def data_field(field: pa.Field[Any]) -> pa.Field[Any]:
             # Column definitions live on TableInfo; the scan's data schema must
             # not ask generic function consumers to interpret catalog defaults.
             field = with_column_expressions(field, ColumnExpressions())
@@ -70,8 +71,12 @@ class ReferenceScan(TableFunctionGenerator[None, ScanState]):
                 field = field.with_type(pa.struct([data_field(child) for child in field.type]))
             return field
 
-        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))
-        return BindResponse(output_schema=pa.schema([data_field(field) for field in schema], metadata=schema.metadata))
+        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
+        return BindResponse(
+            output_schema=pa.schema(
+                [data_field(field) for field in schema], metadata={k: v for k, v in (schema.metadata or {}).items()}
+            )
+        )
 
     @classmethod
     def on_init(cls, params: InitParams[None]) -> GlobalInitResponse:

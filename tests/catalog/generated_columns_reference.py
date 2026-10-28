@@ -35,6 +35,7 @@ from vgi.table_function import BindParams, InitParams, ProcessParams, TableFunct
 from vgi.worker import Worker
 
 from .dependencies_reference import DependencyCatalog, _generated, _schema, object_key
+from .typing_helpers import present
 
 
 def physical_schema(schema: pa.Schema) -> pa.Schema:
@@ -44,7 +45,7 @@ def physical_schema(schema: pa.Schema) -> pa.Schema:
             for field in schema
             if column_expressions(field).generated is None
         ],
-        metadata=schema.metadata,
+        metadata=None if schema.metadata is None else {key: value for key, value in (schema.metadata).items()},
     )
 
 
@@ -53,7 +54,7 @@ def _args(params: Any) -> dict[str, Any]:
     return dict(
         attach_opaque_data=params.attach_opaque_data,
         transaction_opaque_data=params.transaction_opaque_data,
-        **json.loads(call.arguments.positional[0].as_py()),
+        **json.loads(present(call.arguments.positional[0]).as_py()),
     )
 
 
@@ -115,7 +116,7 @@ class GeneratedColumnsCatalog(DependencyCatalog):
         super()._alter_table(operation, **kwargs)
 
     def table_create(self, **kwargs: Any) -> None:
-        schema = pa.ipc.read_schema(pa.BufferReader(kwargs["columns"]))
+        schema = pa.ipc.read_schema(pa.py_buffer(kwargs["columns"]))
         _generated(schema, kwargs["schema_path"])
         if not len(physical_schema(schema)):
             raise ValueError("generated row reference requires at least one physical column")
@@ -142,7 +143,8 @@ class GeneratedColumnsCatalog(DependencyCatalog):
         ref = CatalogObjectRef(kind="table", schema_path=kwargs["schema_path"], name=kwargs["name"])
         with closing(sqlite3.connect(self.database_path)) as db:
             _, data = self._snapshot(db, kwargs["attach_opaque_data"], kwargs["transaction_opaque_data"])
-            return json.loads(data[object_key(ref)]).get("rows", [])
+            rows: list[dict[str, Any]] = json.loads(data[object_key(ref)]).get("rows", [])
+            return rows
 
     def schema_contents(self, **kwargs: Any) -> Any:
         if kwargs["type"] in (SchemaObjectType.TABLE, SchemaObjectType.VIEW):

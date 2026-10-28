@@ -48,6 +48,7 @@ def corrupt_wire(raw: bytes | None) -> bytes | None:
                     value = None if security == "null" else security
                 batch = batch.set_column(index, field, pa.array([value] * batch.num_rows, type=field.type))
             else:
+                assert mode is not None
                 values: dict[str, Any] = {
                     "null": None,
                     "null_item": [None, "y"],

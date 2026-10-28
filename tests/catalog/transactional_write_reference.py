@@ -54,6 +54,7 @@ from vgi.catalog import (
     TableInfo,
     TransactionOpaqueData,
 )
+from vgi.catalog.catalog_interface import SerializedSchema
 from vgi.invocation import BindResponse, GlobalInitResponse
 from vgi.table_function import (
     BindParams,
@@ -66,7 +67,10 @@ from vgi.table_in_out_function import TableInOutGenerator
 from vgi.worker import Worker
 from vgi.write_results import write_result_schema
 
-_ROWS = pa.schema([("id", pa.int64()), ("label", pa.string())])
+from .typing_helpers import present
+
+_ROW_FIELDS: list[pa.Field[Any]] = [pa.field("id", pa.int64()), pa.field("label", pa.string())]
+_ROWS = pa.schema(_ROW_FIELDS)
 _COUNT = write_result_schema("count", _ROWS)
 _PREFIX = "transactional_write_reference:"
 
@@ -91,7 +95,7 @@ def _identifier(name: str) -> str:
 
 
 def _table_argument(params: BindParams[None] | InitParams[None] | ProcessParams[None]) -> str:
-    bind = params.bind_call if isinstance(params, BindParams) else params.init_call.bind_call
+    bind = present(params).bind_call if isinstance(params, BindParams) else present(params.init_call).bind_call
     arguments = bind.arguments.positional
     if len(arguments) != 1 or arguments[0] is None:
         raise _error("one table-name argument is required")
@@ -482,7 +486,7 @@ class TransactionalWriteCatalog(ReadOnlyCatalogInterface):
         return TableInfo(
             name=name,
             schema_path=["main"],
-            columns=_ROWS.serialize().to_pybytes(),
+            columns=SerializedSchema(_ROWS.serialize().to_pybytes()),
             constraints=[],
             comment=None,
             tags={},
@@ -544,7 +548,7 @@ class TransactionalWriteCatalog(ReadOnlyCatalogInterface):
         constraint_definitions: list[bytes],
         **kwargs: Any,
     ) -> None:
-        schema = pa.ipc.read_schema(pa.BufferReader(columns))
+        schema = pa.ipc.read_schema(pa.py_buffer(columns))
         if (
             schema_path != ["main"]
             or on_conflict != OnConflict.ERROR

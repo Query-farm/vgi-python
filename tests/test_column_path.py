@@ -3,7 +3,8 @@
 
 """Structural identities, required-filter semantics and explicit legacy migration."""
 
-from typing import Any
+from collections.abc import Callable
+from typing import Any, cast
 
 import pyarrow as pa
 import pytest
@@ -117,9 +118,11 @@ def test_mutation_cannot_bypass_validation() -> None:
 @pytest.mark.parametrize("wrapper", ["struct", "list", "dictionary"])
 def test_type_carrier_rejects_nested_expression_metadata(attribute: bytes, wrapper: str) -> None:
     child = pa.field("child", pa.int32(), metadata={attribute: b"not a type annotation"})
-    dtype = pa.list_(child) if wrapper == "list" else pa.struct([child])
+    dtype: pa.DataType = pa.list_(child) if wrapper == "list" else pa.struct([child])
     if wrapper == "dictionary":
-        dtype = pa.dictionary(pa.int16(), dtype)
+        # Nested dictionary values are valid at runtime but omitted by PyArrow stubs.
+        dictionary = cast(Callable[[pa.DataType, pa.DataType], pa.DataType], pa.dictionary)
+        dtype = dictionary(pa.int16(), dtype)
     payload = pa.schema([pa.field("target", dtype)]).serialize().to_pybytes()
     with pytest.raises(ValueError, match="only the target type"):
         column_definition(payload, ["target"], type_only=True)

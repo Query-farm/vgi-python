@@ -2,6 +2,8 @@
 # ruff: noqa: D103
 """Live typed-index discovery and refusal across independent SDK workers."""
 
+from __future__ import annotations
+
 import json
 import os
 
@@ -30,7 +32,7 @@ UNSUPPORTED = (
 
 
 @pytest.mark.parametrize("sdk", sorted(set(WORKERS) & {"typescript"}))
-def test_live_index_discovery_has_explicit_metadata_only_definitions(sdk):
+def test_live_index_discovery_has_explicit_metadata_only_definitions(sdk: str) -> None:
     with Client(server_path=WORKERS[sdk], worker_limit=1) as client:
         token = client.catalog_attach(
             name="example", data_version_spec=None, implementation_version=None, client_capabilities=OFFER
@@ -50,7 +52,7 @@ def test_live_index_discovery_has_explicit_metadata_only_definitions(sdk):
 
 
 @pytest.mark.parametrize("sdk", sorted(WORKERS))
-def test_unqualified_index_mutations_leave_catalog_unchanged(sdk):
+def test_unqualified_index_mutations_leave_catalog_unchanged(sdk: str) -> None:
     with Client(server_path=WORKERS[sdk], worker_limit=1) as client:
         attached = client.catalog_attach(
             name="contents_reval", data_version_spec=None, implementation_version=None, client_capabilities=OFFER

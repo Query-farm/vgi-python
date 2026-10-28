@@ -3,7 +3,10 @@
 
 """Constraint wire unions, exact identities and malformed IPC rejection."""
 
+from __future__ import annotations
+
 from dataclasses import replace
+from typing import Any, cast
 
 import pyarrow as pa
 import pytest
@@ -27,21 +30,25 @@ from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot, Objec
 from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.sql import SqlExpression
 
+from .typing_helpers import present
 
-def table(name="items", path=None):
+
+def table(name: str = "items", path: list[str] | None = None) -> CatalogObjectRef:
     return CatalogObjectRef(kind="table", schema_path=path or ["a.b", 'quoted"schema'], name=name)
 
 
-def identity(key="logical-Key", owner=None):
+def identity(key: str = "logical-Key", owner: CatalogObjectRef | None = None) -> CatalogObjectRef:
     owner = owner or table()
     return CatalogObjectRef(kind="constraint", schema_path=owner.schema_path, owner_table=owner.name, name=key)
 
 
-def definition(kind=ConstraintKind.UNIQUE, paths=None, **kwargs):
+def definition(
+    kind: ConstraintKind = ConstraintKind.UNIQUE, paths: list[list[str]] | None = None, **kwargs: Any
+) -> ConstraintDefinition:
     return ConstraintDefinition(kind=kind, column_paths=paths if paths is not None else [["value"]], **kwargs)
 
 
-def expression():
+def expression() -> SqlExpression:
     return SqlExpression(
         sql='"value" > 0',
         profile="vgi.expression.duckdb.scalar.v1",
@@ -50,7 +57,12 @@ def expression():
     )
 
 
-def info(key="logical-Key", value=None, owner=None, **kwargs):
+def info(
+    key: str = "logical-Key",
+    value: ConstraintDefinition | None = None,
+    owner: CatalogObjectRef | None = None,
+    **kwargs: Any,
+) -> ConstraintInfo:
     return ConstraintInfo(
         ref=identity(key, owner),
         definition=value or definition(),
@@ -60,7 +72,7 @@ def info(key="logical-Key", value=None, owner=None, **kwargs):
     )
 
 
-def change(value=None, **kwargs):
+def change(value: ConstraintDefinition | None = None, **kwargs: Any) -> ConstraintChange:
     return ConstraintChange(
         operation=ConstraintOperation.ADD,
         definition=value or definition(),
@@ -70,7 +82,7 @@ def change(value=None, **kwargs):
     )
 
 
-def apply(changes=None, **kwargs):
+def apply(changes: list[ConstraintChange] | None = None, **kwargs: Any) -> ConstraintsApplyRequest:
     return ConstraintsApplyRequest(
         attach_opaque_data=b"attachment",
         table=table(),
@@ -80,7 +92,7 @@ def apply(changes=None, **kwargs):
     )
 
 
-def snapshot(values=None):
+def snapshot(values: list[ConstraintInfo] | None = None) -> ConstraintSnapshot:
     return ConstraintSnapshot(
         table=table(),
         definition_revision=b"revision-1",
@@ -88,12 +100,19 @@ def snapshot(values=None):
     )
 
 
-def batch(record):
+def batch(
+    record: ConstraintDefinition
+    | ForeignKeyDefinition
+    | ConstraintInfo
+    | ConstraintChange
+    | ConstraintsApplyRequest
+    | ConstraintSnapshot,
+) -> pa.RecordBatch:
     with pa.ipc.open_stream(record.serialize_to_bytes()) as reader:
         return reader.read_next_batch()
 
 
-def ipc(value, *, twice=False):
+def ipc(value: pa.RecordBatch, *, twice: bool = False) -> bytes:
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, value.schema) as writer:
         writer.write_batch(value)
@@ -102,7 +121,7 @@ def ipc(value, *, twice=False):
     return sink.getvalue().to_pybytes()
 
 
-def test_all_definition_kinds_roundtrip_with_typed_nested_records():
+def test_all_definition_kinds_roundtrip_with_typed_nested_records() -> None:
     foreign = ForeignKeyDefinition(
         referenced_table=table("parent"),
         referenced_column_paths=[["id.part"], ["nested", "id"]],
@@ -121,10 +140,10 @@ def test_all_definition_kinds_roundtrip_with_typed_nested_records():
         restored = ConstraintDefinition.deserialize_from_bytes(original.serialize_to_bytes())
         assert restored == original
     assert ForeignKeyDefinition.deserialize_from_bytes(foreign.serialize_to_bytes()) == foreign
-    assert definitions[-1].foreign_key.referenced_column_paths == [["id.part"], ["nested", "id"]]
+    assert present(definitions[-1].foreign_key).referenced_column_paths == [["id.part"], ["nested", "id"]]
 
 
-def test_raw_paths_keep_dots_quotes_case_and_struct_boundaries():
+def test_raw_paths_keep_dots_quotes_case_and_struct_boundaries() -> None:
     value = definition(paths=[["a.b"], ["a", "b"], ['quote"name'], ["Name"], ["name"]])
     schema = pa.schema(
         [
@@ -161,12 +180,12 @@ def test_raw_paths_keep_dots_quotes_case_and_struct_boundaries():
         {"kind": ConstraintKind.FOREIGN_KEY},
     ],
 )
-def test_definition_rejects_invalid_union_and_path_shapes(kwargs):
+def test_definition_rejects_invalid_union_and_path_shapes(kwargs: dict[str, Any]) -> None:
     with pytest.raises((TypeError, ValueError)):
         replace(definition(), **kwargs)
 
 
-def test_definition_rejects_payloads_on_wrong_kind_and_fk_arity():
+def test_definition_rejects_payloads_on_wrong_kind_and_fk_arity() -> None:
     foreign = ForeignKeyDefinition(referenced_table=table("parent"), referenced_column_paths=[["id"]])
     with pytest.raises(ValueError, match="only CHECK"):
         replace(definition(), check_expression=expression())
@@ -176,12 +195,12 @@ def test_definition_rejects_payloads_on_wrong_kind_and_fk_arity():
         definition(ConstraintKind.FOREIGN_KEY, [["a"], ["b"]], foreign_key=foreign)
     for kwargs in [{"match": "PARTIAL"}, {"on_update": "UNKNOWN"}, {"on_delete": "UNKNOWN"}]:
         with pytest.raises(ValueError):
-            replace(foreign, **kwargs)
+            replace(foreign, **cast(dict[str, Any], kwargs))
     with pytest.raises(ValueError, match="table reference"):
         replace(foreign, referenced_table=identity())
 
 
-def test_info_stable_key_is_independent_of_declared_label_and_trust_flags():
+def test_info_stable_key_is_independent_of_declared_label_and_trust_flags() -> None:
     original = info(value=definition(declared_name="visible SQL label"))
     renamed = replace(original, definition=replace(original.definition, declared_name="new label"))
     assert original.ref.key() == renamed.ref.key()
@@ -193,14 +212,14 @@ def test_info_stable_key_is_independent_of_declared_label_and_trust_flags():
     assert identity("Key").key() != identity("key").key()
     assert identity(owner=table(path=["a.b"])).key() != identity(owner=table(path=["a", "b"])).key()
     with pytest.raises(ValueError):
-        replace(original, enforcement="unknown")
+        replace(original, enforcement=cast(ConstraintEnforcement, "unknown"))
     with pytest.raises(ValueError):
-        replace(original, validation="unknown")
+        replace(original, validation=cast(ConstraintValidation, "unknown"))
     with pytest.raises(ValueError, match="constraint reference"):
         replace(original, ref=table())
 
 
-def test_foreign_key_readback_requires_resolved_key_on_exact_target_table():
+def test_foreign_key_readback_requires_resolved_key_on_exact_target_table() -> None:
     parent = table("parent")
     foreign = definition(
         ConstraintKind.FOREIGN_KEY,
@@ -214,12 +233,12 @@ def test_foreign_key_readback_requires_resolved_key_on_exact_target_table():
         replace(value, referenced_constraint=identity("parent-primary", table("other")))
     with pytest.raises(ValueError, match="only foreign key"):
         replace(info(), referenced_constraint=value.referenced_constraint)
-    self_target = replace(foreign, foreign_key=replace(foreign.foreign_key, referenced_table=table()))
+    self_target = replace(foreign, foreign_key=replace(present(foreign.foreign_key), referenced_table=table()))
     with pytest.raises(ValueError, match="cannot reference itself"):
         info(value=self_target, referenced_constraint=identity())
 
 
-def test_change_union_roundtrips_all_operations_and_explicit_false():
+def test_change_union_roundtrips_all_operations_and_explicit_false() -> None:
     changes = [
         change(),
         ConstraintChange(operation=ConstraintOperation.DROP, ref=identity(), cascade=False),
@@ -246,12 +265,14 @@ def test_change_union_roundtrips_all_operations_and_explicit_false():
         (ConstraintOperation.REPLACE, {"ref": identity()}),
     ],
 )
-def test_change_union_rejects_missing_or_conflicting_fields(operation, fields):
+def test_change_union_rejects_missing_or_conflicting_fields(
+    operation: ConstraintOperation, fields: dict[str, Any]
+) -> None:
     with pytest.raises((TypeError, ValueError)):
         ConstraintChange(operation=operation, **fields)
 
 
-def test_add_replace_require_explicit_known_enforcement_and_validation():
+def test_add_replace_require_explicit_known_enforcement_and_validation() -> None:
     for kwargs in [
         {"ref": identity()},
         {"enforcement": None},
@@ -262,10 +283,10 @@ def test_add_replace_require_explicit_known_enforcement_and_validation():
         {"declared_name": "outside-definition"},
     ]:
         with pytest.raises((TypeError, ValueError)):
-            replace(change(), **kwargs)
+            replace(change(), **cast(dict[str, Any], kwargs))
 
 
-def test_snapshot_and_request_roundtrip_and_enforce_exact_owner():
+def test_snapshot_and_request_roundtrip_and_enforce_exact_owner() -> None:
     original = snapshot([info("Key"), info("key")])
     restored = ConstraintSnapshot.deserialize_from_bytes(original.serialize_to_bytes())
     assert restored == original
@@ -283,7 +304,7 @@ def test_snapshot_and_request_roundtrip_and_enforce_exact_owner():
         apply([change(definition(ConstraintKind.CHECK, [], check_expression=wrong_expression))])
 
 
-def test_snapshot_rejects_duplicate_keys_labels_and_primary_keys():
+def test_snapshot_rejects_duplicate_keys_labels_and_primary_keys() -> None:
     with pytest.raises(ValueError, match="duplicate constraint identity"):
         snapshot([info(), info()])
     with pytest.raises(ValueError, match="duplicate declared"):
@@ -302,27 +323,27 @@ def test_snapshot_rejects_duplicate_keys_labels_and_primary_keys():
 
 
 @pytest.mark.parametrize("value", [b"", "not-bytes", b"x" * (contract.MAX_CONSTRAINT_TOKEN_BYTES + 1)])
-def test_revisions_and_owner_tokens_are_nonempty_bounded_bytes(value):
+def test_revisions_and_owner_tokens_are_nonempty_bounded_bytes(value: bytes | str) -> None:
     for kwargs in [{"attach_opaque_data": value}, {"expected_revision": value}, {"transaction_opaque_data": value}]:
         with pytest.raises(ValueError):
-            replace(apply(), **kwargs)
+            replace(apply(), **cast(dict[str, Any], kwargs))
     with pytest.raises(ValueError):
-        replace(snapshot(), definition_revision=value)
+        replace(snapshot(), definition_revision=cast(bytes, value))
 
 
-def test_empty_or_malformed_nested_records_reject_before_mutation():
+def test_empty_or_malformed_nested_records_reject_before_mutation() -> None:
     with pytest.raises(ValueError):
         apply([])
     for values in [[b""], [b"not ipc"], [None]]:
         with pytest.raises((TypeError, ValueError, pa.ArrowInvalid)):
-            replace(snapshot(), constraints=values)
+            replace(snapshot(), constraints=cast(list[bytes], values))
         with pytest.raises((TypeError, ValueError, pa.ArrowInvalid)):
-            replace(apply(), changes=values)
+            replace(apply(), changes=cast(list[bytes], values))
     with pytest.raises(ValueError, match="exact schema"):
         replace(snapshot(), constraints=[definition().serialize_to_bytes()])
 
 
-def test_record_decoder_rejects_extra_rows_batches_trailing_bytes_and_unknown_fields():
+def test_record_decoder_rejects_extra_rows_batches_trailing_bytes_and_unknown_fields() -> None:
     original = definition()
     value = batch(original)
     wrong_batches = [
@@ -336,12 +357,12 @@ def test_record_decoder_rejects_extra_rows_batches_trailing_bytes_and_unknown_fi
     for wrong in wrong_batches:
         with pytest.raises(ValueError, match="one row|exact schema"):
             ConstraintDefinition.deserialize_from_bytes(ipc(wrong))
-    for wrong in [ipc(value, twice=True), original.serialize_to_bytes() + b"trailing"]:
+    for wrong_bytes in [ipc(value, twice=True), original.serialize_to_bytes() + b"trailing"]:
         with pytest.raises(ValueError):
-            ConstraintDefinition.deserialize_from_bytes(wrong)
+            ConstraintDefinition.deserialize_from_bytes(wrong_bytes)
 
 
-def test_decoder_rejects_wrong_nullability_and_null_required_fields():
+def test_decoder_rejects_wrong_nullability_and_null_required_fields() -> None:
     value = batch(definition())
     fields = list(value.schema)
     fields[0] = fields[0].with_nullable(True)
@@ -355,14 +376,16 @@ def test_decoder_rejects_wrong_nullability_and_null_required_fields():
         ConstraintDefinition.deserialize_from_bytes(ipc(wrong))
 
 
-def test_unknown_wire_enum_is_not_silently_defaulted():
+def test_unknown_wire_enum_is_not_silently_defaulted() -> None:
     value = batch(definition())
     wrong = value.set_column(0, value.schema.field(0), pa.array(["UNKNOWN"], type=value.schema.field(0).type))
     with pytest.raises(ValueError):
         ConstraintDefinition.deserialize_from_bytes(ipc(wrong))
 
 
-def test_mutated_nested_lists_and_oversized_envelopes_revalidate_on_serialization(monkeypatch):
+def test_mutated_nested_lists_and_oversized_envelopes_revalidate_on_serialization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     value = definition()
     value.column_paths.append(["value"])
     with pytest.raises(ValueError, match="unique"):
@@ -380,11 +403,11 @@ def test_mutated_nested_lists_and_oversized_envelopes_revalidate_on_serializatio
         valid.serialize_to_bytes()
 
 
-def test_constraint_refs_join_existing_owned_backing_index_dependency_closure():
+def test_constraint_refs_join_existing_owned_backing_index_dependency_closure() -> None:
     owner, constraint = table(), identity()
     index = CatalogObjectRef(kind="index", schema_path=owner.schema_path, name="backing-index")
 
-    def edge(dependent, subject, kind):
+    def edge(dependent: CatalogObjectRef, subject: CatalogObjectRef, kind: str) -> bytes:
         return ObjectDependency(
             dependent=dependent.serialize_to_bytes(),
             subject=subject.serialize_to_bytes(),
@@ -410,12 +433,18 @@ def test_constraint_refs_join_existing_owned_backing_index_dependency_closure():
         replace(owner, owner_table="unexpected")
 
 
-def test_constraint_fk_paths_and_mixed_backing_index_cycles_preserve_exact_drop_closure():
+def test_constraint_fk_paths_and_mixed_backing_index_cycles_preserve_exact_drop_closure() -> None:
     parent, child = table("parent"), table("child")
     key, foreign = identity("primary-key", parent), identity("foreign-key", child)
     backing = CatalogObjectRef(kind="index", schema_path=parent.schema_path, name="backing-index")
 
-    def edge(dependent, subject, kind="requires", paths=None, blocks=True):
+    def edge(
+        dependent: CatalogObjectRef,
+        subject: CatalogObjectRef,
+        kind: str = "requires",
+        paths: list[list[str]] | None = None,
+        blocks: bool = True,
+    ) -> bytes:
         return ObjectDependency(
             dependent=dependent.serialize_to_bytes(),
             subject=subject.serialize_to_bytes(),

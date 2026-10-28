@@ -2,6 +2,8 @@
 # ruff: noqa: D103
 """Barrier metadata must survive RPC/persistence and never reach unaware readers."""
 
+from __future__ import annotations
+
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -12,11 +14,13 @@ from vgi_rpc.http._testing import _SyncTestClient
 
 from vgi.catalog import OnConflict, SchemaObjectType, ViewInfo
 from vgi.catalog.capabilities import TRANSACTION_DDL, VIEW_BARRIER_CREATE, VIEW_BARRIER_READ, CatalogCapabilities
+from vgi.catalog.catalog_interface import AttachOpaqueData
 from vgi.client import Client
 from vgi.exceptions import CatalogCapabilityError
 from vgi.protocol import CatalogAttachRequest, ClientCapabilities
 from vgi.serve import create_app
 
+from .typing_helpers import CatalogObjectArgs, present
 from .view_security_reference import PROFILES, ViewSecurityCatalog, ViewSecurityWorker
 
 KEY = b"view-security-reference-signing-key"
@@ -45,7 +49,7 @@ def client() -> Client:
     )
 
 
-def attach(c: Client) -> bytes:
+def attach(c: Client) -> AttachOpaqueData:
     return c.catalog_attach(
         name="options", data_version_spec=None, implementation_version=None, client_capabilities=OFFER
     ).attach_opaque_data
@@ -60,11 +64,11 @@ def create(worker: ViewSecurityWorker, token: bytes, **kwargs: Any) -> None:
 def test_public_rpc_transactions_reconnect_and_metadata_mutations(backend: ViewSecurityWorker) -> None:
     with client() as c:
         token = attach(c)
-        target = dict(attach_opaque_data=token, schema_path=["main"], name="v")
+        target: CatalogObjectArgs = dict(attach_opaque_data=token, schema_path=["main"], name="v")
         c.view_create(**target, definition="SELECT 1 AS x", aliases=["a.b"], security="barrier")
         first = c.view_get(**target)
-        assert first.security == "barrier" and first.aliases == ["a.b"]
-        tx = c.catalog_transaction_begin(attach_opaque_data=token)
+        assert present(first).security == "barrier" and present(first).aliases == ["a.b"]
+        tx = c.catalog_transaction_begin(attach_opaque_data=AttachOpaqueData(token))
         c.view_create(
             **target,
             definition="SELECT 2 AS x",
@@ -72,20 +76,22 @@ def test_public_rpc_transactions_reconnect_and_metadata_mutations(backend: ViewS
             on_conflict=OnConflict.REPLACE,
             transaction_opaque_data=tx,
         )
-        assert c.view_get(**target, transaction_opaque_data=tx).security == "regular"
-        assert c.view_get(**target).security == "barrier"
+        assert present(c.view_get(**target, transaction_opaque_data=tx)).security == "regular"
+        assert present(c.view_get(**target)).security == "barrier"
     with client() as c:
-        c.catalog_transaction_rollback(attach_opaque_data=token, transaction_opaque_data=tx)
+        c.catalog_transaction_rollback(attach_opaque_data=AttachOpaqueData(token), transaction_opaque_data=present(tx))
         assert c.view_get(**target) == first
-        tx = c.catalog_transaction_begin(attach_opaque_data=token)
+        tx = c.catalog_transaction_begin(attach_opaque_data=AttachOpaqueData(token))
         c.view_rename(**target, new_name="renamed", transaction_opaque_data=tx)
         target["name"] = "renamed"
         c.view_comment_set(**target, comment="kept", transaction_opaque_data=tx)
     with client() as c:
-        c.catalog_transaction_commit(attach_opaque_data=token, transaction_opaque_data=tx)
-        c.catalog_transaction_commit(attach_opaque_data=token, transaction_opaque_data=tx)
+        c.catalog_transaction_commit(attach_opaque_data=AttachOpaqueData(token), transaction_opaque_data=present(tx))
+        c.catalog_transaction_commit(attach_opaque_data=AttachOpaqueData(token), transaction_opaque_data=present(tx))
         info = c.view_get(**target)
-        assert info.security == "barrier" and info.aliases == ["a.b"] and info.comment == "kept"
+        assert (
+            present(info).security == "barrier" and present(info).aliases == ["a.b"] and present(info).comment == "kept"
+        )
         assert c.schema_contents(attach_opaque_data=token, path=["main"], type=SchemaObjectType.VIEW)[0] == info
 
 
@@ -165,7 +171,7 @@ def test_transactional_barrier_create_requires_ddl_guarantee(backend: ViewSecuri
     with pytest.raises(CatalogCapabilityError, match=TRANSACTION_DDL):
         create(backend, token, security="barrier", transaction_opaque_data=tx)
     assert backend.catalog_view_get(token, ["main"], "v", tx).to_optional() is None
-    backend.catalog_transaction_rollback(token, tx)
+    backend.catalog_transaction_rollback(token, present(tx))
 
 
 @pytest.mark.parametrize("operation", ["rename", "comment", "drop"])
@@ -184,7 +190,7 @@ def test_transactional_barrier_mutation_requires_ddl_guarantee(backend: ViewSecu
         else:
             backend.catalog_view_drop(token, ["main"], "v", transaction_opaque_data=tx)
     assert backend.catalog_view_get(token, ["main"], "v", tx).to_optional().security == "barrier"
-    backend.catalog_transaction_rollback(token, tx)
+    backend.catalog_transaction_rollback(token, present(tx))
 
 
 @pytest.mark.parametrize("security", [None, "", "secure", "BARRIER", "barrier\0", 1])

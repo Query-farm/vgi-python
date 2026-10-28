@@ -3,9 +3,12 @@
 
 """Lossless one-row Arrow carriers and rejection of ambiguous value payloads."""
 
+from __future__ import annotations
+
+from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, cast
 
 import pyarrow as pa
 import pytest
@@ -119,7 +122,13 @@ def test_rejects_incomplete_or_multiple_payloads(kind: str) -> None:
         (pa.list_(pa.field("item", pa.int64(), nullable=False), 1), [None]),
         (pa.list_view(pa.field("item", pa.int64(), nullable=False)), [None]),
         (pa.large_list_view(pa.field("item", pa.int64(), nullable=False)), [None]),
-        (pa.map_(pa.string(), pa.field("value", pa.int64(), nullable=False)), [("key", None)]),
+        # Runtime accepts Field so its nullability survives; PyArrow stubs omit this overload.
+        (
+            cast("Callable[[pa.DataType, pa.Field[pa.DataType]], pa.DataType]", pa.map_)(
+                pa.string(), pa.field("value", pa.int64(), nullable=False)
+            ),
+            [("key", None)],
+        ),
     ],
 )
 def test_rejects_nulls_in_nonnullable_fields(arrow_type: pa.DataType, value: object) -> None:
@@ -138,6 +147,7 @@ def test_null_parent_does_not_require_valid_struct_children() -> None:
 @pytest.mark.parametrize("kind", ["dictionary", "extension", "run_end", "union"])
 def test_encoded_values_cannot_hide_nullability_violation(kind: str) -> None:
     child = pa.array([None], type=pa.int64())
+    array: pa.Array[pa.Scalar[pa.DataType]]
     if kind == "dictionary":
         array = pa.DictionaryArray.from_arrays(pa.array([0], type=pa.int8()), child)
     elif kind == "extension":

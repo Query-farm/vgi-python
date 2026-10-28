@@ -3,8 +3,11 @@
 
 """Canonical public carriers and fail-closed worker capability boundaries."""
 
+from __future__ import annotations
+
 from dataclasses import replace
 from types import SimpleNamespace
+from typing import Any
 
 import pyarrow as pa
 import pytest
@@ -17,7 +20,7 @@ from vgi.catalog.capabilities import (
     TRANSACTION_DDL,
     CatalogCapabilities,
 )
-from vgi.catalog.catalog_interface import OnConflict, TableInfo
+from vgi.catalog.catalog_interface import OnConflict, SerializedSchema, TableInfo
 from vgi.catalog.constraints import (
     ConstraintChange,
     ConstraintDefinition,
@@ -53,14 +56,14 @@ PROFILES = CatalogCapabilities(
 )
 
 
-def table_info(**changes):
+def table_info(**changes: Any) -> TableInfo:
     return replace(
         TableInfo(
             name=TABLE.name,
             schema_path=TABLE.schema_path,
             comment=None,
             tags={},
-            columns=SCHEMA.serialize().to_pybytes(),
+            columns=SerializedSchema(SCHEMA.serialize().to_pybytes()),
             constraints=[INFO.serialize_to_bytes()],
             definition_revision=b"revision-1",
             insert_function=b"opaque-write-descriptor",
@@ -70,7 +73,7 @@ def table_info(**changes):
     )
 
 
-def create_request(**changes):
+def create_request(**changes: Any) -> TableCreateRequest:
     return replace(
         TableCreateRequest(
             attach_opaque_data=b"sealed-attach",
@@ -84,7 +87,7 @@ def create_request(**changes):
     )
 
 
-def apply_request(**changes):
+def apply_request(**changes: Any) -> ConstraintsApplyRequest:
     return replace(
         ConstraintsApplyRequest(
             attach_opaque_data=b"sealed-attach",
@@ -100,7 +103,9 @@ def apply_request(**changes):
     )
 
 
-def worker(monkeypatch, selected=PROFILES, available=PROFILES):
+def worker(
+    monkeypatch: pytest.MonkeyPatch, selected: CatalogCapabilities = PROFILES, available: CatalogCapabilities = PROFILES
+) -> tuple[Worker, SimpleNamespace, list[Any]]:
     instance = object.__new__(Worker)
     calls = []
     provider = SimpleNamespace(
@@ -110,7 +115,7 @@ def worker(monkeypatch, selected=PROFILES, available=PROFILES):
         table_insert_function_get=lambda **kwargs: calls.append(kwargs),
     )
 
-    def apply(request):
+    def apply(request: ConstraintsApplyRequest) -> ConstraintSnapshot:
         calls.append(request)
         return ConstraintSnapshot(
             table=TABLE, definition_revision=b"revision-2", constraints=[INFO.serialize_to_bytes()]
@@ -125,7 +130,7 @@ def worker(monkeypatch, selected=PROFILES, available=PROFILES):
     return instance, provider, calls
 
 
-def test_public_carriers_have_one_required_authoritative_list():
+def test_public_carriers_have_one_required_authoritative_list() -> None:
     legacy = {
         "not_null_constraints",
         "unique_constraints",
@@ -146,14 +151,14 @@ def test_public_carriers_have_one_required_authoritative_list():
         create_request(constraint_definitions=None)
 
 
-def test_profiles_require_readback_and_create_requires_enforcement():
+def test_profiles_require_readback_and_create_requires_enforcement() -> None:
     assert PROFILES.select(None) == CatalogCapabilities()
     assert PROFILES.select(CatalogCapabilities(ddl=[CONSTRAINT_CREATE, CONSTRAINT_MUTATE])) == CatalogCapabilities()
     read_and_create = CatalogCapabilities(read=[CONSTRAINT_RECORDS_READ], ddl=[CONSTRAINT_CREATE])
     assert PROFILES.select(read_and_create).ddl == []
 
 
-def test_discovery_never_hides_constraints_and_mutation_requires_revision():
+def test_discovery_never_hides_constraints_and_mutation_requires_revision() -> None:
     with pytest.raises(CatalogCapabilityError):
         Worker._table_for_capabilities(table_info(), CatalogCapabilities())
     read_only = CatalogCapabilities(read=[CONSTRAINT_RECORDS_READ])
@@ -166,7 +171,7 @@ def test_discovery_never_hides_constraints_and_mutation_requires_revision():
 
 
 @pytest.mark.parametrize("trusted", [False, True])
-def test_discovery_rejects_nullability_that_does_not_match_trust(trusted):
+def test_discovery_rejects_nullability_that_does_not_match_trust(trusted: bool) -> None:
     info = INFO if trusted else replace(INFO, enforcement=ConstraintEnforcement.METADATA_ONLY)
     wrong = pa.schema([pa.field("a.b", pa.int64(), nullable=trusted)])
     with pytest.raises(ValueError, match="nullability"):
@@ -175,7 +180,7 @@ def test_discovery_rejects_nullability_that_does_not_match_trust(trusted):
         )
 
 
-def test_create_checks_negotiation_and_current_support_before_provider(monkeypatch):
+def test_create_checks_negotiation_and_current_support_before_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     for selected, available in [(CatalogCapabilities(), PROFILES), (PROFILES, CatalogCapabilities())]:
         instance, _, calls = worker(monkeypatch, selected, available)
         with pytest.raises(CatalogCapabilityError):
@@ -187,7 +192,7 @@ def test_create_checks_negotiation_and_current_support_before_provider(monkeypat
     assert calls[0]["attach_opaque_data"] == b"provider-attach"
 
 
-def test_apply_unwraps_context_once_and_rejects_transaction_without_guarantee(monkeypatch):
+def test_apply_unwraps_context_once_and_rejects_transaction_without_guarantee(monkeypatch: pytest.MonkeyPatch) -> None:
     instance, _, calls = worker(monkeypatch)
     request = apply_request(transaction_opaque_data=b"sealed-tx")
     result = instance.catalog_table_constraints_apply(request)
@@ -202,7 +207,7 @@ def test_apply_unwraps_context_once_and_rejects_transaction_without_guarantee(mo
     assert calls == []
 
 
-def test_unqualified_write_discovery_and_wrong_mutation_owner_reject(monkeypatch):
+def test_unqualified_write_discovery_and_wrong_mutation_owner_reject(monkeypatch: pytest.MonkeyPatch) -> None:
     instance, _, calls = worker(monkeypatch, CatalogCapabilities(read=[CONSTRAINT_RECORDS_READ]))
     with pytest.raises(CatalogCapabilityError, match=CONSTRAINT_ENFORCE):
         instance.catalog_table_insert_function_get(b"sealed-attach", TABLE.schema_path, TABLE.name)
@@ -215,7 +220,7 @@ def test_unqualified_write_discovery_and_wrong_mutation_owner_reject(monkeypatch
         instance.catalog_table_constraints_apply(apply_request())
 
 
-def test_legacy_replacement_and_not_null_cannot_bypass_canonical_mutation(monkeypatch):
+def test_legacy_replacement_and_not_null_cannot_bypass_canonical_mutation(monkeypatch: pytest.MonkeyPatch) -> None:
     instance, _, calls = worker(monkeypatch, CatalogCapabilities(read=[CONSTRAINT_RECORDS_READ]))
     with pytest.raises(CatalogCapabilityError, match=CONSTRAINT_MUTATE):
         instance.catalog_table_create(create_request(on_conflict=OnConflict.REPLACE, constraint_definitions=[]))
@@ -224,14 +229,19 @@ def test_legacy_replacement_and_not_null_cannot_bypass_canonical_mutation(monkey
     assert calls == []
 
 
-def test_meta_worker_routes_canonical_apply_without_rewriting_attachment(monkeypatch):
+def test_meta_worker_routes_canonical_apply_without_rewriting_attachment(monkeypatch: pytest.MonkeyPatch) -> None:
     instance = object.__new__(MetaWorker)
     request = apply_request()
     expected = ConstraintSnapshot(table=TABLE, definition_revision=b"revision-2", constraints=[])
     seen = []
-    child = SimpleNamespace(catalog_table_constraints_apply=lambda value: seen.append(value) or expected)
 
-    def route(envelope, *, method_name):
+    def collect(value: ConstraintsApplyRequest) -> ConstraintSnapshot:
+        seen.append(value)
+        return expected
+
+    child = SimpleNamespace(catalog_table_constraints_apply=collect)
+
+    def route(envelope: bytes, *, method_name: str) -> SimpleNamespace:
         assert envelope == request.attach_opaque_data
         assert method_name == "catalog_table_constraints_apply"
         return child
@@ -241,7 +251,7 @@ def test_meta_worker_routes_canonical_apply_without_rewriting_attachment(monkeyp
     assert seen == [request]
 
 
-def test_storage_nullability_is_not_a_synthetic_sql_constraint():
+def test_storage_nullability_is_not_a_synthetic_sql_constraint() -> None:
     from vgi.catalog.constraints import validate_constraint_schema
 
     schema = pa.schema(

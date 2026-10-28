@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import io
 import re
+from typing import Protocol, TextIO
 
 import pyarrow as pa
 import pytest
@@ -14,8 +15,16 @@ from vgi.codegen import cpp_records, cpp_request_builders, cpp_schemas, cpp_secr
 from vgi.codegen._common import GeneratorError
 
 
+class _SchemaEmitter(Protocol):
+    """The common backend-aware schema generator interface."""
+
+    def emit(self, out: TextIO, *, backend: str) -> None:
+        """Render a native backend without relying on untyped module attributes."""
+        ...
+
+
 @pytest.mark.parametrize("module", [cpp_schemas, cpp_request_builders, cpp_secret_schemas, cpp_secret_request_builders])
-def test_nanoarrow_inventory_matches_arrow(module: object) -> None:
+def test_nanoarrow_inventory_matches_arrow(module: _SchemaEmitter) -> None:
     """Switching runtimes preserves every schema or builder, including secret RPCs."""
     outputs = []
     for backend in ("arrow", "nanoarrow"):

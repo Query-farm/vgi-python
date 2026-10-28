@@ -3,11 +3,16 @@
 
 """Mandatory macro families over signed HTTP with durable snapshot transactions."""
 
+from __future__ import annotations
+
 import base64
 import json
 import sqlite3
+from collections.abc import Sequence
 from contextlib import closing
 from dataclasses import replace
+from pathlib import Path
+from typing import Literal, overload
 
 import pyarrow as pa
 import pytest
@@ -15,6 +20,16 @@ from vgi_rpc.http._testing import _SyncTestClient
 
 from vgi.catalog import MacroInfo, MacroOverload, MacroParameter, MacroType, OnConflict, SchemaObjectType
 from vgi.catalog.capabilities import CatalogCapabilities
+from vgi.catalog.catalog_interface import (
+    AttachOpaqueData,
+    CatalogContentsResult,
+    FunctionInfo,
+    IndexInfo,
+    SchemaInfo,
+    TableInfo,
+    TransactionOpaqueData,
+    ViewInfo,
+)
 from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.layout import SqlExpression
 from vgi.catalog.macros import MACRO_DEFAULT_PROFILE, MACRO_PROFILE, canonicalize_macro_defaults
@@ -26,6 +41,7 @@ from vgi.typed_values import TypedValueBatch
 from vgi.worker import Worker
 
 from .schema_options_reference import SchemaOptionsCatalog
+from .typing_helpers import CatalogObjectArgs, present
 
 KEY = b"macro-contract-reference-signing-key"
 
@@ -34,35 +50,48 @@ class MacroCatalog(SchemaOptionsCatalog):
     profiles = CatalogCapabilities()
 
     @staticmethod
-    def _macro_key(path, name):
+    def _macro_key(path: list[str], name: str) -> str:
         return "macro:" + json.dumps([path, name])
 
-    def schemas(self, *, attach_opaque_data, transaction_opaque_data):
+    def schemas(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None
+    ) -> list[SchemaInfo]:
         with closing(sqlite3.connect(self.database_path)) as db:
             _, data = self._snapshot(db, attach_opaque_data, transaction_opaque_data)
             return [
                 self._decode(value, attach_opaque_data) for key, value in data.items() if not key.startswith("macro:")
             ]
 
-    def macro_create(self, **kwargs):
+    def macro_create(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        schema_path: list[str],
+        name: str,
+        macro_type: MacroType,
+        overloads: list[MacroOverload],
+        on_conflict: OnConflict,
+    ) -> None:
         with closing(sqlite3.connect(self.database_path)) as db, db:
             db.execute("BEGIN IMMEDIATE")
-            version, data = self._snapshot(db, kwargs["attach_opaque_data"], kwargs["transaction_opaque_data"])
-            key = self._macro_key(kwargs["schema_path"], kwargs["name"])
+            version, data = self._snapshot(db, attach_opaque_data, transaction_opaque_data)
+            key = self._macro_key(schema_path, name)
             if key in data:
-                if kwargs["on_conflict"] == OnConflict.IGNORE:
+                if on_conflict == OnConflict.IGNORE:
                     return
-                if kwargs["on_conflict"] != OnConflict.REPLACE:
+                if on_conflict != OnConflict.REPLACE:
                     raise ValueError("macro already exists")
-            for overload in kwargs["overloads"]:
+            for overload in overloads:
                 if overload.evaluation_context != QueryEvaluationContext():
                     raise ValueError("finite macro fixture requires default explicit context")
                 definitions = {"x + 1", "x + y"} if overload.macro_type == "scalar" else {"SELECT x AS value"}
                 if overload.definition not in definitions:
                     raise ValueError("finite macro fixture rejects unsupported definition")
 
-            def resolve(overload, parameter):
+            def resolve(overload: MacroOverload, parameter: MacroParameter) -> TypedValueBatch:
                 if parameter.default_expression is None:
+                    assert parameter.default_value is not None
                     if (
                         parameter.declared_type is not None
                         and parameter.default_value.schema.field(0).type != parameter.declared_type.field(0).type
@@ -76,48 +105,122 @@ class MacroCatalog(SchemaOptionsCatalog):
             candidate = MacroInfo(
                 comment=None,
                 tags={},
-                name=kwargs["name"],
-                schema_path=kwargs["schema_path"],
-                macro_type=kwargs["macro_type"],
-                overloads=canonicalize_macro_defaults(kwargs["overloads"], resolve),
+                name=name,
+                schema_path=schema_path,
+                macro_type=macro_type,
+                overloads=canonicalize_macro_defaults(overloads, resolve),
             )
             data[key] = base64.b64encode(candidate.serialize_to_bytes()).decode()
-            self._store(db, version + 1, data, kwargs["transaction_opaque_data"])
+            self._store(db, version + 1, data, transaction_opaque_data)
 
     @staticmethod
-    def _store(db, version, data, tx):
+    def _store(db: sqlite3.Connection, version: int, data: dict[str, str], tx: TransactionOpaqueData | None) -> None:
         if tx is None:
             db.execute("UPDATE catalog SET version=?, data=? WHERE id=1", (version, json.dumps(data)))
         else:
             db.execute("UPDATE transactions SET version=?, data=? WHERE id=?", (version, json.dumps(data), tx))
 
-    def macro_get(self, **kwargs):
+    def macro_get(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        schema_path: list[str],
+        name: str,
+    ) -> MacroInfo | None:
         with closing(sqlite3.connect(self.database_path)) as db:
-            _, data = self._snapshot(db, kwargs["attach_opaque_data"], kwargs["transaction_opaque_data"])
-            value = data.get(self._macro_key(kwargs["schema_path"], kwargs["name"]))
+            _, data = self._snapshot(db, attach_opaque_data, transaction_opaque_data)
+            value = data.get(self._macro_key(schema_path, name))
             return MacroInfo.deserialize_from_bytes(base64.b64decode(value)) if value is not None else None
 
-    def macro_drop(self, **kwargs):
+    def macro_drop(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        schema_path: list[str],
+        name: str,
+        ignore_not_found: bool,
+    ) -> None:
         with closing(sqlite3.connect(self.database_path)) as db, db:
             db.execute("BEGIN IMMEDIATE")
-            version, data = self._snapshot(db, kwargs["attach_opaque_data"], kwargs["transaction_opaque_data"])
-            key = self._macro_key(kwargs["schema_path"], kwargs["name"])
+            version, data = self._snapshot(db, attach_opaque_data, transaction_opaque_data)
+            key = self._macro_key(schema_path, name)
             if key not in data:
-                if kwargs["ignore_not_found"]:
+                if ignore_not_found:
                     return
                 raise ValueError("macro not found")
             del data[key]
-            self._store(db, version + 1, data, kwargs["transaction_opaque_data"])
+            self._store(db, version + 1, data, transaction_opaque_data)
 
-    def schema_contents(self, **kwargs):
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: list[str],
+        type: Literal[SchemaObjectType.TABLE],
+    ) -> list[TableInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: list[str],
+        type: Literal[SchemaObjectType.VIEW],
+    ) -> list[ViewInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: list[str],
+        type: Literal[
+            SchemaObjectType.SCALAR_FUNCTION, SchemaObjectType.TABLE_FUNCTION, SchemaObjectType.AGGREGATE_FUNCTION
+        ],
+    ) -> list[FunctionInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: list[str],
+        type: Literal[SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO],
+    ) -> list[MacroInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: list[str],
+        type: Literal[SchemaObjectType.INDEX],
+    ) -> list[IndexInfo]: ...
+
+    def schema_contents(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: list[str],
+        type: SchemaObjectType,
+    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo]:
         with closing(sqlite3.connect(self.database_path)) as db:
-            _, data = self._snapshot(db, kwargs["attach_opaque_data"], kwargs["transaction_opaque_data"])
+            _, data = self._snapshot(db, attach_opaque_data, transaction_opaque_data)
             return [
                 info
                 for key, value in data.items()
                 if key.startswith("macro:")
-                if (info := MacroInfo.deserialize_from_bytes(base64.b64decode(value))).schema_path == kwargs["path"]
-                and kwargs["type"]
+                if (info := MacroInfo.deserialize_from_bytes(base64.b64decode(value))).schema_path == path
+                and type
                 == (
                     SchemaObjectType.SCALAR_MACRO
                     if info.macro_type == MacroType.SCALAR
@@ -125,21 +228,23 @@ class MacroCatalog(SchemaOptionsCatalog):
                 )
             ]
 
-    def catalog_contents(self, **kwargs):
-        source = super().catalog_contents(**kwargs)
+    def catalog_contents(
+        self, *, attach_opaque_data: AttachOpaqueData, if_none_match: str | None = None
+    ) -> CatalogContentsResult:
+        source = super().catalog_contents(attach_opaque_data=attach_opaque_data, if_none_match=if_none_match)
         return replace(
             source,
             schemas=[
                 replace(
                     schema,
                     scalar_macros=self.schema_contents(
-                        attach_opaque_data=kwargs["attach_opaque_data"],
+                        attach_opaque_data=attach_opaque_data,
                         transaction_opaque_data=None,
                         path=schema.schema.path,
                         type=SchemaObjectType.SCALAR_MACRO,
                     ),
                     table_macros=self.schema_contents(
-                        attach_opaque_data=kwargs["attach_opaque_data"],
+                        attach_opaque_data=attach_opaque_data,
                         transaction_opaque_data=None,
                         path=schema.schema.path,
                         type=SchemaObjectType.TABLE_MACRO,
@@ -155,20 +260,20 @@ class MacroWorker(Worker):
 
 
 @pytest.fixture
-def backend(tmp_path, monkeypatch):
+def backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> MacroWorker:
     monkeypatch.setattr(MacroCatalog, "database_path", str(tmp_path / "macro.sqlite"), raising=False)
     worker = MacroWorker(quiet=True)
     worker._signing_key = KEY
     return worker
 
 
-def client():
+def client() -> Client:
     return Client.from_http(
         "http://vgi.test", httpx_client=_SyncTestClient(create_app(MacroWorker, describe=False, signing_key=KEY))
     )
 
 
-def family(*, expression=False, macro_type="scalar"):
+def family(*, expression: bool = False, macro_type: str = "scalar") -> list[MacroOverload]:
     parameter = MacroParameter(name="x")
     if expression:
         parameter = replace(
@@ -192,13 +297,13 @@ def family(*, expression=False, macro_type="scalar"):
     ]
 
 
-def attach(worker):
+def attach(worker: MacroWorker) -> AttachOpaqueData:
     return worker.catalog_attach(
         CatalogAttachRequest(name="options", data_version_spec=None, implementation_version=None)
     ).attach_opaque_data
 
 
-def create(worker, token, overloads=None):
+def create(worker: MacroWorker, token: AttachOpaqueData, overloads: list[MacroOverload] | None = None) -> None:
     worker.catalog_macro_create(
         MacroCreateRequest(
             attach_opaque_data=token,
@@ -212,7 +317,7 @@ def create(worker, token, overloads=None):
 
 
 @pytest.mark.parametrize("operation", ["get", "list", "contents"])
-def test_mandatory_family_read_requires_no_representation_offer(backend, operation):
+def test_mandatory_family_read_requires_no_representation_offer(backend: MacroWorker, operation: str) -> None:
     token = attach(backend)
     create(backend, token)
     if operation == "get":
@@ -225,14 +330,16 @@ def test_mandatory_family_read_requires_no_representation_offer(backend, operati
 
 
 @pytest.mark.parametrize("macro_type", [MacroType.SCALAR, MacroType.TABLE])
-def test_http_resolves_defaults_once_and_preserves_complete_family(backend, macro_type):
+def test_http_resolves_defaults_once_and_preserves_complete_family(backend: MacroWorker, macro_type: MacroType) -> None:
     with client() as c:
         token = c.catalog_attach(name="options", data_version_spec=None, implementation_version=None).attach_opaque_data
-        target = dict(attach_opaque_data=token, schema_path=["main"], name="m")
+        target: CatalogObjectArgs = dict(attach_opaque_data=token, schema_path=["main"], name="m")
         c.macro_create(**target, macro_type=macro_type, overloads=family(expression=True, macro_type=macro_type.value))
-        info = c.macro_get(**target)
+        info = present(c.macro_get(**target))
         parameter = info.overloads[0].parameters[0]
-        assert parameter.default_expression is None and parameter.default_value.batch.column(0)[0].as_py() == 42
+        assert (
+            parameter.default_expression is None and present(parameter.default_value).batch.column(0)[0].as_py() == 42
+        )
         listing = c.schema_contents(
             attach_opaque_data=token,
             path=["main"],
@@ -245,12 +352,12 @@ def test_http_resolves_defaults_once_and_preserves_complete_family(backend, macr
         assert c.macro_get(**target) == info
 
 
-def test_atomic_replacement_rollback_and_reconnect_use_persisted_records(backend):
+def test_atomic_replacement_rollback_and_reconnect_use_persisted_records(backend: MacroWorker) -> None:
     with client() as c:
         token = c.catalog_attach(name="options", data_version_spec=None, implementation_version=None).attach_opaque_data
-        target = dict(attach_opaque_data=token, schema_path=["main"], name="m")
+        target: CatalogObjectArgs = dict(attach_opaque_data=token, schema_path=["main"], name="m")
         c.macro_create(**target, macro_type=MacroType.SCALAR, overloads=family())
-        original = c.macro_get(**target)
+        original = present(c.macro_get(**target))
         second = replace(
             family()[0], parameters=[MacroParameter(name="x"), MacroParameter(name="y")], definition="x + y"
         )
@@ -263,10 +370,10 @@ def test_atomic_replacement_rollback_and_reconnect_use_persisted_records(backend
             overloads=complete,
             on_conflict=OnConflict.REPLACE,
         )
-        assert len(c.macro_get(**target, transaction_opaque_data=tx).overloads) == 2
+        assert len(present(c.macro_get(**target, transaction_opaque_data=present(tx))).overloads) == 2
         assert c.macro_get(**target) == original
     with client() as c:
-        c.catalog_transaction_rollback(attach_opaque_data=token, transaction_opaque_data=tx)
+        c.catalog_transaction_rollback(attach_opaque_data=token, transaction_opaque_data=present(tx))
         assert c.macro_get(**target) == original
         bad = replace(
             family(expression=True)[0],
@@ -274,7 +381,7 @@ def test_atomic_replacement_rollback_and_reconnect_use_persisted_records(backend
                 replace(
                     family(expression=True)[0].parameters[0],
                     default_expression=replace(
-                        family(expression=True)[0].parameters[0].default_expression, sql="random()"
+                        present(family(expression=True)[0].parameters[0].default_expression), sql="random()"
                     ),
                 )
             ],
@@ -293,14 +400,14 @@ def test_atomic_replacement_rollback_and_reconnect_use_persisted_records(backend
             overloads=complete,
             on_conflict=OnConflict.REPLACE,
         )
-        c.catalog_transaction_commit(attach_opaque_data=token, transaction_opaque_data=tx)
+        c.catalog_transaction_commit(attach_opaque_data=token, transaction_opaque_data=present(tx))
     with client() as c:
-        assert c.macro_get(**target).overloads == complete
+        assert present(c.macro_get(**target)).overloads == complete
         c.macro_drop(**target)
         assert c.macro_get(**target) is None
 
 
-def test_discovery_record_rejects_unresolved_default_expression():
+def test_discovery_record_rejects_unresolved_default_expression() -> None:
     with pytest.raises(ValueError, match="resolved at creation"):
         MacroInfo(
             comment=None,
@@ -312,19 +419,19 @@ def test_discovery_record_rejects_unresolved_default_expression():
         )
 
 
-def test_http_retains_typed_null_docs_and_rejects_unqualified_coercion(backend):
+def test_http_retains_typed_null_docs_and_rejects_unqualified_coercion(backend: MacroWorker) -> None:
     declared = pa.schema([pa.field("x", pa.int64(), metadata={b"type_note": b"retained"})])
     value = TypedValueBatch(pa.record_batch([pa.array([None], type=pa.int64())], schema=declared))
     parameter = MacroParameter(name="x", declared_type=declared, default_value=value, documentation="")
     member = replace(family()[0], parameters=[parameter])
     with client() as c:
         token = c.catalog_attach(name="options", data_version_spec=None, implementation_version=None).attach_opaque_data
-        target = dict(attach_opaque_data=token, schema_path=["main"], name="m")
+        target: CatalogObjectArgs = dict(attach_opaque_data=token, schema_path=["main"], name="m")
         c.macro_create(**target, macro_type=MacroType.SCALAR, overloads=[member])
-        original = c.macro_get(**target)
+        original = present(c.macro_get(**target))
         restored = original.overloads[0].parameters[0]
-        assert restored.declared_type.equals(declared, check_metadata=True)
-        assert restored.default_value.batch.equals(value.batch, check_metadata=True)
+        assert present(restored.declared_type).equals(declared, check_metadata=True)
+        assert present(restored.default_value).batch.equals(value.batch, check_metadata=True)
         assert restored.has_default and restored.documentation == ""
         bad = replace(parameter, declared_type=pa.schema([pa.field("x", pa.string())]))
         with pytest.raises(CatalogClientError, match="unsupported default coercion"):

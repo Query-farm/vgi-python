@@ -3,6 +3,9 @@
 
 """Mandatory column expressions preserve existing transaction promises."""
 
+from __future__ import annotations
+
+from collections.abc import Callable
 from dataclasses import replace
 
 import pyarrow as pa
@@ -10,17 +13,21 @@ import pytest
 
 from vgi.catalog import OnConflict, TableInfo
 from vgi.catalog.capabilities import CATALOG_DEPENDENCIES_READ, ROW_SCALAR_EXPRESSION, TRANSACTION_DDL
+from vgi.catalog.catalog_interface import AttachOpaqueData, SerializedSchema, TransactionOpaqueData
 from vgi.catalog.sql import ColumnExpressions, with_column_expressions
 from vgi.exceptions import CatalogCapabilityError
 from vgi.protocol import TableCreateRequest
 
-from .dependencies_reference import DEPENDENCY_PROFILES, DependencyCatalog
+from .dependencies_reference import DEPENDENCY_PROFILES, DependencyCatalog, DependencyWorker
 from .test_dependencies_protocol import OFFER, request
 from .test_dependencies_protocol import backend as backend
 from .test_dependency_alter_lifecycle import expression, generated, schema
+from .typing_helpers import CatalogColumnTransactionArgs, CatalogObjectTransactionArgs, present
 
 
-def create_request(token, columns, tx=None):
+def create_request(
+    token: AttachOpaqueData, columns: SerializedSchema, tx: TransactionOpaqueData | None = None
+) -> TableCreateRequest:
     return TableCreateRequest(
         attach_opaque_data=token,
         schema_path=["main"],
@@ -32,7 +39,7 @@ def create_request(token, columns, tx=None):
     )
 
 
-def limited_expression_token(backend, monkeypatch, mode):
+def limited_expression_token(backend: DependencyWorker, monkeypatch: pytest.MonkeyPatch, mode: str) -> AttachOpaqueData:
     profiles = replace(DEPENDENCY_PROFILES, read=[p for p in DEPENDENCY_PROFILES.read if p != ROW_SCALAR_EXPRESSION])
     token = backend.catalog_attach(request(replace(OFFER, catalog=profiles) if mode == "unselected" else OFFER))
     if mode == "withdrawn":
@@ -44,8 +51,8 @@ def limited_expression_token(backend, monkeypatch, mode):
 @pytest.mark.parametrize("operation", ["create", "add"])
 @pytest.mark.parametrize("nested", [False, True])
 def test_canonical_generated_representation_needs_no_expression_read_opt_in(
-    backend, monkeypatch, mode, operation, nested
-):
+    backend: DependencyWorker, monkeypatch: pytest.MonkeyPatch, mode: str, operation: str, nested: bool
+) -> None:
     token = limited_expression_token(backend, monkeypatch, mode)
     field = generated("computed", "id + 1")
     if nested:
@@ -62,23 +69,28 @@ def test_canonical_generated_representation_needs_no_expression_read_opt_in(
 
 
 @pytest.mark.parametrize("mode", ["unselected", "withdrawn"])
-def test_all_table_discovery_paths_preserve_generated_without_read_opt_in(backend, monkeypatch, mode):
+def test_all_table_discovery_paths_preserve_generated_without_read_opt_in(
+    backend: DependencyWorker, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
     full = backend.catalog_attach(request()).attach_opaque_data
     backend.catalog_table_create(
         create_request(full, schema(pa.field("id", pa.int64()), generated("computed", "id + 1")))
     )
     token = limited_expression_token(backend, monkeypatch, mode)
     before = backend.catalog_dependencies(token)
-    for read in [
+    reads: list[Callable[[], object]] = [
         lambda: backend.catalog_table_get(token, ["main"], "items"),
         lambda: backend.catalog_schema_contents_tables(token, ["main"]),
         lambda: backend.catalog_contents(token),
-    ]:
+    ]
+    for read in reads:
         read()
     assert backend.catalog_dependencies(token) == before
 
 
-def test_default_and_nested_expression_readback_is_mandatory_without_profile_negotiation(backend, monkeypatch):
+def test_default_and_nested_expression_readback_is_mandatory_without_profile_negotiation(
+    backend: DependencyWorker, monkeypatch: pytest.MonkeyPatch
+) -> None:
     field = with_column_expressions(pa.field("child", pa.int64()), ColumnExpressions(default=expression("42")))
     columns = schema(pa.field("parent", pa.struct([field])))
     info = TableInfo(name="items", schema_path=["main"], columns=columns, constraints=[], comment=None, tags={})
@@ -92,7 +104,9 @@ def test_default_and_nested_expression_readback_is_mandatory_without_profile_neg
 
 
 @pytest.mark.parametrize("mode", ["unselected", "omit_both", "withdrawn"])
-def test_dependency_mutations_require_selected_current_transaction_ddl_before_effects(backend, monkeypatch, mode):
+def test_dependency_mutations_require_selected_current_transaction_ddl_before_effects(
+    backend: DependencyWorker, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
     profiles = replace(
         DEPENDENCY_PROFILES,
         transaction=[],
@@ -100,12 +114,14 @@ def test_dependency_mutations_require_selected_current_transaction_ddl_before_ef
     )
     offer = OFFER if mode == "withdrawn" else replace(OFFER, catalog=profiles)
     token = backend.catalog_attach(request(offer)).attach_opaque_data
-    tx = backend.catalog_transaction_begin(token).transaction_opaque_data
+    tx = TransactionOpaqueData(present(backend.catalog_transaction_begin(token).transaction_opaque_data))
     if mode == "withdrawn":
         monkeypatch.setattr(DependencyCatalog, "profiles", profiles)
-    args = dict(attach_opaque_data=token, schema_path=["main"], name="items", transaction_opaque_data=tx)
-    column = dict(args, column_path=["id"])
-    methods = {
+    args: CatalogObjectTransactionArgs = dict(
+        attach_opaque_data=token, schema_path=["main"], name="items", transaction_opaque_data=tx
+    )
+    column: CatalogColumnTransactionArgs = {**args, "column_path": ["id"]}
+    methods: dict[str, Callable[[], object]] = {
         "schema_create": lambda: backend.catalog_schema_create(token, ["new"], transaction_opaque_data=tx),
         "schema_drop": lambda: backend.catalog_schema_drop(token, ["new"], transaction_opaque_data=tx),
         "table_create": lambda: backend.catalog_table_create(
@@ -144,11 +160,13 @@ def test_dependency_mutations_require_selected_current_transaction_ddl_before_ef
     backend.catalog_transaction_rollback(token, tx)
 
 
-def test_legacy_expression_metadata_rejects_but_plain_non_dependency_transactions_remain(backend, monkeypatch):
+def test_legacy_expression_metadata_rejects_but_plain_non_dependency_transactions_remain(
+    backend: DependencyWorker, monkeypatch: pytest.MonkeyPatch
+) -> None:
     profiles = replace(DEPENDENCY_PROFILES, read=[], transaction=[])
     monkeypatch.setattr(DependencyCatalog, "profiles", profiles)
     token = backend.catalog_attach(request(None)).attach_opaque_data
-    tx = backend.catalog_transaction_begin(token).transaction_opaque_data
+    tx = TransactionOpaqueData(present(backend.catalog_transaction_begin(token).transaction_opaque_data))
     calls = []
     monkeypatch.setattr(backend._get_catalog(), "table_create", lambda **kwargs: calls.append(kwargs))
     legacy = schema(pa.field("id", pa.int64(), metadata={b"default": b"42"}))
@@ -162,7 +180,9 @@ def test_legacy_expression_metadata_rejects_but_plain_non_dependency_transaction
 
 
 @pytest.mark.parametrize("operation", ["create", "add"])
-def test_canonical_expression_ddl_requires_transaction_profile_without_graph_profile(backend, monkeypatch, operation):
+def test_canonical_expression_ddl_requires_transaction_profile_without_graph_profile(
+    backend: DependencyWorker, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
     profiles = replace(
         DEPENDENCY_PROFILES,
         read=[p for p in DEPENDENCY_PROFILES.read if p != CATALOG_DEPENDENCIES_READ],
@@ -170,7 +190,7 @@ def test_canonical_expression_ddl_requires_transaction_profile_without_graph_pro
     )
     monkeypatch.setattr(DependencyCatalog, "profiles", profiles)
     token = backend.catalog_attach(request(replace(OFFER, catalog=profiles))).attach_opaque_data
-    tx = backend.catalog_transaction_begin(token).transaction_opaque_data
+    tx = TransactionOpaqueData(present(backend.catalog_transaction_begin(token).transaction_opaque_data))
     calls = []
     monkeypatch.setattr(backend._get_catalog(), "table_create", lambda **kwargs: calls.append(kwargs))
     monkeypatch.setattr(backend._get_catalog(), "table_column_add", lambda **kwargs: calls.append(kwargs))

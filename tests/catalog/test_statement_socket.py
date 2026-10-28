@@ -2,6 +2,8 @@
 # ruff: noqa: D103
 """Run the bounded statement example in a separate process over real HTTP."""
 
+from __future__ import annotations
+
 import os
 import selectors
 import subprocess
@@ -14,7 +16,7 @@ from .statement_reference import CREATE, DROP, INSERT, SELECT, UPDATE
 from .test_statement_protocol import attach, begin, execute, finish, parameters, table, version
 
 
-def test_statement_example_over_socket_http(tmp_path):
+def test_statement_example_over_socket_http(tmp_path: Path) -> None:
     env = os.environ | {"VGI_STATEMENT_REFERENCE_DIR": str(tmp_path / "provider")}
     with (tmp_path / "provider.log").open("wb") as log:
         server = subprocess.Popen(

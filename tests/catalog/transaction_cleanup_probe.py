@@ -55,7 +55,8 @@ from vgi.invocation import BindResponse, GlobalInitResponse
 from vgi.table_function import BindParams, InitParams, ProcessParams, TableFunctionGenerator
 from vgi.worker import Worker
 
-_ROWS = pa.schema([("id", pa.int64()), ("label", pa.string())])
+_ROW_FIELDS: list[pa.Field[Any]] = [pa.field("id", pa.int64()), pa.field("label", pa.string())]
+_ROWS = pa.schema(_ROW_FIELDS)
 
 
 def _root() -> Path:
@@ -108,7 +109,7 @@ def _active(root: Path, attach: bytes, token: bytes | None) -> dict[str, Any]:
     path = root / f"active-{token.hex()}.json"
     if not path.exists():
         raise ValueError("transaction_cleanup_probe: transaction is not active")
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
     if data["attach"] != attach.hex():
         raise ValueError("transaction_cleanup_probe: transaction belongs to another attachment")
     return data

@@ -3,8 +3,11 @@
 
 """Semantic proofs for canonical constraints, without advertising public RPCs."""
 
+from __future__ import annotations
+
 from dataclasses import replace
 from pathlib import Path
+from typing import Any, cast
 
 import duckdb
 import pyarrow as pa
@@ -15,6 +18,7 @@ from vgi.catalog.constraints import (
     ConstraintChange,
     ConstraintDefinition,
     ConstraintEnforcement,
+    ConstraintInfo,
     ConstraintKind,
     ConstraintOperation,
     ConstraintsApplyRequest,
@@ -29,9 +33,15 @@ from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.sql import SqlExpression
 
 from .constraints_reference import ConstraintCatalog
+from .typing_helpers import present
 
 ATTACH = b"constraint-owner"
-COLUMNS = pa.schema([pa.field("id", pa.int64()), pa.field("other", pa.int64()), pa.field("label", pa.string())])
+COLUMNS = pa.schema(
+    cast(
+        "list[pa.Field[Any]]",
+        [pa.field("id", pa.int64()), pa.field("other", pa.int64()), pa.field("label", pa.string())],
+    )
+)
 
 
 @pytest.fixture
@@ -67,7 +77,7 @@ def foreign_key(parent: CatalogObjectRef, local: list[str], remote: list[str]) -
     )
 
 
-def add(item: ConstraintDefinition, **kwargs) -> ConstraintChange:
+def add(item: ConstraintDefinition, **kwargs: Any) -> ConstraintChange:
     return ConstraintChange(
         operation=ConstraintOperation.ADD,
         definition=item,
@@ -76,7 +86,13 @@ def add(item: ConstraintDefinition, **kwargs) -> ConstraintChange:
     )
 
 
-def mutate(catalog: ConstraintCatalog, target: CatalogObjectRef, *changes: ConstraintChange, tx=None, revision=None):
+def mutate(
+    catalog: ConstraintCatalog,
+    target: CatalogObjectRef,
+    *changes: ConstraintChange,
+    tx: bytes | None = None,
+    revision: bytes | None = None,
+) -> ConstraintSnapshot:
     return catalog.apply(
         ConstraintsApplyRequest(
             attach_opaque_data=ATTACH,
@@ -88,7 +104,9 @@ def mutate(catalog: ConstraintCatalog, target: CatalogObjectRef, *changes: Const
     )
 
 
-def write(catalog: ConstraintCatalog, target: CatalogObjectRef, rows: list[dict], *, tx=None) -> None:
+def write(
+    catalog: ConstraintCatalog, target: CatalogObjectRef, rows: list[dict[str, Any]], *, tx: bytes | None = None
+) -> None:
     catalog.replace_rows(ATTACH, target, pa.Table.from_pylist(rows, schema=catalog.columns(ATTACH, target, tx)), tx=tx)
 
 
@@ -113,7 +131,12 @@ def test_canonical_create_readback_survives_restart_and_ipc(catalog: ConstraintC
 def test_unique_composite_null_semantics_and_atomic_batch_failure(catalog: ConstraintCatalog) -> None:
     target = table()
     catalog.create(ATTACH, target, COLUMNS, [definition(ConstraintKind.UNIQUE, "id", "other")])
-    accepted = [{"id": 1, "other": None}, {"id": 1, "other": None}, {"id": None, "other": 2}, {"id": 1, "other": 2}]
+    accepted: list[dict[str, Any]] = [
+        {"id": 1, "other": None},
+        {"id": 1, "other": None},
+        {"id": None, "other": 2},
+        {"id": 1, "other": 2},
+    ]
     write(catalog, target, accepted)
     before, version = catalog.rows(ATTACH, target), catalog.version(ATTACH)
     with pytest.raises(ValueError, match="UNIQUE"):
@@ -222,7 +245,7 @@ def test_atomic_apply_stale_revisions_and_stable_label_identity(catalog: Constra
     assert unchanged == renamed and catalog.version(ATTACH) == version
 
 
-def seed_fk(catalog: ConstraintCatalog):
+def seed_fk(catalog: ConstraintCatalog) -> tuple[CatalogObjectRef, CatalogObjectRef, ConstraintInfo, ConstraintInfo]:
     parent, child = table("parent"), table("child")
     parent_info = catalog.create(ATTACH, parent, COLUMNS, [definition(ConstraintKind.UNIQUE, "id", "other")])
     write(catalog, parent, [{"id": 1, "other": 2}])
@@ -273,7 +296,7 @@ def test_explicit_fk_target_change_rejects_without_retaining_a_misleading_bindin
         )
     assert catalog.get(ATTACH, child) == before
     assert before.constraint_infos()[0].referenced_constraint == key.ref
-    assert before.constraint_infos()[0].definition.foreign_key.referenced_table == parent
+    assert present(before.constraint_infos()[0].definition.foreign_key).referenced_table == parent
 
 
 def test_drop_self_referencing_table_removes_its_owned_fk_under_restrict(catalog: ConstraintCatalog) -> None:
@@ -326,7 +349,7 @@ def test_table_rename_rewrites_fk_coordinates_and_recreate_uses_new_keys(catalog
     assert renamed.constraint_infos()[0].ref.owner_table == "renamed"
     child_fk = catalog.get(ATTACH, child).constraint_infos()[0]
     assert child_fk.referenced_constraint == renamed.constraint_infos()[0].ref
-    assert child_fk.definition.foreign_key.referenced_table == new_parent
+    assert present(child_fk.definition.foreign_key).referenced_table == new_parent
     write(catalog, child, [{"id": 1, "other": 2}])
     with pytest.raises(ValueError, match="dependent foreign keys"):
         catalog.drop_table(ATTACH, new_parent)
@@ -367,7 +390,9 @@ def test_rollback_commit_reconnect_and_transaction_conflicts(catalog: Constraint
     assert persisted.rows(ATTACH, target).column("id").to_pylist() == [7]
 
 
-def test_failed_statement_and_post_write_fault_preserve_prior_state(catalog: ConstraintCatalog, monkeypatch) -> None:
+def test_failed_statement_and_post_write_fault_preserve_prior_state(
+    catalog: ConstraintCatalog, monkeypatch: pytest.MonkeyPatch
+) -> None:
     target = table()
     catalog.create(ATTACH, target, COLUMNS, [definition(ConstraintKind.UNIQUE, "id")])
     tx = catalog.begin(ATTACH)
@@ -377,7 +402,7 @@ def test_failed_statement_and_post_write_fault_preserve_prior_state(catalog: Con
     catalog.commit(ATTACH, tx)
     before, version = catalog.get(ATTACH, target), catalog.version(ATTACH)
 
-    def fail():
+    def fail() -> None:
         raise RuntimeError("injected after SQLite write")
 
     monkeypatch.setattr(catalog, "_after_write", fail)

@@ -6,6 +6,8 @@ Set VGI_METADATA_WORKERS to a JSON object mapping SDK names to worker argv lists
 The workers must expose the ordinary mutable ``contents_reval`` test catalog.
 """
 
+from __future__ import annotations
+
 import json
 import os
 from dataclasses import replace
@@ -24,6 +26,8 @@ from vgi.catalog.query import (
 from vgi.client import Client
 from vgi.protocol import ClientCapabilities
 from vgi.query_parameters import QueryParameters
+
+from .typing_helpers import CatalogObjectArgs, CatalogSchemaArgs, present
 
 WORKERS: dict[str, list[str]] = json.loads(os.environ.get("VGI_METADATA_WORKERS", "{}"))
 
@@ -75,7 +79,7 @@ def test_view_metadata_lifecycle_over_public_rpc(sdk: str) -> None:
             data_version_spec=None,
             implementation_version=None,
         ).attach_opaque_data
-        target = dict(attach_opaque_data=token, schema_path=["main"], name="view.with.dot")
+        target: CatalogObjectArgs = dict(attach_opaque_data=token, schema_path=["main"], name="view.with.dot")
         client.view_create(
             **target,
             definition="SELECT 1 AS x, 2 AS y",
@@ -86,10 +90,10 @@ def test_view_metadata_lifecycle_over_public_rpc(sdk: str) -> None:
         )
         original = client.view_get(**target)
         original_version = client.catalog_version(attach_opaque_data=token)
-        assert original.comment == ""
-        assert original.tags == {"owner": "one", "empty": ""}
-        assert original.column_comments == {"a.b": "", 'with"quote': "kept"}
-        assert original.aliases == ["a.b", 'with"quote'] and original.security == "regular"
+        assert present(original).comment == ""
+        assert present(original).tags == {"owner": "one", "empty": ""}
+        assert present(original).column_comments == {"a.b": "", 'with"quote': "kept"}
+        assert present(original).aliases == ["a.b", 'with"quote'] and present(original).security == "regular"
         assert client.schema_contents(attach_opaque_data=token, path=["main"], type=SchemaObjectType.VIEW) == [original]
         client.view_create(**target, definition="SELECT 9", on_conflict=OnConflict.IGNORE, comment="ignored")
         assert client.view_get(**target) == original
@@ -108,11 +112,15 @@ def test_view_metadata_lifecycle_over_public_rpc(sdk: str) -> None:
         client.view_column_comment_set(**target, column_path=["a.b"], comment=None)
         client.view_column_comment_set(**target, column_path=['with"quote'], comment="")
         client.view_comment_set(**target, comment=None)
-        assert client.view_get(**target) == replace(original, comment=None, column_comments={'with"quote': ""})
+        assert client.view_get(**target) == replace(present(original), comment=None, column_comments={'with"quote': ""})
         client.view_create(**target, definition="SELECT 3 AS z", on_conflict=OnConflict.REPLACE)
         replaced = client.view_get(**target)
-        assert replaced.comment is None and replaced.tags == {} and replaced.column_comments == {}
-        assert replaced.aliases == []
+        assert (
+            present(replaced).comment is None
+            and present(replaced).tags == {}
+            and present(replaced).column_comments == {}
+        )
+        assert present(replaced).aliases == []
         client.view_drop(**target)
         client.view_column_comment_set(**target, column_path=["a.b"], comment="unused", ignore_not_found=True)
         with pytest.raises(Exception, match="not found|does not exist"):
@@ -125,19 +133,19 @@ def test_schema_creation_metadata_over_public_rpc(sdk: str) -> None:
         token = client.catalog_attach(
             name="contents_reval", data_version_spec=None, implementation_version=None
         ).attach_opaque_data
-        target = dict(attach_opaque_data=token, path=["a.b"])
+        target: CatalogSchemaArgs = dict(attach_opaque_data=token, path=["a.b"])
         tags = {"owner": "one", "empty": "", "__proto__": "literal", "a.b": "quoted"}
         initial_version = client.catalog_version(attach_opaque_data=token)
         client.schema_create(**target, comment="", tags=tags)
         original = client.schema_get(**target)
-        assert original.comment == "" and original.tags == tags
+        assert present(original).comment == "" and present(original).tags == tags
         assert client.catalog_version(attach_opaque_data=token) > initial_version
         client.schema_create(attach_opaque_data=token, path=["a"], comment="parent")
         client.schema_create(attach_opaque_data=token, path=["a", "b"], comment="nested", tags={"owner": "two"})
-        assert client.schema_get(attach_opaque_data=token, path=["a", "b"]).comment == "nested"
+        assert present(client.schema_get(attach_opaque_data=token, path=["a", "b"])).comment == "nested"
         assert client.schema_get(**target) == original
         listed = next(s for s in client.schemas(attach_opaque_data=token) if s.path == ["a.b"])
-        assert replace(listed, estimated_object_count=original.estimated_object_count) == original
+        assert replace(listed, estimated_object_count=present(original).estimated_object_count) == original
         snapshot = client.contents(attach_opaque_data=token)
         cached = next(s.schema for s in snapshot.schemas if s.schema.path == ["a.b"])
         assert replace(cached, estimated_object_count=original.estimated_object_count) == original
@@ -151,18 +159,18 @@ def test_schema_creation_metadata_over_public_rpc(sdk: str) -> None:
         assert client.catalog_version(attach_opaque_data=token) == version
         client.schema_create(**target, on_conflict=OnConflict.REPLACE)
         replacement = client.schema_get(**target)
-        assert replacement.comment is None and replacement.tags == {}
+        assert present(replacement).comment is None and present(replacement).tags == {}
         assert client.catalog_version(attach_opaque_data=token) > version
-        assert client.schema_get(attach_opaque_data=token, path=["a", "b"]).tags == {"owner": "two"}
+        assert present(client.schema_get(attach_opaque_data=token, path=["a", "b"])).tags == {"owner": "two"}
         client.schema_create(**target, on_conflict=OnConflict.REPLACE, comment="reset", tags=tags)
         replacement = client.schema_get(**target)
-        assert replacement.comment == "reset" and replacement.tags == tags
+        assert present(replacement).comment == "reset" and present(replacement).tags == tags
         snapshot = client.contents(attach_opaque_data=token)
         cached = next(s.schema for s in snapshot.schemas if s.schema.path == ["a.b"])
-        assert replace(cached, estimated_object_count=replacement.estimated_object_count) == replacement
+        assert replace(cached, estimated_object_count=present(replacement).estimated_object_count) == replacement
         client.schema_drop(**target)
         assert client.schema_get(**target) is None
-        assert client.schema_get(attach_opaque_data=token, path=["a", "b"]).comment == "nested"
+        assert present(client.schema_get(attach_opaque_data=token, path=["a", "b"])).comment == "nested"
 
 
 @pytest.mark.parametrize("sdk", sorted(WORKERS))
@@ -184,7 +192,7 @@ def test_unqualified_provider_rejects_schema_metadata_mutation(sdk: str) -> None
             attached.selected_capabilities is None
             or SCHEMA_METADATA_ALTER not in attached.selected_capabilities.names()
         )
-        target = dict(attach_opaque_data=token, path=["main"])
+        target: CatalogSchemaArgs = dict(attach_opaque_data=token, path=["main"])
         before = client.schema_get(**target)
         version = client.catalog_version(attach_opaque_data=token)
         with pytest.raises(

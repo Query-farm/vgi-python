@@ -3,6 +3,8 @@
 
 """Absent catalog defaults survive real attachment and qualified discovery."""
 
+from __future__ import annotations
+
 import json
 from typing import Any
 
@@ -12,6 +14,7 @@ from vgi_rpc.http._testing import _SyncTestClient
 
 from vgi.arguments import Arguments
 from vgi.catalog import Catalog, CatalogAttachResult, ReadOnlyCatalogInterface, Schema, SchemaObjectType, View
+from vgi.catalog.catalog_interface import AttachOpaqueData
 from vgi.client import Client
 from vgi.client.cli_utils import catalog_attach_result_to_dict
 from vgi.invocation import FunctionType
@@ -25,7 +28,7 @@ KEY = b"nullable-default-schema-signing-key"
 
 def attach_result(**kwargs: Any) -> CatalogAttachResult:
     return CatalogAttachResult(
-        attach_opaque_data=b"attachment",
+        attach_opaque_data=AttachOpaqueData(b"attachment"),
         supports_transactions=False,
         supports_time_travel=False,
         catalog_version_frozen=True,

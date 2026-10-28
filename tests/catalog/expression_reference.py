@@ -130,7 +130,9 @@ def _primitive(dtype: pa.DataType) -> bool:
     )
 
 
-def evaluate_expression(expr: SqlExpression, table: pa.Table, owner_path: list[str], *, role: str) -> pa.ChunkedArray:
+def evaluate_expression(
+    expr: SqlExpression, table: pa.Table, owner_path: list[str], *, role: str
+) -> pa.ChunkedArray[Any]:
     """Evaluate a qualified row expression without erasing CHECK's NULL values."""
     table.validate(full=True)
     for field in table.schema:

@@ -3,9 +3,11 @@
 
 """Real RPC column-path edits, data rewrites, rollback, and capability guards."""
 
+from __future__ import annotations
+
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pyarrow as pa
 import pytest
@@ -21,6 +23,7 @@ from vgi.catalog.capabilities import (
     TRANSACTION_DDL,
     CatalogCapabilities,
 )
+from vgi.catalog.catalog_interface import AttachOpaqueData, SerializedSchema
 from vgi.catalog.constraints import (
     ConstraintChange,
     ConstraintDefinition,
@@ -39,10 +42,11 @@ from vgi.client.catalog_mixin import CatalogClientError
 from vgi.column_path import column_definition, replace_column_field
 from vgi.exceptions import CatalogCapabilityError
 from vgi.meta_worker import MetaWorker
-from vgi.protocol import CatalogAttachRequest, ClientCapabilities
+from vgi.protocol import CatalogAttachRequest, ClientCapabilities, VgiProtocol
 from vgi.serve import create_app
 
 from .column_paths_reference import COLUMN_PROFILES, ColumnPathsCatalog, ColumnPathsWorker
+from .typing_helpers import present
 
 KEY = b"column-path-reference-signing-key"
 OFFER = ClientCapabilities(
@@ -60,7 +64,7 @@ SCHEMA = pa.schema(
     ],
     metadata={b"table": b"retained"},
 )
-ROWS = [
+ROWS: list[dict[str, Any]] = [
     {"id": 1, "a.b": 7, "a": {"b": 2, "keep": "k"}},
     {"id": 2, "a.b": 8, "a": None},
     {"id": 3, "a.b": 9, "a": {"b": None, "keep": "z"}},
@@ -116,7 +120,7 @@ def default_field(name: str, sql: str, **kwargs: Any) -> bytes:
 
 
 def info(c: Client, token: bytes, tx: bytes | None = None) -> pa.Schema:
-    return pa.ipc.read_schema(pa.BufferReader(c.table_get(**args(token, tx)).columns))
+    return pa.ipc.read_schema(pa.py_buffer(present(c.table_get(**args(token, tx))).columns))
 
 
 def seed(worker: ColumnPathsWorker, token: bytes, rows: list[dict[str, Any]]) -> None:
@@ -134,7 +138,7 @@ def setup(c: Client, backend: ColumnPathsWorker) -> bytes:
     token = attach(c)
     c.table_create(
         **args(token),
-        columns=SCHEMA.serialize().to_pybytes(),
+        columns=SerializedSchema(SCHEMA.serialize().to_pybytes()),
         constraint_definitions=[
             ConstraintDefinition(kind=ConstraintKind.NOT_NULL, column_paths=[["id"]]).serialize_to_bytes()
         ],
@@ -149,7 +153,9 @@ def test_nested_add_default_comment_and_nullability(backend: ColumnPathsWorker) 
         c.table_column_add(
             **args(token),
             column_path=["a", "x.y"],
-            column_definition=default_field("x.y", "9", metadata={b"comment": b"created", b"tags": b'{"team":"one"}'}),
+            column_definition=SerializedSchema(
+                default_field("x.y", "9", metadata={b"comment": b"created", b"tags": b'{"team":"one"}'})
+            ),
         )
         assert [row["a"] for row in rows(backend, token)] == [
             {"b": 2, "keep": "k", "x.y": 9},
@@ -184,12 +190,12 @@ def test_constraint_identity_and_revision_survive_rename_and_noop(backend: Colum
         original = c.table_get(**args(token))
         c.table_not_null_set(**args(token), column_path=["id"])
         unchanged = c.table_get(**args(token))
-        assert unchanged.definition_revision == original.definition_revision
+        assert present(unchanged).definition_revision == present(original).definition_revision
         c.table_column_rename(**args(token), column_path=["id"], new_column_name="renamed.id")
         renamed = c.table_get(**args(token))
-        assert renamed.definition_revision != original.definition_revision
-        assert renamed.constraint_infos()[0].ref == original.constraint_infos()[0].ref
-        assert renamed.constraint_infos()[0].definition.column_paths == [["renamed.id"]]
+        assert present(renamed).definition_revision != present(original).definition_revision
+        assert present(renamed).constraint_infos()[0].ref == present(original).constraint_infos()[0].ref
+        assert present(renamed).constraint_infos()[0].definition.column_paths == [["renamed.id"]]
 
 
 def test_type_using_rename_and_drop_keep_literal_dotted_column_distinct(backend: ColumnPathsWorker) -> None:
@@ -198,7 +204,7 @@ def test_type_using_rename_and_drop_keep_literal_dotted_column_distinct(backend:
         c.table_column_type_change(
             **args(token),
             column_path=["a", "b"],
-            column_definition=field("b", pa.float64()),
+            column_definition=SerializedSchema(field("b", pa.float64())),
             expression=expression('"a"."b" + 0.5'),
         )
         assert rows(backend, token)[0]["a"]["b"] == 2.5
@@ -216,7 +222,11 @@ def test_type_using_rename_and_drop_keep_literal_dotted_column_distinct(backend:
 def test_existing_nulls_and_failed_cast_do_not_change_data_or_version(backend: ColumnPathsWorker) -> None:
     with client() as c:
         token = setup(c, backend)
-        original, schema, version = rows(backend, token), info(c, token), c.catalog_version(attach_opaque_data=token)
+        original, schema, version = (
+            rows(backend, token),
+            info(c, token),
+            c.catalog_version(attach_opaque_data=AttachOpaqueData(token)),
+        )
         with pytest.raises(ValueError, match="NOT NULL"):
             backend.catalog_table_not_null_set(**args(token), column_path=["a", "b"])
         with pytest.raises((ValueError, pa.ArrowInvalid), match="range|convert|truncate"):
@@ -227,7 +237,7 @@ def test_existing_nulls_and_failed_cast_do_not_change_data_or_version(backend: C
                 expression=expression("1000").serialize_to_bytes(),
             )
         assert rows(backend, token) == original and info(c, token).equals(schema, check_metadata=True)
-        assert c.catalog_version(attach_opaque_data=token) == version
+        assert c.catalog_version(attach_opaque_data=AttachOpaqueData(token)) == version
 
 
 def test_metadata_edits_preserve_existing_future_write_partitions(backend: ColumnPathsWorker) -> None:
@@ -264,25 +274,29 @@ def test_metadata_edits_preserve_existing_future_write_partitions(backend: Colum
 def test_transactional_column_edits_rollback_reconnect_and_conflict(backend: ColumnPathsWorker) -> None:
     with client() as c:
         token = setup(c, backend)
-        tx = c.catalog_transaction_begin(attach_opaque_data=token)
+        tx = c.catalog_transaction_begin(attach_opaque_data=AttachOpaqueData(token))
         c.table_column_rename(**args(token, tx), column_path=["a", "b"], new_column_name="changed")
-        c.table_column_add(**args(token, tx), column_path=["new"], column_definition=default_field("new", "42"))
+        c.table_column_add(
+            **args(token, tx), column_path=["new"], column_definition=SerializedSchema(default_field("new", "42"))
+        )
         assert rows(backend, token, tx)[0]["new"] == 42
         assert "new" not in rows(backend, token)[0]
     with client() as c:
-        c.catalog_transaction_rollback(attach_opaque_data=token, transaction_opaque_data=tx)
+        c.catalog_transaction_rollback(attach_opaque_data=AttachOpaqueData(token), transaction_opaque_data=present(tx))
         assert info(c, token).equals(SCHEMA, check_metadata=True)
-        first = c.catalog_transaction_begin(attach_opaque_data=token)
-        second = c.catalog_transaction_begin(attach_opaque_data=token)
+        first = c.catalog_transaction_begin(attach_opaque_data=AttachOpaqueData(token))
+        second = c.catalog_transaction_begin(attach_opaque_data=AttachOpaqueData(token))
         c.table_column_rename(**args(token, first), column_path=["a.b"], new_column_name="renamed.literal")
         c.table_column_drop(**args(token, second), column_path=["a", "b"])
     with client() as c:
-        c.catalog_transaction_commit(attach_opaque_data=token, transaction_opaque_data=first)
+        c.catalog_transaction_commit(attach_opaque_data=AttachOpaqueData(token), transaction_opaque_data=present(first))
         with pytest.raises(ValueError, match="conflict"):
-            backend.catalog_transaction_commit(token, second)
+            backend.catalog_transaction_commit(token, present(second))
         assert rows(backend, token)[0]["renamed.literal"] == 7
         assert rows(backend, token)[0]["a"]["b"] == 2
-        c.catalog_transaction_rollback(attach_opaque_data=token, transaction_opaque_data=second)
+        c.catalog_transaction_rollback(
+            attach_opaque_data=AttachOpaqueData(token), transaction_opaque_data=present(second)
+        )
 
 
 def test_capability_absence_downgrade_and_transaction_guarantee(
@@ -307,10 +321,12 @@ def test_capability_absence_downgrade_and_transaction_guarantee(
         # Flat edits need no nested profile but must preserve canonical constraints.
         c.table_column_rename(**args(old), column_path=["a.b"], new_column_name="literal")
         limited = attach(c, replace(OFFER, catalog=replace(COLUMN_PROFILES, transaction=[])))
-        tx = c.catalog_transaction_begin(attach_opaque_data=limited)
+        tx = c.catalog_transaction_begin(attach_opaque_data=AttachOpaqueData(limited))
         with pytest.raises(CatalogCapabilityError, match=TRANSACTION_DDL):
             backend.catalog_table_column_rename(**args(limited, tx), column_path=["a", "b"], new_column_name="other")
-        c.catalog_transaction_rollback(attach_opaque_data=limited, transaction_opaque_data=tx)
+        c.catalog_transaction_rollback(
+            attach_opaque_data=AttachOpaqueData(limited), transaction_opaque_data=present(tx)
+        )
         monkeypatch.setattr(
             backend._get_catalog(),
             "profiles",
@@ -324,17 +340,20 @@ def test_capability_absence_downgrade_and_transaction_guarantee(
 def test_missing_target_flags_and_parent_validation(backend: ColumnPathsWorker) -> None:
     with client() as c:
         token = setup(c, backend)
-        version = c.catalog_version(attach_opaque_data=token)
+        version = c.catalog_version(attach_opaque_data=AttachOpaqueData(token))
         c.table_column_add(
-            **args(token), column_path=["a", "b"], column_definition=field("b"), if_column_not_exists=True
+            **args(token),
+            column_path=["a", "b"],
+            column_definition=SerializedSchema(field("b")),
+            if_column_not_exists=True,
         )
         c.table_column_drop(**args(token), column_path=["a", "absent"], if_column_exists=True)
-        assert c.catalog_version(attach_opaque_data=token) == version
+        assert c.catalog_version(attach_opaque_data=AttachOpaqueData(token)) == version
         with pytest.raises(ValueError, match="non-struct"):
             backend.catalog_table_column_add(**args(token), column_path=["a.b", "bad"], column_definition=field("bad"))
         with pytest.raises(ValueError, match="already exists"):
             backend.catalog_table_column_rename(**args(token), column_path=["a", "b"], new_column_name="keep")
-        assert c.catalog_version(attach_opaque_data=token) == version
+        assert c.catalog_version(attach_opaque_data=AttachOpaqueData(token)) == version
 
 
 def test_meta_worker_routes_path_without_rendering_it(backend: ColumnPathsWorker) -> None:
@@ -346,9 +365,10 @@ def test_meta_worker_routes_path_without_rendering_it(backend: ColumnPathsWorker
             name="columns", data_version_spec=None, implementation_version=None, client_capabilities=OFFER
         )
     ).attach_opaque_data
-    meta.catalog_table_column_comment_set(**args(token), column_path=["a", "b"], comment="nested only")
-    schema = pa.ipc.read_schema(pa.BufferReader(meta.catalog_table_get(**args(token)).to_optional().columns))
-    assert b"comment" not in schema.field("a.b").metadata
+    proxy = cast(VgiProtocol, meta)
+    proxy.catalog_table_column_comment_set(**args(token), column_path=["a", "b"], comment="nested only")
+    schema = pa.ipc.read_schema(pa.py_buffer(present(proxy.catalog_table_get(**args(token)).to_optional()).columns))
+    assert b"comment" not in (schema.field("a.b").metadata or {})
     assert schema.field("a").type.field("b").metadata[b"comment"] == b"nested only"
 
 
@@ -370,7 +390,7 @@ def test_definition_validation_and_last_field_guard() -> None:
 def test_mandatory_defaults_and_using_without_new_capabilities(backend: ColumnPathsWorker) -> None:
     with client() as c:
         token = attach(c, None)
-        c.table_create(**args(token), columns=default_field("temperature", "250"))
+        c.table_create(**args(token), columns=SerializedSchema(default_field("temperature", "250")))
         seed(backend, token, [{}, {"temperature": None}, {"temperature": 310}])
         assert rows(backend, token) == [{"temperature": 250}, {"temperature": None}, {"temperature": 310}]
         assert column_expressions(info(c, token).field("temperature")).default == expression("250")
@@ -378,12 +398,14 @@ def test_mandatory_defaults_and_using_without_new_capabilities(backend: ColumnPa
         seed(backend, token, [{}])
         assert rows(backend, token)[-1] == {"temperature": None}
         c.table_column_type_change(
-            **args(token), column_path=["temperature"], column_definition=field("temperature", pa.int64())
+            **args(token),
+            column_path=["temperature"],
+            column_definition=SerializedSchema(field("temperature", pa.int64())),
         )
         c.table_column_type_change(
             **args(token),
             column_path=["temperature"],
-            column_definition=field("temperature", pa.float64()),
+            column_definition=SerializedSchema(field("temperature", pa.float64())),
             expression=expression("temperature / 10.0"),
         )
         assert rows(backend, token) == [
@@ -392,14 +414,16 @@ def test_mandatory_defaults_and_using_without_new_capabilities(backend: ColumnPa
             {"temperature": 31.0},
             {"temperature": None},
         ]
-        c.table_column_add(**args(token), column_path=["added"], column_definition=default_field("added", "7"))
+        c.table_column_add(
+            **args(token), column_path=["added"], column_definition=SerializedSchema(default_field("added", "7"))
+        )
         assert all(row["added"] == 7 for row in rows(backend, token))
         before = c.table_get(**args(token))
         with pytest.raises(CatalogClientError, match="range|convert|truncate"):
             c.table_column_type_change(
                 **args(token),
                 column_path=["temperature"],
-                column_definition=field("temperature", pa.int8()),
+                column_definition=SerializedSchema(field("temperature", pa.int8())),
                 expression=expression("temperature * 1000"),
             )
         assert c.table_get(**args(token)) == before
@@ -413,31 +437,31 @@ def test_mandatory_defaults_and_using_without_new_capabilities(backend: ColumnPa
 def test_signed_http_expression_transaction_rollback_and_commit(backend: ColumnPathsWorker) -> None:
     with client() as c:
         token = attach(c)
-        c.table_create(**args(token), columns=default_field("temperature", "200"))
+        c.table_create(**args(token), columns=SerializedSchema(default_field("temperature", "200")))
         seed(backend, token, [{"temperature": 123}])
         initial = c.table_get(**args(token))
-        tx = c.catalog_transaction_begin(attach_opaque_data=token)
+        tx = c.catalog_transaction_begin(attach_opaque_data=AttachOpaqueData(token))
         c.table_column_default_set(**args(token, tx), column_path=["temperature"], expression=expression("300"))
         c.table_column_type_change(
             **args(token, tx),
             column_path=["temperature"],
-            column_definition=field("temperature", pa.float64()),
+            column_definition=SerializedSchema(field("temperature", pa.float64())),
             expression=expression("temperature / 10.0"),
         )
         assert rows(backend, token, tx) == [{"temperature": 12.3}]
         assert c.table_get(**args(token)) == initial
     with client() as c:
-        c.catalog_transaction_rollback(attach_opaque_data=token, transaction_opaque_data=tx)
+        c.catalog_transaction_rollback(attach_opaque_data=AttachOpaqueData(token), transaction_opaque_data=present(tx))
         assert c.table_get(**args(token)) == initial and rows(backend, token) == [{"temperature": 123}]
-        tx = c.catalog_transaction_begin(attach_opaque_data=token)
+        tx = c.catalog_transaction_begin(attach_opaque_data=AttachOpaqueData(token))
         c.table_column_default_set(**args(token, tx), column_path=["temperature"], expression=expression("500"))
         c.table_column_type_change(
             **args(token, tx),
             column_path=["temperature"],
-            column_definition=field("temperature", pa.float64()),
+            column_definition=SerializedSchema(field("temperature", pa.float64())),
             expression=expression("temperature / 10.0"),
         )
-        c.catalog_transaction_commit(attach_opaque_data=token, transaction_opaque_data=tx)
+        c.catalog_transaction_commit(attach_opaque_data=AttachOpaqueData(token), transaction_opaque_data=present(tx))
     with client() as c:
         assert column_expressions(info(c, token).field("temperature")).default == expression("500")
         seed(backend, token, [{}])
@@ -449,9 +473,9 @@ def test_signed_http_expression_transaction_rollback_and_commit(backend: ColumnP
 def test_expression_validation_precedes_effects(backend: ColumnPathsWorker, operation: str, failure: str) -> None:
     with client() as c:
         token = attach(c, None)
-        c.table_create(**args(token), columns=field("temperature"))
+        c.table_create(**args(token), columns=SerializedSchema(field("temperature")))
         seed(backend, token, [{"temperature": 123}])
-        original, version = c.table_get(**args(token)), c.catalog_version(attach_opaque_data=token)
+        original, version = c.table_get(**args(token)), c.catalog_version(attach_opaque_data=AttachOpaqueData(token))
         value = expression("7")
         if failure == "owner":
             value = replace(value, schema_path=["other"])
@@ -476,7 +500,10 @@ def test_expression_validation_precedes_effects(backend: ColumnPathsWorker, oper
                     column_definition=field("temperature", pa.int64()),
                     expression=payload,
                 )
-        assert c.table_get(**args(token)) == original and c.catalog_version(attach_opaque_data=token) == version
+        assert (
+            c.table_get(**args(token)) == original
+            and c.catalog_version(attach_opaque_data=AttachOpaqueData(token)) == version
+        )
         assert rows(backend, token) == [{"temperature": 123}]
 
 
@@ -484,21 +511,25 @@ def test_legacy_column_metadata_and_untyped_public_expressions_reject(backend: C
     with client() as c:
         token = attach(c, None)
         with pytest.raises(CatalogClientError, match="canonical SqlExpression"):
-            c.table_create(**args(token), columns=field("temperature", metadata={b"default": b"7"}))
-        c.table_create(**args(token), columns=field("temperature"))
+            c.table_create(**args(token), columns=SerializedSchema(field("temperature", metadata={b"default": b"7"})))
+        c.table_create(**args(token), columns=SerializedSchema(field("temperature")))
         with pytest.raises(CatalogClientError, match="canonical SqlExpression"):
             c.table_column_add(
-                **args(token), column_path=["old"], column_definition=field("old", metadata={b"default": b"7"})
+                **args(token),
+                column_path=["old"],
+                column_definition=SerializedSchema(field("old", metadata={b"default": b"7"})),
             )
         for value in (None, "NULL"):
             with pytest.raises(TypeError, match="SqlExpression"):
-                c.table_column_default_set(**args(token), column_path=["temperature"], expression=value)
+                c.table_column_default_set(
+                    **args(token), column_path=["temperature"], expression=cast(SqlExpression, value)
+                )
         with pytest.raises(TypeError, match="SqlExpression"):
             c.table_column_type_change(
                 **args(token),
                 column_path=["temperature"],
-                column_definition=field("temperature", pa.int64()),
-                expression="temperature + 1",
+                column_definition=SerializedSchema(field("temperature", pa.int64())),
+                expression=cast(SqlExpression, "temperature + 1"),
             )
 
 
@@ -515,16 +546,19 @@ def test_native_not_null_request_uses_atomic_revision_and_transaction(backend: C
         request = ConstraintsApplyRequest(
             attach_opaque_data=token,
             table=CatalogObjectRef(kind="table", schema_path=["main"], name="t.with.dot"),
-            expected_revision=initial.definition_revision,
+            expected_revision=present(present(initial).definition_revision),
             changes=[change.serialize_to_bytes()],
         )
         snapshot = c.table_constraints_apply(request)
-        assert snapshot.definition_revision != initial.definition_revision
+        assert present(snapshot).definition_revision != present(initial).definition_revision
         assert not info(c, token).field("a.b").nullable
-        before, version = c.table_get(**args(token)), c.catalog_version(attach_opaque_data=token)
+        before, version = c.table_get(**args(token)), c.catalog_version(attach_opaque_data=AttachOpaqueData(token))
         with pytest.raises(CatalogClientError, match="stale"):
             c.table_constraints_apply(request)
-        assert c.table_get(**args(token)) == before and c.catalog_version(attach_opaque_data=token) == version
+        assert (
+            c.table_get(**args(token)) == before
+            and c.catalog_version(attach_opaque_data=AttachOpaqueData(token)) == version
+        )
         bad = replace(change, definition=ConstraintDefinition(kind=ConstraintKind.NOT_NULL, column_paths=[["a", "b"]]))
         with pytest.raises(CatalogClientError, match="NOT NULL"):
             c.table_constraints_apply(
@@ -532,7 +566,7 @@ def test_native_not_null_request_uses_atomic_revision_and_transaction(backend: C
             )
         assert c.table_get(**args(token)) == before and rows(backend, token) == ROWS
         added = next(item for item in snapshot.constraint_infos() if item.definition.column_paths == [["a.b"]])
-        tx = c.catalog_transaction_begin(attach_opaque_data=token)
+        tx = c.catalog_transaction_begin(attach_opaque_data=AttachOpaqueData(token))
         c.table_constraints_apply(
             replace(
                 request,
@@ -546,5 +580,5 @@ def test_native_not_null_request_uses_atomic_revision_and_transaction(backend: C
             )
         )
         assert info(c, token, tx).field("a.b").nullable
-        c.catalog_transaction_rollback(attach_opaque_data=token, transaction_opaque_data=tx)
+        c.catalog_transaction_rollback(attach_opaque_data=AttachOpaqueData(token), transaction_opaque_data=present(tx))
         assert c.table_get(**args(token)) == before

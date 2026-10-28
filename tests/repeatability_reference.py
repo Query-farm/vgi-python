@@ -13,10 +13,11 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from collections.abc import Sequence
 from contextlib import closing
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -31,8 +32,13 @@ from vgi.invocation import BindRepeatability, BindResponse, GlobalInitResponse
 from vgi.protocol import TableFunctionProjectionRequest, TableFunctionProjectionResponse
 from vgi.table_function import BindParams, InitParams, ProcessParams, TableFunctionGenerator
 
-SOURCE = pa.schema([pa.field("n", pa.int32()), pa.field("label", pa.string()), pa.field("generation", pa.int64())])
-BASELINE = [(1, "one"), (None, "null"), (3, "three"), (4, "four")]
+SOURCE_FIELDS: list[pa.Field[Any]] = [
+    pa.field("n", pa.int32()),
+    pa.field("label", pa.string()),
+    pa.field("generation", pa.int64()),
+]
+SOURCE = pa.schema(SOURCE_FIELDS)
+BASELINE: list[tuple[int | None, str]] = [(1, "one"), (None, "null"), (3, "three"), (4, "four")]
 
 
 def database_path() -> Path:
@@ -42,7 +48,7 @@ def database_path() -> Path:
     return path
 
 
-def seed_database(path: Path, rows=BASELINE, *, generation: int = 1) -> None:
+def seed_database(path: Path, rows: Sequence[tuple[int | None, str]] = BASELINE, *, generation: int = 1) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(path)) as db, db:
         db.execute("CREATE TABLE IF NOT EXISTS version (generation INTEGER NOT NULL)")
@@ -53,17 +59,17 @@ def seed_database(path: Path, rows=BASELINE, *, generation: int = 1) -> None:
         db.executemany("INSERT INTO items VALUES (?, ?, ?)", [(i, n, label) for i, (n, label) in enumerate(rows)])
 
 
-def replace_rows(path: Path, rows) -> int:
+def replace_rows(path: Path, rows: Sequence[tuple[int | None, str]]) -> int:
     with closing(sqlite3.connect(path)) as db, db:
         db.execute("BEGIN IMMEDIATE")
-        generation = db.execute("SELECT generation FROM version").fetchone()[0] + 1
+        generation = int(db.execute("SELECT generation FROM version").fetchone()[0]) + 1
         db.execute("UPDATE version SET generation = ?", [generation])
         db.execute("DELETE FROM items")
         db.executemany("INSERT INTO items VALUES (?, ?, ?)", [(i, n, label) for i, (n, label) in enumerate(rows)])
     return generation
 
 
-def event(kind: str, **details) -> None:
+def event(kind: str, **details: object) -> None:
     if filename := os.environ.get("VGI_REPEATABILITY_TRACE"):
         with open(filename, "a") as output:
             output.write(json.dumps({"event": kind, **details}) + "\n")
@@ -90,7 +96,7 @@ def read_snapshot(path: Path) -> Snapshot:
     return snapshot_from_rows(rows, generation)
 
 
-def snapshot_from_rows(rows, generation: int) -> Snapshot:
+def snapshot_from_rows(rows: Sequence[tuple[int | None, str]], generation: int) -> Snapshot:
     batch = pa.RecordBatch.from_pylist(
         [{"n": n, "label": label, "generation": generation} for n, label in rows], schema=SOURCE
     )
@@ -146,6 +152,7 @@ class RepeatabilitySource(TableFunctionGenerator[None, StreamState]):
             raise ValueError("repeatability proposal changed source schema")
         if request.bind_result.repeatability != cls.repeatability:
             raise ValueError("repeatability proposal changed source promise")
+        assert request.bind_result.opaque_data is not None
         original = BoundState.deserialize_from_bytes(request.bind_result.opaque_data)
         if original.proposal is not None:
             raise ValueError("repeatability reference negotiates once")
@@ -172,7 +179,9 @@ class RepeatabilitySource(TableFunctionGenerator[None, StreamState]):
         )
 
     @classmethod
-    def bound_state(cls, params) -> BoundState:
+    def bound_state(cls, params: InitParams[None] | ProcessParams[None]) -> BoundState:
+        assert params.init_call is not None
+        assert params.init_call.bind_opaque_data is not None
         state = BoundState.deserialize_from_bytes(params.init_call.bind_opaque_data)
         if (state.snapshot is not None) != (cls.repeatability == BindRepeatability.STABLE_WITHIN_QUERY):
             raise ValueError("repeatability reference requires its complete snapshot state")

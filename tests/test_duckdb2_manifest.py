@@ -7,10 +7,35 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+from typing import NotRequired, TypedDict
 
 import pytest
 
 from scripts.check_duckdb2_manifest import audit_rows, check_inventory, pending_decisions
+
+
+class _Area(TypedDict):
+    """One mutable review area in the inventory fixture."""
+
+    title: str
+    scope: list[str]
+    records: list[str]
+    existing_methods: list[str]
+    disposition: str
+    capability_contract: str
+    reason: NotRequired[str]
+    later_release_cost: NotRequired[str]
+
+
+class _Manifest(TypedDict):
+    """Precisely typed inventory sections mutated by the negative cases."""
+
+    format_version: int
+    sources: dict[str, str]
+    areas: dict[str, _Area]
+    audit_fields: list[dict[str, str | int | list[str]]]
+    proposals: list[object]
+
 
 _ROOT = Path(__file__).resolve().parents[1]
 
@@ -20,11 +45,11 @@ def test_current_manifest_matches_native_audit() -> None:
     if not native.is_dir():
         pytest.skip("native checkout required for field-audit comparison")
     manifest = json.loads((_ROOT / "docs/protocol/duckdb-2.0-manifest.json").read_text())
-    assert check_inventory(manifest, native) == []
+    assert check_inventory(dict(manifest), native) == []
 
 
 @pytest.fixture
-def inventory(tmp_path: Path) -> tuple[dict, Path]:
+def inventory(tmp_path: Path) -> tuple[_Manifest, Path]:
     """A minimal external audit with two distinct requirements."""
     source = (
         "## Shared creation fields and object identity\n\n"
@@ -39,7 +64,7 @@ def inventory(tmp_path: Path) -> tuple[dict, Path]:
         "| Candidate | Decision |\n| --- | --- |\n| Queries | review query execution |\n"
     )
     rows = audit_rows(source)
-    manifest = {
+    manifest: _Manifest = {
         "format_version": 1,
         "sources": {
             "audit_path": "audit.md",
@@ -74,9 +99,9 @@ def inventory(tmp_path: Path) -> tuple[dict, Path]:
 
 
 @pytest.mark.parametrize("change", ["remove", "duplicate", "reorder", "alter_evidence", "nonexistent_method"])
-def test_inventory_rejects_lost_or_misrepresented_requirements(inventory: tuple[dict, Path], change: str) -> None:
+def test_inventory_rejects_lost_or_misrepresented_requirements(inventory: tuple[_Manifest, Path], change: str) -> None:
     manifest, native = inventory
-    assert check_inventory(manifest, native) == []
+    assert check_inventory(dict(manifest), native) == []
     changed = copy.deepcopy(manifest)
     fields = changed["audit_fields"]
     if change == "remove":
@@ -89,39 +114,40 @@ def test_inventory_rejects_lost_or_misrepresented_requirements(inventory: tuple[
         fields[0]["audit_evidence"] = ["already implemented"]
     else:
         changed["areas"]["identity"]["existing_methods"] = ["catalog_nonexistent"]
-    assert check_inventory(changed, native)
+    assert check_inventory(dict(changed), native)
 
 
-def test_missing_or_changed_audit_is_not_coverage(inventory: tuple[dict, Path]) -> None:
+def test_missing_or_changed_audit_is_not_coverage(inventory: tuple[_Manifest, Path]) -> None:
     manifest, native = inventory
     (native / "audit.md").write_text((native / "audit.md").read_text().replace("preserve NULL", "new requirement"))
-    assert check_inventory(manifest, native)
+    assert check_inventory(dict(manifest), native)
     (native / "audit.md").unlink()
-    assert "required audit source is missing" in check_inventory(manifest, native)[0]
+    assert "required audit source is missing" in check_inventory(dict(manifest), native)[0]
 
 
-def test_candidate_without_catalog_fields_cannot_disappear(inventory: tuple[dict, Path]) -> None:
+def test_candidate_without_catalog_fields_cannot_disappear(inventory: tuple[_Manifest, Path]) -> None:
     manifest, native = inventory
     del manifest["areas"]["query"]
-    assert any("Queries: plan scope is missing" in error for error in check_inventory(manifest, native))
+    assert any("Queries: plan scope is missing" in error for error in check_inventory(dict(manifest), native))
 
 
-def test_changed_or_missing_plan_is_not_coverage(inventory: tuple[dict, Path]) -> None:
+def test_changed_or_missing_plan_is_not_coverage(inventory: tuple[_Manifest, Path]) -> None:
     manifest, native = inventory
     (native / "plan.md").write_text(
         (native / "plan.md").read_text().replace("preserve identity", "preserve raw identity")
     )
-    assert check_inventory(manifest, native)
+    assert check_inventory(dict(manifest), native)
     (native / "plan.md").unlink()
-    assert any("required plan source is missing" in error for error in check_inventory(manifest, native))
+    assert any("required plan source is missing" in error for error in check_inventory(dict(manifest), native))
 
 
-def test_unresolved_decision_cannot_be_hidden_by_inventory_coverage(inventory: tuple[dict, Path]) -> None:
+def test_unresolved_decision_cannot_be_hidden_by_inventory_coverage(inventory: tuple[_Manifest, Path]) -> None:
     manifest, native = inventory
     manifest["areas"]["identity"]["disposition"] = "decision_required"
-    assert check_inventory(manifest, native) == []
-    assert pending_decisions(manifest)
+    assert check_inventory(dict(manifest), native) == []
+    assert pending_decisions(dict(manifest))
     manifest["areas"]["identity"]["disposition"] = "defer"
-    assert pending_decisions(manifest)
-    manifest["areas"]["identity"].update(reason="missing engine callback", later_release_cost="new RPC and SDK version")
-    assert pending_decisions(manifest) == []
+    assert pending_decisions(dict(manifest))
+    manifest["areas"]["identity"]["reason"] = "missing engine callback"
+    manifest["areas"]["identity"]["later_release_cost"] = "new RPC and SDK version"
+    assert pending_decisions(dict(manifest)) == []

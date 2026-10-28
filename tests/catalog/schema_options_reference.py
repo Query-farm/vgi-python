@@ -20,6 +20,7 @@ from dataclasses import replace
 from typing import Any, ClassVar
 
 import pyarrow as pa
+from vgi_rpc.rpc import CallContext
 
 from vgi.catalog import (
     AttachOpaqueData,
@@ -39,18 +40,17 @@ from vgi.catalog.capabilities import (
 from vgi.catalog.catalog_interface import CatalogContentsResult, OnConflict, SchemaContentsInfo
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.options import OptionChanges, OptionDefinitions
+from vgi.protocol import ClientCapabilities
 from vgi.schema_path import schema_path_key
 from vgi.typed_values import TypedValueBatch
 from vgi.worker import Worker
 
-SCHEMA = pa.schema(
-    [
-        pa.field("label", pa.string(), metadata={b"purpose": b"display"}),
-        pa.field("limit", pa.int32(), nullable=False),
-        pa.field("locked", pa.bool_(), nullable=False),
-    ],
-    metadata={b"provider": b"schema-options-reference/v1"},
-)
+SCHEMA_FIELDS: list[pa.Field[Any]] = [
+    pa.field("label", pa.string(), metadata={b"purpose": b"display"}),
+    pa.field("limit", pa.int32(), nullable=False),
+    pa.field("locked", pa.bool_(), nullable=False),
+]
+SCHEMA = pa.schema(SCHEMA_FIELDS, metadata={b"provider": b"schema-options-reference/v1"})
 DEFINITIONS = OptionDefinitions(
     schema=SCHEMA,
     defaults=TypedValueBatch(
@@ -112,8 +112,24 @@ class SchemaOptionsCatalog(ReadOnlyCatalogInterface):
     def _decode(value: str, attach: AttachOpaqueData) -> SchemaInfo:
         return replace(SchemaInfo.deserialize_from_bytes(base64.b64decode(value)), attach_opaque_data=attach)
 
-    def catalog_attach(self, **kwargs: Any) -> CatalogAttachResult:
-        result = super().catalog_attach(**kwargs)
+    def catalog_attach(
+        self,
+        *,
+        name: str,
+        options: dict[str, Any],
+        data_version_spec: str | None,
+        implementation_version: str | None,
+        client_capabilities: ClientCapabilities | None = None,
+        ctx: CallContext | None = None,
+    ) -> CatalogAttachResult:
+        result = super().catalog_attach(
+            name=name,
+            options=options,
+            data_version_spec=data_version_spec,
+            implementation_version=implementation_version,
+            client_capabilities=client_capabilities,
+            ctx=ctx,
+        )
         attach = AttachOpaqueData(uuid.uuid4().bytes)
         return replace(
             result,

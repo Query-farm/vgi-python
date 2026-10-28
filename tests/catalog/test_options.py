@@ -14,17 +14,15 @@ from vgi.typed_values import TypedValueBatch
 
 
 def _defaults() -> TypedValueBatch:
-    schema = pa.schema(
-        [
-            pa.field("label", pa.string(), metadata={b"option": b"display label"}),
-            pa.field("limit", pa.int32(), nullable=False),
-            pa.field("cost", pa.decimal128(12, 3)),
-            pa.field(
-                "nested", pa.struct([pa.field("enabled", pa.bool_(), nullable=False, metadata={b"child": b"retained"})])
-            ),
-        ],
-        metadata={b"provider": b"example-options/v1"},
-    )
+    fields: list[pa.Field[Any]] = [
+        pa.field("label", pa.string(), metadata={b"option": b"display label"}),
+        pa.field("limit", pa.int32(), nullable=False),
+        pa.field("cost", pa.decimal128(12, 3)),
+        pa.field(
+            "nested", pa.struct([pa.field("enabled", pa.bool_(), nullable=False, metadata={b"child": b"retained"})])
+        ),
+    ]
+    schema = pa.schema(fields, metadata={b"provider": b"example-options/v1"})
     return TypedValueBatch(
         pa.RecordBatch.from_pylist(
             [{"label": "default", "limit": 10, "cost": Decimal("1.125"), "nested": {"enabled": True}}], schema=schema
@@ -34,7 +32,10 @@ def _defaults() -> TypedValueBatch:
 
 def _sets(**values: Any) -> TypedValueBatch:
     defaults = _defaults()
-    schema = pa.schema([defaults.schema.field(name) for name in values], metadata=defaults.schema.metadata)
+    schema = pa.schema(
+        [defaults.schema.field(name) for name in values],
+        metadata=None if defaults.schema.metadata is None else {k: v for k, v in defaults.schema.metadata.items()},
+    )
     return TypedValueBatch(pa.RecordBatch.from_pylist([values], schema=schema))
 
 
@@ -147,7 +148,10 @@ def test_semantic_schema_changes_cannot_be_silently_cast(part: str) -> None:
     else:
         field = field.with_nullable(False)
     values = TypedValueBatch(
-        pa.RecordBatch.from_pylist([{"nested": {"enabled": False}}], schema=pa.schema([field], metadata=metadata))
+        pa.RecordBatch.from_pylist(
+            [{"nested": {"enabled": False}}],
+            schema=pa.schema([field], metadata=None if metadata is None else {k: v for k, v in metadata.items()}),
+        )
     )
     with pytest.raises(ValueError, match="expected schema"):
         OptionChanges(set_values=values).apply_to(OptionState(values=defaults), defaults=defaults)

@@ -2,14 +2,19 @@
 
 """Writable reconciliation facts require actual value checks before storage."""
 
+from __future__ import annotations
+
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
 from vgi._test_fixtures.schema_reconcile.worker import TABLES, _all_rows, _insert_row, _update_row
 
 
-def test_reconciliation_storage_rejects_nested_null_without_publishing(tmp_path, monkeypatch):
+def test_reconciliation_storage_rejects_nested_null_without_publishing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """All write entry points enforce required values, including nested leaves."""
     monkeypatch.setenv("VGI_SCHEMA_RECONCILE_DB", str(tmp_path / "reconcile.sqlite"))
     spec = TABLES["demo"]

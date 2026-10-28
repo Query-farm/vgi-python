@@ -3,7 +3,11 @@
 
 """Column comments/tags survive durable RPC edits and reject invalid metadata."""
 
+from __future__ import annotations
+
+from collections.abc import Callable
 from dataclasses import replace
+from typing import Any, cast
 
 import pyarrow as pa
 import pytest
@@ -18,11 +22,13 @@ from vgi.catalog import (
     validate_column_metadata,
     with_column_metadata,
 )
-from vgi.catalog.catalog_interface import CatalogContentsResult, SchemaContentsInfo
+from vgi.catalog.catalog_interface import AttachOpaqueData, CatalogContentsResult, SchemaContentsInfo, SerializedSchema
 from vgi.protocol import TableCreateRequest, TablesResponse
 
+from .column_paths_reference import ColumnPathsWorker
 from .test_column_paths_protocol import args, attach, client, info, rows, seed
 from .test_column_paths_protocol import backend as backend
+from .typing_helpers import present
 
 
 @pytest.mark.parametrize(
@@ -33,72 +39,78 @@ from .test_column_paths_protocol import backend as backend
         ColumnMetadata(comment="snow 雪\x00", tags={"": "", "nul\x00": "雪"}),
     ],
 )
-def test_helper_distinguishes_absence_and_empty_metadata(value):
+def test_helper_distinguishes_absence_and_empty_metadata(value: ColumnMetadata) -> None:
     field = pa.field("a.b", pa.int32(), metadata={b"provider.opaque": b"\x00\xff"})
     updated = with_column_metadata(field, value)
     assert column_metadata(updated) == value
+    assert updated.metadata is not None
     assert updated.metadata[b"provider.opaque"] == b"\x00\xff"
     assert (b"comment" in updated.metadata) == (value.comment is not None)
     assert (b"tags" in updated.metadata) == (value.tags is not None)
     assert with_column_metadata(updated, ColumnMetadata()).equals(field, check_metadata=True)
 
 
-def test_comment_edit_preserves_existing_tag_encoding_and_unrelated_metadata():
+def test_comment_edit_preserves_existing_tag_encoding_and_unrelated_metadata() -> None:
     field = pa.field("x", pa.int32(), metadata={b"tags": b' { "a" : "b" } ', b"other": b"kept"})
     updated = with_column_metadata(field, replace(column_metadata(field), comment=""))
     assert updated.metadata == {b"comment": b"", b"tags": b' { "a" : "b" } ', b"other": b"kept"}
 
 
 @pytest.mark.parametrize("key", [b"comment", b"tags", b"opaque"])
-def test_existing_duplicate_arrow_key_restriction_is_preserved(key):
-    field = pa.field("x", pa.int32(), metadata=pa.KeyValueMetadata([(key, b"{}"), (key, b"{}")]))
+def test_existing_duplicate_arrow_key_restriction_is_preserved(key: bytes) -> None:
+    # PyArrow supports duplicate metadata entries; its stubs only admit mappings.
+    metadata_factory = cast(Callable[[list[tuple[bytes, bytes]]], pa.KeyValueMetadata], pa.KeyValueMetadata)
+    field_factory = cast("Callable[[str, pa.DataType, bool, pa.KeyValueMetadata], pa.Field[Any]]", pa.field)
+    field = field_factory("x", pa.int32(), True, metadata_factory([(key, b"{}"), (key, b"{}")]))
     with pytest.raises(ValueError, match="unique"):
         column_metadata(field)
     with pytest.raises(ValueError, match="unique"):
         with_column_metadata(field, ColumnMetadata(comment="replacement"))
 
 
-def test_mutated_python_tag_maps_are_revalidated_before_editing():
+def test_mutated_python_tag_maps_are_revalidated_before_editing() -> None:
     value = ColumnMetadata(tags={"a": "valid"})
-    value.tags["a"] = 1
+    assert value.tags is not None
+    # Deliberately corrupt the validated mapping to exercise publication checks.
+    value.tags["a"] = cast(str, 1)
     with pytest.raises(TypeError, match="string"):
         with_column_metadata(pa.field("x", pa.int32()), value)
 
 
-def test_recursive_validator_reaches_extension_storage():
+def test_recursive_validator_reaches_extension_storage() -> None:
     class Wrapped(pa.ExtensionType):
         """An opaque wrapper with an invalid metadata-bearing child."""
 
-        def __init__(self):
+        def __init__(self) -> None:
             super().__init__(pa.struct([pa.field("x", pa.int32(), metadata={b"tags": b'{"a":1}'})]), "test.column_meta")
 
-        def __arrow_ext_serialize__(self):
+        def __arrow_ext_serialize__(self) -> bytes:
             return b""
 
         @classmethod
-        def __arrow_ext_deserialize__(cls, storage_type, serialized):
+        def __arrow_ext_deserialize__(cls, storage_type: pa.DataType, serialized: bytes) -> Wrapped:
             return cls()
 
     with pytest.raises(ValueError, match="object of strings"):
         validate_column_metadata(pa.schema([pa.field("wrapped", Wrapped())]))
 
 
-def test_declarative_empty_comment_is_present_and_tags_are_preserved():
+def test_declarative_empty_comment_is_present_and_tags_are_preserved() -> None:
     field = pa.field("x", pa.int32(), metadata={b"tags": b"{}", b"other": b"kept"})
     table = Table(name="t", columns=pa.schema([field]), column_comments={"x": ""})
-    result = pa.ipc.read_schema(pa.BufferReader(table.to_table_info(["main"]).columns)).field("x")
+    result = pa.ipc.read_schema(pa.py_buffer(table.to_table_info(["main"]).columns)).field("x")
     assert result.metadata == {b"comment": b"", b"tags": b"{}", b"other": b"kept"}
 
 
-def _columns(*, invalid=False):
-    return (
+def _columns(*, invalid: bool = False) -> SerializedSchema:
+    return SerializedSchema(
         pa.schema([pa.field("x", pa.int32(), metadata={b"tags": b'{"a":1}'} if invalid else None)])
         .serialize()
         .to_pybytes()
     )
 
 
-def test_record_publication_revalidates_replaced_column_bytes():
+def test_record_publication_revalidates_replaced_column_bytes() -> None:
     records = [
         TableInfo(name="t", schema_path=["main"], columns=_columns(), constraints=[], comment=None, tags={}),
         TableCreateRequest(
@@ -118,7 +130,9 @@ def test_record_publication_revalidates_replaced_column_bytes():
 
 
 @pytest.mark.parametrize("operation", ["create", "add"])
-def test_bad_metadata_rejects_before_provider_mutation(backend, monkeypatch, operation):
+def test_bad_metadata_rejects_before_provider_mutation(
+    backend: ColumnPathsWorker, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
     with client() as c:
         token = attach(c, None)
         c.table_create(**args(token), columns=_columns())
@@ -141,7 +155,9 @@ def test_bad_metadata_rejects_before_provider_mutation(backend, monkeypatch, ope
 
 
 @pytest.mark.parametrize("operation", ["get", "list", "contents"])
-def test_discovery_validates_even_previously_serialized_provider_records(backend, monkeypatch, operation):
+def test_discovery_validates_even_previously_serialized_provider_records(
+    backend: ColumnPathsWorker, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
     with client() as c:
         token = attach(c, None)
     entry = TableInfo(name="t", schema_path=["main"], columns=_columns(), constraints=[], comment=None, tags={})
@@ -156,7 +172,7 @@ def test_discovery_validates_even_previously_serialized_provider_records(backend
         lambda **kwargs: CatalogContentsResult(
             schemas=[
                 SchemaContentsInfo(
-                    schema=SchemaInfo(attach_opaque_data=b"", path=["main"], comment=None, tags={}),
+                    schema=SchemaInfo(attach_opaque_data=AttachOpaqueData(b""), path=["main"], comment=None, tags={}),
                     tables=[entry],
                 )
             ]
@@ -171,7 +187,7 @@ def test_discovery_validates_even_previously_serialized_provider_records(backend
             backend.catalog_contents(token)
 
 
-def test_signed_http_create_add_metadata_rollback_and_reconnect(backend):
+def test_signed_http_create_add_metadata_rollback_and_reconnect(backend: ColumnPathsWorker) -> None:
     base = pa.schema(
         [
             with_column_metadata(
@@ -197,23 +213,27 @@ def test_signed_http_create_add_metadata_rollback_and_reconnect(backend):
     )
     with client() as c:
         token = attach(c, None)
-        c.table_create(**args(token), columns=base.serialize().to_pybytes())
+        c.table_create(**args(token), columns=SerializedSchema(base.serialize().to_pybytes()))
         seed(backend, token, [{"x": 1, "nested": {"a.b": "data"}}])
         assert info(c, token).equals(base, check_metadata=True)
-        tx = c.catalog_transaction_begin(attach_opaque_data=token)
+        tx = c.catalog_transaction_begin(attach_opaque_data=AttachOpaqueData(token))
         c.table_column_add(
-            **args(token, tx), column_path=["added"], column_definition=pa.schema([added]).serialize().to_pybytes()
+            **args(token, tx),
+            column_path=["added"],
+            column_definition=SerializedSchema(pa.schema([added]).serialize().to_pybytes()),
         )
         assert info(c, token, tx).field("added").equals(added, check_metadata=True)
         assert "added" not in info(c, token).names
     with client() as c:
-        c.catalog_transaction_rollback(attach_opaque_data=token, transaction_opaque_data=tx)
+        c.catalog_transaction_rollback(attach_opaque_data=AttachOpaqueData(token), transaction_opaque_data=present(tx))
         assert info(c, token).equals(base, check_metadata=True)
-        tx = c.catalog_transaction_begin(attach_opaque_data=token)
+        tx = c.catalog_transaction_begin(attach_opaque_data=AttachOpaqueData(token))
         c.table_column_add(
-            **args(token, tx), column_path=["added"], column_definition=pa.schema([added]).serialize().to_pybytes()
+            **args(token, tx),
+            column_path=["added"],
+            column_definition=SerializedSchema(pa.schema([added]).serialize().to_pybytes()),
         )
-        c.catalog_transaction_commit(attach_opaque_data=token, transaction_opaque_data=tx)
+        c.catalog_transaction_commit(attach_opaque_data=AttachOpaqueData(token), transaction_opaque_data=present(tx))
     with client() as c:
         assert info(c, token).equals(base.append(added), check_metadata=True)
         assert rows(backend, token) == [{"x": 1, "nested": {"a.b": "data"}, "added": None}]

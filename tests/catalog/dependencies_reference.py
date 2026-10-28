@@ -14,12 +14,13 @@ import json
 import sqlite3
 from contextlib import closing
 from dataclasses import replace
-from typing import Any
+from typing import Any, Literal, cast
 
 import duckdb
 import pyarrow as pa
 
 from vgi.catalog import (
+    AttachOpaqueData,
     CatalogObjectRef,
     DependencySnapshot,
     ObjectDependency,
@@ -38,7 +39,7 @@ from vgi.catalog.capabilities import (
     SCHEMA_LIFECYCLE,
     TRANSACTION_DDL,
 )
-from vgi.catalog.catalog_interface import CatalogContentsResult, SchemaContentsInfo, SchemaObjectType
+from vgi.catalog.catalog_interface import CatalogContentsResult, SchemaContentsInfo, SchemaObjectType, SerializedSchema
 from vgi.catalog.sql import column_expressions
 from vgi.column_path import column_definition, column_path_key, replace_column_field, resolve_column_path
 from vgi.schema_path import schema_path_key
@@ -46,6 +47,7 @@ from vgi.worker import Worker
 
 from .expression_reference import evaluate_expression, validate_expression
 from .schema_options_reference import DEFINITIONS, PROFILES, SchemaOptionsCatalog, _key
+from .typing_helpers import present
 
 DEPENDENCY_PROFILES = replace(
     PROFILES,
@@ -98,13 +100,14 @@ def edge(
 
 def _read_schema(payload: bytes) -> pa.Schema:
     reader = pa.BufferReader(payload)
-    schema = pa.ipc.read_schema(reader)
+    schema = pa.ipc.read_schema(reader)  # type: ignore[arg-type]  # Arrow accepts a file-like reader; retain consumed-byte check.
     if reader.tell() != len(payload):
         raise ValueError("table schema contains trailing bytes")
     return schema
 
 
-def _schema(info: TableInfo) -> pa.Schema:
+def _schema(info: TableInfo | ViewInfo) -> pa.Schema:
+    assert isinstance(info, TableInfo)
     return _read_schema(info.columns)
 
 
@@ -185,7 +188,7 @@ class DependencyCatalog(SchemaOptionsCatalog):
         result = {}
         for key, value in data.items():
             if key.startswith("["):
-                result[key] = schema_ref(self._decode(value, b"").path)
+                result[key] = schema_ref(self._decode(value, AttachOpaqueData(b"")).path)
             else:
                 result[key] = CatalogObjectRef.deserialize_from_bytes(base64.b64decode(json.loads(value)["ref"]))
         return result
@@ -242,7 +245,7 @@ class DependencyCatalog(SchemaOptionsCatalog):
         cls = TableInfo if item["kind"] == "table" else ViewInfo
         return cls.deserialize_from_bytes(base64.b64decode(item["info"]))
 
-    def _get(self, kind: str, kwargs: dict[str, Any]) -> Any:
+    def _get(self, kind: str, kwargs: dict[str, Any]) -> TableInfo | ViewInfo | None:
         ref = CatalogObjectRef(kind=kind, schema_path=kwargs["schema_path"], name=kwargs["name"])
         with closing(sqlite3.connect(self.database_path)) as db:
             _, data = self._snapshot(db, kwargs["attach_opaque_data"], kwargs["transaction_opaque_data"])
@@ -250,10 +253,14 @@ class DependencyCatalog(SchemaOptionsCatalog):
             return self._info(value) if value is not None else None
 
     def table_get(self, **kwargs: Any) -> TableInfo | None:
-        return self._get("table", kwargs)
+        info = self._get("table", kwargs)
+        assert info is None or isinstance(info, TableInfo)
+        return info
 
     def view_get(self, **kwargs: Any) -> ViewInfo | None:
-        return self._get("view", kwargs)
+        info = self._get("view", kwargs)
+        assert info is None or isinstance(info, ViewInfo)
+        return info
 
     def schema_contents(self, **kwargs: Any) -> Any:
         expected = {SchemaObjectType.TABLE: "table", SchemaObjectType.VIEW: "view"}.get(kwargs["type"])
@@ -280,13 +287,16 @@ class DependencyCatalog(SchemaOptionsCatalog):
                 for k, r in objects.items()
                 if r.kind != "schema" and _key(r.schema_path) == key
             ]
-            schemas.append(
-                SchemaContentsInfo(
-                    schema=info,
-                    tables=[v for kind, v in items if kind == "table"],
-                    views=[v for kind, v in items if kind == "view"],
-                )
-            )
+            tables: list[TableInfo] = []
+            views: list[ViewInfo] = []
+            for kind, item in items:
+                if kind == "table":
+                    assert isinstance(item, TableInfo)
+                    tables.append(item)
+                elif kind == "view":
+                    assert isinstance(item, ViewInfo)
+                    views.append(item)
+            schemas.append(SchemaContentsInfo(schema=info, tables=tables, views=views))
         return CatalogContentsResult(schemas=schemas, etag="dependency-reference")
 
     def _authorize_drop(self, ref: CatalogObjectRef) -> None:
@@ -323,7 +333,7 @@ class DependencyCatalog(SchemaOptionsCatalog):
                 if ref.schema_path and _key(ref.schema_path) not in data:
                     raise ValueError("parent schema does not exist")
                 if ref.schema_path:
-                    parent = self._decode(data[_key(ref.schema_path)], b"").path
+                    parent = self._decode(data[_key(ref.schema_path)], AttachOpaqueData(b"")).path
                     path = [*parent, ref.name]
                 if key in data:
                     if conflict == OnConflict.IGNORE:
@@ -333,7 +343,7 @@ class DependencyCatalog(SchemaOptionsCatalog):
                     for drop in self._drop_keys(version, data, ref, False):
                         del data[drop]
                 info = SchemaInfo(
-                    attach_opaque_data=b"",
+                    attach_opaque_data=AttachOpaqueData(b""),
                     path=path,
                     comment=kwargs.get("comment"),
                     tags=kwargs.get("tags") or {},
@@ -342,8 +352,8 @@ class DependencyCatalog(SchemaOptionsCatalog):
             else:
                 if key not in data:
                     raise ValueError("schema does not exist")
-                info = self._decode(data[key], b"")
-                info = replace(info, options=DEFINITIONS.apply(info.options, kwargs["changes"]))
+                info = self._decode(data[key], AttachOpaqueData(b""))
+                info = replace(info, options=DEFINITIONS.apply(present(info.options), kwargs["changes"]))
             data[key] = self._encode(info)
             self._publish(db, version, data, tx)
 
@@ -371,7 +381,9 @@ class DependencyCatalog(SchemaOptionsCatalog):
     @staticmethod
     def _bind_view(definition: str, path: list[str], data: dict[str, str]) -> tuple[str, TableInfo | ViewInfo]:
         with duckdb.connect(config={"enable_external_access": False}) as con:
-            parsed = json.loads(con.execute("SELECT json_serialize_sql(?)", [definition]).fetchone()[0])
+            row = con.execute("SELECT json_serialize_sql(?)", [definition]).fetchone()
+            assert row is not None
+            parsed = json.loads(row[0])
         if parsed.get("error") or len(parsed.get("statements", [])) != 1:
             raise ValueError("reference requires SELECT * FROM one relation")
         statement = parsed["statements"][0]
@@ -423,7 +435,7 @@ class DependencyCatalog(SchemaOptionsCatalog):
                 raise ValueError("schema does not exist")
             # Resolve the complete owning path to the provider's spelling.
             # Case-insensitive request aliases must not leak into graph identity.
-            ref = replace(ref, schema_path=self._decode(data[_key(ref.schema_path)], b"").path)
+            ref = replace(ref, schema_path=self._decode(data[_key(ref.schema_path)], AttachOpaqueData(b"")).path)
             other_kind = "view" if kind == "table" else "table"
             if object_key(replace(ref, kind=other_kind)) in data:
                 raise ValueError("relation name is already in use")
@@ -446,7 +458,7 @@ class DependencyCatalog(SchemaOptionsCatalog):
                 ):
                     raise ValueError("reference does not implement table constraints/options/layout")
                 _generated(_read_schema(kwargs["columns"]), ref.schema_path)
-                info = TableInfo(
+                info: TableInfo | ViewInfo = TableInfo(
                     name=ref.name,
                     schema_path=ref.schema_path,
                     columns=kwargs["columns"],
@@ -460,12 +472,12 @@ class DependencyCatalog(SchemaOptionsCatalog):
                     raise ValueError("self-referential views are invalid")
                 subjects = [subject]
                 count = (
-                    len(pa.ipc.read_schema(pa.BufferReader(bound.columns)))
+                    len(pa.ipc.read_schema(pa.py_buffer(bound.columns)))
                     if isinstance(bound, TableInfo)
                     else len(json.loads(data[subject])["output_names"])
                 )
                 output_names = kwargs.get("aliases") or (
-                    pa.ipc.read_schema(pa.BufferReader(bound.columns)).names
+                    pa.ipc.read_schema(pa.py_buffer(bound.columns)).names
                     if isinstance(bound, TableInfo)
                     else json.loads(data[subject])["output_names"]
                 )
@@ -536,23 +548,30 @@ class DependencyCatalog(SchemaOptionsCatalog):
                     info = replace(info, comment=kwargs["comment"])
                 else:
                     assert field is not None
-                    metadata = dict(field.metadata or {})
+                    metadata: dict[bytes | str, bytes | str] = {
+                        key: value for key, value in (field.metadata or {}).items()
+                    }
                     if kwargs["comment"] is None:
                         metadata.pop(b"comment", None)
                     else:
                         metadata[b"comment"] = kwargs["comment"].encode()
                     schema = replace_column_field(schema, path, field.with_metadata(metadata))
-                    info = replace(info, columns=schema.serialize().to_pybytes())
+                    info = replace(info, columns=SerializedSchema(schema.serialize().to_pybytes()))
                 self._store_info(data, key, info)
                 self._publish(db, version, data, tx)
                 return
             graph = self._graph(version, data)
             if operation == "drop" and kwargs.get("cascade"):
+                assert path is not None
                 self._drop_column_cascade(graph, data, canonical, path)
                 self._publish(db, version, data, tx)
                 return
+            assert operation in ("rename", "type", "drop")
             graph.assert_alter_allowed(
-                canonical, column_path=path, action=operation, schemas=self._column_schemas(data)
+                canonical,
+                column_path=path,
+                action=cast(Literal["rename", "type", "drop"], operation),
+                schemas=self._column_schemas(data),
             )
             self._authorize_alter(canonical, path, operation)
             if path is None:
@@ -579,7 +598,7 @@ class DependencyCatalog(SchemaOptionsCatalog):
                 else:
                     raise ValueError("unsupported semantic mutation")
                 schema = replace_column_field(schema, path, replacement)
-                self._store_info(data, key, replace(info, columns=schema.serialize().to_pybytes()))
+                self._store_info(data, key, replace(info, columns=SerializedSchema(schema.serialize().to_pybytes())))
             self._publish(db, version, data, tx)
 
     def _drop_column_cascade(
@@ -603,7 +622,7 @@ class DependencyCatalog(SchemaOptionsCatalog):
             info = self._info(data[key])
             assert isinstance(info, TableInfo)
             changed = replace_column_field(_schema(info), column.column_path, None)
-            self._store_info(data, key, replace(info, columns=changed.serialize().to_pybytes()))
+            self._store_info(data, key, replace(info, columns=SerializedSchema(changed.serialize().to_pybytes())))
 
     def table_rename(self, **kwargs: Any) -> None:
         self._alter_table("rename", **kwargs)

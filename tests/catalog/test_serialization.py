@@ -2,8 +2,11 @@
 
 """Tests for catalog dataclass serialization/deserialization."""
 
+from __future__ import annotations
+
+from collections.abc import Callable
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 import pyarrow as pa
 import pytest
@@ -25,7 +28,9 @@ from vgi.catalog import (
     ViewInfo,
 )
 from vgi.catalog.evaluation_context import QueryEvaluationContext
-from vgi.catalog.macros import normalize_macro_overloads
+from vgi.catalog.macros import MacroOverload, normalize_macro_overloads
+
+from .typing_helpers import present
 
 
 def canonical_unique(owner: str, *paths: list[str]) -> list[bytes]:
@@ -528,7 +533,7 @@ class TestMacroInfoSerialization:
     """The required complete family retains identity, values, types, and docs."""
 
     @pytest.mark.parametrize("macro_type,definition", [(MacroType.SCALAR, "x + 1"), (MacroType.TABLE, "SELECT x")])
-    def test_family_round_trip(self, macro_type, definition):
+    def test_family_round_trip(self, macro_type: MacroType, definition: str) -> None:
         """Required families preserve scalar and table definitions."""
         original = MacroInfo(
             name="macro",
@@ -553,7 +558,7 @@ class TestMacroInfoSerialization:
         )
         assert not MacroInfo.ARROW_SCHEMA.field("overloads").nullable
 
-    def test_typed_null_and_documentation_are_independent(self):
+    def test_typed_null_and_documentation_are_independent(self) -> None:
         """Declared types, NULL defaults, and empty documentation survive independently."""
         from vgi.catalog.macros import MACRO_PROFILE, MacroOverload, MacroParameter
         from vgi.typed_values import TypedValueBatch
@@ -581,22 +586,27 @@ class TestMacroInfoSerialization:
             ],
         )
         restored = MacroInfo.deserialize_from_bytes(original.serialize_to_bytes()).overloads[0].parameters[0]
-        assert restored.declared_type.equals(declared, check_metadata=True)
-        assert restored.default_value.batch.equals(literal.batch, check_metadata=True)
+        assert present(restored.declared_type).equals(declared, check_metadata=True)
+        assert present(restored.default_value).batch.equals(present(literal).batch, check_metadata=True)
         assert restored.has_default and restored.default_expression is None and restored.documentation == ""
 
     @pytest.mark.parametrize("family", [None, []])
-    def test_missing_or_empty_family_rejects(self, family):
+    def test_missing_or_empty_family_rejects(self, family: list[MacroOverload] | None) -> None:
         """A wire macro always contains at least one complete member."""
         with pytest.raises(ValueError, match="nonempty"):
             MacroInfo(
-                name="m", schema_path=["main"], macro_type=MacroType.SCALAR, overloads=family, comment=None, tags={}
+                name="m",
+                schema_path=["main"],
+                macro_type=MacroType.SCALAR,
+                overloads=cast(list[MacroOverload], family),
+                comment=None,
+                tags={},
             )
 
-    def test_no_legacy_wire_constructor(self):
+    def test_no_legacy_wire_constructor(self) -> None:
         """Legacy single fields cannot construct the successor wire record."""
         with pytest.raises(TypeError, match="parameters"):
-            MacroInfo(
+            cast("Callable[..., MacroInfo]", MacroInfo)(
                 name="m",
                 schema_path=["main"],
                 macro_type=MacroType.SCALAR,
@@ -610,7 +620,7 @@ class TestMacroInfoSerialization:
 class TestMacroArgumentsSchemaWire:
     """Local single-definition adapters publish canonical parameter records."""
 
-    def test_declarative_macro_to_info_carries_docs_and_literal_defaults(self):
+    def test_declarative_macro_to_info_carries_docs_and_literal_defaults(self) -> None:
         """Local convenience declarations normalize into parameter records."""
         from vgi.catalog.descriptors import Macro
 
@@ -627,11 +637,11 @@ class TestMacroArgumentsSchemaWire:
         parameters = source.to_macro_info(["main"]).overloads[0].parameters
         assert [p.name for p in parameters] == ["x", "lo", "hi"]
         assert parameters[0].documentation == "value to clamp" and parameters[0].default_value is None
-        assert parameters[1].default_value.batch.column(0)[0].as_py() == 0
-        assert parameters[2].default_value.batch.column(0)[0].as_py() == 100
+        assert present(parameters[1].default_value).batch.column(0)[0].as_py() == 0
+        assert present(parameters[2].default_value).batch.column(0)[0].as_py() == 100
         assert all(p.declared_type is None for p in parameters)
 
-    def test_declarative_macro_rejects_unknown_doc_param(self):
+    def test_declarative_macro_rejects_unknown_doc_param(self) -> None:
         """Unknown documentation keys reject before normalization."""
         from vgi.catalog.descriptors import Macro
 
@@ -644,7 +654,7 @@ class TestMacroArgumentsSchemaWire:
                 definition="x",
             )
 
-    def test_create_request_preserves_complete_family(self):
+    def test_create_request_preserves_complete_family(self) -> None:
         """CREATE uses only the mandatory family fields."""
         from vgi.catalog import OnConflict
         from vgi.protocol import MacroCreateRequest

@@ -3,6 +3,7 @@
 """The explicit mutation profile uses existing records without weakening reads."""
 
 from dataclasses import replace
+from typing import Any
 
 import pyarrow as pa
 import pytest
@@ -20,8 +21,10 @@ from vgi.catalog.query import (
 )
 from vgi.query_parameters import QueryParameters
 
+from .typing_helpers import present
 
-def capability():
+
+def capability() -> QueryCapabilities:
     return QueryCapabilities(
         encoding=QUERY_ENCODING,
         semantic_profiles=[QUERY_EXPLICIT, QUERY_STATEMENT],
@@ -33,7 +36,7 @@ def capability():
     )
 
 
-def request():
+def request() -> CatalogQueryPrepareRequest:
     return CatalogQueryPrepareRequest(
         attach_opaque_data=b"attachment",
         transaction_opaque_data=b"transaction",
@@ -47,7 +50,7 @@ def request():
     )
 
 
-def accepted(req, schema):
+def accepted(req: CatalogQueryPrepareRequest, schema: pa.Schema) -> CatalogQueryPrepareResult:
     return CatalogQueryPrepareResult(
         status="accepted",
         prepared_query_token=b"preparation",
@@ -58,32 +61,36 @@ def accepted(req, schema):
     )
 
 
-def test_statements_require_explicit_offer_and_transactions():
+def test_statements_require_explicit_offer_and_transactions() -> None:
     offered = ClientQueryCapabilities(
         encodings=[QUERY_ENCODING],
         semantic_profiles=[QUERY_EXPLICIT, QUERY_STATEMENT],
         engine_version="fixture",
     )
-    assert capability().select(offered, supports_transactions=True).execution_modes == ["explicit", "statement"]
-    assert capability().select(offered, supports_transactions=False).execution_modes == ["explicit"]
+    assert present(capability().select(offered, supports_transactions=True)).execution_modes == [
+        "explicit",
+        "statement",
+    ]
+    assert present(capability().select(offered, supports_transactions=False)).execution_modes == ["explicit"]
     assert (
         capability().select(replace(offered, semantic_profiles=[QUERY_STATEMENT]), supports_transactions=False) is None
     )
-    assert capability().select(
-        replace(offered, semantic_profiles=[QUERY_EXPLICIT]), supports_transactions=True
+    assert present(
+        capability().select(replace(offered, semantic_profiles=[QUERY_EXPLICIT]), supports_transactions=True)
     ).execution_modes == ["explicit"]
     assert capability().select(None, supports_transactions=True) is None
 
 
-def test_statement_context_owner_and_mode_are_not_inferred_from_sql():
+def test_statement_context_owner_and_mode_are_not_inferred_from_sql() -> None:
     req = request()
     req.validate_agreement(capability())
-    for changes in [
+    invalid_changes: list[dict[str, Any]] = [
         {"transaction_opaque_data": None},
         {"transaction_opaque_data": b""},
         {"semantic_profile": QUERY_EXPLICIT},
         {"mode": "explicit"},
-    ]:
+    ]
+    for changes in invalid_changes:
         with pytest.raises(ValueError):
             replace(req, **changes)
     with pytest.raises(ValueError, match="provider evaluation context"):
@@ -93,7 +100,7 @@ def test_statement_context_owner_and_mode_are_not_inferred_from_sql():
 
 
 @pytest.mark.parametrize("kind", [b"command", b"rows"])
-def test_statement_preparation_uses_existing_record_and_schema_carriers(kind):
+def test_statement_preparation_uses_existing_record_and_schema_carriers(kind: bytes) -> None:
     req = request()
     field = pa.field("affected_rows", pa.int64()) if kind == b"command" else pa.field("id", pa.int32())
     result = accepted(req, pa.schema([field], metadata={STATEMENT_RESULT_KEY: kind}))
@@ -117,17 +124,17 @@ def test_statement_preparation_uses_existing_record_and_schema_carriers(kind):
         pa.schema([], metadata={STATEMENT_RESULT_KEY: b"rows"}),
     ],
 )
-def test_invalid_statement_results_reject_during_preparation(schema):
+def test_invalid_statement_results_reject_during_preparation(schema: pa.Schema) -> None:
     req = request()
     with pytest.raises(ValueError, match="statement"):
         accepted(req, schema).validate_request(req)
 
 
 @pytest.mark.parametrize("second", [b"command", b"rows"])
-def test_duplicate_result_kind_metadata_rejects(second):
+def test_duplicate_result_kind_metadata_rejects(second: bytes) -> None:
     schema = pa.schema(
         [pa.field("affected_rows", pa.int64())],
-        metadata=pa.KeyValueMetadata([(STATEMENT_RESULT_KEY, b"command"), (STATEMENT_RESULT_KEY, second)]),
+        metadata=pa.KeyValueMetadata([(STATEMENT_RESULT_KEY, b"command"), (STATEMENT_RESULT_KEY, second)]),  # type: ignore[arg-type]  # Arrow supports duplicate metadata pairs.
     )
     req = request()
     with pytest.raises(ValueError, match="metadata keys must be unique"):

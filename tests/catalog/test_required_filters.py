@@ -47,7 +47,7 @@ def test_empty_requirements() -> None:
         ((("a.b",), ("a.b",)),),
     ],
 )
-def test_malformed_or_unresolved_paths(groups: tuple) -> None:
+def test_malformed_or_unresolved_paths(groups: tuple[tuple[tuple[str, ...], ...], ...]) -> None:
     """Reject empty, duplicate, NUL, missing and non-struct paths before publication."""
     with pytest.raises(ValueError):
         Table(name="t", columns=COLUMNS, required_filters=groups)

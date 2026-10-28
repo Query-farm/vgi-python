@@ -100,7 +100,7 @@ def test_bind_and_init_preserve_argument_metadata() -> None:
         pa.array([[("a", 1)]], type=pa.map_(pa.string(), pa.int64())),
     ],
 )
-def test_encoded_arrow_types_retain_values_and_annotations(array: pa.Array) -> None:
+def test_encoded_arrow_types_retain_values_and_annotations(array: pa.Array[pa.Scalar[pa.DataType]]) -> None:
     schema = pa.schema([pa.field("positional_0", array.type, metadata={b"annotation": b"preserved"})])
     batch = pa.RecordBatch.from_arrays([array], schema=schema)
     values = TypedValueBatch.deserialize_from_bytes(TypedValueBatch(batch).serialize_to_bytes())
@@ -150,5 +150,5 @@ def test_public_http_bind_preserves_argument_metadata() -> None:
     original = _arguments()
     app = create_app(_MetadataWorker, describe=False, signing_key=b"metadata-test-key")
     with Client.from_http("http://vgi.test", httpx_client=_SyncTestClient(app)) as client:
-        response = client.bind(function_name="metadata", schema_path=None, arguments=Arguments.from_batch(original))
+        response = client.bind(function_name="metadata", schema_path=["main"], arguments=Arguments.from_batch(original))
     assert response.output_schema.equals(original.schema, check_metadata=True)

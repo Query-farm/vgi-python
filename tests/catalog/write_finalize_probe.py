@@ -44,7 +44,8 @@ from vgi.table_in_out_function import TableInOutGenerator
 from vgi.worker import Worker
 from vgi.write_results import write_result_schema
 
-_ROWS = pa.schema([("id", pa.int64()), ("label", pa.string())])
+_ROW_FIELDS: list[pa.Field[Any]] = [pa.field("id", pa.int64()), pa.field("label", pa.string())]
+_ROWS = pa.schema(_ROW_FIELDS)
 _COUNT = write_result_schema("count", _ROWS)
 
 

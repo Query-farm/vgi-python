@@ -5,6 +5,8 @@
 import sqlite3
 from contextlib import closing
 from dataclasses import replace
+from pathlib import Path
+from typing import Any, cast
 
 import pyarrow as pa
 import pytest
@@ -13,22 +15,25 @@ from vgi_rpc.rpc import AuthContext, CallContext
 
 from vgi import attach_capabilities
 from vgi.arguments import Arguments
+from vgi.catalog import CatalogAttachResult
 from vgi.catalog.capabilities import CatalogCapabilities
 from vgi.catalog.query import (
     QUERY_ENCODING,
     QUERY_EXECUTOR,
     QUERY_EXPLICIT,
     CatalogQueryPrepareRequest,
+    CatalogQueryPrepareResult,
     QueryEvaluationContext,
 )
 from vgi.client import Client
 from vgi.invocation import FunctionType
 from vgi.meta_worker import MetaWorker
-from vgi.protocol import BindRequest, CatalogAttachRequest, ClientCapabilities, InitRequest
+from vgi.protocol import BindRequest, CatalogAttachRequest, ClientCapabilities, InitRequest, VgiProtocol
 from vgi.query_parameters import QueryParameters
 from vgi.serve import create_app
 
 from .query_reference import OFFER, QueryReferenceCatalog, QueryReferenceProvider, QueryReferenceWorker
+from .typing_helpers import present
 
 KEY = b"query-reference-signing-key"
 CTX = CallContext(auth=AuthContext.anonymous(), emit_client_log=lambda *args, **kwargs: None)
@@ -38,14 +43,14 @@ CAPS = ClientCapabilities(
 
 
 @pytest.fixture
-def backend(tmp_path, monkeypatch):
+def backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> QueryReferenceWorker:
     monkeypatch.setattr(QueryReferenceCatalog, "database_path", str(tmp_path / "query.sqlite"), raising=False)
     worker = QueryReferenceWorker(quiet=True)
     worker._signing_key = KEY
     return worker
 
 
-def client(attach=None):
+def client(attach: bytes | None = None) -> Client:
     return Client.from_http(
         "http://vgi.test",
         attach_opaque_data=attach,
@@ -53,20 +58,25 @@ def client(attach=None):
     )
 
 
-def attach(c, capabilities=CAPS):
+def attach(c: Client, capabilities: ClientCapabilities = CAPS) -> CatalogAttachResult:
     return c.catalog_attach(
         name="queries", data_version_spec=None, implementation_version=None, client_capabilities=capabilities
     )
 
 
-def parameters(value=3, name="value", dtype=None):
+def parameters(value: int | str | None = 3, name: str = "value", dtype: pa.DataType | None = None) -> QueryParameters:
     return QueryParameters.from_batch(
         pa.record_batch([pa.array([value], type=dtype or pa.int32())], names=[name]),
         mode="positional" if name == "1" else "named",
     )
 
 
-def request(attached, values=None, query="SELECT $value AS result", tx=None):
+def request(
+    attached: CatalogAttachResult,
+    values: QueryParameters | None = None,
+    query: str = "SELECT $value AS result",
+    tx: bytes | None = None,
+) -> CatalogQueryPrepareRequest:
     return CatalogQueryPrepareRequest(
         attach_opaque_data=attached.attach_opaque_data,
         encoding=QUERY_ENCODING,
@@ -81,7 +91,12 @@ def request(attached, values=None, query="SELECT $value AS result", tx=None):
     )
 
 
-def bind_request(attached, prepared, values=None, tx=None):
+def bind_request(
+    attached: CatalogAttachResult,
+    prepared: CatalogQueryPrepareResult,
+    values: QueryParameters | None = None,
+    tx: bytes | None = None,
+) -> BindRequest:
     return BindRequest(
         function_name=QUERY_EXECUTOR,
         schema_path=[],
@@ -97,7 +112,7 @@ def bind_request(attached, prepared, values=None, tx=None):
     )
 
 
-def counts():
+def counts() -> dict[str, int]:
     with closing(sqlite3.connect(QueryReferenceCatalog.database_path)) as db:
         return {
             table: db.execute(f"SELECT count(*) FROM query_{table}").fetchone()[0]
@@ -105,20 +120,21 @@ def counts():
         } | {"starts": db.execute("SELECT starts FROM query_audit").fetchone()[0]}
 
 
-def test_query_agreement_is_optional_private_and_portable(backend):
+def test_query_agreement_is_optional_private_and_portable(backend: QueryReferenceWorker) -> None:
     with client() as c:
         no_offer = attach(c, replace(CAPS, query_pushdown=None))
         selected = attach(c)
         assert no_offer.query_pushdown is None
-        assert selected.query_pushdown.semantic_profiles == [QUERY_EXPLICIT]
+        assert present(selected.query_pushdown).semantic_profiles == [QUERY_EXPLICIT]
         assert selected.attach_opaque_data_required
         with pytest.raises(Exception, match="query|capability"):
             c.catalog_query_prepare(request(no_offer))
     other = QueryReferenceWorker(quiet=True)
     other._signing_key = KEY
     plain = other._open_attach_context(selected.attach_opaque_data, None)
+    assert plain is not None
     assert attach_capabilities.agreement(plain) == CatalogCapabilities()
-    offer, agreement = attach_capabilities.query_agreement(plain)
+    offer, agreement = present(attach_capabilities.query_agreement(plain))
     assert offer == OFFER and agreement == selected.query_pushdown
     assert other._unwrap_attach_full(selected.attach_opaque_data) == attach_capabilities.split(plain)[1]
     for payload in [b"VGI\0CAPQ\0", b"VGI\0CAPQ\0\0\0\0\1x", plain[:25]]:
@@ -131,7 +147,9 @@ def test_query_agreement_is_optional_private_and_portable(backend):
 
 
 @pytest.mark.parametrize("name,query", [("value", "SELECT $value AS result"), ("1", "SELECT $1 AS result")])
-def test_prepare_bind_do_not_execute_and_values_rebind_without_casts(backend, name, query):
+def test_prepare_bind_do_not_execute_and_values_rebind_without_casts(
+    backend: QueryReferenceWorker, name: str, query: str
+) -> None:
     with client() as c:
         attached = attach(c)
         first = parameters(None, name)
@@ -160,7 +178,7 @@ def test_prepare_bind_do_not_execute_and_values_rebind_without_casts(backend, na
         assert counts()["starts"] == 3
 
 
-def test_repeated_placeholder_empty_result_and_ordered_multibatch(backend):
+def test_repeated_placeholder_empty_result_and_ordered_multibatch(backend: QueryReferenceWorker) -> None:
     with client() as c:
         attached = attach(c)
         for query, values, expected in [
@@ -185,10 +203,12 @@ def test_repeated_placeholder_empty_result_and_ordered_multibatch(backend):
         assert counts()["starts"] == 3
 
 
-def test_receipts_bind_attachment_transaction_revision_and_release(backend, monkeypatch):
+def test_receipts_bind_attachment_transaction_revision_and_release(
+    backend: QueryReferenceWorker, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with client() as c:
         attached, other = attach(c), attach(c)
-        tx = c.catalog_transaction_begin(attach_opaque_data=attached.attach_opaque_data)
+        tx = present(c.catalog_transaction_begin(attach_opaque_data=attached.attach_opaque_data))
         prepared = c.catalog_query_prepare(request(attached, tx=tx))
         for wrong_attach, wrong_tx in [(other, tx), (attached, None)]:
             with pytest.raises(Exception, match="opaque|query|transaction"):
@@ -198,12 +218,12 @@ def test_receipts_bind_attachment_transaction_revision_and_release(backend, monk
             backend.bind(bind_request(attached, prepared, tx=tx), CTX)
         c.catalog_query_release(
             attach_opaque_data=attached.attach_opaque_data,
-            prepared_query_token=prepared.prepared_query_token,
+            prepared_query_token=present(prepared.prepared_query_token),
             transaction_opaque_data=tx,
         )
         c.catalog_query_release(
             attach_opaque_data=attached.attach_opaque_data,
-            prepared_query_token=prepared.prepared_query_token,
+            prepared_query_token=present(prepared.prepared_query_token),
             transaction_opaque_data=tx,
         )
         assert counts()["preparations"] == counts()["starts"] == 0
@@ -223,7 +243,9 @@ def test_receipts_bind_attachment_transaction_revision_and_release(backend, monk
         {"tablesample_percentage": 10.0},
     ],
 )
-def test_query_executor_rejects_alternate_init_before_start(backend, change):
+def test_query_executor_rejects_alternate_init_before_start(
+    backend: QueryReferenceWorker, change: dict[str, Any]
+) -> None:
     with client() as c:
         attached = attach(c)
         prepared = c.catalog_query_prepare(request(attached))
@@ -235,7 +257,7 @@ def test_query_executor_rejects_alternate_init_before_start(backend, change):
         assert counts()["starts"] == 0
 
 
-def test_generator_close_transaction_end_and_detach_cleanup(backend):
+def test_generator_close_transaction_end_and_detach_cleanup(backend: QueryReferenceWorker) -> None:
     with client() as c:
         attached = attach(c)
         values = QueryParameters.empty()
@@ -247,7 +269,7 @@ def test_generator_close_transaction_end_and_detach_cleanup(backend):
         assert next(rows).column(0).to_pylist() == [0, 1]
         rows.close()
         assert counts()["executions"] == counts()["fragments"] == 0
-        tx = c.catalog_transaction_begin(attach_opaque_data=attached.attach_opaque_data)
+        tx = present(c.catalog_transaction_begin(attach_opaque_data=attached.attach_opaque_data))
         prepared = c.catalog_query_prepare(request(attached, values, query, tx))
         c.catalog_transaction_rollback(attach_opaque_data=attached.attach_opaque_data, transaction_opaque_data=tx)
         with pytest.raises(Exception, match="transaction|missing"):
@@ -263,7 +285,7 @@ def test_generator_close_transaction_end_and_detach_cleanup(backend):
         assert counts()["preparations"] == 0
 
 
-def test_meta_worker_routes_prepare_and_release_with_private_agreement(backend):
+def test_meta_worker_routes_prepare_and_release_with_private_agreement(backend: QueryReferenceWorker) -> None:
     meta = MetaWorker([backend])
     meta._signing_key = KEY
     attached = meta.catalog_attach(
@@ -273,13 +295,15 @@ def test_meta_worker_routes_prepare_and_release_with_private_agreement(backend):
     )
     prepared = meta.catalog_query_prepare(request(attached))
     assert meta.bind(bind_request(attached, prepared), CTX).output_schema.names == ["result"]
-    meta.catalog_query_release(
-        attach_opaque_data=attached.attach_opaque_data, prepared_query_token=prepared.prepared_query_token
+    cast(VgiProtocol, meta).catalog_query_release(
+        attach_opaque_data=attached.attach_opaque_data, prepared_query_token=present(prepared.prepared_query_token)
     )
     assert counts()["preparations"] == 0
 
 
-def test_quota_and_expiry_are_bounded_and_cleanup_needs_no_client_release(backend, monkeypatch):
+def test_quota_and_expiry_are_bounded_and_cleanup_needs_no_client_release(
+    backend: QueryReferenceWorker, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with client() as c:
         attached = attach(c)
         monkeypatch.setattr(QueryReferenceProvider, "max_resources", 1)
@@ -288,12 +312,14 @@ def test_quota_and_expiry_are_bounded_and_cleanup_needs_no_client_release(backen
             c.catalog_query_prepare(request(attached))
         with closing(sqlite3.connect(QueryReferenceCatalog.database_path)) as db, db:
             db.execute("UPDATE query_preparations SET expires=0")
-        backend._get_catalog().query_provider.sweep()
+        provider = backend._get_catalog().query_provider
+        assert isinstance(provider, QueryReferenceProvider)
+        provider.sweep()
         assert counts()["preparations"] == 0
         assert c.catalog_query_prepare(request(attached)).status == "accepted"
 
 
-def test_fresh_worker_resumes_ordered_fragments_after_preparation_release(backend):
+def test_fresh_worker_resumes_ordered_fragments_after_preparation_release(backend: QueryReferenceWorker) -> None:
     with client() as c:
         attached = attach(c)
         values = QueryParameters.empty()
@@ -302,10 +328,11 @@ def test_fresh_worker_resumes_ordered_fragments_after_preparation_release(backen
         call = bind_request(attached, prepared, values)
         cursor = c.table_scan_resumable(function_name=QUERY_EXECUTOR, schema_path=[], arguments=call.arguments)
         first, token = cursor.next()
+        assert first is not None
         assert first.column(0).to_pylist() == [0, 1] and token is not None
         cursor.close()  # HTTP releases the local reader; the execution has its own lease.
         c.catalog_query_release(
-            attach_opaque_data=attached.attach_opaque_data, prepared_query_token=prepared.prepared_query_token
+            attach_opaque_data=attached.attach_opaque_data, prepared_query_token=present(prepared.prepared_query_token)
         )
         assert counts()["preparations"] == 0 and counts()["starts"] == 1
     # A different app/Worker and connection recover only the shared fragments.
@@ -318,14 +345,16 @@ def test_fresh_worker_resumes_ordered_fragments_after_preparation_release(backen
             batch, _ = cursor.next()
             if batch is None:
                 break
-            rows.extend(batch.column(0).to_pylist())
+            rows.extend(int(present(value)) for value in batch.column(0).to_pylist())
         cursor.close()
     assert rows == list(range(7))
     assert counts() == {"preparations": 0, "executions": 0, "fragments": 0, "starts": 1}
 
 
 @pytest.mark.parametrize("failure", ["missing", "wrong_schema", "expired", "policy"])
-def test_failed_continuation_never_reexecutes_or_falls_back(backend, monkeypatch, failure):
+def test_failed_continuation_never_reexecutes_or_falls_back(
+    backend: QueryReferenceWorker, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
     with client() as c:
         attached = attach(c)
         values = QueryParameters.empty()
@@ -336,6 +365,7 @@ def test_failed_continuation_never_reexecutes_or_falls_back(backend, monkeypatch
         )
         _, token = cursor.next()
         cursor.close()
+        assert token is not None
     if failure == "policy":
         monkeypatch.setattr(QueryReferenceProvider, "revision", "changed")
     else:
@@ -358,7 +388,9 @@ def test_failed_continuation_never_reexecutes_or_falls_back(backend, monkeypatch
     assert counts()["executions"] == counts()["fragments"] == 0
 
 
-def test_query_receipts_are_authentication_bound_and_tampering_rejects(backend, monkeypatch):
+def test_query_receipts_are_authentication_bound_and_tampering_rejects(
+    backend: QueryReferenceWorker, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import vgi.query_execution as execution
 
     alice = AuthContext(domain="fixture", authenticated=True, principal="alice")
@@ -371,9 +403,12 @@ def test_query_receipts_are_authentication_bound_and_tampering_rejects(backend, 
         )
     )
     prepared = backend.catalog_query_prepare(request(attached))
+    assert prepared.prepared_query_token is not None
+    assert attached.query_pushdown is not None
     tampered = replace(
         prepared,
-        prepared_query_token=prepared.prepared_query_token[:-1] + bytes([prepared.prepared_query_token[-1] ^ 1]),
+        prepared_query_token=present(prepared.prepared_query_token)[:-1]
+        + bytes([prepared.prepared_query_token[-1] ^ 1]),
     )
     with pytest.raises(Exception, match="opaque|query"):
         backend.bind(bind_request(attached, tampered), CTX)
@@ -390,7 +425,7 @@ def test_query_receipts_are_authentication_bound_and_tampering_rejects(backend, 
     assert counts()["starts"] == 0
 
 
-def test_reserved_executor_is_hidden_and_cannot_be_registered(backend):
+def test_reserved_executor_is_hidden_and_cannot_be_registered(backend: QueryReferenceWorker) -> None:
     from vgi.query_execution import executor_type
     from vgi.worker import Worker
 

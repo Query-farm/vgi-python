@@ -2,13 +2,18 @@
 # ruff: noqa: D103
 """Object identity, dependency validation and order-independent drop closure."""
 
+from __future__ import annotations
+
 import itertools
 from dataclasses import replace
+from typing import Any, Literal, cast
 
 import pyarrow as pa
 import pytest
 
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot, ObjectDependency
+
+from .typing_helpers import present
 
 
 def ref(name: str, kind: str = "table", path: list[str] | None = None, owner: str | None = None) -> CatalogObjectRef:
@@ -70,7 +75,7 @@ def test_identity_preserves_raw_paths_owner_and_spelling() -> None:
         dict(kind="trigger", owner_table=""),
     ],
 )
-def test_malformed_object_references_reject(kwargs: dict) -> None:
+def test_malformed_object_references_reject(kwargs: dict[str, Any]) -> None:
     with pytest.raises((ValueError, TypeError)):
         CatalogObjectRef(**(dict(kind="table", schema_path=["main"], name="t") | kwargs))
 
@@ -201,7 +206,7 @@ def test_edges_merge_only_within_full_column_identity_and_canonicalize_paths() -
         {"dependent_column_path": [None]},
     ],
 )
-def test_column_edge_rejects_malformed_flags_and_paths(kwargs: dict) -> None:
+def test_column_edge_rejects_malformed_flags_and_paths(kwargs: dict[str, Any]) -> None:
     with pytest.raises((ValueError, TypeError)):
         replace(edge(ref("a"), ref("b")), **kwargs)
 
@@ -246,7 +251,9 @@ def test_column_validation_proves_exact_schema_identity_not_just_path_syntax() -
 
 
 @pytest.mark.parametrize("action", ["rename", "type", "drop"])
-def test_semantic_protection_is_symmetric_for_parent_child_but_not_dotted_names(action: str) -> None:
+def test_semantic_protection_is_symmetric_for_parent_child_but_not_dotted_names(
+    action: Literal["rename", "type", "drop"],
+) -> None:
     table, view = ref("t"), ref("v", "view")
     value = graph([table, view], [edge(view, table, paths=[["a", "b"]])])
     for path in [["a"], ["a", "b"], ["a", "b", "child"]]:
@@ -382,11 +389,11 @@ def test_semantic_plans_recheck_mutation_target_schemas_and_actions() -> None:
     with pytest.raises(ValueError, match="does not exist"):
         value.plan_alter(ref("absent"), action="rename")
     with pytest.raises(ValueError, match="unknown semantic"):
-        value.plan_alter(table, action="comment")
+        value.plan_alter(table, action=cast(Literal["rename", "type", "drop"], "comment"))
     with pytest.raises(ValueError, match="boolean"):
-        value.plan_alter(table, action="drop", cascade=1)
+        value.plan_alter(table, action="drop", cascade=cast(bool, 1))
     dependency = edge(table, table, column=["generated"], paths=[["source"]])
-    dependency.subject_column_paths.append([])
+    present(dependency.subject_column_paths).append([])
     with pytest.raises(ValueError, match="at least one"):
         dependency.serialize_to_bytes()
 

@@ -23,36 +23,49 @@ import os
 import threading
 import time
 import uuid
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar, Literal, overload
 from wsgiref.simple_server import make_server
 
 import duckdb
 import pyarrow as pa
+from vgi_rpc.rpc import CallContext
 
 from vgi.catalog import (
     AttachOpaqueData,
+    CatalogAttachResult,
+    FunctionInfo,
+    IndexInfo,
+    MacroInfo,
     ReadOnlyCatalogInterface,
     SchemaInfo,
     SchemaObjectType,
+    SerializedSchema,
     TableInfo,
     TransactionOpaqueData,
+    ViewInfo,
 )
 from vgi.catalog.query import (
     QUERY_ENCODING,
     QUERY_EXPLICIT,
     QUERY_STATEMENT,
     STATEMENT_RESULT_KEY,
+    CatalogQueryPrepareRequest,
     CatalogQueryPrepareResult,
     ClientQueryCapabilities,
     QueryCapabilities,
     QueryEvaluationContext,
 )
-from vgi.query_parameters import PARAMETER_MODE_KEY, read_parameter_schema
-from vgi.query_provider import CatalogQueryProvider, QueryExecution, QueryPreparation
+from vgi.protocol import ClientCapabilities
+from vgi.query_parameters import PARAMETER_MODE_KEY, QueryParameters, read_parameter_schema
+from vgi.query_provider import CatalogQueryProvider, QueryExecution, QueryOwner, QueryPreparation
+from vgi.schema_path import SchemaPath
 from vgi.worker import Worker
+
+from .typing_helpers import present
 
 INSERT = "INSERT INTO items VALUES ($id, $label)"
 INSERT_RETURNING = INSERT + " RETURNING id, label"
@@ -63,7 +76,8 @@ CREATE = "CREATE TABLE added (value BIGINT)"
 DROP = "DROP TABLE added"
 SELECT = "SELECT id, label FROM items ORDER BY id"
 BASELINE = [(0, "zero"), (1, "one"), (2, "two")]
-ROWS = pa.schema([("id", pa.int64()), ("label", pa.string())])
+ROW_FIELDS: list[pa.Field[Any]] = [pa.field("id", pa.int64()), pa.field("label", pa.string())]
+ROWS = pa.schema(ROW_FIELDS)
 COMMAND = pa.schema([("affected_rows", pa.int64())], metadata={STATEMENT_RESULT_KEY: b"command"})
 RETURNING = ROWS.with_metadata({STATEMENT_RESULT_KEY: b"rows"})
 TYPES = {pa.int64(): duckdb.sqltypes.BIGINT, pa.string(): duckdb.sqltypes.VARCHAR}
@@ -94,7 +108,7 @@ STATEMENTS = {
 }
 
 
-def now_ms():
+def now_ms() -> int:
     return time.time_ns() // 1_000_000
 
 
@@ -133,11 +147,13 @@ class StatementAuthority:
     max_result_rows = 10_000
     max_result_bytes = 1024 * 1024
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path) -> None:
         self.lock = threading.RLock()
         self.connection = duckdb.connect(str(path), config={"enable_external_access": False, "threads": 1})
         self.connection.execute("CREATE TABLE IF NOT EXISTS _statement_version (version BIGINT)")
-        if self.connection.execute("SELECT count(*) FROM _statement_version").fetchone()[0] == 0:
+        row = self.connection.execute("SELECT count(*) FROM _statement_version").fetchone()
+        assert row is not None
+        if row[0] == 0:
             self.connection.execute("INSERT INTO _statement_version VALUES (1)")
             self.connection.execute("CREATE TABLE items (id BIGINT, label VARCHAR)")
             self.connection.executemany("INSERT INTO items VALUES (?, ?)", BASELINE)
@@ -152,13 +168,13 @@ class StatementAuthority:
         # Test-only fault is copied into the next execution, never looked up on replay.
         self.fail_read_at: int | None = None
 
-    def authorize(self, attach):
+    def authorize(self, attach: bytes) -> None:
         if attach not in self.attachments:
             raise ValueError("statement attachment is closed")
 
-    def transaction(self, attach, token, *, allow_failed=False):
+    def transaction(self, attach: bytes, token: bytes | None, *, allow_failed: bool = False) -> _Transaction:
         self.authorize(attach)
-        tx = self.transactions.get(token)
+        tx = None if token is None else self.transactions.get(token)
         if tx is None or tx.attach != attach:
             raise ValueError("statement transaction is inactive or belongs to another attachment")
         if tx.expires <= now_ms():
@@ -168,7 +184,7 @@ class StatementAuthority:
         return tx
 
     @contextmanager
-    def reader(self, attach, token=None):
+    def reader(self, attach: bytes, token: bytes | None = None) -> Iterator[duckdb.DuckDBPyConnection]:
         with self.lock:
             self.authorize(attach)
             if token is not None:
@@ -180,20 +196,22 @@ class StatementAuthority:
                 finally:
                     connection.close()
 
-    def remove_transaction(self, token):
+    def remove_transaction(self, token: bytes) -> None:
         tx = self.transactions.pop(token)
         tx.connection.close()
         self.preparations = {key: value for key, value in self.preparations.items() if value[1] != token}
         self.executions = {key: value for key, value in self.executions.items() if value.transaction != token}
 
-    def sweep(self):
+    def sweep(self) -> None:
         with self.lock:
             for token, tx in list(self.transactions.items()):
                 if tx.expires <= now_ms():
                     tx.connection.execute("ROLLBACK")
                     self.remove_transaction(token)
             self.preparations = {
-                key: value for key, value in self.preparations.items() if value[2].result.expires_at_epoch_ms > now_ms()
+                key: value
+                for key, value in self.preparations.items()
+                if (value[2].result.expires_at_epoch_ms or 0) > now_ms()
             }
             self.completed = {key: value for key, value in self.completed.items() if value.expires > now_ms()}
             for handle, result in list(self.executions.items()):
@@ -203,7 +221,7 @@ class StatementAuthority:
                     tx.pending.discard(handle)
                     del self.executions[handle]
 
-    def close(self):
+    def close(self) -> None:
         with self.lock:
             for token in list(self.transactions):
                 self.transactions[token].connection.execute("ROLLBACK")
@@ -214,10 +232,10 @@ class StatementAuthority:
 class StatementReferenceProvider(CatalogQueryProvider):
     """Describe finite SQL, then execute it on its owner's transaction connection."""
 
-    def __init__(self, authority):
+    def __init__(self, authority: StatementAuthority) -> None:
         self.authority = authority
 
-    def capabilities(self, *, owner, offer):
+    def capabilities(self, *, owner: QueryOwner, offer: ClientQueryCapabilities) -> QueryCapabilities | None:
         with self.authority.lock:
             self.authority.authorize(owner.attach_opaque_data)
             return QueryCapabilities(
@@ -230,7 +248,7 @@ class StatementReferenceProvider(CatalogQueryProvider):
                 default_evaluation_context=QueryEvaluationContext(),
             )
 
-    def prepare(self, *, owner, request):
+    def prepare(self, *, owner: QueryOwner, request: CatalogQueryPrepareRequest) -> CatalogQueryPrepareResult:
         authority = self.authority
         with authority.lock:
             authority.sweep()
@@ -244,7 +262,9 @@ class StatementReferenceProvider(CatalogQueryProvider):
             if len(authority.preparations) >= authority.max_resources:
                 raise ValueError("statement preparation quota exceeded")
             # Only metadata lookup: no SQL from request is run during prepare/bind.
-            version = tx.connection.execute("SELECT version FROM _statement_version").fetchone()[0]
+            row = tx.connection.execute("SELECT version FROM _statement_version").fetchone()
+            assert row is not None
+            version = int(row[0])
             result = CatalogQueryPrepareResult(
                 status="accepted",
                 prepared_query_token=uuid.uuid4().bytes,
@@ -254,6 +274,8 @@ class StatementReferenceProvider(CatalogQueryProvider):
                 context_digest=request.evaluation_context.digest(request.encoding, request.semantic_profile),
                 expires_at_epoch_ms=min(tx.expires, now_ms() + authority.lifetime_ms),
             )
+            assert result.prepared_query_token is not None
+            assert owner.transaction_opaque_data is not None
             preparation = QueryPreparation(request=request, result=result)
             authority.preparations[result.prepared_query_token] = (
                 owner.scope,
@@ -262,17 +284,21 @@ class StatementReferenceProvider(CatalogQueryProvider):
             )
             return result
 
-    def resolve(self, *, owner, recipe):
+    def resolve(self, *, owner: QueryOwner, recipe: bytes) -> QueryPreparation:
         with self.authority.lock:
             self.authority.transaction(owner.attach_opaque_data, owner.transaction_opaque_data)
             saved = self.authority.preparations.get(recipe)
-            if saved is None or saved[0] != owner.scope or saved[2].result.expires_at_epoch_ms <= now_ms():
+            if saved is None or saved[0] != owner.scope or (saved[2].result.expires_at_epoch_ms or 0) <= now_ms():
                 raise ValueError("statement preparation is missing, expired or belongs to another owner")
             return saved[2]
 
-    def start(self, *, owner, preparation, parameters, execution_id):
+    def start(
+        self, *, owner: QueryOwner, preparation: QueryPreparation, parameters: QueryParameters, execution_id: bytes
+    ) -> QueryExecution:
         authority = self.authority
         with authority.lock:
+            assert preparation.result.prepared_query_token is not None
+            assert owner.transaction_opaque_data is not None
             saved = self.resolve(owner=owner, recipe=preparation.result.prepared_query_token)
             if saved != preparation:
                 raise ValueError("statement preparation changed")
@@ -296,7 +322,9 @@ class StatementReferenceProvider(CatalogQueryProvider):
                 }
                 cursor = tx.connection.execute(saved.request.query, values)
                 if spec.output == COMMAND:
-                    count = None if spec.ddl else cursor.fetchone()[0]
+                    row = None if spec.ddl else cursor.fetchone()
+                    assert spec.ddl or row is not None
+                    count = None if row is None else row[0]
                     cursor.fetchall()
                     batches = [pa.record_batch([pa.array([count], type=pa.int64())], schema=COMMAND)]
                     if spec.ddl:
@@ -334,7 +362,7 @@ class StatementReferenceProvider(CatalogQueryProvider):
                 tx.failed = True
                 raise
 
-    def read(self, *, owner, handle, position):
+    def read(self, *, owner: QueryOwner, handle: bytes, position: int) -> pa.RecordBatch | None:
         with self.authority.lock:
             tx = self.authority.transaction(owner.attach_opaque_data, owner.transaction_opaque_data)
             result = self.authority.executions.get(handle)
@@ -351,7 +379,7 @@ class StatementReferenceProvider(CatalogQueryProvider):
                 return None
             return result.batches[position]
 
-    def close(self, *, owner, handle, reason):
+    def close(self, *, owner: QueryOwner, handle: bytes, reason: str) -> None:
         with self.authority.lock:
             result = self.authority.executions.get(handle)
             if result is None:
@@ -364,7 +392,7 @@ class StatementReferenceProvider(CatalogQueryProvider):
             tx.pending.discard(handle)
             del self.authority.executions[handle]
 
-    def release(self, *, owner, recipe):
+    def release(self, *, owner: QueryOwner, recipe: bytes) -> None:
         with self.authority.lock:
             saved = self.authority.preparations.get(recipe)
             if saved is not None:
@@ -381,7 +409,7 @@ class StatementReferenceCatalog(ReadOnlyCatalogInterface):
     catalog_contents_attach_independent = False
     authority: ClassVar[StatementAuthority | None] = None
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         if type(self).authority is None:
             root = Path(os.environ["VGI_STATEMENT_REFERENCE_DIR"])
@@ -389,16 +417,34 @@ class StatementReferenceCatalog(ReadOnlyCatalogInterface):
                 raise ValueError("VGI_STATEMENT_REFERENCE_DIR must name an isolated absolute directory")
             root.mkdir(parents=True, exist_ok=True)
             type(self).authority = StatementAuthority(root / "data.duckdb")
-        self.query_provider = StatementReferenceProvider(self.authority)
+        assert type(self).authority is not None
+        self._authority = present(type(self).authority)
+        self.query_provider = StatementReferenceProvider(self._authority)
 
-    def catalog_attach(self, **kwargs):
-        result = super().catalog_attach(**kwargs)
-        with self.authority.lock:
-            self.authority.sweep()
-            if len(self.authority.attachments) >= self.authority.max_resources:
+    def catalog_attach(
+        self,
+        *,
+        name: str,
+        options: dict[str, Any],
+        data_version_spec: str | None,
+        implementation_version: str | None,
+        client_capabilities: ClientCapabilities | None = None,
+        ctx: CallContext | None = None,
+    ) -> CatalogAttachResult:
+        result = super().catalog_attach(
+            name=name,
+            options=options,
+            data_version_spec=data_version_spec,
+            implementation_version=implementation_version,
+            client_capabilities=client_capabilities,
+            ctx=ctx,
+        )
+        with self._authority.lock:
+            self._authority.sweep()
+            if len(self._authority.attachments) >= self._authority.max_resources:
                 raise ValueError("statement attachment quota exceeded")
             attach = AttachOpaqueData(uuid.uuid4().bytes)
-            self.authority.attachments.add(attach)
+            self._authority.attachments.add(attach)
             return replace(
                 result,
                 attach_opaque_data=attach,
@@ -409,35 +455,35 @@ class StatementReferenceCatalog(ReadOnlyCatalogInterface):
                 catalog_version=self.catalog_version(attach_opaque_data=attach),
             )
 
-    def catalog_transaction_begin(self, *, attach_opaque_data):
-        with self.authority.lock:
-            self.authority.sweep()
-            self.authority.authorize(attach_opaque_data)
-            if len(self.authority.transactions) + len(self.authority.completed) >= self.authority.max_resources:
+    def catalog_transaction_begin(self, *, attach_opaque_data: AttachOpaqueData) -> TransactionOpaqueData:
+        with self._authority.lock:
+            self._authority.sweep()
+            self._authority.authorize(attach_opaque_data)
+            if len(self._authority.transactions) + len(self._authority.completed) >= self._authority.max_resources:
                 raise ValueError("statement transaction quota exceeded")
-            connection = self.authority.connection.cursor()
+            connection = self._authority.connection.cursor()
             try:
                 connection.execute("BEGIN")
             except Exception:
                 connection.close()
                 raise
             token = TransactionOpaqueData(uuid.uuid4().bytes)
-            self.authority.transactions[token] = _Transaction(
-                attach_opaque_data, connection, now_ms() + self.authority.lifetime_ms
+            self._authority.transactions[token] = _Transaction(
+                attach_opaque_data, connection, now_ms() + self._authority.lifetime_ms
             )
             return token
 
-    def _finish(self, attach, token, operation):
-        with self.authority.lock:
-            self.authority.authorize(attach)
-            completed = self.authority.completed.get(token)
+    def _finish(self, attach: bytes, token: bytes, operation: str) -> None:
+        with self._authority.lock:
+            self._authority.authorize(attach)
+            completed = self._authority.completed.get(token)
             if completed is not None:
                 if completed.attach != attach or completed.expires <= now_ms():
                     raise ValueError("statement completion is expired or belongs to another attachment")
                 if completed.operation != operation:
                     raise ValueError("statement transaction already completed with the opposite operation")
                 return
-            tx = self.authority.transaction(attach, token, allow_failed=True)
+            tx = self._authority.transaction(attach, token, allow_failed=True)
             if operation == "COMMIT" and (tx.failed or tx.pending):
                 raise ValueError("statement transaction failed or result is pending; rollback required")
             try:
@@ -445,35 +491,56 @@ class StatementReferenceCatalog(ReadOnlyCatalogInterface):
             except Exception:
                 tx.failed = True
                 raise
-            self.authority.remove_transaction(token)
-            self.authority.completed[token] = _Completion(attach, operation, now_ms() + self.authority.lifetime_ms)
+            self._authority.remove_transaction(token)
+            self._authority.completed[token] = _Completion(attach, operation, now_ms() + self._authority.lifetime_ms)
 
-    def catalog_transaction_commit(self, *, attach_opaque_data, transaction_opaque_data):
+    def catalog_transaction_commit(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData
+    ) -> None:
         self._finish(attach_opaque_data, transaction_opaque_data, "COMMIT")
 
-    def catalog_transaction_rollback(self, *, attach_opaque_data, transaction_opaque_data):
+    def catalog_transaction_rollback(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData
+    ) -> None:
         self._finish(attach_opaque_data, transaction_opaque_data, "ROLLBACK")
 
-    def catalog_detach(self, *, attach_opaque_data):
-        with self.authority.lock:
-            for token, tx in list(self.authority.transactions.items()):
+    def catalog_detach(self, *, attach_opaque_data: AttachOpaqueData) -> None:
+        with self._authority.lock:
+            for token, tx in list(self._authority.transactions.items()):
                 if tx.attach == attach_opaque_data:
                     self._finish(attach_opaque_data, token, "ROLLBACK")
-            self.authority.completed = {
-                key: value for key, value in self.authority.completed.items() if value.attach != attach_opaque_data
+            self._authority.completed = {
+                key: value for key, value in self._authority.completed.items() if value.attach != attach_opaque_data
             }
-            self.authority.attachments.discard(attach_opaque_data)
+            self._authority.attachments.discard(attach_opaque_data)
 
-    def catalog_version(self, *, attach_opaque_data, transaction_opaque_data=None, **kwargs):
-        with self.authority.reader(attach_opaque_data, transaction_opaque_data) as connection:
-            return connection.execute("SELECT version FROM _statement_version").fetchone()[0]
+    def catalog_version(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+        ctx: CallContext | None = None,
+    ) -> int:
+        with self._authority.reader(attach_opaque_data, transaction_opaque_data) as connection:
+            row = connection.execute("SELECT version FROM _statement_version").fetchone()
+            assert row is not None
+            return int(row[0])
 
-    def table_get(self, *, attach_opaque_data, transaction_opaque_data, schema_path, name, **kwargs):
+    def table_get(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        schema_path: SchemaPath,
+        name: str,
+        at_unit: str | None = None,
+        at_value: str | None = None,
+    ) -> TableInfo | None:
         if schema_path != ["main"] or name not in {"items", "added"}:
             return None
-        if any(value is not None for value in kwargs.values()):
+        if at_unit is not None or at_value is not None:
             raise ValueError("statement reference does not support time travel")
-        with self.authority.reader(attach_opaque_data, transaction_opaque_data) as connection:
+        with self._authority.reader(attach_opaque_data, transaction_opaque_data) as connection:
             if not connection.execute(
                 "SELECT 1 FROM information_schema.tables WHERE table_schema='main' AND table_name=?", [name]
             ).fetchone():
@@ -482,17 +549,80 @@ class StatementReferenceCatalog(ReadOnlyCatalogInterface):
             return TableInfo(
                 name=name,
                 schema_path=["main"],
-                columns=schema.serialize().to_pybytes(),
+                columns=SerializedSchema(schema.serialize().to_pybytes()),
                 constraints=[],
                 comment=None,
                 tags={},
             )
 
-    def schemas(self, *, attach_opaque_data, transaction_opaque_data):
+    def schemas(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None
+    ) -> list[SchemaInfo]:
         self.catalog_version(attach_opaque_data=attach_opaque_data, transaction_opaque_data=transaction_opaque_data)
         return [SchemaInfo(path=["main"], comment=None, tags={})]
 
-    def schema_contents(self, *, attach_opaque_data, transaction_opaque_data, path, type):
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: SchemaPath,
+        type: Literal[SchemaObjectType.TABLE],
+    ) -> Sequence[TableInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: SchemaPath,
+        type: Literal[SchemaObjectType.VIEW],
+    ) -> Sequence[ViewInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: SchemaPath,
+        type: Literal[
+            SchemaObjectType.SCALAR_FUNCTION,
+            SchemaObjectType.TABLE_FUNCTION,
+            SchemaObjectType.AGGREGATE_FUNCTION,
+        ],
+    ) -> Sequence[FunctionInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: SchemaPath,
+        type: Literal[SchemaObjectType.SCALAR_MACRO, SchemaObjectType.TABLE_MACRO],
+    ) -> Sequence[MacroInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: SchemaPath,
+        type: Literal[SchemaObjectType.INDEX],
+    ) -> Sequence[IndexInfo]: ...
+
+    def schema_contents(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: SchemaPath,
+        type: SchemaObjectType,
+    ) -> Sequence[TableInfo | ViewInfo | FunctionInfo | MacroInfo | IndexInfo]:
         if path != ["main"] or type != SchemaObjectType.TABLE:
             return []
         return [
@@ -516,7 +646,7 @@ class StatementReferenceWorker(Worker):
     catalog_interface = StatementReferenceCatalog
 
 
-def main():
+def main() -> None:
     from vgi.serve import create_app
 
     parser = argparse.ArgumentParser(description=__doc__)
