@@ -75,7 +75,7 @@ class Rates(TableFunctionGenerator[RatesArgs, None]):
         description = "Exchange rates from a slow upstream, cacheable for 5 minutes"
 
     @classmethod
-    def process(cls, params: ProcessParams[RatesArgs, None], state: None, out: OutputCollector) -> None:
+    def process(cls, params: ProcessParams[RatesArgs], state: None, out: OutputCollector) -> None:
         """Answer the scan — or, if the client's copy is still current, say so."""
         vgi_out = cast(VgiOutputCollector, out)
 
