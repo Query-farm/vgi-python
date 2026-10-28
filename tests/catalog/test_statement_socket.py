@@ -5,10 +5,11 @@
 from __future__ import annotations
 
 import os
-import selectors
 import subprocess
 import sys
 from pathlib import Path
+from queue import Empty, Queue
+from threading import Thread
 
 from vgi.client import Client
 
@@ -18,7 +19,8 @@ from .test_statement_protocol import attach, begin, execute, finish, parameters,
 
 def test_statement_example_over_socket_http(tmp_path: Path) -> None:
     env = os.environ | {"VGI_STATEMENT_REFERENCE_DIR": str(tmp_path / "provider")}
-    with (tmp_path / "provider.log").open("wb") as log:
+    log_path = tmp_path / "provider.log"
+    with log_path.open("wb") as log:
         server = subprocess.Popen(
             [sys.executable, "-m", "tests.catalog.statement_reference", "--port", "0"],
             cwd=Path(__file__).resolve().parents[2],
@@ -26,13 +28,30 @@ def test_statement_example_over_socket_http(tmp_path: Path) -> None:
             stdout=subprocess.PIPE,
             stderr=log,
         )
+        reader: Thread | None = None
         try:
-            assert server.stdout is not None
-            with selectors.DefaultSelector() as selector:
-                selector.register(server.stdout, selectors.EVENT_READ)
-                assert selector.select(timeout=30), "statement example did not start"
-            announced = server.stdout.readline().decode().strip()
-            assert announced.startswith("PORT:"), announced
+            stdout = server.stdout
+            assert stdout is not None
+            readiness: Queue[str] = Queue(maxsize=1)
+
+            def read_readiness() -> None:
+                # Windows selectors accept sockets, not subprocess pipes. Keep
+                # the same bounded startup deadline on every platform.
+                readiness.put(stdout.readline().decode(errors="replace").strip())
+
+            reader = Thread(target=read_readiness, daemon=True)
+            reader.start()
+            try:
+                announced = readiness.get(timeout=30)
+            except Empty:
+                raise AssertionError(
+                    f"statement example did not start (exit={server.poll()}); "
+                    f"stderr:\n{log_path.read_text(errors='replace')}"
+                ) from None
+            assert announced.startswith("PORT:"), (
+                f"unexpected readiness line: {announced!r} (exit={server.poll()}); "
+                f"stderr:\n{log_path.read_text(errors='replace')}"
+            )
             url = f"http://127.0.0.1:{int(announced.split(':')[1])}"
             with Client.from_http(url) as client:
                 attached = attach(client)
@@ -69,5 +88,7 @@ def test_statement_example_over_socket_http(tmp_path: Path) -> None:
             except subprocess.TimeoutExpired:
                 server.kill()
                 server.wait(timeout=10)
+            if reader is not None:
+                reader.join(timeout=10)
             if server.stdout is not None:
                 server.stdout.close()
