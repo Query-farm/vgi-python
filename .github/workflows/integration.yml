@@ -27,7 +27,7 @@ concurrency:
 env:
   # The test suite and native Actions artifact must come from this exact ref.
   # The downloader verifies its provenance against the checked-out commit.
-  VGI_REF: a83ff7e8cd46aa840a10e78fe9b31603931824c2
+  VGI_REF: 7b1e1fbbe745d77fdacf52d6d135fa3ef4491d48
   VGI_NATIVE_RUNNER_BRANCH: release/vgi-v3-ci-20261028
   # CI is not a user: its ATTACHes should not land in Query.Farm's adoption data.
   # The vgi extension fires a telemetry event per successful ATTACH, and this
