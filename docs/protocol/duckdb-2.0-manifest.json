@@ -12512,5 +12512,71 @@
       "crash_passed": 2,
       "publication": "Committed locally only; not pushed, merged or released."
     }
+  },
+  "dependency_fix_checkpoint_2026_10_27": {
+    "status": "fixes_committed_release_candidates_qualified_publication_pending",
+    "evidence_root": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC/qualification/v3-dependency-fixes-20261027-vgttOv",
+    "java_rpc": {
+      "candidate_version": "0.33.2",
+      "fix_revision": "ec578e142021700be0d471a020d4929da9269e39",
+      "candidate_revision": "2f13ace76882659d1f1bcd745b869bb2099d2bd6",
+      "core_tests": {
+        "java21_passed": 680,
+        "java25_passed": 680
+      },
+      "ffm_tests": {
+        "java22_passed": 21,
+        "java25_passed": 21
+      },
+      "packaging": "JAR, sources, javadoc and POM built into an isolated Maven repository; SDK resolves the external module with composite source substitution disabled.",
+      "sdk_unit_passed": 803,
+      "sdk_unit_skipped": 2,
+      "publication": "Not pushed, merged or published; SDK dependency pin must remain unmerged until 0.33.2 is available from Maven Central.",
+      "sdk_revision": "0789d65560eaf4476dcc027e8c60e5af148b45e5",
+      "sdk_sql_passed_files": 336,
+      "sdk_sql_expected_skips": 37,
+      "sdk_crash_passed": 2,
+      "evidence": "java/summary.json"
+    },
+    "rust_sdk": {
+      "candidate_version": "0.48.0",
+      "candidate_revision": "a14e7f9425d16575b29d469aa0cfa24f4fd20497",
+      "toolchain": "1.97.0",
+      "passed_release_gates": [
+        "cargo fmt --all -- --check",
+        "cargo clippy -p vgi --all-targets --all-features -- -D warnings",
+        "cargo build --workspace",
+        "cargo build -p vgi --all-features",
+        "cargo test --doc -p vgi --all-features",
+        "vgi-protocol package dry-run"
+      ],
+      "doctests_passed": 9,
+      "doctests_ignored": 4,
+      "dependency_changes": "Only the seven workspace package versions change in the ignored local lock; all 493 registry dependency entries remain identical.",
+      "publication": "Not pushed, tagged or published. Dependent vgi and vgi-client registry package checks require publishing vgi-protocol first.",
+      "evidence": "rust/summary.json"
+    },
+    "native_fixtures": {
+      "fix_revision": "8bac1ab254db1133bfe8ac180e875552ffaa6261",
+      "changes": [
+        "Reject linked SDK protocol name/version mismatch before starting SAB worker threads.",
+        "Require matching registry SDK/protocol, RPC and Arrow dependencies across both fixture locks."
+      ],
+      "lock_checker_tests_passed": 6,
+      "negative_identity_proof": "All five SAB connection tests reject the real registry v2 fixture immediately, without thread abort or hang.",
+      "candidate_unit_cases_passed": 171,
+      "candidate_unit_assertions": 1400,
+      "candidate_fixture_sdk_revision": "3f46d2272e618c63dfff0929ab0ebdfdebb0a743",
+      "registry_pins": "Original consistent manifests and locks retained. Prepared VGI0.48.0/RPC0.32/Arrow60 changes are an uncommitted qualification patch until the SDK is published.",
+      "pending_patch": "native/fixture-0.48-publication-pending.patch",
+      "evidence": "native/summary.json"
+    },
+    "generation": "Strict --check --require-all across all SDKs passes.",
+    "remaining": [
+      "Publish Java RPC 0.33.2 and verify the SDK dependency through Maven Central.",
+      "Publish vgi-protocol, vgi and vgi-client 0.48.0 in dependency order.",
+      "Regenerate both native fixture Cargo.lock files from crates.io, commit their matching manifests/locks, and verify the full native unit target without candidate static-library overrides."
+    ],
+    "limits": "Local preparation commits only. No VGI main merge, public release or native DuckDB 2 enablement. The prior full language matrix remains the broader coverage checkpoint."
   }
 }
