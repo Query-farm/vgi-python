@@ -12293,5 +12293,224 @@
       "The initial C# command selected a historical sibling RPC checkout and failed unrelated IdentityFixture API compilation. The final focused run uses the checked-in published NuGet dependency and passes; both logs are retained."
     ],
     "review": "Independent read-only cross-repository review found no material issue in active routing, versions, hashes, generated references, publication identities or auxiliary-protocol independence."
+  },
+  "full_candidate_checkpoint_2026_10_27": {
+    "status": "candidate_suites_passed_published_dependency_release_blockers_remain",
+    "scope": "Full configured primary SQLLogic lanes and SDK suites; original skip allowlists, file exclusions and execution floors retained. This is not full optional external-service/platform/HTTP SQL coverage.",
+    "protocol": "vgi.v3/3.0.0",
+    "host": "ec2-user@54.224.166.207",
+    "artifacts": "/home/ec2-user/vgi-duckdb2-20261013-UgAEHC/qualification/protocol-v3-full-20261027-BwGMpF",
+    "native_engine_revision": "105edd31b57fe7e6d32ee648efad562e45a9f908",
+    "native_unittest_sha256": "3d00fad4dbb9d01b4f973368102f0d2cae6a8dd40c729773817f1f6a386ad325",
+    "sdk_units": {
+      "python": {
+        "passed": 4661,
+        "skipped": 129
+      },
+      "go": {
+        "passed": 908,
+        "skipped": 1,
+        "race": true,
+        "coverage": true
+      },
+      "rust": {
+        "passed": 723,
+        "ignored": 4,
+        "explicit_launcher_passed": 3
+      },
+      "typescript_arrowjs": {
+        "passed": 743,
+        "skipped": 68
+      },
+      "typescript_flechette": {
+        "passed": 744,
+        "skipped": 67
+      },
+      "java_with_patched_rpc": {
+        "passed": 803,
+        "skipped": 2
+      },
+      "csharp": {
+        "passed": 766,
+        "skipped": 0
+      },
+      "cpp": {
+        "passed": 94,
+        "skipped": 0
+      }
+    },
+    "sql_lanes": {
+      "python": {
+        "passed_files": 356,
+        "expected_skips": 33,
+        "failed": 0,
+        "dedicated_crash_passed": 2,
+        "crash_in_primary": false
+      },
+      "go": {
+        "passed_files": 358,
+        "expected_skips": 32,
+        "failed": 0,
+        "dedicated_crash_passed": 0,
+        "crash_in_primary": true
+      },
+      "rust": {
+        "passed_files": 342,
+        "expected_skips": 37,
+        "failed": 0,
+        "dedicated_crash_passed": 0,
+        "crash_in_primary": true
+      },
+      "typescript_arrowjs": {
+        "passed_files": 342,
+        "expected_skips": 46,
+        "failed": 0,
+        "dedicated_crash_passed": 2,
+        "crash_in_primary": false
+      },
+      "typescript_flechette": {
+        "passed_files": 342,
+        "expected_skips": 46,
+        "failed": 0,
+        "dedicated_crash_passed": 2,
+        "crash_in_primary": false
+      },
+      "java_with_patched_rpc": {
+        "passed_files": 336,
+        "expected_skips": 37,
+        "failed": 0,
+        "dedicated_crash_passed": 2,
+        "crash_in_primary": false
+      },
+      "csharp": {
+        "passed_files": 342,
+        "expected_skips": 37,
+        "failed": 0,
+        "dedicated_crash_passed": 2,
+        "crash_in_primary": false
+      },
+      "cpp": {
+        "passed_files": 341,
+        "expected_skips": 38,
+        "failed": 0,
+        "dedicated_crash_passed": 0,
+        "crash_in_primary": true
+      }
+    },
+    "release_blockers": [
+      {
+        "dependency": "vgi-rpc-java",
+        "published_version": "0.33.1",
+        "failure": "16 SDK unit failures plus catalog_contents SQL failure; scalar DICT_INT16_UTF8 record-field annotation is ignored. Patched source passes the complete Java matrix.",
+        "action": "Land/release minimal dictionary fix, pin the released artifact, and rerun Java without composite source override."
+      },
+      {
+        "dependency": "native SAB Rust fixture",
+        "published_vgi_version": "0.35.1",
+        "failure": "Committed fixture speaks vgi.v2/2.0.0; it cannot interoperate with the v3 native client.",
+        "action": "Qualify exact v3 candidate with explicit isolated staticlib overrides; update fixture requirements/locks to the matching published Rust SDK during the coordinated release and verify without overrides."
+      }
+    ],
+    "cpp_rpc_publication_proof": {
+      "qualified_revision": "3ee63c04a32b1bad75d722467ada25760c16ba7d",
+      "published_version": "0.11.0",
+      "published_revision": "25fad89ed4bc7746e2958537752a00fe0a707ecd",
+      "identical_tree": "3e9bd7a46c3fdb78ee2c0e8ba9fea1139aaf4c36"
+    },
+    "test_infrastructure_fixes": [
+      "Native unit target links the production extension archive and removes two obsolete boundary stubs to resolve successor helpers without duplicate symbols. Test-only cache paths select candidate SAB staticlibs explicitly.",
+      "Semantic ALTER diagnostic now verifies ordinary casts, unsupported expression rejection, and generated-column RESTRICT/CASCADE against the already implemented behavior."
+    ],
+    "diagnostics": [
+      "Initial Python run used too-long AF_UNIX paths; full rerun through a short symlink into the owned workspace passed.",
+      "Initial Go coverage tooling selected Go1.25.12 under Go1.26 compilation; full race+coverage rerun passed with explicit Go1.26 PATH.",
+      "Initial native contract selection included two hidden fixture-dependent cases without their fixtures; the corrected 81-case run passes, and both cases pass in their dedicated query/transaction runners."
+    ],
+    "tested_revisions": {
+      "vgi": "7d1597ed2e05a306aaa7ff82878e76d9b00fafbb",
+      "vgi-python": "4ab6cf0278b24d1288d03701b94ec31f38c00715",
+      "vgi-go": "ae8f35dc8324c7869648cb2ffd27bf0721397692",
+      "vgi-rust": "3f46d2272e618c63dfff0929ab0ebdfdebb0a743",
+      "vgi-typescript": "5ddfd82510db16f3d5a674ddcf8277d922bdfc82",
+      "vgi-java": "783fda8de9506ef3e98f7d46e0efcfe3d066901b",
+      "vgi-csharp": "ab8c3bfedd2ff6883b876b23fb8970239aadac25",
+      "vgi-cpp": "40eea1c662aec4cf679e38e34830ff5f921c6b5b"
+    },
+    "native_references": {
+      "catalog_contracts": {
+        "passed_cases": 81,
+        "assertions": 1864,
+        "log": "native/catalog-contracts-complete.log"
+      },
+      "macros": {
+        "passed_cases": 6,
+        "assertions": 129,
+        "log": "native/macro-families.log"
+      },
+      "queries": {
+        "passed_scenarios": 18,
+        "log": "native/queries.log"
+      },
+      "semantic_alter": {
+        "passed_scenarios": 6,
+        "log": "native/semantic-alter-qualified.log"
+      },
+      "transactional_writes": {
+        "passed_scenarios": 17,
+        "log": "native/transactional-writes.log"
+      },
+      "runner_tests": {
+        "passed": 10,
+        "log": "native/runner-tests.log"
+      },
+      "other_passed": [
+        "column paths / required filters / view aliases",
+        "schema dependencies",
+        "nullable default schema",
+        "column metadata and corpus",
+        "constraint and index reference",
+        "generated columns",
+        "projection acceptance",
+        "repeatability",
+        "query interruption",
+        "transaction cleanup",
+        "HTTP interruption"
+      ]
+    },
+    "native_support_tests": {
+      "filter": {
+        "cases": 14,
+        "assertions": 233
+      },
+      "settings": {
+        "cases": 8,
+        "assertions": 140
+      },
+      "cancellation": {
+        "cases": 9,
+        "assertions": 37
+      }
+    },
+    "native_units": {
+      "passed_cases": 171,
+      "assertions": 1395,
+      "scope": "Unfiltered native unit binary, including SAB ring, C++/Rust RPC and WebWorkerFunctionConnection; candidate Rust staticlibs selected explicitly.",
+      "log": "native/native-unit-full.log",
+      "fixtures": "native/candidate-fixtures-proof.json"
+    },
+    "java_minimal_fix": {
+      "revision": "ec578e142021700be0d471a020d4929da9269e39",
+      "base_published_revision": "3a8a300a10226be1b56e0458e81ffa3212b73f1d",
+      "branch": "codex/vgi-v3-record-dictionaries",
+      "local_worktree": "/Users/rusty/Development/vgi-rpc-java-v3-dictionary",
+      "scope": "Two files only: scalar record dictionary annotation derivation and regression tests; excludes the unrelated virtual-thread change.",
+      "rpc_regressions_passed": 5,
+      "sdk_passed": 803,
+      "sdk_skipped": 2,
+      "sql_passed_files": 336,
+      "sql_expected_skips": 37,
+      "crash_passed": 2,
+      "publication": "Committed locally only; not pushed, merged or released."
+    }
   }
 }
