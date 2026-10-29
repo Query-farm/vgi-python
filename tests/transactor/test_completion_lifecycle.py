@@ -28,6 +28,11 @@ from vgi.transactor.client import TransactorClient
 from vgi.transactor.protocol import TransactorProtocol
 from vgi.transactor.server import TransactorImpl
 
+# The transactor's client and server speak over AF_UNIX, which is POSIX-only.
+pytestmark = pytest.mark.skipif(
+    not hasattr(socket, "AF_UNIX"), reason="the transactor transport is AF_UNIX (POSIX-only)"
+)
+
 
 @pytest.fixture
 def transactor(tmp_path: Path) -> Iterator[tuple[TransactorImpl, bytes]]:
