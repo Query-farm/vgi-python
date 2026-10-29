@@ -322,7 +322,13 @@ def test_snapshot_rejects_duplicate_keys_labels_and_primary_keys() -> None:
         )
 
 
-@pytest.mark.parametrize("value", [b"", "not-bytes", b"x" * (contract.MAX_CONSTRAINT_TOKEN_BYTES + 1)])
+# Explicit ids: an oversized value as the test id overflows PYTEST_CURRENT_TEST,
+# and Windows limits an environment variable to 32,767 characters.
+@pytest.mark.parametrize(
+    "value",
+    [b"", "not-bytes", b"x" * (contract.MAX_CONSTRAINT_TOKEN_BYTES + 1)],
+    ids=["empty", "not-bytes", "over-limit"],
+)
 def test_revisions_and_owner_tokens_are_nonempty_bounded_bytes(value: bytes | str) -> None:
     for kwargs in [{"attach_opaque_data": value}, {"expected_revision": value}, {"transaction_opaque_data": value}]:
         with pytest.raises(ValueError):
