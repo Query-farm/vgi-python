@@ -1,11 +1,11 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
-"""The language-neutral model behind every SDK's generated ``vgi.v2`` registry.
+"""The language-neutral model behind every SDK's generated ``vgi.v3`` registry.
 
 Why the registry is generated
 -----------------------------
 
-``vgi.v2`` is the unit of optionality: every SDK hosts *every* method, with
+``vgi.v3`` is the unit of optionality: every SDK hosts *every* method, with
 exactly the reference's method type and params / result / header schemas, so
 ``vgi_rpc.Reflection.v1`` reports one protocol hash everywhere. A method an SDK
 does not implement is still registered and answers ``UNIMPLEMENTED`` /
@@ -61,7 +61,7 @@ There is one registry generator. It has three layers:
    here.
 
 Every backend's output is three things: **a complete declaration**
-(interface, trait, abstract class) of every ``vgi.v2`` method with its exact
+(interface, trait, abstract class) of every ``vgi.v3`` method with its exact
 types; **a default implementation** in which every method answers the SDK's
 ``UNIMPLEMENTED``, which SDK code inherits and overrides; and **the
 registration** that hands the declaration to the vgi-rpc server. In Java and
@@ -150,7 +150,7 @@ def record_name(annotation: object) -> str | None:
 
 @dataclass(frozen=True)
 class RegistryParam:
-    """One wire parameter of a ``vgi.v2`` method, in params-schema order.
+    """One wire parameter of a ``vgi.v3`` method, in params-schema order.
 
     Attributes:
         name: The wire name (snake_case), which is also the params-schema field name.
@@ -188,7 +188,7 @@ class SchemaNames:
 
 @dataclass(frozen=True)
 class RegistryMethod:
-    """One ``vgi.v2`` method, everything a registry needs to declare it.
+    """One ``vgi.v3`` method, everything a registry needs to declare it.
 
     Attributes:
         name: The wire method name.
@@ -466,10 +466,10 @@ def records_used(methods: Iterable[RegistryMethod], *, headers: bool = True) -> 
 def check_record_table(
     table: Mapping[str, str], methods: Sequence[RegistryMethod], *, what: str, headers: bool
 ) -> None:
-    """Refuse a backend name-table entry for a record no ``vgi.v2`` method carries (a typo binds nothing)."""
+    """Refuse a backend name-table entry for a record no ``vgi.v3`` method carries (a typo binds nothing)."""
     stale = sorted(set(table) - records_used(methods, headers=headers))
     if stale:
-        raise GeneratorError(f"{what} names records no vgi.v2 method carries: {stale}")
+        raise GeneratorError(f"{what} names records no vgi.v3 method carries: {stale}")
 
 
 def check_raw_results(

@@ -90,7 +90,7 @@ class GenericTableScan(TableFunctionGenerator[None, WritableScanState]):
         """Bind: query transactor for table schema (already includes rowid)."""
         table_name = _get_table_name_from_bind(params)
         attach_opaque_data = params.attach_opaque_data  # unwrapped plaintext
-        tx_id = params.bind_call.transaction_opaque_data
+        tx_id = params.transaction_opaque_data
         assert attach_opaque_data is not None and tx_id is not None
         table_schema = _get_table_schema_from_transactor(table_name, attach_opaque_data, tx_id)
         return BindResponse(output_schema=table_schema)
@@ -148,7 +148,7 @@ class _GenericWriteBase(TableInOutGenerator[None, None]):
         result_mode = _result_mode(params)
         if result_mode != "count":
             attach_opaque_data = params.attach_opaque_data  # unwrapped plaintext
-            tx_id = params.bind_call.transaction_opaque_data
+            tx_id = params.transaction_opaque_data
             assert attach_opaque_data is not None and tx_id is not None
             table_schema = _get_table_schema_from_transactor(table_name, attach_opaque_data, tx_id)
             user_fields = [f for f in table_schema if f.name not in ("rowid", "row_id")]

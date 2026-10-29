@@ -15,13 +15,14 @@ Request types ([`BindRequest`][], [`InitRequest`][]) are in ``vgi.protocol``.
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Annotated
+from typing import Annotated, Self
 
 import pyarrow as pa
-from vgi_rpc import ArrowSerializableDataclass, ArrowType
+from vgi_rpc import ArrowSerializableDataclass, ArrowType, IpcValidation
 
 from vgi.arguments import SecretLookupEntry
 from vgi.metadata import DEFAULT_MAX_WORKERS
@@ -30,6 +31,7 @@ __all__ = [
     "FunctionType",
     "BaseInitResponse",
     "BindResponse",
+    "BindRepeatability",
     "GlobalInitResponse",
 ]
 
@@ -46,6 +48,20 @@ class FunctionType(Enum):
     SCALAR = "scalar"
     TABLE = "table"
     TABLE_BUFFERING = "table_buffering"
+
+
+class BindRepeatability(Enum):
+    """Repeatability of equivalent scans derived from one complete bind state.
+
+    ``STABLE_WITHIN_QUERY`` promises the same logical rows and values during a
+    single query. It does not combine independently bound sources into one
+    snapshot, promise row order or batch boundaries, authorize retries, or
+    establish cross-query cache validity. A provider anchors the promise in
+    existing opaque bind state or an existing transaction snapshot.
+    """
+
+    UNKNOWN = "unknown"
+    STABLE_WITHIN_QUERY = "stable_within_query"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -70,6 +86,10 @@ class BindResponse(ArrowSerializableDataclass):
         lookup_secret_types: Secret types for scoped lookup requests (empty = normal response).
         lookup_scopes: Scopes for scoped lookup requests (parallel to lookup_secret_types).
         lookup_names: Names for scoped lookup requests (parallel to lookup_secret_types).
+        projection_expression_profiles: Scalar expression profiles offered for optional
+            projection proposals on this bind; an empty list offers none.
+        repeatability: Optional provider promise for equivalent scans of this
+            complete bind state within one query; unknown makes no promise.
 
     """
 
@@ -85,6 +105,46 @@ class BindResponse(ArrowSerializableDataclass):
     lookup_secret_types: list[str] = field(default_factory=list)
     lookup_scopes: list[str] = field(default_factory=list)
     lookup_names: list[str] = field(default_factory=list)
+    projection_expression_profiles: list[str] = field(default_factory=list)
+    repeatability: BindRepeatability = BindRepeatability.UNKNOWN
+
+    def __post_init__(self) -> None:
+        """Validate the per-bind offer without granting projection acceptance."""
+        if not isinstance(self.repeatability, BindRepeatability):
+            raise ValueError("invalid bind repeatability")
+        profiles = self.projection_expression_profiles
+        if (
+            not isinstance(profiles, list)
+            or len(profiles) > 64
+            or any(
+                not isinstance(profile, str)
+                or len(profile) > 256
+                or re.fullmatch(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*\.v[1-9][0-9]*", profile) is None
+                for profile in profiles
+            )
+            or len(set(profiles)) != len(profiles)
+        ):
+            raise ValueError("invalid projection expression profile offer")
+
+    @classmethod
+    def deserialize_from_batch(
+        cls,
+        batch: pa.RecordBatch,
+        custom_metadata: pa.KeyValueMetadata | None = None,
+        *,
+        ipc_validation: IpcValidation = IpcValidation.FULL,
+    ) -> Self:
+        """Require the successor promise before generic legacy enum decoding."""
+        index = batch.schema.get_field_index("repeatability")
+        if batch.num_rows != 1 or index < 0:
+            raise ValueError("bind repeatability must be present in one row")
+        field = batch.schema.field(index)
+        if field.nullable or field.type != pa.dictionary(pa.int16(), pa.string()):
+            raise ValueError("bind repeatability requires nonnullable dictionary<int16, utf8>")
+        value = batch.column(index)[0].as_py()
+        if value not in BindRepeatability.__members__:
+            raise ValueError("invalid bind repeatability wire value")
+        return super(BindResponse, cls).deserialize_from_batch(batch, custom_metadata, ipc_validation=ipc_validation)
 
     @property
     def is_secret_scope_request(self) -> bool:

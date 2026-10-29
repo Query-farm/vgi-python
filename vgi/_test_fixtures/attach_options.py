@@ -46,6 +46,7 @@ from vgi.catalog.catalog_interface import (
 )
 from vgi.catalog.descriptors import Catalog, Schema
 from vgi.invocation import BindResponse
+from vgi.protocol import ClientCapabilities
 from vgi.schema_utils import schema
 from vgi.table_function import BindParams, ProcessParams, TableFunctionGenerator, init_single_worker
 from vgi.worker import Worker
@@ -260,6 +261,7 @@ class AttachOptionsCatalog(ReadOnlyCatalogInterface):
         options: dict[str, Any],
         data_version_spec: str | None,
         implementation_version: str | None,
+        client_capabilities: ClientCapabilities | None = None,
         ctx: CallContext | None = None,
     ) -> CatalogAttachResult:
         del data_version_spec, implementation_version, ctx

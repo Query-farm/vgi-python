@@ -71,7 +71,7 @@ def test_builder_fields_follow_arrow_schema_order() -> None:
         names = [line.strip().split(":", 1)[0] for line in body.group(1).splitlines()]
         assert names == list(cls.ARROW_SCHEMA.names), name  # type: ignore[attr-defined]
     assert "    supports_catalog_contents: init.supports_catalog_contents ?? false," in text
-    assert '    default_schema: init.default_schema ?? "main",' in text
+    assert '    default_schema: init.default_schema === undefined ? "main" : init.default_schema,' in text
 
 
 def test_client_records_are_reexported() -> None:

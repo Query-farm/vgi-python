@@ -38,6 +38,8 @@ from vgi_rpc.rpc import CallContext, Stream
 
 from vgi._redact import short_hash
 from vgi.catalog.catalog_interface import CatalogAttachResult
+from vgi.catalog.constraints import ConstraintsApplyRequest, ConstraintSnapshot
+from vgi.catalog.query import CatalogQueryPrepareRequest, CatalogQueryPrepareResult
 from vgi.exceptions import NotFoundError
 from vgi.invocation import GlobalInitResponse
 from vgi.protocol import (
@@ -106,6 +108,11 @@ _ATTACH_ID_METHODS = [
     "catalog_contents",
     "catalog_schema_get",
     "catalog_schema_create",
+    "catalog_schema_option_definitions",
+    "catalog_schema_alter_options",
+    "catalog_schema_alter_metadata",
+    "catalog_dependencies",
+    "catalog_query_release",
     "catalog_schema_drop",
     "catalog_schema_contents_tables",
     "catalog_schema_contents_views",
@@ -113,6 +120,9 @@ _ATTACH_ID_METHODS = [
     "catalog_schema_contents_macros",
     "catalog_copy_from_formats",
     "catalog_table_get",
+    "catalog_table_option_definitions",
+    "catalog_table_alter_options",
+    "catalog_table_alter_layout",
     "catalog_table_drop",
     "catalog_table_scan_function_get",
     "catalog_table_scan_branches_get",
@@ -136,9 +146,11 @@ _ATTACH_ID_METHODS = [
     "catalog_view_drop",
     "catalog_view_rename",
     "catalog_view_comment_set",
+    "catalog_view_column_comment_set",
     "catalog_macro_get",
     "catalog_macro_drop",
     "catalog_index_get",
+    "catalog_index_option_definitions",
     "catalog_index_drop",
     "catalog_schema_contents_indexes",
 ]
@@ -325,6 +337,14 @@ class MetaWorker:
         worker = self._maybe_worker_for_attach(envelope) or self._workers[0]
         return worker._unwrap_attach_full(envelope)
 
+    def _unwrap_transaction_for(self, request: Any) -> bytes | None:
+        """Re-open a function transaction on its owning worker during continuation."""
+        bind = getattr(request, "bind_call", request)
+        if not getattr(bind, "transaction_opaque_data", None):
+            return None
+        worker = self._maybe_worker_for_attach(getattr(bind, "attach_opaque_data", None)) or self._workers[0]
+        return worker._unwrap_transaction_for(request)
+
     def _resolve_function(self, request: BindRequest) -> Any:
         """Dispatch function-class resolution to the worker that hosts it.
 
@@ -440,6 +460,12 @@ class MetaWorker:
             request
         )
 
+    def catalog_table_constraints_apply(self, request: ConstraintsApplyRequest) -> ConstraintSnapshot:
+        """Route by the sealed attachment; the selected child owns unwrapping."""
+        return self._worker_for_attach(
+            request.attach_opaque_data, method_name="catalog_table_constraints_apply"
+        ).catalog_table_constraints_apply(request)
+
     def catalog_macro_create(self, request: Any) -> None:
         """Create a macro — dispatch via attach_opaque_data in request."""
         self._worker_for_attach(request.attach_opaque_data, method_name="catalog_macro_create").catalog_macro_create(
@@ -541,6 +567,17 @@ class MetaWorker:
                 return w.table_function_cardinality(request, ctx=ctx)
         msg = f"Unknown function '{fn_name}'"
         raise NotFoundError(msg)
+
+    def table_function_projection(self, request: Any, ctx: CallContext) -> Any:
+        """Route an optional pure projection proposal to the source's owner."""
+        patched, worker = self._unwrap_bind_call_attach_opaque_data(request, method_name="table_function_projection")
+        if worker is not None:
+            return worker.table_function_projection(patched, ctx=ctx)
+        fn_name = request.bind_call.function_name
+        for candidate in self._workers:
+            if fn_name in type(candidate)._build_registry():
+                return candidate.table_function_projection(request, ctx=ctx)
+        raise ValueError(f"Unknown function '{fn_name}'")
 
     def table_function_plan(self, request: Any, ctx: CallContext) -> Any:
         """Dispatch scan planning to the right worker."""
@@ -722,6 +759,12 @@ class MetaWorker:
                     attach_already_unwrapped=attach_already_unwrapped,
                 )
         raise NotFoundError(f"Unknown table_buffering function '{fn_name}'")
+
+    def catalog_query_prepare(self, request: CatalogQueryPrepareRequest) -> CatalogQueryPrepareResult:
+        """Route preparation through the same authenticated attachment as execution."""
+        return self._worker_for_attach(
+            request.attach_opaque_data, method_name="catalog_query_prepare"
+        ).catalog_query_prepare(request)
 
     def hosted_protocols(self) -> tuple[tuple[type, object], ...]:
         """Return every child worker class's ``hosted_protocols()``, in order.

@@ -37,7 +37,7 @@ _WORKER_SCRIPT = str(Path(__file__).with_name("_hosted_protocols_worker.py"))
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 _EXTRAS = ["vgi_test.Echo.v1", "vgi_test.Counter.v1"]
-_EXPECTED = ["vgi.v2", *_EXTRAS, "vgi_rpc.Reflection.v1"]
+_EXPECTED = ["vgi.v3", *_EXTRAS, "vgi_rpc.Reflection.v1"]
 _IDENTITY = "vgi_rpc.Identity.v2"
 
 # Protocol classes are abstract to mypy; the connect helpers want concrete types.
@@ -177,6 +177,9 @@ class TestEveryTransport:
             assert _names(proxy) == _EXPECTED
         with http_connect(_ECHO, client=client) as echo:
             assert echo.echo(text="web") == "echo:web"
+        # An old major must not fall through to the incompatible v3 handler.
+        response = client.post("/vgi.v2/bind", content=b"", headers={})
+        assert response.status_code == 404
 
 
 class TestIdentityPlacement:
@@ -219,12 +222,12 @@ class TestHookContract:
     """Called once; default empty; bad answers fail early and name the hook."""
 
     def test_default_is_empty(self) -> None:
-        """A worker that does not override the hook hosts only ``vgi.v2`` and reflection."""
+        """A worker that does not override the hook hosts only ``vgi.v3`` and reflection."""
         from tests.test_serve import _SingleWorker
 
         assert tuple(_SingleWorker.hosted_protocols()) == ()
         server = build_rpc_server(_SingleWorker(quiet=True), transport="pipe")
-        assert list(server.bindings) == ["vgi.v2", "vgi_rpc.Reflection.v1"]
+        assert list(server.bindings) == ["vgi.v3", "vgi_rpc.Reflection.v1"]
 
     def test_called_once_per_build(self) -> None:
         """The hook is consulted once per server, so its answer is fixed per process."""
@@ -242,7 +245,7 @@ class TestHookContract:
     def test_describe_false_drops_only_reflection(self) -> None:
         """``--no-describe`` removes reflection, never the worker's extras."""
         server = build_rpc_server(HostingWorker(quiet=True), transport="http", describe=False)
-        assert list(server.bindings) == ["vgi.v2", *_EXTRAS]
+        assert list(server.bindings) == ["vgi.v3", *_EXTRAS]
 
     def test_unknown_transport_rejected(self) -> None:
         """A typo in a transport label fails loudly rather than defaulting."""
@@ -279,10 +282,10 @@ class TestHookContract:
             build_rpc_server(worker, transport="pipe")
 
     def test_worker_own_protocol_name_rejected(self) -> None:
-        """An extra may not shadow ``vgi.v2``."""
+        """An extra may not shadow ``vgi.v3``."""
 
         class _Shadow(Protocol):
-            protocol_name: ClassVar[str] = "vgi.v2"
+            protocol_name: ClassVar[str] = "vgi.v3"
 
             def echo(self, text: str) -> str: ...
 
@@ -376,11 +379,11 @@ class TestFixtureWorker:
     """The fixture worker hosts the vgi-rpc reference secondary, and opts into Identity on request."""
 
     def test_example_worker_hosts_the_secondary(self) -> None:
-        """``vgi-fixture-worker`` lists ``vgi.v2`` then ``conformance.Secondary.v1``."""
+        """``vgi-fixture-worker`` lists ``vgi.v3`` then ``conformance.Secondary.v1``."""
         from vgi._test_fixtures.worker import ExampleWorker
 
         server = build_rpc_server(ExampleWorker(quiet=True), transport="pipe")
-        assert list(server.bindings)[:2] == ["vgi.v2", "conformance.Secondary.v1"]
+        assert list(server.bindings)[:2] == ["vgi.v3", "conformance.Secondary.v1"]
 
     def test_identity_fixture_hosts_identity_with_the_conformance_allowlist(self) -> None:
         """``vgi-fixture-http --identity`` builds Identity without reading the environment."""

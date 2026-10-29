@@ -1,0 +1,234 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+# ruff: noqa: D103
+"""Run the same public RPC lifecycle against independently built SDK workers.
+
+Set VGI_METADATA_WORKERS to a JSON object mapping SDK names to worker argv lists.
+The workers must expose the ordinary mutable ``contents_reval`` test catalog.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import replace
+
+import pytest
+
+from vgi.catalog import CatalogMetadataChanges, OnConflict, SchemaObjectType
+from vgi.catalog.capabilities import CATALOG_DEPENDENCIES_READ, SCHEMA_METADATA_ALTER, CatalogCapabilities
+from vgi.catalog.query import (
+    QUERY_ENCODING,
+    QUERY_EXPLICIT,
+    CatalogQueryPrepareRequest,
+    ClientQueryCapabilities,
+    QueryEvaluationContext,
+)
+from vgi.client import Client
+from vgi.protocol import ClientCapabilities
+from vgi.query_parameters import QueryParameters
+
+from .typing_helpers import CatalogObjectArgs, CatalogSchemaArgs, present
+
+WORKERS: dict[str, list[str]] = json.loads(os.environ.get("VGI_METADATA_WORKERS", "{}"))
+
+
+@pytest.mark.parametrize("sdk", sorted(WORKERS))
+def test_unqualified_provider_does_not_select_or_execute_queries(sdk: str) -> None:
+    offer = ClientCapabilities(
+        engine="reference-client",
+        native_formats=[],
+        catalogs=[],
+        can_stream=True,
+        filter_encodings=[],
+        query_pushdown=ClientQueryCapabilities(
+            encodings=[QUERY_ENCODING], semantic_profiles=[QUERY_EXPLICIT], engine_version="fixture-client-build"
+        ),
+    )
+    with Client(server_path=WORKERS[sdk], worker_limit=1) as client:
+        attached = client.catalog_attach(
+            name="contents_reval", data_version_spec=None, implementation_version=None, client_capabilities=offer
+        )
+        assert attached.query_pushdown is None
+        query = CatalogQueryPrepareRequest(
+            attach_opaque_data=attached.attach_opaque_data,
+            encoding=QUERY_ENCODING,
+            semantic_profile=QUERY_EXPLICIT,
+            mode="explicit",
+            capability_revision="unselected",
+            query="SELECT 1",
+            parameter_schema=QueryParameters.empty().schema_bytes(),
+            evaluation_context=QueryEvaluationContext(),
+        )
+        with pytest.raises(
+            Exception,
+            match="(?i)unsupported|unimplemented|not implemented|does not support|not supported|capability|negotiated",
+        ):
+            client.catalog_query_prepare(query)
+        with pytest.raises(
+            Exception,
+            match="(?i)unsupported|unimplemented|not implemented|does not support|not supported|capability|negotiated",
+        ):
+            client.catalog_query_release(attach_opaque_data=attached.attach_opaque_data, prepared_query_token=b"absent")
+
+
+@pytest.mark.parametrize("sdk", sorted(WORKERS))
+def test_view_metadata_lifecycle_over_public_rpc(sdk: str) -> None:
+    with Client(server_path=WORKERS[sdk], worker_limit=1) as client:
+        token = client.catalog_attach(
+            name="contents_reval",
+            data_version_spec=None,
+            implementation_version=None,
+        ).attach_opaque_data
+        target: CatalogObjectArgs = dict(attach_opaque_data=token, schema_path=["main"], name="view.with.dot")
+        client.view_create(
+            **target,
+            definition="SELECT 1 AS x, 2 AS y",
+            aliases=["a.b", 'with"quote'],
+            comment="",
+            tags={"owner": "one", "empty": ""},
+            column_comments={"a.b": "", 'with"quote': "kept"},
+        )
+        original = client.view_get(**target)
+        original_version = client.catalog_version(attach_opaque_data=token)
+        assert present(original).comment == ""
+        assert present(original).tags == {"owner": "one", "empty": ""}
+        assert present(original).column_comments == {"a.b": "", 'with"quote': "kept"}
+        assert present(original).aliases == ["a.b", 'with"quote'] and present(original).security == "regular"
+        assert client.schema_contents(attach_opaque_data=token, path=["main"], type=SchemaObjectType.VIEW) == [original]
+        client.view_create(**target, definition="SELECT 9", on_conflict=OnConflict.IGNORE, comment="ignored")
+        assert client.view_get(**target) == original
+        assert client.catalog_version(attach_opaque_data=token) == original_version
+        for key in ("", "a\0b"):
+            for mode in (OnConflict.IGNORE, OnConflict.REPLACE):
+                with pytest.raises(Exception, match="identifier|alias|empty|NUL"):
+                    client.view_create(**target, definition="SELECT 9", on_conflict=mode, column_comments={key: "bad"})
+                assert client.view_get(**target) == original
+                assert client.catalog_version(attach_opaque_data=token) == original_version
+        for path in ([], ["a", "b"], [""], ["a\0b"]):
+            with pytest.raises(Exception, match="identifier|column path|component|empty|NUL"):
+                client.view_column_comment_set(**target, column_path=path, comment="bad", ignore_not_found=True)
+            assert client.view_get(**target) == original
+            assert client.catalog_version(attach_opaque_data=token) == original_version
+        client.view_column_comment_set(**target, column_path=["a.b"], comment=None)
+        client.view_column_comment_set(**target, column_path=['with"quote'], comment="")
+        client.view_comment_set(**target, comment=None)
+        assert client.view_get(**target) == replace(present(original), comment=None, column_comments={'with"quote': ""})
+        client.view_create(**target, definition="SELECT 3 AS z", on_conflict=OnConflict.REPLACE)
+        replaced = client.view_get(**target)
+        assert (
+            present(replaced).comment is None
+            and present(replaced).tags == {}
+            and present(replaced).column_comments == {}
+        )
+        assert present(replaced).aliases == []
+        client.view_drop(**target)
+        client.view_column_comment_set(**target, column_path=["a.b"], comment="unused", ignore_not_found=True)
+        with pytest.raises(Exception, match="not found|does not exist"):
+            client.view_column_comment_set(**target, column_path=["a.b"], comment="unused")
+
+
+@pytest.mark.parametrize("sdk", sorted(WORKERS))
+def test_schema_creation_metadata_over_public_rpc(sdk: str) -> None:
+    with Client(server_path=WORKERS[sdk], worker_limit=1) as client:
+        token = client.catalog_attach(
+            name="contents_reval", data_version_spec=None, implementation_version=None
+        ).attach_opaque_data
+        target: CatalogSchemaArgs = dict(attach_opaque_data=token, path=["a.b"])
+        tags = {"owner": "one", "empty": "", "__proto__": "literal", "a.b": "quoted"}
+        initial_version = client.catalog_version(attach_opaque_data=token)
+        client.schema_create(**target, comment="", tags=tags)
+        original = client.schema_get(**target)
+        assert present(original).comment == "" and present(original).tags == tags
+        assert client.catalog_version(attach_opaque_data=token) > initial_version
+        client.schema_create(attach_opaque_data=token, path=["a"], comment="parent")
+        client.schema_create(attach_opaque_data=token, path=["a", "b"], comment="nested", tags={"owner": "two"})
+        assert present(client.schema_get(attach_opaque_data=token, path=["a", "b"])).comment == "nested"
+        assert client.schema_get(**target) == original
+        listed = next(s for s in client.schemas(attach_opaque_data=token) if s.path == ["a.b"])
+        assert replace(listed, estimated_object_count=present(original).estimated_object_count) == original
+        snapshot = client.contents(attach_opaque_data=token)
+        cached = next(s.schema for s in snapshot.schemas if s.schema.path == ["a.b"])
+        assert replace(cached, estimated_object_count=original.estimated_object_count) == original
+        version = client.catalog_version(attach_opaque_data=token)
+        with pytest.raises(Exception, match="already exists"):
+            client.schema_create(**target, comment="bad", tags={"bad": "bad"})
+        assert client.schema_get(**target) == original
+        assert client.catalog_version(attach_opaque_data=token) == version
+        client.schema_create(**target, on_conflict=OnConflict.IGNORE, comment="ignored", tags={"ignored": "yes"})
+        assert client.schema_get(**target) == original
+        assert client.catalog_version(attach_opaque_data=token) == version
+        client.schema_create(**target, on_conflict=OnConflict.REPLACE)
+        replacement = client.schema_get(**target)
+        assert present(replacement).comment is None and present(replacement).tags == {}
+        assert client.catalog_version(attach_opaque_data=token) > version
+        assert present(client.schema_get(attach_opaque_data=token, path=["a", "b"])).tags == {"owner": "two"}
+        client.schema_create(**target, on_conflict=OnConflict.REPLACE, comment="reset", tags=tags)
+        replacement = client.schema_get(**target)
+        assert present(replacement).comment == "reset" and present(replacement).tags == tags
+        snapshot = client.contents(attach_opaque_data=token)
+        cached = next(s.schema for s in snapshot.schemas if s.schema.path == ["a.b"])
+        assert replace(cached, estimated_object_count=present(replacement).estimated_object_count) == replacement
+        client.schema_drop(**target)
+        assert client.schema_get(**target) is None
+        assert present(client.schema_get(attach_opaque_data=token, path=["a", "b"])).comment == "nested"
+
+
+@pytest.mark.parametrize("sdk", sorted(WORKERS))
+def test_unqualified_provider_rejects_schema_metadata_mutation(sdk: str) -> None:
+    offer = ClientCapabilities(
+        engine="reference-client",
+        native_formats=[],
+        catalogs=[],
+        can_stream=False,
+        filter_encodings=[],
+        catalog=CatalogCapabilities(ddl=[SCHEMA_METADATA_ALTER]),
+    )
+    with Client(server_path=WORKERS[sdk], worker_limit=1) as client:
+        attached = client.catalog_attach(
+            name="contents_reval", data_version_spec=None, implementation_version=None, client_capabilities=offer
+        )
+        token = attached.attach_opaque_data
+        assert (
+            attached.selected_capabilities is None
+            or SCHEMA_METADATA_ALTER not in attached.selected_capabilities.names()
+        )
+        target: CatalogSchemaArgs = dict(attach_opaque_data=token, path=["main"])
+        before = client.schema_get(**target)
+        version = client.catalog_version(attach_opaque_data=token)
+        with pytest.raises(
+            Exception,
+            match="(?i)not implemented|unimplemented|not supported|does not support|requires.*vgi.schema.metadata",
+        ):
+            client.schema_alter_metadata(
+                **target, changes=CatalogMetadataChanges(set_comment=True, comment="bad", set_tags={"a": "bad"})
+            )
+        assert client.schema_get(**target) == before
+        assert client.catalog_version(attach_opaque_data=token) == version
+
+
+@pytest.mark.parametrize("sdk", sorted(WORKERS))
+def test_unqualified_provider_rejects_dependency_discovery(sdk: str) -> None:
+    offer = ClientCapabilities(
+        engine="reference-client",
+        native_formats=[],
+        catalogs=[],
+        can_stream=False,
+        filter_encodings=[],
+        catalog=CatalogCapabilities(read=[CATALOG_DEPENDENCIES_READ]),
+    )
+    with Client(server_path=WORKERS[sdk], worker_limit=1) as client:
+        attached = client.catalog_attach(
+            name="contents_reval", data_version_spec=None, implementation_version=None, client_capabilities=offer
+        )
+        assert (
+            attached.selected_capabilities is None
+            or CATALOG_DEPENDENCIES_READ not in attached.selected_capabilities.names()
+        )
+        token = attached.attach_opaque_data
+        version = client.catalog_version(attach_opaque_data=token)
+        with pytest.raises(
+            Exception,
+            match="(?i)not implemented|unimplemented|not supported|does not support|requires.*vgi.catalog.dependencies",
+        ):
+            client.catalog_dependencies(attach_opaque_data=token)
+        assert client.catalog_version(attach_opaque_data=token) == version

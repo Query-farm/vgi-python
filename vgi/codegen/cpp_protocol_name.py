@@ -17,7 +17,7 @@ implementations, four different answers. That was invisible until the
 transports made ``vgi_rpc.protocol`` a required routing key, at which point
 there was no single string the DuckDB extension could send.
 
-The names were then decided (``vgi.v2``, ``vgi.secret.v1``) and hand-written on
+The names were originally decided (``vgi.v2``, ``vgi.secret.v1``) and hand-written on
 both sides. That is the same shape of hazard one step removed: the version is
 generated *and* drift-guarded, so a version bump that misses the C++ tree is a
 red build, while a rename that missed it was a silent misroute. A wire contract

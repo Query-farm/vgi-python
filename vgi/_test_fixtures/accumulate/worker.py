@@ -69,6 +69,7 @@ from vgi.catalog.catalog_interface import AttachOpaqueData, CatalogAttachResult,
 from vgi.function_storage import BoundStorage, FunctionStorage
 from vgi.invocation import BindResponse
 from vgi.metadata import FunctionExample
+from vgi.protocol import ClientCapabilities
 from vgi.table_buffering_function import TableBufferingFunction, TableBufferingParams
 from vgi.table_function import (
     BindParams,
@@ -734,6 +735,7 @@ class AccumulateCatalog(ReadOnlyCatalogInterface):
         options: dict[str, Any],
         data_version_spec: str | None,
         implementation_version: str | None,
+        client_capabilities: ClientCapabilities | None = None,
         ctx: CallContext | None = None,
     ) -> CatalogAttachResult:
         """Attach, minting a random per-ATTACH storage scope id."""
@@ -742,6 +744,7 @@ class AccumulateCatalog(ReadOnlyCatalogInterface):
             options=options,
             data_version_spec=data_version_spec,
             implementation_version=implementation_version,
+            client_capabilities=client_capabilities,
             ctx=ctx,
         )
         return dataclasses.replace(

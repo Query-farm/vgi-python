@@ -30,8 +30,8 @@ if TYPE_CHECKING:
     from typing import TextIO
 
 
-def emit(out: TextIO, namespace: list[str] | None = None) -> None:
-    """Emit the generated C++ secret-schema header to *out*."""
+def emit(out: TextIO, namespace: list[str] | None = None, backend: str = "arrow") -> None:
+    """Emit the generated C++ secret-schema header to *out* (``backend="nanoarrow"``: the nanoarrow backend)."""
     schemas = collect_schemas(
         VgiSecretProtocol,
         info_types=(),
@@ -48,6 +48,7 @@ def emit(out: TextIO, namespace: list[str] | None = None) -> None:
             "  > ~/Development/vgi/src/generated/vgi_secret_protocol_schemas.hpp",
         ],
         namespace=namespace,
+        backend=backend,
     )
 
 

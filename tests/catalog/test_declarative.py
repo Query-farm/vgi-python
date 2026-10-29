@@ -14,7 +14,7 @@ Tests cover:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Annotated, ClassVar
+from typing import Annotated, Any, ClassVar
 
 import pyarrow as pa
 import pytest
@@ -727,74 +727,58 @@ class TestTableForeignKeyConstraints:
 
 
 class TestTableToTableInfoConstraints:
-    """Tests for Table.to_table_info() with PK and FK constraints."""
+    """Canonical records preserve provider identity and trust without inference."""
 
-    def test_to_table_info_with_primary_key(self) -> None:
-        """to_table_info converts PK column names to indices."""
+    @pytest.mark.parametrize(
+        "legacy",
+        [
+            {"not_null": ("id",)},
+            {"unique": (("id",),)},
+            {"primary_key": (("id",),)},
+            {"check": ("id > 0",)},
+            {"foreign_key": (ForeignKeyDef(columns=("id",), referenced_table="other", referenced_columns=("id",)),)},
+        ],
+    )
+    def test_legacy_discovery_requires_explicit_migration(self, legacy: dict[str, Any]) -> None:
+        """Old declarations cannot invent provider identity or enforcement."""
+        table = Table(name="users", columns=pa.schema([("id", pa.int64())]), **legacy)
+        with pytest.raises(ValueError, match="explicit canonical"):
+            table.to_table_info(["main"])
+
+    def test_canonical_records_preserve_identity_and_state(self) -> None:
+        """Readback carries the original provider facts unchanged."""
+        from vgi.catalog.constraints import (
+            ConstraintDefinition,
+            ConstraintEnforcement,
+            ConstraintInfo,
+            ConstraintKind,
+            ConstraintValidation,
+        )
+        from vgi.catalog.dependencies import CatalogObjectRef
+
+        record = ConstraintInfo(
+            ref=CatalogObjectRef(kind="constraint", schema_path=["main"], owner_table="users", name="provider-key"),
+            definition=ConstraintDefinition(
+                kind=ConstraintKind.UNIQUE, column_paths=[["id"]], declared_name="declared"
+            ),
+            enforcement=ConstraintEnforcement.METADATA_ONLY,
+            validation=ConstraintValidation.UNVALIDATED,
+        )
         table = Table(
             name="users",
-            columns=pa.schema(
-                [("id", pa.int64()), ("email", pa.string())]  # type: ignore[arg-type]
-            ),
-            primary_key=(("id",),),
-        )
-        info = table.to_table_info(["main"])
-        assert info.primary_key_constraints == [[0]]
-
-    def test_to_table_info_with_composite_pk(self) -> None:
-        """to_table_info converts composite PK column names to indices."""
-        table = Table(
-            name="projects",
-            columns=pa.schema(
-                [("dept_id", pa.int64()), ("code", pa.string()), ("title", pa.string())]  # type: ignore[arg-type]
-            ),
-            primary_key=(("dept_id", "code"),),
-        )
-        info = table.to_table_info(["main"])
-        assert info.primary_key_constraints == [[0, 1]]
-
-    def test_to_table_info_with_foreign_key(self) -> None:
-        """to_table_info serializes FK constraints as IPC bytes."""
-        table = Table(
-            name="employees",
-            columns=pa.schema([("id", pa.int64()), ("dept_id", pa.int64())]),
-            foreign_key=(
-                ForeignKeyDef(columns=("dept_id",), referenced_table="departments", referenced_columns=("id",)),
-            ),
-        )
-        info = table.to_table_info(["data"])
-        assert len(info.foreign_key_constraints) == 1
-        assert isinstance(info.foreign_key_constraints[0], bytes)
-
-    def test_to_table_info_no_pk_fk_defaults_empty(self) -> None:
-        """to_table_info returns empty PK/FK when not specified."""
-        table = Table(
-            name="simple",
             columns=pa.schema([("id", pa.int64())]),
+            constraints=(record,),
+            definition_revision=b"revision",
         )
         info = table.to_table_info(["main"])
-        assert info.primary_key_constraints == []
-        assert info.foreign_key_constraints == []
+        assert info.constraints == [record.serialize_to_bytes()]
+        assert info.constraint_infos() == [record]
+        assert info.definition_revision == b"revision"
 
-    def test_to_table_info_all_constraints(self) -> None:
-        """to_table_info converts all constraint types."""
-        table = Table(
-            name="full",
-            columns=pa.schema(
-                [("id", pa.int64()), ("name", pa.string()), ("ref_id", pa.int64())]  # type: ignore[arg-type]
-            ),
-            not_null=("id", "name"),
-            unique=(("name",),),
-            check=("id > 0",),
-            primary_key=(("id",),),
-            foreign_key=(ForeignKeyDef(columns=("ref_id",), referenced_table="other", referenced_columns=("id",)),),
-        )
-        info = table.to_table_info(["main"])
-        assert info.not_null_constraints == [0, 1]
-        assert info.unique_constraints == [[1]]
-        assert info.check_constraints == ["id > 0"]
-        assert info.primary_key_constraints == [[0]]
-        assert len(info.foreign_key_constraints) == 1
+    def test_no_constraints_is_explicit(self) -> None:
+        """Empty declarations serialize as an authoritative empty list."""
+        table = Table(name="simple", columns=pa.schema([("id", pa.int64())]))
+        assert table.to_table_info(["main"]).constraints == []
 
 
 class TestTableToTableInfo:
@@ -816,23 +800,6 @@ class TestTableToTableInfo:
         assert info.schema_path == ["main"]
         assert info.comment == "User table"
         assert info.tags == {"type": "core"}
-
-    def test_to_table_info_with_constraints(self) -> None:
-        """Table converts constraints to indices."""
-        table = Table(
-            name="users",
-            columns=pa.schema(
-                [("id", pa.int64()), ("email", pa.string())]  # type: ignore[arg-type]
-            ),
-            not_null=("id", "email"),
-            unique=(("id",), ("email",)),
-            check=("id > 0",),
-        )
-        info = table.to_table_info(["main"])
-        # Column indices: id=0, email=1
-        assert info.not_null_constraints == [0, 1]
-        assert info.unique_constraints == [[0], [1]]
-        assert info.check_constraints == ["id > 0"]
 
 
 # =============================================================================
@@ -871,7 +838,7 @@ class TestTableDefaults:
             defaults={},
         )
         info = table.to_table_info(["main"])
-        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
         assert schema.field("id").metadata is None
 
     def test_defaults_python_str_quoted(self) -> None:
@@ -884,7 +851,7 @@ class TestTableDefaults:
             defaults={"name": "unknown"},
         )
         info = table.to_table_info(["main"])
-        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
         assert schema.field("name").metadata == {b"default": b"'unknown'"}
 
     def test_defaults_python_str_escapes_quotes(self) -> None:
@@ -897,7 +864,7 @@ class TestTableDefaults:
             defaults={"name": "it's"},
         )
         info = table.to_table_info(["main"])
-        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
         assert schema.field("name").metadata == {b"default": b"'it''s'"}
 
     def test_defaults_python_int(self) -> None:
@@ -908,7 +875,7 @@ class TestTableDefaults:
             defaults={"qty": 42},
         )
         info = table.to_table_info(["main"])
-        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
         assert schema.field("qty").metadata == {b"default": b"42"}
 
     def test_defaults_python_float(self) -> None:
@@ -919,7 +886,7 @@ class TestTableDefaults:
             defaults={"price": 9.99},
         )
         info = table.to_table_info(["main"])
-        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
         assert schema.field("price").metadata == {b"default": b"9.99"}
 
     def test_defaults_python_bool(self) -> None:
@@ -930,7 +897,7 @@ class TestTableDefaults:
             defaults={"a": True, "b": False},
         )
         info = table.to_table_info(["main"])
-        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
         assert schema.field("a").metadata == {b"default": b"true"}
         assert schema.field("b").metadata == {b"default": b"false"}
 
@@ -942,7 +909,7 @@ class TestTableDefaults:
             defaults={"val": None},
         )
         info = table.to_table_info(["main"])
-        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
         assert schema.field("val").metadata == {b"default": b"NULL"}
 
     def test_defaults_sql_expression(self) -> None:
@@ -953,7 +920,7 @@ class TestTableDefaults:
             defaults={"ts": Sql("current_timestamp")},
         )
         info = table.to_table_info(["main"])
-        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
         assert schema.field("ts").metadata == {b"default": b"current_timestamp"}
 
     def test_defaults_mixed_types(self) -> None:
@@ -970,7 +937,7 @@ class TestTableDefaults:
             defaults={"qty": 0, "name": "unknown"},
         )
         info = table.to_table_info(["main"])
-        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
         assert schema.field("qty").metadata == {b"default": b"0"}
         assert schema.field("name").metadata == {b"default": b"'unknown'"}
         assert schema.field("id").metadata is None
@@ -988,7 +955,7 @@ class TestTableDefaults:
             defaults={"row_id": 0},
         )
         info = table.to_table_info(["main"])
-        schema = pa.ipc.read_schema(pa.BufferReader(info.columns))  # type: ignore[arg-type]
+        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
         metadata = schema.field("row_id").metadata
         assert metadata is not None
         assert metadata[b"is_row_id"] == b""
@@ -1125,9 +1092,9 @@ class TestMacroDescriptor:
         assert info.name == "add"
         assert info.schema_path == ["main"]
         assert info.macro_type == MacroType.SCALAR
-        assert info.parameters == ["x", "y"]
-        assert info.parameter_default_values is not None
-        assert info.definition == "x + y"
+        assert [p.name for p in info.overloads[0].parameters] == ["x", "y"]
+        assert info.overloads[0].parameters[1].default_value is not None
+        assert info.overloads[0].definition == "x + y"
         assert info.comment == "Add two values"
         assert info.tags == {"type": "math"}
 
@@ -1558,11 +1525,29 @@ class TestReadOnlyCatalogWithCatalog:
 
     @pytest.fixture
     def users_table(self) -> Table:
-        """Create a users table for testing."""
+        """Create a users table with an explicit untrusted provider declaration."""
+        from vgi.catalog.constraints import (
+            ConstraintDefinition,
+            ConstraintEnforcement,
+            ConstraintInfo,
+            ConstraintKind,
+            ConstraintValidation,
+        )
+        from vgi.catalog.dependencies import CatalogObjectRef
+
         return Table(
             name="users",
             function=UsersFunction,
-            not_null=("id",),
+            constraints=(
+                ConstraintInfo(
+                    ref=CatalogObjectRef(
+                        kind="constraint", schema_path=["main"], owner_table="users", name="fixture-user-id"
+                    ),
+                    definition=ConstraintDefinition(kind=ConstraintKind.NOT_NULL, column_paths=[["id"]]),
+                    enforcement=ConstraintEnforcement.METADATA_ONLY,
+                    validation=ConstraintValidation.UNVALIDATED,
+                ),
+            ),
             comment="User accounts",
         )
 

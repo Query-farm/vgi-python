@@ -59,6 +59,7 @@ from vgi.catalog import (
     FunctionInfo,
     IndexInfo,
     MacroInfo,
+    MacroOverload,
     MacroType,
     OnConflict,
     ScanBranch,
@@ -74,14 +75,24 @@ from vgi.catalog import (
     ViewInfo,
 )
 from vgi.catalog.catalog_interface import deserialize_column_statistics
+from vgi.catalog.constraints import ConstraintsApplyRequest, ConstraintSnapshot
 from vgi.catalog.contents_codec import decode_inventory
+from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot
+from vgi.catalog.indexes import IndexDefinition
+from vgi.catalog.layout import TableLayout, TableLayoutChange
+from vgi.catalog.metadata_changes import CatalogMetadataChanges
+from vgi.catalog.options import OptionChanges, OptionDefinitions
+from vgi.catalog.query import CatalogQueryPrepareRequest, CatalogQueryPrepareResult
 from vgi.protocol import (
     CatalogAttachRequest,
     CatalogCreateRequest,
+    ClientCapabilities,
+    IndexCreateRequest,
     MacroCreateRequest,
     TableCreateRequest,
     VgiProtocol,
 )
+from vgi.typed_values import TypedValueBatch
 
 # Module-level worker pool shared across all CatalogClientMixin instances.
 # Workers are cached by command and reused across catalog calls, avoiding
@@ -350,6 +361,7 @@ class CatalogClientMixin:
         options: dict[str, Any] | None = None,
         data_version_spec: str | None,
         implementation_version: str | None,
+        client_capabilities: ClientCapabilities | None = None,
     ) -> CatalogAttachResult:
         """Attach to a catalog.
 
@@ -360,6 +372,9 @@ class CatalogClientMixin:
                 (``None`` = unconstrained — worker picks).
             implementation_version: Semver constraint for the worker's
                 implementation version (``None`` = unconstrained).
+            client_capabilities: Capabilities of the consuming engine. ``None``
+                leaves support unspecified; the worker must not infer support
+                for optional semantics from the Python SDK version.
 
         Returns:
             [`CatalogAttachResult`][] with attach_opaque_data, catalog capabilities, and
@@ -373,6 +388,7 @@ class CatalogClientMixin:
                     options=self._options_to_batch(options),
                     data_version_spec=data_version_spec,
                     implementation_version=implementation_version,
+                    client_capabilities=client_capabilities,
                 )
             )
 
@@ -438,6 +454,34 @@ class CatalogClientMixin:
                 attach_opaque_data=attach_opaque_data,
                 transaction_opaque_data=transaction_opaque_data,
             ).version
+
+    def catalog_dependencies(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None = None
+    ) -> DependencySnapshot:
+        """Read a complete transaction-visible graph under its selected read profile."""
+        with self._catalog_connect() as proxy:
+            return proxy.catalog_dependencies(
+                attach_opaque_data=attach_opaque_data, transaction_opaque_data=transaction_opaque_data
+            )
+
+    def catalog_query_prepare(self, request: CatalogQueryPrepareRequest) -> CatalogQueryPrepareResult:
+        """Authorize and describe a query; this does not execute or fetch rows."""
+        request.__post_init__()
+        with self._catalog_connect() as proxy:
+            result = proxy.catalog_query_prepare(request=request)
+        result.validate_request(request)
+        return result
+
+    def catalog_query_release(
+        self, *, attach_opaque_data: bytes, prepared_query_token: bytes, transaction_opaque_data: bytes | None = None
+    ) -> None:
+        """Release preparation resources without canceling executions already started."""
+        with self._catalog_connect() as proxy:
+            proxy.catalog_query_release(
+                attach_opaque_data=attach_opaque_data,
+                prepared_query_token=prepared_query_token,
+                transaction_opaque_data=transaction_opaque_data,
+            )
 
     # ========== Transaction Methods ==========
 
@@ -674,8 +718,10 @@ class CatalogClientMixin:
         attach_opaque_data: AttachOpaqueData,
         transaction_opaque_data: TransactionOpaqueData | None = None,
         path: list[str],
+        on_conflict: OnConflict = OnConflict.ERROR,
         comment: str | None = None,
         tags: dict[str, str] | None = None,
+        options: TypedValueBatch | None = None,
     ) -> None:
         """Create a new schema.
 
@@ -683,16 +729,72 @@ class CatalogClientMixin:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID.
             path: Raw schema identifier components for the new schema.
+            on_conflict: ERROR, IGNORE, or REPLACE for an existing schema.
             comment: Optional description of the schema.
             tags: Optional key-value tags for the schema.
+            options: Typed literal overrides; requires negotiated schema-option creation.
 
         """
         with self._catalog_connect() as proxy:
             proxy.catalog_schema_create(
                 attach_opaque_data=attach_opaque_data,
                 path=path,
+                on_conflict=on_conflict,
                 comment=comment,
                 tags=tags,
+                transaction_opaque_data=transaction_opaque_data,
+                options=options.serialize_to_bytes() if options is not None else None,
+            )
+
+    def schema_option_definitions(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        path: list[str],
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+    ) -> OptionDefinitions:
+        """Discover typed options and defaults for an existing or proposed schema."""
+        with self._catalog_connect() as proxy:
+            return proxy.catalog_schema_option_definitions(
+                attach_opaque_data=attach_opaque_data,
+                path=path,
+                transaction_opaque_data=transaction_opaque_data,
+            )
+
+    def schema_alter_metadata(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        path: list[str],
+        changes: CatalogMetadataChanges,
+        ignore_not_found: bool = False,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+    ) -> None:
+        """Atomically change comments/tags; requires vgi.schema.metadata.alter.v1."""
+        changes.__post_init__()
+        with self._catalog_connect() as proxy:
+            proxy.catalog_schema_alter_metadata(
+                attach_opaque_data=attach_opaque_data,
+                path=path,
+                changes=changes.serialize_to_bytes(),
+                ignore_not_found=ignore_not_found,
+                transaction_opaque_data=transaction_opaque_data,
+            )
+
+    def schema_alter_options(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        path: list[str],
+        changes: OptionChanges,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+    ) -> None:
+        """Atomically SET/RESET schema options; read effective values with schema_get."""
+        with self._catalog_connect() as proxy:
+            proxy.catalog_schema_alter_options(
+                attach_opaque_data=attach_opaque_data,
+                path=path,
+                changes=changes.serialize_to_bytes(),
                 transaction_opaque_data=transaction_opaque_data,
             )
 
@@ -969,9 +1071,11 @@ class CatalogClientMixin:
         name: str,
         columns: SerializedSchema,
         on_conflict: OnConflict = OnConflict.ERROR,
-        not_null_constraints: list[int] | None = None,
-        unique_constraints: list[list[int]] | None = None,
-        check_constraints: list[str] | None = None,
+        constraint_definitions: list[bytes] | None = None,
+        comment: str | None = None,
+        tags: dict[str, str] | None = None,
+        options: TypedValueBatch | None = None,
+        layout: TableLayout | None = None,
     ) -> None:
         """Create a new table.
 
@@ -982,9 +1086,13 @@ class CatalogClientMixin:
             name: The name for the new table.
             columns: Serialized PyArrow schema for the table columns.
             on_conflict: Behavior if table already exists.
-            not_null_constraints: Column indices that must not be null.
-            unique_constraints: Lists of column indices for unique constraints.
-            check_constraints: SQL expressions for check constraints.
+            constraint_definitions: Canonical ConstraintDefinition IPC records.
+                Nonempty requests require enforced validation of all rows.
+            comment: Initial table comment under the metadata creation profile.
+            tags: Initial table tags under the metadata creation profile.
+            options: Typed option overrides under the table-option creation profile.
+            layout: Partition/sort policy under the layout creation profile.
+
 
         """
         with self._catalog_connect() as proxy:
@@ -995,11 +1103,159 @@ class CatalogClientMixin:
                     name=name,
                     columns=columns,
                     on_conflict=on_conflict,
-                    not_null_constraints=not_null_constraints or [],
-                    unique_constraints=unique_constraints or [],
-                    check_constraints=check_constraints or [],
+                    constraint_definitions=[] if constraint_definitions is None else constraint_definitions,
+                    transaction_opaque_data=transaction_opaque_data,
+                    comment=comment,
+                    tags=tags,
+                    options=options,
+                    layout=layout,
+                )
+            )
+
+    def table_constraints_apply(self, request: ConstraintsApplyRequest) -> ConstraintSnapshot:
+        """Apply one atomic constraint change set without retrying ambiguous replies."""
+        request.__post_init__()
+        with self._catalog_connect() as proxy:
+            result = proxy.catalog_table_constraints_apply(request=request)
+        result.__post_init__()
+        if result.table != request.table:
+            raise ValueError("constraint mutation returned a different table")
+        return result
+
+    def index_get(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        schema_path: list[str],
+        name: str,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+    ) -> IndexInfo | None:
+        """Read one resolved typed index definition."""
+        with self._catalog_connect() as proxy:
+            infos = proxy.catalog_index_get(
+                attach_opaque_data=attach_opaque_data,
+                schema_path=schema_path,
+                name=name,
+                transaction_opaque_data=transaction_opaque_data,
+            ).to_infos()
+        if len(infos) > 1:
+            raise ValueError("index lookup returned more than one definition")
+        return infos[0] if infos else None
+
+    def index_option_definitions(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        table: CatalogObjectRef,
+        algorithm: str,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+    ) -> OptionDefinitions:
+        """Discover typed options for an exact provider algorithm and table."""
+        with self._catalog_connect() as proxy:
+            return proxy.catalog_index_option_definitions(
+                attach_opaque_data=attach_opaque_data,
+                table=table.serialize_to_bytes(),
+                algorithm=algorithm,
+                transaction_opaque_data=transaction_opaque_data,
+            )
+
+    def index_create(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        schema_path: list[str],
+        name: str,
+        definition: IndexDefinition,
+        on_conflict: OnConflict = OnConflict.ERROR,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+    ) -> None:
+        """Create one complete typed index without retrying an ambiguous mutation."""
+        with self._catalog_connect() as proxy:
+            proxy.catalog_index_create(
+                request=IndexCreateRequest(
+                    attach_opaque_data=attach_opaque_data,
+                    schema_path=schema_path,
+                    name=name,
+                    definition=definition,
+                    on_conflict=on_conflict,
                     transaction_opaque_data=transaction_opaque_data,
                 )
+            )
+
+    def index_drop(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        schema_path: list[str],
+        name: str,
+        ignore_not_found: bool = False,
+        cascade: bool = False,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+    ) -> None:
+        """Drop an index under the provider's atomic dependency-closure checks."""
+        with self._catalog_connect() as proxy:
+            proxy.catalog_index_drop(
+                attach_opaque_data=attach_opaque_data,
+                schema_path=schema_path,
+                name=name,
+                ignore_not_found=ignore_not_found,
+                cascade=cascade,
+                transaction_opaque_data=transaction_opaque_data,
+            )
+
+    def table_option_definitions(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        schema_path: list[str],
+        name: str,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+    ) -> OptionDefinitions:
+        """Discover typed table-option definitions in the current snapshot."""
+        with self._catalog_connect() as proxy:
+            return proxy.catalog_table_option_definitions(
+                attach_opaque_data=attach_opaque_data,
+                schema_path=schema_path,
+                name=name,
+                transaction_opaque_data=transaction_opaque_data,
+            )
+
+    def table_alter_options(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        schema_path: list[str],
+        name: str,
+        changes: OptionChanges,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+    ) -> None:
+        """Apply one atomic SET/RESET operation to table options."""
+        with self._catalog_connect() as proxy:
+            proxy.catalog_table_alter_options(
+                attach_opaque_data=attach_opaque_data,
+                schema_path=schema_path,
+                name=name,
+                changes=changes.serialize_to_bytes(),
+                transaction_opaque_data=transaction_opaque_data,
+            )
+
+    def table_alter_layout(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        schema_path: list[str],
+        name: str,
+        changes: TableLayoutChange,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+    ) -> None:
+        """Replace layout components with an explicit existing-data policy."""
+        with self._catalog_connect() as proxy:
+            proxy.catalog_table_alter_layout(
+                attach_opaque_data=attach_opaque_data,
+                schema_path=schema_path,
+                name=name,
+                changes=changes.serialize_to_bytes(),
+                transaction_opaque_data=transaction_opaque_data,
             )
 
     def table_drop(
@@ -1213,6 +1469,39 @@ class CatalogClientMixin:
                 transaction_opaque_data=transaction_opaque_data,
             )
 
+    def table_column_comment_set(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        schema_path: list[str],
+        name: str,
+        column_path: list[str],
+        comment: str | None = None,
+        ignore_not_found: bool = False,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+    ) -> None:
+        """Set or remove a comment on an exact raw column path.
+
+        Args:
+            attach_opaque_data: The attachment ID from catalog_attach.
+            schema_path: The owning schema's raw components.
+            name: The table name.
+            column_path: Raw components identifying the target field.
+            comment: The replacement comment, or None to clear it.
+            ignore_not_found: Ignore a missing table.
+            transaction_opaque_data: Optional transaction handle.
+        """
+        with self._catalog_connect() as proxy:
+            proxy.catalog_table_column_comment_set(
+                attach_opaque_data=attach_opaque_data,
+                schema_path=schema_path,
+                name=name,
+                column_path=column_path,
+                comment=comment,
+                ignore_not_found=ignore_not_found,
+                transaction_opaque_data=transaction_opaque_data,
+            )
+
     def table_column_add(
         self,
         *,
@@ -1220,6 +1509,7 @@ class CatalogClientMixin:
         transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_path: list[str],
         name: str,
+        column_path: list[str],
         column_definition: SerializedSchema,
         ignore_not_found: bool = False,
         if_column_not_exists: bool = False,
@@ -1231,6 +1521,7 @@ class CatalogClientMixin:
             transaction_opaque_data: Optional transaction ID.
             schema_path: The schema containing the table.
             name: The table name.
+            column_path: Raw components identifying the target field.
             column_definition: Serialized schema with single field for the new column.
             ignore_not_found: If True, don't error if table doesn't exist.
             if_column_not_exists: If True, don't error if column already exists.
@@ -1241,6 +1532,7 @@ class CatalogClientMixin:
                 attach_opaque_data=attach_opaque_data,
                 schema_path=schema_path,
                 name=name,
+                column_path=column_path,
                 column_definition=column_definition,
                 ignore_not_found=ignore_not_found,
                 if_column_not_exists=if_column_not_exists,
@@ -1254,7 +1546,7 @@ class CatalogClientMixin:
         transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool = False,
         if_column_exists: bool = False,
         cascade: bool = False,
@@ -1266,7 +1558,7 @@ class CatalogClientMixin:
             transaction_opaque_data: Optional transaction ID.
             schema_path: The schema containing the table.
             name: The table name.
-            column_name: The name of the column to drop.
+            column_path: The name of the column to drop.
             ignore_not_found: If True, don't error if table doesn't exist.
             if_column_exists: If True, don't error if column doesn't exist.
             cascade: If True, drop dependent constraints.
@@ -1277,7 +1569,7 @@ class CatalogClientMixin:
                 attach_opaque_data=attach_opaque_data,
                 schema_path=schema_path,
                 name=name,
-                column_name=column_name,
+                column_path=column_path,
                 ignore_not_found=ignore_not_found,
                 if_column_exists=if_column_exists,
                 cascade=cascade,
@@ -1291,7 +1583,7 @@ class CatalogClientMixin:
         transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         new_column_name: str,
         ignore_not_found: bool = False,
     ) -> None:
@@ -1302,7 +1594,7 @@ class CatalogClientMixin:
             transaction_opaque_data: Optional transaction ID.
             schema_path: The schema containing the table.
             name: The table name.
-            column_name: The current name of the column.
+            column_path: The current name of the column.
             new_column_name: The new name for the column.
             ignore_not_found: If True, don't error if table doesn't exist.
 
@@ -1312,7 +1604,7 @@ class CatalogClientMixin:
                 attach_opaque_data=attach_opaque_data,
                 schema_path=schema_path,
                 name=name,
-                column_name=column_name,
+                column_path=column_path,
                 new_column_name=new_column_name,
                 ignore_not_found=ignore_not_found,
                 transaction_opaque_data=transaction_opaque_data,
@@ -1325,7 +1617,7 @@ class CatalogClientMixin:
         transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         expression: SqlExpression,
         ignore_not_found: bool = False,
     ) -> None:
@@ -1336,18 +1628,21 @@ class CatalogClientMixin:
             transaction_opaque_data: Optional transaction ID.
             schema_path: The schema containing the table.
             name: The table name.
-            column_name: The column to set the default for.
+            column_path: The column to set the default for.
             expression: The SQL expression for the default value.
             ignore_not_found: If True, don't error if table doesn't exist.
 
         """
+        if not isinstance(expression, SqlExpression):
+            raise TypeError("expression must be a SqlExpression")
+        expression.validate_owner(schema_path)
         with self._catalog_connect() as proxy:
             proxy.catalog_table_column_default_set(
                 attach_opaque_data=attach_opaque_data,
                 schema_path=schema_path,
                 name=name,
-                column_name=column_name,
-                expression=expression,
+                column_path=column_path,
+                expression=expression.serialize_to_bytes(),
                 ignore_not_found=ignore_not_found,
                 transaction_opaque_data=transaction_opaque_data,
             )
@@ -1359,7 +1654,7 @@ class CatalogClientMixin:
         transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool = False,
     ) -> None:
         """Remove the default value from a column.
@@ -1369,7 +1664,7 @@ class CatalogClientMixin:
             transaction_opaque_data: Optional transaction ID.
             schema_path: The schema containing the table.
             name: The table name.
-            column_name: The column to remove the default from.
+            column_path: The column to remove the default from.
             ignore_not_found: If True, don't error if table doesn't exist.
 
         """
@@ -1378,7 +1673,7 @@ class CatalogClientMixin:
                 attach_opaque_data=attach_opaque_data,
                 schema_path=schema_path,
                 name=name,
-                column_name=column_name,
+                column_path=column_path,
                 ignore_not_found=ignore_not_found,
                 transaction_opaque_data=transaction_opaque_data,
             )
@@ -1390,6 +1685,7 @@ class CatalogClientMixin:
         transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_path: list[str],
         name: str,
+        column_path: list[str],
         column_definition: SerializedSchema,
         expression: SqlExpression | None = None,
         ignore_not_found: bool = False,
@@ -1401,19 +1697,25 @@ class CatalogClientMixin:
             transaction_opaque_data: Optional transaction ID.
             schema_path: The schema containing the table.
             name: The table name.
+            column_path: Raw components identifying the target field.
             column_definition: Serialized schema with single field defining the
                 new type. Column name is taken from the schema field name.
             expression: Optional SQL expression to convert existing values.
             ignore_not_found: If True, don't error if table doesn't exist.
 
         """
+        if expression is not None:
+            if not isinstance(expression, SqlExpression):
+                raise TypeError("expression must be a SqlExpression or None")
+            expression.validate_owner(schema_path)
         with self._catalog_connect() as proxy:
             proxy.catalog_table_column_type_change(
                 attach_opaque_data=attach_opaque_data,
                 schema_path=schema_path,
                 name=name,
+                column_path=column_path,
                 column_definition=column_definition,
-                expression=expression,
+                expression=None if expression is None else expression.serialize_to_bytes(),
                 ignore_not_found=ignore_not_found,
                 transaction_opaque_data=transaction_opaque_data,
             )
@@ -1425,7 +1727,7 @@ class CatalogClientMixin:
         transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool = False,
     ) -> None:
         """Remove NOT NULL constraint from a column.
@@ -1435,7 +1737,7 @@ class CatalogClientMixin:
             transaction_opaque_data: Optional transaction ID.
             schema_path: The schema containing the table.
             name: The table name.
-            column_name: The column to remove NOT NULL from.
+            column_path: The column to remove NOT NULL from.
             ignore_not_found: If True, don't error if table doesn't exist.
 
         """
@@ -1444,7 +1746,7 @@ class CatalogClientMixin:
                 attach_opaque_data=attach_opaque_data,
                 schema_path=schema_path,
                 name=name,
-                column_name=column_name,
+                column_path=column_path,
                 ignore_not_found=ignore_not_found,
                 transaction_opaque_data=transaction_opaque_data,
             )
@@ -1456,7 +1758,7 @@ class CatalogClientMixin:
         transaction_opaque_data: TransactionOpaqueData | None = None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool = False,
     ) -> None:
         """Add NOT NULL constraint to a column.
@@ -1466,7 +1768,7 @@ class CatalogClientMixin:
             transaction_opaque_data: Optional transaction ID.
             schema_path: The schema containing the table.
             name: The table name.
-            column_name: The column to add NOT NULL to.
+            column_path: The column to add NOT NULL to.
             ignore_not_found: If True, don't error if table doesn't exist.
 
         """
@@ -1475,7 +1777,7 @@ class CatalogClientMixin:
                 attach_opaque_data=attach_opaque_data,
                 schema_path=schema_path,
                 name=name,
-                column_name=column_name,
+                column_path=column_path,
                 ignore_not_found=ignore_not_found,
                 transaction_opaque_data=transaction_opaque_data,
             )
@@ -1519,6 +1821,11 @@ class CatalogClientMixin:
         name: str,
         definition: str,
         on_conflict: OnConflict = OnConflict.ERROR,
+        aliases: list[str] | None = None,
+        security: str = "regular",
+        comment: str | None = None,
+        tags: dict[str, str] | None = None,
+        column_comments: dict[str, str] | None = None,
     ) -> None:
         """Create a new view.
 
@@ -1529,6 +1836,11 @@ class CatalogClientMixin:
             name: The name for the new view.
             definition: The SQL SELECT statement defining the view.
             on_conflict: Behavior if view already exists.
+            aliases: Ordered raw output identifiers; omitted uses query names.
+            security: Optimization barrier mode; barrier requires negotiated support.
+            comment: Creation comment; None and an empty string remain distinct.
+            tags: Creation tags; omitted or empty resets tags on REPLACE.
+            column_comments: Comments keyed by raw output names.
 
         """
         with self._catalog_connect() as proxy:
@@ -1537,6 +1849,11 @@ class CatalogClientMixin:
                 schema_path=schema_path,
                 name=name,
                 definition=definition,
+                aliases=aliases,
+                security=security,
+                comment=comment,
+                tags=tags,
+                column_comments=column_comments,
                 on_conflict=on_conflict,
                 transaction_opaque_data=transaction_opaque_data,
             )
@@ -1634,6 +1951,29 @@ class CatalogClientMixin:
                 transaction_opaque_data=transaction_opaque_data,
             )
 
+    def view_column_comment_set(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None = None,
+        schema_path: list[str],
+        name: str,
+        column_path: list[str],
+        comment: str | None = None,
+        ignore_not_found: bool = False,
+    ) -> None:
+        """Set or clear the comment keyed by a raw view output name."""
+        with self._catalog_connect() as proxy:
+            proxy.catalog_view_column_comment_set(
+                attach_opaque_data=attach_opaque_data,
+                transaction_opaque_data=transaction_opaque_data,
+                schema_path=schema_path,
+                name=name,
+                column_path=column_path,
+                comment=comment,
+                ignore_not_found=ignore_not_found,
+            )
+
     # ========== Macro Methods ==========
 
     def macro_get(
@@ -1672,30 +2012,10 @@ class CatalogClientMixin:
         schema_path: list[str],
         name: str,
         macro_type: MacroType,
-        parameters: list[str],
-        definition: str,
+        overloads: list[MacroOverload],
         on_conflict: OnConflict = OnConflict.ERROR,
-        parameter_default_values: pa.RecordBatch | None = None,
-        arguments_schema: pa.Schema | None = None,
     ) -> None:
-        """Create a new macro.
-
-        Args:
-            attach_opaque_data: The attachment ID from catalog_attach.
-            transaction_opaque_data: Optional transaction ID.
-            schema_path: The schema to create the macro in.
-            name: The name for the new macro.
-            macro_type: Whether this is a scalar or table macro.
-            parameters: Ordered list of parameter names.
-            definition: SQL expression (scalar) or query (table).
-            on_conflict: Behavior if macro already exists.
-            parameter_default_values: One-row `RecordBatch` with typed defaults.
-            arguments_schema: Optional Arrow schema (one nullable field per
-                parameter, in ``parameters`` order) carrying per-parameter
-                descriptions via the ``vgi_doc`` field metadata key. Build with
-                ``vgi.argument_spec.macro_arguments_schema``.
-
-        """
+        """Create or replace one complete family of explicitly scoped macro definitions."""
         with self._catalog_connect() as proxy:
             proxy.catalog_macro_create(
                 request=MacroCreateRequest(
@@ -1703,11 +2023,8 @@ class CatalogClientMixin:
                     schema_path=schema_path,
                     name=name,
                     macro_type=macro_type,
-                    parameters=parameters,
-                    definition=definition,
+                    overloads=overloads,
                     on_conflict=on_conflict,
-                    parameter_default_values=parameter_default_values,
-                    arguments_schema=arguments_schema,
                     transaction_opaque_data=transaction_opaque_data,
                 )
             )

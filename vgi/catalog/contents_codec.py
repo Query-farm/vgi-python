@@ -1,4 +1,4 @@
-"""Catalog-wide metadata collections for the 2.2 wire contract.
+"""Catalog-wide metadata collections using the six-stream codec introduced in 2.2.
 
 The author-facing inventory stays grouped by schema. Collection encoders reuse
 the ordinary record conversion, and readers consume every row of every batch.
@@ -212,6 +212,7 @@ def decode_inventory(
 
 def contents_digest(categories: dict[str, bytes | None]) -> str:
     """Hash category identity and complete stream bytes with unambiguous lengths."""
+    # This domain versions the unchanged stream framing, not the VGI protocol.
     digest = hashlib.sha256(b"vgi.catalog.contents.2.2\0")
     for kind in CATEGORY_TYPES:
         data = categories[kind]

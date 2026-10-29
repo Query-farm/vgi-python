@@ -52,6 +52,7 @@ from vgi.catalog import (
     TransactionOpaqueData,
 )
 from vgi.invocation import BindResponse
+from vgi.protocol import ClientCapabilities
 from vgi.schema_utils import schema
 from vgi.table_function import BindParams, ProcessParams, TableFunctionGenerator, init_single_worker
 from vgi.worker import Worker
@@ -411,6 +412,7 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
         options: dict[str, Any],
         data_version_spec: str | None,
         implementation_version: str | None,
+        client_capabilities: ClientCapabilities | None = None,
         ctx: CallContext | None = None,
     ) -> CatalogAttachResult:
         """Validate versions, record the resolved data version, return attach result."""
@@ -458,9 +460,7 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
             name=name,
             schema_path=["main"],
             columns=SerializedSchema(table.columns.serialize().to_pybytes()),
-            not_null_constraints=[],
-            unique_constraints=[],
-            check_constraints=[],
+            constraints=[],
         )
 
     # ------------------------------------------------------------------ schemas / tables

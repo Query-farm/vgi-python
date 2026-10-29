@@ -1,0 +1,277 @@
+# Copyright 2025, 2026 Query Farm LLC - https://query.farm
+# ruff: noqa: D102, D107
+
+"""Persistent table-option/layout reference with real existing-row rewrites.
+
+The fixture uses the pinned 1.5 SQL parser locally to prove a closed scalar
+expression profile. Its AST is only a validation aid and never crosses VGI.
+It advertises schema/table DDL transactions, not general data-write atomicity.
+"""
+
+from __future__ import annotations
+
+import base64
+import json
+import sqlite3
+from collections.abc import Sequence
+from contextlib import closing
+from dataclasses import replace
+from typing import Any, Literal, Never, overload
+
+import duckdb
+import pyarrow as pa
+
+from vgi.catalog import SchemaInfo, TableInfo
+from vgi.catalog.capabilities import (
+    ROW_SCALAR_EXPRESSION,
+    TABLE_LAYOUT_ALTER_FUTURE,
+    TABLE_LAYOUT_ALTER_REWRITE,
+    TABLE_LAYOUT_CREATE,
+    TABLE_LAYOUT_READ,
+    TABLE_METADATA_CREATE,
+    TABLE_OPTIONS_ALTER,
+    TABLE_OPTIONS_CREATE,
+    TABLE_OPTIONS_READ,
+    CatalogCapabilities,
+)
+from vgi.catalog.catalog_interface import (
+    AttachOpaqueData,
+    CatalogContentsResult,
+    OnConflict,
+    SchemaContentsInfo,
+    SchemaObjectType,
+    TransactionOpaqueData,
+)
+from vgi.catalog.layout import LayoutChangeMode, TableLayout, TableLayoutChange
+from vgi.schema_path import schema_path_key
+from vgi.worker import Worker
+
+from .expression_reference import validate_expression as _validate_expression
+from .schema_options_reference import DEFINITIONS, PROFILES, SchemaOptionsCatalog
+
+TABLE_PROFILES = CatalogCapabilities(
+    read=sorted([*PROFILES.read, TABLE_OPTIONS_READ, TABLE_LAYOUT_READ, ROW_SCALAR_EXPRESSION]),
+    ddl=sorted(
+        [
+            *PROFILES.ddl,
+            TABLE_OPTIONS_CREATE,
+            TABLE_OPTIONS_ALTER,
+            TABLE_METADATA_CREATE,
+            TABLE_LAYOUT_CREATE,
+            TABLE_LAYOUT_ALTER_FUTURE,
+            TABLE_LAYOUT_ALTER_REWRITE,
+        ]
+    ),
+    transaction=PROFILES.transaction,
+)
+
+
+def _table_key(path: list[str], name: str) -> str:
+    if not name or "\x00" in name:
+        raise ValueError("invalid table name")
+    return json.dumps({"schema": schema_path_key(path), "table": name.lower()})
+
+
+def arrange_rows(rows: list[dict[str, Any]], info: TableInfo) -> list[dict[str, Any]]:
+    """Validate/bind keys, then partition and sort actual rows in one snapshot."""
+    columns = pa.ipc.read_schema(pa.py_buffer(info.columns))
+    layout = info.layout or TableLayout()
+    partitions, sorts = layout.partition_expressions(), layout.sort_keys()
+    with duckdb.connect(config={"enable_external_access": False}) as connection:
+        connection.register("input_data", pa.Table.from_pylist(rows, schema=columns))
+        for expr in partitions + [key.expression for key in sorts]:
+            _validate_expression(connection, expr, info.schema_path)
+        select = "*" + "".join(f", ({expr.sql}) AS __vgi_partition_{i}" for i, expr in enumerate(partitions))
+        order = ", ".join(f"({key.expression.sql}) {key.direction.value} NULLS {key.null_order.value}" for key in sorts)
+        result = connection.execute(
+            f"SELECT {select} FROM input_data" + (f" ORDER BY {order}" if order else "")
+        ).to_arrow_table()
+    groups: dict[str, dict[str, Any]] = {}
+    for row in range(len(result)):
+        key = [result.column(len(columns) + i)[row].as_py() for i in range(len(partitions))]
+        group = groups.setdefault(json.dumps(key), {"key": key, "rows": []})
+        group["rows"].append({name: result.column(i)[row].as_py() for i, name in enumerate(columns.names)})
+    return list(groups.values())
+
+
+class TableLayoutCatalog(SchemaOptionsCatalog):
+    """Schema/table metadata and data-layout snapshots in one durable transaction."""
+
+    catalog_name = "layout"
+    profiles = TABLE_PROFILES
+
+    def schemas(self, *, attach_opaque_data: Any, transaction_opaque_data: Any) -> list[SchemaInfo]:
+        with closing(sqlite3.connect(self.database_path)) as db:
+            _, data = self._snapshot(db, attach_opaque_data, transaction_opaque_data)
+            return [self._decode(value, attach_opaque_data) for key, value in data.items() if key.startswith("[")]
+
+    @staticmethod
+    def _info(value: str) -> TableInfo:
+        return TableInfo.deserialize_from_bytes(base64.b64decode(json.loads(value)["info"]))
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: list[str],
+        type: Literal[SchemaObjectType.TABLE],
+    ) -> list[TableInfo]: ...
+
+    @overload
+    def schema_contents(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: list[str],
+        type: Literal[
+            SchemaObjectType.VIEW,
+            SchemaObjectType.SCALAR_FUNCTION,
+            SchemaObjectType.TABLE_FUNCTION,
+            SchemaObjectType.AGGREGATE_FUNCTION,
+            SchemaObjectType.SCALAR_MACRO,
+            SchemaObjectType.TABLE_MACRO,
+            SchemaObjectType.INDEX,
+        ],
+    ) -> list[Never]: ...
+
+    def schema_contents(
+        self, *, attach_opaque_data: Any, transaction_opaque_data: Any, path: list[str], type: SchemaObjectType
+    ) -> Sequence[TableInfo]:
+        if type != SchemaObjectType.TABLE:
+            return []
+        with closing(sqlite3.connect(self.database_path)) as db:
+            _, data = self._snapshot(db, attach_opaque_data, transaction_opaque_data)
+            return [
+                self._info(value)
+                for key, value in data.items()
+                if key.startswith("{") and schema_path_key(self._info(value).schema_path) == schema_path_key(path)
+            ]
+
+    def table_get(
+        self, *, attach_opaque_data: Any, transaction_opaque_data: Any, schema_path: list[str], name: str, **kwargs: Any
+    ) -> TableInfo | None:
+        with closing(sqlite3.connect(self.database_path)) as db:
+            _, data = self._snapshot(db, attach_opaque_data, transaction_opaque_data)
+            value = data.get(_table_key(schema_path, name))
+            return self._info(value) if value is not None else None
+
+    def catalog_contents(self, *, attach_opaque_data: Any, if_none_match: str | None = None) -> CatalogContentsResult:
+        return CatalogContentsResult(
+            schemas=[
+                SchemaContentsInfo(
+                    schema=info,
+                    tables=self.schema_contents(
+                        attach_opaque_data=attach_opaque_data,
+                        transaction_opaque_data=None,
+                        path=info.path,
+                        type=SchemaObjectType.TABLE,
+                    ),
+                )
+                for info in self.schemas(attach_opaque_data=attach_opaque_data, transaction_opaque_data=None)
+            ],
+            etag="same-provider-etag",
+        )
+
+    def table_option_definitions(self, **kwargs: Any) -> Any:
+        return DEFINITIONS
+
+    def _arrange(self, rows: list[dict[str, Any]], info: TableInfo) -> list[dict[str, Any]]:
+        layout = info.layout or TableLayout()
+        for expression in layout.partition_expressions() + [key.expression for key in layout.sort_keys()]:
+            if expression.profile not in self.profiles.read:
+                raise ValueError("expression profile is no longer supported")
+        return arrange_rows(rows, info)
+
+    def _create_constraints(self, args: dict[str, Any]) -> tuple[list[bytes], bytes | None]:
+        """Keep this layout-only reference explicit about unsupported enforcement."""
+        if args["constraint_definitions"]:
+            raise ValueError("constraint enforcement is outside this reference")
+        return [], None
+
+    def _change(self, args: dict[str, Any], action: str) -> None:
+        attach, tx = args["attach_opaque_data"], args["transaction_opaque_data"]
+        path, name = args["schema_path"], args["name"]
+        key = _table_key(path, name)
+        with closing(sqlite3.connect(self.database_path)) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            version, data = self._snapshot(db, attach, tx)
+            if action == "create":
+                if json.dumps(schema_path_key(path)) not in data:
+                    raise ValueError("schema does not exist")
+                constraints, revision = self._create_constraints(args)
+                info = TableInfo(
+                    name=name,
+                    schema_path=path,
+                    columns=args["columns"],
+                    comment=args.get("comment"),
+                    tags=args.get("tags") or {},
+                    constraints=constraints,
+                    definition_revision=revision,
+                    options=DEFINITIONS.create(args.get("options")),
+                    layout=args.get("layout") or TableLayout(),
+                )
+                physical = self._arrange([], info)
+                if key in data:
+                    if args["on_conflict"] == OnConflict.IGNORE:
+                        return
+                    if args["on_conflict"] != OnConflict.REPLACE:
+                        raise ValueError("table already exists")
+            else:
+                if key not in data:
+                    raise ValueError("table does not exist")
+                record = json.loads(data[key])
+                info, physical = self._info(data[key]), record["partitions"]
+                if action == "options":
+                    assert info.options is not None
+                    info = replace(info, options=DEFINITIONS.apply(info.options, args["changes"]))
+                elif action == "layout":
+                    change: TableLayoutChange = args["changes"]
+                    info = replace(info, layout=change.apply_to(info.layout or TableLayout()))
+                    self._arrange([], info)  # Bind and validate even a future-write change.
+                    if change.mode == LayoutChangeMode.REWRITE:
+                        physical = self._arrange([row for part in physical for row in part["rows"]], info)
+                elif action == "seed":
+                    physical += self._arrange(args["rows"], info)
+                elif action == "drop":
+                    del data[key]
+            if action != "drop":
+                data[key] = json.dumps(
+                    {"info": base64.b64encode(info.serialize_to_bytes()).decode(), "partitions": physical}
+                )
+            if tx is None:
+                db.execute("UPDATE catalog SET version=?, data=? WHERE id=1", (version + 1, json.dumps(data)))
+            else:
+                db.execute("UPDATE transactions SET version=?, data=? WHERE id=?", (version + 1, json.dumps(data), tx))
+
+    def table_create(self, **kwargs: Any) -> None:
+        self._change(kwargs, "create")
+
+    def table_alter_options(self, **kwargs: Any) -> None:
+        self._change(kwargs, "options")
+
+    def table_alter_layout(self, **kwargs: Any) -> None:
+        self._change(kwargs, "layout")
+
+    def table_drop(self, **kwargs: Any) -> None:
+        self._change(kwargs, "drop")
+
+    def seed_rows(self, **kwargs: Any) -> None:
+        """Populate physical data for layout tests without advertising data writes."""
+        self._change(kwargs, "seed")
+
+    def physical_rows(
+        self, *, attach_opaque_data: Any, transaction_opaque_data: Any, schema_path: list[str], name: str
+    ) -> list[dict[str, Any]]:
+        """Read the durable physical partitions for a test assertion."""
+        with closing(sqlite3.connect(self.database_path)) as db:
+            _, data = self._snapshot(db, attach_opaque_data, transaction_opaque_data)
+            return json.loads(data[_table_key(schema_path, name)])["partitions"]  # type: ignore[no-any-return]
+
+
+class TableLayoutWorker(Worker):
+    """Normal public protocol host for the table-layout reference."""
+
+    catalog_interface = TableLayoutCatalog

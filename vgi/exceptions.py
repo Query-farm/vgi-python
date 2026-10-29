@@ -23,6 +23,7 @@ __all__ = [
     "ArgumentTypeError",
     "BindStateNotFoundError",
     "CatalogReadOnlyError",
+    "CatalogCapabilityError",
     "ExecutionIdentifierError",
     "InvalidArgumentError",
     "NotFoundError",
@@ -68,6 +69,17 @@ class CatalogReadOnlyError(Exception):
     """
 
     error_code: ClassVar[Code] = Code.FAILED_PRECONDITION
+
+
+class CatalogCapabilityError(NotImplementedError):
+    """An operation requires a profile not selected or no longer supported."""
+
+    error_code: ClassVar[str] = "UNIMPLEMENTED"
+    error_kind: ClassVar[str] = "catalog_capability_required"
+
+    def __init__(self, operation: str, profile: str) -> None:
+        """Identify the unsupported operation without exposing provider state."""
+        super().__init__(f"{operation} requires negotiated capability {profile}")
 
 
 class OpaqueDataNotRecognizedError(ValueError):

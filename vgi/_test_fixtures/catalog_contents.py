@@ -78,6 +78,7 @@ from vgi.catalog import (
     Table,
     View,
 )
+from vgi.protocol import ClientCapabilities
 from vgi.worker import Worker
 
 CATALOG_PROBE = "contents_probe"
@@ -232,6 +233,7 @@ class _PrivateMemoryCatalog(InMemoryCatalog):
         options: dict[str, Any],
         data_version_spec: str | None,
         implementation_version: str | None,
+        client_capabilities: ClientCapabilities | None = None,
         ctx: Any = None,
     ) -> CatalogAttachResult:
         """Attach a fresh private catalog, advertising ``catalog_contents``."""
@@ -248,6 +250,7 @@ class _PrivateMemoryCatalog(InMemoryCatalog):
             options=options,
             data_version_spec=data_version_spec,
             implementation_version=implementation_version,
+            client_capabilities=client_capabilities,
             ctx=ctx,
         )
         return replace(

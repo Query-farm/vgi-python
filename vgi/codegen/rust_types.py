@@ -42,7 +42,7 @@ import pyarrow as pa
 from vgi_rpc.rpc._types import MethodType, rpc_methods  # type: ignore[attr-defined]
 
 from vgi.catalog.catalog_interface import CatalogAttachResult
-from vgi.codegen._common import GeneratorError, provenance_comment, sanitize_name
+from vgi.codegen._common import SHARED_CONTRACT_TYPES, GeneratorError, provenance_comment, sanitize_name
 from vgi.codegen.csharp_types import _base, _parse_docstring
 from vgi.codegen.rust_request_builders import _rust_ident
 from vgi.codegen.rust_schemas import snake_case
@@ -59,6 +59,7 @@ GENERATOR_VERSION = "1"
 #: factory for — an ``EXTRA_RESPONSE_TYPES`` entry or a unary method result) and
 #: delete its hand-written counterpart in vgi-rust.
 RUST_TYPES: tuple[type, ...] = (
+    *SHARED_CONTRACT_TYPES,
     CatalogAttachResult,
     SchemaContents,
     CatalogContentsResponse,

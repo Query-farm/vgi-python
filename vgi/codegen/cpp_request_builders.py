@@ -121,13 +121,20 @@ def _is_simple_map(dtype: pa.DataType) -> bool:
 
 
 def _is_supported_field(field: pa.Field[Any]) -> bool:
-    return _is_simple_scalar(field.type) or _is_simple_list(field.type) or _is_simple_map(field.type)
+    return (
+        _is_simple_scalar(field.type)
+        or _is_simple_list(field.type)
+        or _is_simple_map(field.type)
+        or pa.types.is_struct(field.type)
+    )
 
 
-def _cpp_param_type(field: pa.Field[Any]) -> str:
+def _cpp_param_type(field: pa.Field[Any], backend: str = "arrow") -> str:
     """C++ parameter type for a schema field (with std::optional<T> for nullable)."""
     base: str
     t = field.type
+    if pa.types.is_struct(t):
+        return "const VgiColumn&" if backend == "nanoarrow" else "const std::shared_ptr<arrow::Array>&"
     if t.equals(pa.binary()):
         base = "std::vector<uint8_t>"
     elif t.equals(pa.string()):
@@ -261,6 +268,8 @@ def _build_array_call(field: pa.Field[Any], param: str, *, method_name: str) -> 
     if _is_simple_list(t):
         inner = t.value_type
         if inner.equals(pa.string()):
+            if nullable:
+                return f"arrays.push_back(BuildOptionalStringListScalar({param}));"
             return f"arrays.push_back(BuildStringListScalar({param}));"
         if inner.equals(pa.binary()):
             return f"arrays.push_back(BuildBinaryListScalar({param}));"
@@ -283,6 +292,7 @@ def _emit_builder(
     *,
     method_name: str,
     exception_type: str = "IOException",
+    backend: str = "arrow",
 ) -> str:
     """Render one ``Build<Name>Params(...)`` function as an inline C++ definition."""
     schema = es.schema
@@ -301,24 +311,57 @@ def _emit_builder(
     # Param signatures — one per field, in schema order.
     params_decl: list[str] = []
     for f in schema:
-        cpp_type = _cpp_param_type(f)
+        cpp_type = _cpp_param_type(f, backend)
         params_decl.append(f"\t    {cpp_type} {f.name}")
     params_str = ",\n".join(params_decl)
 
     # Body — emit one push_back per field.
     pushes: list[str] = []
-    for f in schema:
-        pushes.append(f"\t{_build_array_call(f, f.name, method_name=method_name)}")
+    for i, f in enumerate(schema):
+        if pa.types.is_struct(f.type) and backend == "nanoarrow":
+            nullable = "true" if f.nullable else "false"
+            pushes.append(f"\tarrays.push_back(BuildStructScalar({f.name}, schema->field({i}), {nullable}));")
+        elif pa.types.is_struct(f.type):
+            param = f.name
+            pushes.extend(
+                [
+                    f"\tif ({param}) {{",
+                    f"\t\tif ({param}->length() != 1 || !{param}->type()->Equals(schema->field({i})->type())"
+                    + (f" || {param}->IsNull(0)" if not f.nullable else "")
+                    + ") {",
+                    f'\t\t\tthrow {exception_type}("{func_name}: invalid {param} struct");',
+                    "\t\t}",
+                    f"\t\tarrays.push_back({param});",
+                    "\t} else {",
+                ]
+            )
+            if f.nullable:
+                pushes.extend(
+                    [
+                        f"\t\tauto null_array = arrow::MakeArrayOfNull(schema->field({i})->type(), 1);",
+                        f"\t\tif (!null_array.ok()) throw {exception_type}(null_array.status().ToString());",
+                        "\t\tarrays.push_back(null_array.ValueOrDie());",
+                    ]
+                )
+            else:
+                pushes.append(f'\t\tthrow {exception_type}("{func_name}: missing {param} struct");')
+            pushes.append("\t}")
+        else:
+            pushes.append(f"\t{_build_array_call(f, f.name, method_name=method_name)}")
     body = "\n".join(pushes)
 
     out = io.StringIO()
     out.write(f"// Origin: {es.origin}\n")
-    out.write(f"inline std::shared_ptr<arrow::RecordBatch> {func_name}(\n")
+    batch_type = "VgiBatchPtr" if backend == "nanoarrow" else "std::shared_ptr<arrow::RecordBatch>"
+    out.write(f"inline {batch_type} {func_name}(\n")
     out.write(params_str)
     out.write(") {\n")
     out.write(f"\tconst auto &schema = {name}Schema();\n")
     out.write('\tstatic_assert(true, "compile-time anchor — runtime field-count assert below");\n')
-    out.write("\tstd::vector<std::shared_ptr<arrow::Array>> arrays;\n")
+    array_type = "ArrowArray" if backend == "nanoarrow" else "std::shared_ptr<arrow::Array>"
+    out.write(f"\tstd::vector<{array_type}> arrays;\n")
+    if backend == "nanoarrow":
+        out.write("\tRequestArrayGuard guard(arrays);\n")
     out.write(f"\tarrays.reserve({len(schema)});\n")
     out.write(body + "\n")
     out.write("\tif (arrays.size() != static_cast<size_t>(schema->num_fields())) {\n")
@@ -328,7 +371,10 @@ def _emit_builder(
         f'+ std::to_string(schema->num_fields()) + " fields");\n'
     )
     out.write("\t}\n")
-    out.write("\treturn arrow::RecordBatch::Make(schema, 1, arrays);\n")
+    if backend == "nanoarrow":
+        out.write("\treturn VgiBatch::FromColumns(schema, 1, std::move(arrays));\n")
+    else:
+        out.write("\treturn arrow::RecordBatch::Make(schema, 1, arrays);\n")
     out.write("}\n")
     return out.getvalue()
 
@@ -365,6 +411,7 @@ def emit_builders(
     exception_include: str = '"duckdb/common/exception.hpp"',
     exception_type: str = "IOException",
     standalone_schemas: tuple[EmittedSchema, ...] = (),
+    backend: str = "arrow",
 ) -> None:
     """Render request-builder functions for a set of params schemas as a C++ header.
 
@@ -392,6 +439,10 @@ def emit_builders(
     existing callers (and the drift tests that compare against
     ``vgi``'s checked-in copy) are unaffected.
     """
+    if backend == "nanoarrow":
+        regen_command_lines = [
+            "uv run --project ~/Development/vgi-python python scripts/regen_generated.py --native-cpp-backend nanoarrow"
+        ]
     if namespace is None:
         namespace = parse_cpp_namespace(DEFAULT_CPP_NAMESPACE)
     body = io.StringIO()
@@ -405,7 +456,10 @@ def emit_builders(
     body.write("#include <string>\n")
     body.write("#include <utility>\n")
     body.write("#include <vector>\n\n")
-    body.write("#include <arrow/api.h>\n\n")
+    if backend not in ("arrow", "nanoarrow"):
+        raise GeneratorError(f"unknown C++ builder backend {backend!r}")
+    if backend == "arrow":
+        body.write("#include <arrow/api.h>\n\n")
     body.write(f"#include {exception_include}\n\n")
     body.write(open_namespace(namespace))
     body.write("\n")
@@ -425,7 +479,7 @@ def emit_builders(
             )
             skipped.append(method_name)
             continue
-        chunk = _emit_builder(es, method_name=method_name, exception_type=exception_type)
+        chunk = _emit_builder(es, method_name=method_name, exception_type=exception_type, backend=backend)
         body.write(chunk + "\n")
         if chunk.lstrip().startswith("// SKIPPED"):
             skipped.append(method_name)
@@ -433,7 +487,7 @@ def emit_builders(
             emitted.append(method_name)
 
     for es in standalone_schemas:
-        chunk = _emit_builder(es, method_name=es.name, exception_type=exception_type)
+        chunk = _emit_builder(es, method_name=es.name, exception_type=exception_type, backend=backend)
         body.write(chunk + "\n")
         if chunk.lstrip().startswith("// SKIPPED"):
             skipped.append(es.name)
@@ -474,6 +528,7 @@ def emit(
     helpers_include: str = "vgi_rpc_types.hpp",
     exception_include: str = '"duckdb/common/exception.hpp"',
     exception_type: str = "IOException",
+    backend: str = "arrow",
 ) -> None:
     """Emit the generated C++ request-builder header to *out*."""
     standalone_schemas = tuple(
@@ -491,6 +546,7 @@ def emit(
         ],
         schemas_include=schemas_include,
         namespace=namespace,
+        backend=backend,
         helpers_include=helpers_include,
         exception_include=exception_include,
         exception_type=exception_type,

@@ -42,8 +42,10 @@ from vgi_rpc import ArrowSerializableDataclass
 from vgi_rpc.rpc import OutputCollector
 
 from vgi import Worker
+from vgi._test_fixtures.constraint_facts import fixed_not_null
 from vgi.arguments import Arg
 from vgi.catalog import Catalog, Schema
+from vgi.catalog.capabilities import CONSTRAINT_RECORDS_READ, CatalogCapabilities
 from vgi.catalog.catalog_interface import (
     AttachOpaqueData,
     ReadOnlyCatalogInterface,
@@ -357,6 +359,10 @@ class ProjReproCatalog(ReadOnlyCatalogInterface):
     catalog = _CATALOG
     catalog_name = CATALOG_NAME
 
+    def catalog_capabilities(self, *, attach_opaque_data: AttachOpaqueData) -> CatalogCapabilities:
+        """The generator always supplies these four fields and exposes no writes."""
+        return CatalogCapabilities(read=[CONSTRAINT_RECORDS_READ])
+
     def _info(self, table_name: str) -> TableInfo:
         return TableInfo(
             comment=f"reproducer table -> {_TABLE_NAMES[table_name]}",
@@ -364,9 +370,12 @@ class ProjReproCatalog(ReadOnlyCatalogInterface):
             name=table_name,
             schema_path=["main"],
             columns=SerializedSchema(_serialize_schema(WIDE_SCHEMA)),
-            not_null_constraints=[],
-            unique_constraints=[],
-            check_constraints=[],
+            constraints=[
+                fact.serialize_to_bytes()
+                for fact in fixed_not_null(
+                    table_name, ["main"], (("topic",), ("partition",), ("offset",), ("headers",))
+                )
+            ],
         )
 
     def schemas(

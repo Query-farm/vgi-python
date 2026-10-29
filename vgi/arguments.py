@@ -18,12 +18,14 @@ import types
 import typing
 import warnings
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Final, TypeVar, overload
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, ClassVar, Final, TypeVar, cast, overload
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
 from vgi_rpc.errors import Code
+
+from vgi.typed_values import TypedValueBatch
 
 if TYPE_CHECKING:
     from pyarrow import Scalar
@@ -405,11 +407,16 @@ class Arguments:
     Attributes:
         positional: Tuple of positional argument values as pa.Scalar.
         named: Dictionary mapping argument names to pa.Scalar values.
+        argument_schema: Optional complete schema using ``positional_<index>``
+            and ``named_<name>`` fields. Preserves nullability and metadata that
+            cannot be recovered from scalars alone. Use ``from_batch`` to retain
+            the schema of an existing one-row argument batch.
 
     """
 
     positional: tuple["Scalar[Any] | None", ...] = ()
     named: dict[str, "Scalar[Any]"] | None = None
+    argument_schema: pa.Schema | None = field(default=None, kw_only=True, repr=False)
 
     def get(
         self,
@@ -533,12 +540,24 @@ class Arguments:
         Creates a schema with one field per argument: "positional_0", "positional_1",
         etc. for positional args, and "named_<name>" for named args. Field types
         are taken directly from scalar values to handle Arrow extension types.
+        An explicit ``argument_schema`` retains field and schema metadata; its
+        names and types must match the supplied values.
 
         Returns:
             Arrow schema matching the structure returned by `encoded_dict()`.
 
         """
         args_dict = self.encoded_dict()
+        if self.argument_schema is not None:
+            schema = self.argument_schema
+            if len(schema) != len(args_dict) or set(schema.names) != set(args_dict):
+                raise ValueError("argument schema must contain exactly the supplied argument fields")
+            for definition in schema:
+                scalar = args_dict[definition.name]
+                actual_type = pa.null() if scalar is None else scalar.type
+                if not definition.type.equals(actual_type, check_metadata=True):
+                    raise ValueError(f"argument {definition.name!r} does not match its declared type")
+            return schema
         fields: list[pa.Field[Any]] = []
         for key, scalar in args_dict.items():
             if scalar is None:
@@ -547,8 +566,42 @@ class Arguments:
                 fields.append(pa.field(key, scalar.type))
         return pa.schema(fields)
 
-    @staticmethod
-    def decode(data: pa.StructScalar) -> "Arguments":
+    @classmethod
+    def from_batch(cls, batch: pa.RecordBatch) -> "Arguments":
+        """Read one argument row without losing field or schema metadata.
+
+        Fields use the existing argument wire names: zero-based contiguous
+        ``positional_<index>`` and ``named_<name>``. Their order is preserved,
+        even when named fields appear before positional fields.
+        """
+        values = TypedValueBatch(batch)
+        positional_values: dict[int, Scalar[Any]] = {}
+        named: dict[str, Scalar[Any]] = {}
+        for index, key in enumerate(values.schema.names):
+            value = batch.column(index)[0]
+            if key.startswith("positional_"):
+                suffix = key[len("positional_") :]
+                if not re.fullmatch(r"0|[1-9][0-9]*", suffix):
+                    raise ValueError(f"invalid positional argument field {key!r}")
+                # Check before int conversion/allocation: a malformed field must
+                # not request an arbitrarily large positional tuple.
+                if len(suffix) > len(str(batch.num_columns)) or int(suffix) >= batch.num_columns:
+                    raise ValueError("positional argument indexes must be contiguous from zero")
+                positional_values[int(suffix)] = value
+            elif key.startswith("named_") and key[len("named_") :]:
+                named[key[len("named_") :]] = value
+            else:
+                raise ValueError(f"invalid argument field {key!r}")
+        if set(positional_values) != set(range(len(positional_values))):
+            raise ValueError("positional argument indexes must be contiguous from zero")
+        return cls(
+            positional=tuple(positional_values[index] for index in range(len(positional_values))),
+            named=named or None,
+            argument_schema=values.schema,
+        )
+
+    @classmethod
+    def decode(cls, data: pa.StructScalar) -> "Arguments":
         """Decode [`Arguments`][] from a serialized dictionary.
 
         Args:
@@ -558,18 +611,31 @@ class Arguments:
             Deserialized `Arguments` instance.
 
         """
-        positional: list[Scalar[Any] | None] = []
-        named: dict[str, Scalar[Any]] = {}
-        for key, value in data.items():
-            if key.startswith("positional_"):
-                index = int(key[len("positional_") :])
-                while len(positional) <= index:
-                    positional.append(None)
-                positional[index] = value
-            elif key.startswith("named_"):
-                name = key[len("named_") :]
-                named[name] = value
-        return Arguments(positional=tuple(positional), named=named or None)
+        if not isinstance(data, pa.StructScalar):
+            raise ValueError("arguments require a present struct value")
+        if not data.is_valid:
+            # DuckDB 1.5 encodes no arguments as a NULL empty struct. It has no
+            # values to discard; a NULL populated struct would lose arguments.
+            if len(data.type) == 0:
+                return cls()
+            raise ValueError("arguments require a present struct value")
+        struct_array = pa.repeat(data, 1)
+        return cls.from_batch(pa.RecordBatch.from_struct_array(struct_array))
+
+    def to_batch(self) -> pa.RecordBatch:
+        """Return one flat argument row with its complete Arrow schema."""
+        args_dict = self.encoded_dict()
+        schema = self.schema()
+        arrays: list[pa.Array[Any]] = []
+        for definition in schema:
+            scalar = args_dict[definition.name]
+            arrays.append(pa.nulls(1) if scalar is None else pa.repeat(scalar, 1))  # type: ignore[call-overload]
+        batch = (
+            pa.RecordBatch.from_arrays(arrays, schema=schema)
+            if arrays
+            else TypedValueBatch.empty(metadata=schema.metadata).batch
+        )
+        return TypedValueBatch(batch).batch
 
     def serialize_to_bytes(self) -> bytes:
         """Serialize [`Arguments`][] to bytes using Arrow IPC format.
@@ -584,27 +650,10 @@ class Arguments:
             Serialized bytes containing the `Arguments`.
 
         """
-        args_dict = self.encoded_dict()
-        fields: list[pa.Field[Any]] = []
-        arrays: list[pa.Array[Any]] = []
-        for key, scalar in args_dict.items():
-            if scalar is None:
-                fields.append(pa.field(key, pa.null()))
-                arrays.append(pa.nulls(1))
-            else:
-                fields.append(pa.field(key, scalar.type))
-                arrays.append(pa.repeat(scalar, 1))  # type: ignore[call-overload]
-        if fields:
-            struct_array: pa.StructArray = pa.StructArray.from_arrays(arrays, fields=fields)
-        else:
-            # Empty args: create a length-1 struct array with no fields
-            struct_type = pa.struct([])
-            struct_array = pa.array([{}], type=struct_type)  # type: ignore[assignment]
+        values = self.to_batch()
+        struct_array = values.to_struct_array()
         batch = pa.RecordBatch.from_arrays([struct_array], names=["args"])
-        sink = pa.BufferOutputStream()
-        with pa.ipc.new_stream(sink, batch.schema) as writer:
-            writer.write_batch(batch)
-        return sink.getvalue().to_pybytes()
+        return TypedValueBatch(batch.replace_schema_metadata(values.schema.metadata)).serialize_to_bytes()
 
     @staticmethod
     def deserialize_from_bytes(data: bytes, ipc_validation: Any = None) -> "Arguments":
@@ -619,9 +668,15 @@ class Arguments:
             Deserialized `Arguments` instance.
 
         """
-        reader = pa.ipc.open_stream(data)
-        batch = reader.read_next_batch()
-        return Arguments.decode(batch.column("args")[0])
+        batch = TypedValueBatch.deserialize_from_bytes(data, ipc_validation).batch
+        if batch.schema.names != ["args"] or not pa.types.is_struct(batch.schema.field(0).type):
+            raise ValueError("argument IPC must contain exactly one args struct column")
+        if not batch.column(0)[0].is_valid and len(batch.schema.field(0).type) != 0:
+            raise ValueError("arguments require a present struct value")
+        values = pa.RecordBatch.from_struct_array(cast(pa.StructArray, batch.column(0))).replace_schema_metadata(
+            batch.schema.metadata
+        )
+        return Arguments.from_batch(values)
 
 
 class ArgumentValidationError(ValueError):

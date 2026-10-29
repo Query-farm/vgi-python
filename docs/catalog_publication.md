@@ -1,6 +1,6 @@
 # Batched catalog contents and reusable publications
 
-VGI wire revision **2.2.0** retains the `vgi.v2` route and replaces
+VGI wire revision **3.0.0** uses the `vgi.v3` route and retains
 `catalog_contents` with six catalog-wide Arrow IPC streams: schemas, tables,
 views, functions, macros and indexes. Each stream can contain multiple batches.
 Null means an empty category. Function and macro subtype fields remain intact.
@@ -20,8 +20,8 @@ the argument is discarded. Use `CatalogAttachResult.attach_opaque_data` for
 subsequent requests. Worker functions still receive their attachment state.
 
 Every minor wire revision is an explicit contract boundary. The server checks
-major and minor exactly, so clients and workers must both use 2.2. A patch bump
-does not permit schema changes. Serving 2.1 and 2.2 during migration requires
+major and minor exactly, so clients and workers must both use 3.0. A patch bump
+does not permit schema changes. Serving v2 and v3 during migration requires
 separate deployment URLs or an explicit compatibility implementation.
 
 ## Enable publication
@@ -40,7 +40,7 @@ S3 client and its SDK when using the S3 repository.
 The catalog implementation uses APIs available in published **vgi-rpc 0.50.0**.
 An isolated check against that release passed 157 functional catalog, client,
 serialization, binary dictionary and publication tests. The package retains its
-declared RPC minimum of 0.52.0 for Identity.v2 support; catalog publication does
+declared RPC minimum of 0.52.3 for complete request framing; catalog publication does
 not introduce a dependency on unpublished RPC APIs.
 
 ```python
@@ -169,3 +169,8 @@ server at a predictable port; `/stats` reports uploads and object GETs. Its CORS
 headers and preflight support permit browser conformance tests. This fixture is
 intended for local testing and its object storage lasts only for the worker's
 lifetime.
+
+Snapshot manifests and cache keys use `vgi.v3` / wire revision `3.0` and the
+current catalog contract hash. The `vgi.catalog.contents.2.2` digest domain
+continues to identify the unchanged six-stream codec, independently of the
+protocol major. Existing v2 snapshots cannot be reused under the v3 identity.

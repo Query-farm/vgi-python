@@ -24,12 +24,9 @@ matches what the generator would emit right now.
 
 ### Opaque vs describable types
 
-For fields typed as `Annotated[T, ArrowType(binary|large_binary)]`:
-- If `T` is a pyarrow `Schema` / `RecordBatch`, or an opaque dataclass
-  (`Arguments`, `ArrowSerializableDataclass | None`), emit `Uint8Array` with
-  a JSDoc tag noting the semantic source. Serialization stays the caller's
-  responsibility (and matches the existing Python side).
-- Otherwise walk the inner type and emit its semantic shape.
+For fields typed as `Annotated[T, ArrowType(binary|large_binary)]`, emit
+`Uint8Array`: the codec returns bytes and does not recursively decode nested
+records. Keep describable nested interfaces available for explicit decoding.
 
 For the INFO_TYPES response envelopes (CatalogsResponse, TablesResponse, …
 FunctionsResponse), promote `items: list[bytes]` to a typed array of the
@@ -53,6 +50,7 @@ import types as pytypes
 import typing
 from typing import TYPE_CHECKING
 
+import pyarrow as pa
 from vgi_rpc.rpc._types import rpc_methods
 
 from vgi.codegen._common import INFO_TYPES, GeneratorError, provenance_comment
@@ -194,6 +192,10 @@ def _emit_type(t: typing.Any, ctx: _Ctx) -> str:
         inner = _strip_optional(t) if _is_optional(t) else t
         suffix = " | null" if _is_optional(t) else ""
 
+        if pa.types.is_binary(arrow_meta.arrow_type) or pa.types.is_large_binary(arrow_meta.arrow_type):
+            if isinstance(inner, type) and dataclasses.is_dataclass(inner) and _opaque_tag_for(inner) is None:
+                _register_dataclass(inner, ctx)
+            return f"Uint8Array{suffix}"
         if _opaque_tag_for(inner) is not None:
             return f"Uint8Array{suffix}"
         if typing.get_origin(inner) is list:
@@ -323,6 +325,12 @@ def _inner_opaque_semantic(t: typing.Any) -> str | None:
     tag = _opaque_tag_for(inner)
     if tag is not None:
         return tag
+    if (
+        (pa.types.is_binary(arrow_meta.arrow_type) or pa.types.is_large_binary(arrow_meta.arrow_type))
+        and isinstance(inner, type)
+        and dataclasses.is_dataclass(inner)
+    ):
+        return f"@ipc-record {inner.__name__}"
     if typing.get_origin(inner) is list:
         (li,) = typing.get_args(inner)
         tag = _opaque_tag_for(li)

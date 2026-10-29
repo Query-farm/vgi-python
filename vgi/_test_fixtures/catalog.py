@@ -8,13 +8,13 @@ be used for testing and as a reference implementation.
 
 from __future__ import annotations
 
+import dataclasses
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, overload
 
 if TYPE_CHECKING:
-    import pyarrow as pa
     from vgi_rpc.rpc import CallContext
 
 from vgi._redact import short_hash
@@ -35,7 +35,11 @@ from vgi.catalog import (
     TransactionOpaqueData,
     ViewInfo,
 )
+from vgi.catalog.layout import TableLayout
+from vgi.catalog.macros import MacroOverload
+from vgi.protocol import ClientCapabilities
 from vgi.schema_path import SchemaKey, schema_path_key
+from vgi.typed_values import TypedValueBatch
 from vgi.worker import Worker
 
 
@@ -154,6 +158,7 @@ class InMemoryCatalog(CatalogInterface):
         options: dict[str, Any],
         data_version_spec: str | None,
         implementation_version: str | None,
+        client_capabilities: ClientCapabilities | None = None,
         ctx: CallContext | None = None,
     ) -> CatalogAttachResult:
         """Attach to a catalog with the given name.
@@ -354,19 +359,27 @@ class InMemoryCatalog(CatalogInterface):
         on_conflict: OnConflict = OnConflict.ERROR,
         comment: str | None,
         tags: dict[str, str],
+        options: TypedValueBatch | None = None,
     ) -> None:
         """Create a new schema."""
+        if options is not None:
+            raise NotImplementedError("Schema options are not supported by this fixture")
         catalog = self._get_catalog(attach_opaque_data)
         path_key = schema_path_key(path)
         if path_key in catalog.schemas:
-            msg = f"Schema {path!r} already exists"
-            raise ValueError(msg)
+            if on_conflict == OnConflict.IGNORE:
+                return
+            if on_conflict != OnConflict.REPLACE:
+                msg = f"Schema {path!r} already exists"
+                raise ValueError(msg)
+        if len(path) > 1 and schema_path_key(path[:-1]) not in catalog.schemas:
+            raise ValueError("Parent schema does not exist")
         catalog.schemas[path_key] = SchemaData(
             info=SchemaInfo(
                 attach_opaque_data=attach_opaque_data,
                 path=list(path),
                 comment=comment,
-                tags=tags,
+                tags=dict(tags),
             )
         )
         self._increment_version(attach_opaque_data)
@@ -507,13 +520,18 @@ class InMemoryCatalog(CatalogInterface):
         name: str,
         columns: SerializedSchema,
         on_conflict: OnConflict,
-        not_null_constraints: list[int],
-        unique_constraints: list[list[int]],
-        check_constraints: list[str],
-        primary_key_constraints: list[list[int]] | None = None,
-        foreign_key_constraints: list[bytes] | None = None,
+        constraint_definitions: list[bytes],
+        comment: str | None = None,
+        tags: dict[str, str] | None = None,
+        options: TypedValueBatch | None = None,
+        layout: TableLayout | None = None,
     ) -> None:
         """Create a new table."""
+        if constraint_definitions:
+            raise NotImplementedError("this metadata-only catalog does not enforce canonical constraints")
+        if any(value is not None for value in (comment, tags, options, layout)):
+            raise NotImplementedError("table creation metadata/options/layout profiles are not supported")
+
         schema_data = self._get_schema(attach_opaque_data, schema_path)
         if name in schema_data.tables:
             if on_conflict == OnConflict.ERROR:
@@ -528,9 +546,7 @@ class InMemoryCatalog(CatalogInterface):
                 name=name,
                 schema_path=schema_path,
                 columns=columns,
-                not_null_constraints=not_null_constraints,
-                unique_constraints=unique_constraints,
-                check_constraints=check_constraints,
+                constraints=[],
                 comment=None,
                 tags={},
             )
@@ -582,9 +598,8 @@ class InMemoryCatalog(CatalogInterface):
                 name=old_info.name,
                 schema_path=old_info.schema_path,
                 columns=old_info.columns,
-                not_null_constraints=old_info.not_null_constraints,
-                unique_constraints=old_info.unique_constraints,
-                check_constraints=old_info.check_constraints,
+                constraints=old_info.constraints,
+                definition_revision=old_info.definition_revision,
                 comment=comment,
                 tags=old_info.tags,
             )
@@ -619,9 +634,8 @@ class InMemoryCatalog(CatalogInterface):
                 name=new_name,
                 schema_path=old_info.schema_path,
                 columns=old_info.columns,
-                not_null_constraints=old_info.not_null_constraints,
-                unique_constraints=old_info.unique_constraints,
-                check_constraints=old_info.check_constraints,
+                constraints=old_info.constraints,
+                definition_revision=old_info.definition_revision,
                 comment=old_info.comment,
                 tags=old_info.tags,
             )
@@ -637,8 +651,15 @@ class InMemoryCatalog(CatalogInterface):
         name: str,
         definition: str,
         on_conflict: OnConflict,
+        aliases: list[str] | None = None,
+        security: str = "regular",
+        comment: str | None = None,
+        tags: dict[str, str] | None = None,
+        column_comments: dict[str, str] | None = None,
     ) -> None:
         """Create a new view."""
+        if security != "regular":
+            raise NotImplementedError("view security mode is unsupported by this provider")
         schema_data = self._get_schema(attach_opaque_data, schema_path)
         if name in schema_data.views:
             if on_conflict == OnConflict.ERROR:
@@ -653,8 +674,10 @@ class InMemoryCatalog(CatalogInterface):
                 name=name,
                 schema_path=schema_path,
                 definition=definition,
-                comment=None,
-                tags={},
+                aliases=list(aliases or []),
+                comment=comment,
+                tags=dict(tags or {}),
+                column_comments=dict(column_comments or {}),
             )
         )
         self._increment_version(attach_opaque_data)
@@ -707,6 +730,9 @@ class InMemoryCatalog(CatalogInterface):
                 name=new_name,
                 schema_path=old_info.schema_path,
                 definition=old_info.definition,
+                aliases=list(old_info.aliases),
+                security=old_info.security,
+                column_comments=dict(old_info.column_comments),
                 comment=old_info.comment,
                 tags=old_info.tags,
             )
@@ -738,10 +764,41 @@ class InMemoryCatalog(CatalogInterface):
                 name=old_info.name,
                 schema_path=old_info.schema_path,
                 definition=old_info.definition,
+                aliases=list(old_info.aliases),
+                security=old_info.security,
+                column_comments=dict(old_info.column_comments),
                 comment=comment,
                 tags=old_info.tags,
             )
         )
+        self._increment_version(attach_opaque_data)
+
+    def view_column_comment_set(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        schema_path: list[str],
+        name: str,
+        column_path: list[str],
+        comment: str | None,
+        ignore_not_found: bool,
+    ) -> None:
+        """Set or clear the comment keyed by a raw view output name."""
+        if len(column_path) != 1 or not column_path[0] or "\0" in column_path[0]:
+            raise ValueError("view column comments require one raw output identifier")
+        schema_data = self._get_schema(attach_opaque_data, schema_path)
+        view = schema_data.views.get(name)
+        if view is None:
+            if ignore_not_found:
+                return
+            raise ValueError(f"View {name!r} not found in schema {schema_path!r}")
+        comments = dict(view.info.column_comments)
+        if comment is None:
+            comments.pop(column_path[0], None)
+        else:
+            comments[column_path[0]] = comment
+        schema_data.views[name] = ViewData(info=dataclasses.replace(view.info, column_comments=comments))
         self._increment_version(attach_opaque_data)
 
     def macro_create(
@@ -752,11 +809,8 @@ class InMemoryCatalog(CatalogInterface):
         schema_path: list[str],
         name: str,
         macro_type: MacroType,
-        parameters: list[str],
-        definition: str,
+        overloads: list[MacroOverload],
         on_conflict: OnConflict,
-        parameter_default_values: pa.RecordBatch | None = None,
-        arguments_schema: pa.Schema | None = None,
     ) -> None:
         """Create a new macro."""
         schema_data = self._get_schema(attach_opaque_data, schema_path)
@@ -773,12 +827,9 @@ class InMemoryCatalog(CatalogInterface):
                 name=name,
                 schema_path=schema_path,
                 macro_type=macro_type,
-                parameters=parameters,
-                parameter_default_values=parameter_default_values,
-                definition=definition,
+                overloads=overloads,
                 comment=None,
                 tags={},
-                arguments_schema=arguments_schema,
             )
         )
         self._increment_version(attach_opaque_data)

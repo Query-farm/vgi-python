@@ -78,6 +78,30 @@ Returned by `catalog_attach()` with attachment metadata:
 > a value minted for one principal cannot be replayed by another. Your implementation only ever sees the
 > plaintext; the sealing and unsealing happen transparently in the worker.
 
+### Client capabilities at attach
+
+`Client.catalog_attach(..., client_capabilities=offer)` accepts the existing
+`vgi.protocol.ClientCapabilities` record. The worker passes it to
+`CatalogInterface.catalog_attach` as the keyword argument `client_capabilities`.
+Custom overrides must accept this argument (usually
+`client_capabilities: ClientCapabilities | None = None`) and forward it when
+delegating to another catalog implementation. This is an SDK hook change; the
+wire record and protocol version are unchanged.
+
+The offer describes the consuming engine's native formats, companion catalogs,
+streaming support, and filter encodings. `None` means support is unspecified.
+It does not imply support for optional behavior, and the offer is not an
+authorization grant. Attach-ticket redemption keeps the redeeming client's
+offer rather than recording the ticket creator's capabilities.
+
+If catalog behavior depends on the offer, retain the selected behavior in
+attachment-scoped shared storage or in `attach_opaque_data`. Later requests may
+reach another worker process. Do not put one client's agreement on the shared
+catalog instance. Override `catalog_contents_attach_independent = False` when
+metadata differs between attachments; the read-only base class otherwise
+permits reuse across clients. New DuckDB 2.0 capability fields and mandatory
+execution checks remain part of the combined protocol design.
+
 ### SchemaInfo
 
 Information about a schema in a catalog:

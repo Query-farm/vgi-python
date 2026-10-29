@@ -33,12 +33,27 @@ if TYPE_CHECKING:
     from vgi.catalog.secret_type import SecretTypeSpec
     from vgi.catalog.setting import SettingSpec
     from vgi.catalog.snapshot import CatalogSnapshotPolicy
+    from vgi.protocol import ClientCapabilities
+    from vgi.query_provider import CatalogQueryProvider
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass, ArrowType
-from vgi_rpc.utils import deserialize_record_batch, serialize_record_batch_bytes
+from vgi_rpc.utils import IpcValidation, deserialize_record_batch, serialize_record_batch_bytes
 
 from vgi.arguments import Arguments, SecretLookupEntry
+from vgi.catalog.capabilities import (
+    CatalogCapabilities,
+)
+from vgi.catalog.column_metadata import validate_column_metadata
+from vgi.catalog.constraints import ConstraintInfo, ConstraintsApplyRequest, ConstraintSnapshot, constraint_infos
+from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot
+from vgi.catalog.indexes import IndexConstraintType, IndexDefinition
+from vgi.catalog.layout import TableLayout, TableLayoutChange
+from vgi.catalog.macros import MAX_MACRO_BYTES, MacroOverload, validate_macro_family
+from vgi.catalog.metadata_changes import CatalogMetadataChanges
+from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
+from vgi.catalog.query import QueryCapabilities
+from vgi.catalog.sql import SqlExpression as SqlExpression
 from vgi.exceptions import CatalogReadOnlyError, InvalidArgumentError, NotFoundError, UnsupportedOperationError
 from vgi.metadata import (
     ArgumentMonotonicity,
@@ -52,7 +67,8 @@ from vgi.metadata import (
     PartitionKind,
     RuntimeFilterAlgorithmCapability,
 )
-from vgi.schema_path import SchemaKey, SchemaPath, schema_path_display, schema_path_key
+from vgi.schema_path import SchemaKey, SchemaPath, schema_path_display, schema_path_key, validate_default_schema
+from vgi.typed_values import TypedValueBatch
 
 _FILTER_IDENTITY_LIST_TYPE = pa.list_(
     pa.struct(
@@ -125,7 +141,6 @@ class CatalogExample(ArrowSerializableDataclass):
 AttachOpaqueData = NewType("AttachOpaqueData", bytes)
 TransactionOpaqueData = NewType("TransactionOpaqueData", bytes)
 SerializedSchema = NewType("SerializedSchema", bytes)
-SqlExpression = NewType("SqlExpression", str)
 
 
 @dataclass(frozen=True)
@@ -270,7 +285,7 @@ class CatalogAttachResult(ArrowSerializableDataclass):
             persisted across commands. True: Catalog is stateful;
             attach_opaque_data represents a session. False: Catalog is
             stateless; CLI can auto-attach on each command.
-        default_schema: The name of the default schema for this catalog.
+        default_schema: Raw root schema name, or None when there is no implicit default.
         settings: Extension options (settings) exposed by this catalog/worker.
             Each ExtensionOption is serialized as bytes for Arrow compatibility.
         secret_types: Secret types registered with DuckDB's SecretManager. Each
@@ -309,6 +324,9 @@ class CatalogAttachResult(ArrowSerializableDataclass):
             catalog with one ``catalog_contents`` call instead of
             ``catalog_schemas`` plus a ``catalog_schema_contents_*`` call per
             schema and kind. Older workers omit it and read as ``False``.
+        catalog_capabilities: Current provider profile advertisement, not authorization.
+        selected_capabilities: Profiles selected for this attachment; absent means none.
+        query_pushdown: Immutable query agreement selected from the client's offer, or None.
     """
 
     attach_opaque_data: AttachOpaqueData
@@ -317,7 +335,7 @@ class CatalogAttachResult(ArrowSerializableDataclass):
     catalog_version_frozen: bool
     catalog_version: int
     attach_opaque_data_required: bool = True
-    default_schema: str = "main"
+    default_schema: str | None = "main"
     settings: list[bytes] = field(default_factory=list)
     secret_types: list[bytes] = field(default_factory=list)
     attach_catalogs: list[bytes] = field(default_factory=list)
@@ -329,6 +347,17 @@ class CatalogAttachResult(ArrowSerializableDataclass):
     resolved_data_version: str | None = field(kw_only=True)
     resolved_implementation_version: str | None = field(kw_only=True)
     supports_catalog_contents: bool = field(default=False, kw_only=True)
+    catalog_capabilities: Annotated[CatalogCapabilities | None, ArrowType(pa.binary())] = field(
+        default=None, kw_only=True
+    )
+    selected_capabilities: Annotated[CatalogCapabilities | None, ArrowType(pa.binary())] = field(
+        default=None, kw_only=True
+    )
+    query_pushdown: QueryCapabilities | None = field(default=None, kw_only=True)
+
+    def __post_init__(self) -> None:
+        """Reject invalid defaults before an attachment can be published."""
+        validate_default_schema(self.default_schema)
 
 
 @dataclass(frozen=True)
@@ -389,21 +418,22 @@ class SchemaInfo(CatalogObject, ArrowSerializableDataclass):
             AT-clause queries do not honor the bypass — they always issue the
             per-name RPC because a historical version may have had entries the
             current view does not.
+        options: Effective typed options and explicit overrides when negotiated.
     """
 
     path: SchemaPath
     # Constructor-only compatibility for existing catalog authors; never metadata.
     attach_opaque_data: InitVar[AttachOpaqueData | None] = field(default=None, kw_only=True)
     estimated_object_count: dict[str, int] | None = None
+    options: Annotated[OptionState | None, ArrowType(pa.binary())] = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ForeignKeyInfo(ArrowSerializableDataclass):
-    """Serialized foreign-key constraint carried inside `TableInfo`.
+    """Legacy foreign-key convenience record retained for source migration.
 
-    `TableInfo.foreign_key_constraints` contains IPC-serialized instances of
-    this record. It is distinct from the author-facing `ForeignKeyDef`, whose
-    column-name fields are resolved into this wire representation.
+    Canonical table carriers use `ForeignKeyDefinition` inside `ConstraintInfo`
+    or `ConstraintDefinition`. This older record is no longer table wire state.
 
     Attributes:
         fk_columns: Referencing column names on the table carrying the constraint.
@@ -425,12 +455,9 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     Attributes:
         columns: The columns of the table as a PyArrow schema that is serialized
             as bytes.
-        not_null_constraints: Column indices with a NOT NULL constraint. Uses
-            ArrowType to specify int32 instead of the default int64.
-        unique_constraints: Column-index groups with a UNIQUE constraint.
-        check_constraints: SQL CHECK constraint expressions.
-        primary_key_constraints: Column-index groups forming the primary key.
-        foreign_key_constraints: Serialized foreign-key constraint specs.
+        constraints: Required canonical ConstraintInfo IPC list; empty means none.
+        definition_revision: Opaque semantic revision, required when canonical
+            mutation support is selected and never reused after recreation.
         write_result_modes: Maximum result mode supported for each writable
             operation. Keys are ``insert``, ``update``, and ``delete``; a missing
             key means the operation is unsupported. Values are ordered
@@ -484,30 +511,22 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
             path; workers can still inline manually inside their own
             ``schema_contents`` override when the bind output is independently
             known to be stable.
-        required_filters: Required WHERE-filter groups the VGI extension's
-            optimizer pass verifies against any scan (conjunctive normal form):
-            the outer list is an AND of groups, each inner group is an OR of
-            dotted-path column references (top-level names like ``"country"`` or
-            struct subfields like ``"bbox.xmin"``). A group is satisfied when any
-            one of its paths has a filter; every group must be satisfied. So
-            ``[["accession_number"], ["ticker", "cik"]]`` means "accession_number
-            AND one of (ticker, cik)". Empty (default) means no enforcement — the
-            zero-cost fast path. Satisfaction is prefix-based: a present filter on
-            a shorter dotted path satisfies any required path it's a prefix of (a
-            whole-struct filter on ``bbox`` satisfies every ``"bbox.*"`` path).
-            The C++ extension throws ``BinderException`` listing any unsatisfied
-            groups.
+        required_filters: AND-of-OR groups of raw column paths. Each path is
+            a nonempty list of exact field names, e.g. ``[[["bbox", "xmin"]],
+            [["ticker"], ["cik"]]]``. Dots and quotes are literal characters.
+            A filter on a component prefix satisfies a path; a filter on
+            ``["bbox"]`` satisfies ``["bbox", "xmin"]``, while ``["bbox.xmin"]``
+            is a different identity. Empty means no enforcement. These are
+            column-presence requirements, not proof of remote enforcement.
+        options: Negotiated typed option readback, or None when unsupported.
+        layout: Negotiated partition/sort policy, or None when unsupported.
+            This metadata never guarantees scan output order.
     """
 
     columns: SerializedSchema
 
-    not_null_constraints: Annotated[list[int], ArrowType(pa.list_(pa.int32()))]
-    unique_constraints: Annotated[list[list[int]], ArrowType(pa.list_(pa.list_(pa.int32())))]
-    check_constraints: list[str]
-    primary_key_constraints: Annotated[list[list[int]], ArrowType(pa.list_(pa.list_(pa.int32())))] = field(
-        default_factory=list
-    )
-    foreign_key_constraints: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))] = field(default_factory=list)
+    constraints: list[bytes]
+    definition_revision: bytes | None = None
 
     write_result_modes: Annotated[dict[str, str], ArrowType(pa.map_(pa.string(), pa.string()))] = field(
         default_factory=dict
@@ -527,9 +546,30 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
 
     bind_result: Annotated[bytes | None, ArrowType(pa.binary())] = None
 
-    required_filters: Annotated[list[list[str]], ArrowType(pa.list_(pa.list_(pa.string())))] = field(
+    required_filters: Annotated[list[list[list[str]]], ArrowType(pa.list_(pa.list_(pa.list_(pa.string()))))] = field(
         default_factory=list
     )
+
+    options: Annotated[OptionState | None, ArrowType(pa.binary())] = None
+    layout: Annotated[TableLayout | None, ArrowType(pa.binary())] = None
+
+    def __post_init__(self) -> None:
+        """Validate canonical identities and revision without inferring enforcement."""
+        self.constraint_infos()
+        validate_column_metadata(pa.ipc.read_schema(pa.py_buffer(self.columns)))
+
+    def serialize_to_bytes(self) -> bytes:
+        """Validate field metadata again before publishing a table descriptor."""
+        self.__post_init__()
+        return super().serialize_to_bytes()
+
+    def constraint_infos(self) -> list[ConstraintInfo]:
+        """Decode the complete canonical constraint readback for this table."""
+        return constraint_infos(
+            self.constraints,
+            CatalogObjectRef(kind="table", schema_path=self.schema_path, name=self.name),
+            self.definition_revision,
+        )
 
 
 @dataclass(frozen=True)
@@ -546,40 +586,101 @@ class ViewInfo(CatalogSchemaObject, ArrowSerializableDataclass):
             aligns these by name against the bound output columns and feeds them
             into ``CreateViewInfo.column_comments_map``; names that don't match a
             bound column are ignored.
+        aliases: Ordered raw output identifiers. A partial list renames the leading
+            outputs; an empty list retains names from the SELECT. Literal dots and
+            quotes are part of the identifier, never SQL syntax.
+        security: ``regular`` or ``barrier``. A barrier prevents unsafe query
+            optimization across the view; it does not grant privileges. Readers
+            must enforce the barrier when materializing or reject the view.
     """
 
     definition: str
     column_comments: dict[str, str] = field(default_factory=dict)
+    # Ordered raw output identifiers, never SQL fragments or dotted paths.
+    # A partial list renames only the leading outputs; [] uses query names.
+    aliases: list[str] = field(default_factory=list)
+    security: str = "regular"
+
+    @classmethod
+    def deserialize_from_batch(
+        cls,
+        batch: pa.RecordBatch,
+        custom_metadata: pa.KeyValueMetadata | None = None,
+        *,
+        ipc_validation: IpcValidation = IpcValidation.FULL,
+    ) -> Self:
+        """Wire metadata must explicitly carry security, even for ordinary views."""
+        index = batch.schema.get_field_index("security")
+        if (
+            index < 0
+            or batch.num_rows != 1
+            or batch.column(index).type != pa.string()
+            or batch.column(index).null_count
+        ):
+            raise ValueError("ViewInfo.security must be an explicit non-null string")
+        return super().deserialize_from_batch(batch, custom_metadata, ipc_validation=ipc_validation)
+
+    @staticmethod
+    def validate_aliases(aliases: list[str]) -> None:
+        """Reject malformed identifiers without changing order or spelling."""
+        if not isinstance(aliases, list) or any(
+            not isinstance(alias, str) or not alias or "\0" in alias for alias in aliases
+        ):
+            raise ValueError("view aliases must be a list of nonempty raw identifiers without NUL")
+
+    @staticmethod
+    def validate_create_metadata(
+        comment: str | None,
+        tags: dict[str, str] | None,
+        column_comments: dict[str, str] | None,
+    ) -> None:
+        """Validate creation metadata before a provider can change catalog state."""
+        if comment is not None and not isinstance(comment, str):
+            raise ValueError("view comment must be a string or None")
+        for label, values in (("tags", tags), ("column_comments", column_comments)):
+            if values is None:
+                continue
+            if not isinstance(values, dict) or any(
+                not isinstance(k, str) or not isinstance(v, str) for k, v in values.items()
+            ):
+                raise ValueError(f"view {label} must map strings to strings")
+        if column_comments is not None:
+            ViewInfo.validate_aliases(list(column_comments))
+
+    @staticmethod
+    def validate_security(security: str) -> None:
+        """Reject unknown security modes; never downgrade a barrier."""
+        if security not in ("regular", "barrier"):
+            raise ValueError("view security must be regular or barrier")
+
+    def __post_init__(self) -> None:
+        """Validate aliases at the metadata boundary."""
+        self.validate_aliases(self.aliases)
+        self.validate_security(self.security)
 
 
 @dataclass(frozen=True)
 class MacroInfo(CatalogSchemaObject, ArrowSerializableDataclass):
-    """Information about a macro in a schema.
-
-    Attributes:
-        macro_type: Whether this is a scalar or table macro.
-        parameters: Ordered list of parameter names.
-        parameter_default_values: One-row `RecordBatch` where column names are parameter
-            names and values are typed defaults. None if no defaults.
-            Serialized as IPC bytes over the wire.
-        definition: The SQL expression (scalar) or query (table).
-        arguments_schema: Optional Arrow schema (serialized as IPC bytes) with one
-            nullable field per parameter, in ``parameters`` order. Each field's type
-            is the parameter's default value type when known (else null), and the
-            ``vgi_doc`` field metadata key carries the parameter's description (UTF-8,
-            presence-only — omitted when undocumented). Mirrors the per-argument doc
-            channel functions expose via ``FunctionInfo.arguments``. None means the
-            worker did not supply per-parameter docs (older workers); the extension
-            falls back to ``parameters`` for names. Built with
-            ``vgi.argument_spec.macro_arguments_schema``.
-
-    """
+    """One complete macro family with resolved literal defaults on discovery."""
 
     macro_type: "MacroType"
-    parameters: list[str]
-    parameter_default_values: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
-    definition: str = ""
-    arguments_schema: Annotated[pa.Schema | None, ArrowType(pa.binary())] = None
+    overloads: list[MacroOverload]
+
+    def __post_init__(self) -> None:
+        """Validate the mandatory complete family and reject unresolved defaults."""
+        validate_macro_family(macro_type=self.macro_type.value, schema_path=self.schema_path, overloads=self.overloads)
+        if any(
+            parameter.default_expression is not None for overload in self.overloads for parameter in overload.parameters
+        ):
+            raise ValueError("macro discovery must return defaults resolved at creation")
+
+    def serialize_to_bytes(self) -> bytes:
+        """Revalidate mutable overload families before catalog publication."""
+        self.__post_init__()
+        result = super().serialize_to_bytes()
+        if len(result) > MAX_MACRO_BYTES:
+            raise ValueError("macro record is too large")
+        return result
 
 
 class FunctionType(Enum):
@@ -610,40 +711,24 @@ class MacroType(Enum):
     TABLE = "table"
 
 
-class IndexConstraintType(Enum):
-    """The constraint type of an index.
-
-    Attributes:
-        NONE: Regular index (no constraint enforcement).
-        UNIQUE: Index enforces a UNIQUE constraint.
-        PRIMARY: Index enforces a PRIMARY KEY constraint.
-    """
-
-    NONE = "none"
-    UNIQUE = "unique"
-    PRIMARY = "primary"
-
-
 @dataclass(frozen=True)
 class IndexInfo(CatalogSchemaObject, ArrowSerializableDataclass):
-    """Information about an index in a schema.
+    """Resolved typed index definition and effective options with explicit names."""
 
-    Attributes:
-        table_name: The name of the table this index is on.
-        index_type: The index type string (e.g., "ART", or empty for default).
-        constraint_type: The constraint enforcement type (NONE, UNIQUE, PRIMARY).
-        expressions: SQL expression strings defining the indexed expressions.
-            For column-based indexes, these are column references (e.g., "col_a").
-            For expression indexes, these are arbitrary SQL (e.g., "lower(col_a)").
-        options: Key-value index options (WITH clause).
+    definition: Annotated[IndexDefinition, ArrowType(pa.binary())]
+    options: Annotated[OptionState, ArrowType(pa.binary())]
 
-    """
+    def __post_init__(self) -> None:
+        """Require complete definitions and consistent effective option values."""
+        self.definition.__post_init__()
+        self.options.__post_init__()
+        if not self.definition.options.batch.equals(self.options.values.batch, check_metadata=True):
+            raise ValueError("index definition and readback options disagree")
 
-    table_name: str
-    index_type: str = ""
-    constraint_type: IndexConstraintType = IndexConstraintType.NONE
-    expressions: list[str] = field(default_factory=list)
-    options: dict[str, str] = field(default_factory=dict)
+    def serialize_to_bytes(self) -> bytes:
+        """Revalidate nested mutable collections before publication."""
+        self.__post_init__()
+        return super().serialize_to_bytes()
 
 
 class SchemaObjectType(Enum):
@@ -1765,6 +1850,9 @@ class CatalogInterface(ABC):
     #: ``False``.
     catalog_contents_attach_independent: ClassVar[bool] = False
 
+    #: Optional provider for prepared read-only catalog queries. The Worker
+    #: negotiates and binds it to each attachment; default catalogs select none.
+    query_provider: "CatalogQueryProvider | None" = None
     #: Optional framework publication policy; ordinary delivery when unset.
     catalog_snapshot_policy: ClassVar["CatalogSnapshotPolicy | None"] = None
 
@@ -1864,6 +1952,14 @@ class CatalogInterface(ABC):
         """
         raise UnsupportedOperationError("Catalog transactions not implemented.")
 
+    def catalog_capabilities(self, *, attach_opaque_data: AttachOpaqueData) -> CatalogCapabilities:
+        """Return currently implemented profiles for this attachment, not authorization.
+
+        Re-evaluated before new operations. Do not infer support merely from
+        a method existing or a codec understanding its records.
+        """
+        return CatalogCapabilities()
+
     @abstractmethod
     def catalog_attach(
         self,
@@ -1872,6 +1968,7 @@ class CatalogInterface(ABC):
         options: dict[str, Any],
         data_version_spec: str | None,
         implementation_version: str | None,
+        client_capabilities: "ClientCapabilities | None" = None,
         ctx: "CallContext | None" = None,
     ) -> CatalogAttachResult:
         """Attach to a catalog with the given name and options.
@@ -1883,6 +1980,15 @@ class CatalogInterface(ABC):
         cannot satisfy a requested version MUST raise an exception with a
         human-readable message; the error surfaces on the client as the
         ATTACH failure.
+
+        ``client_capabilities`` describes the consuming engine's offered
+        capabilities. ``None`` means unspecified support, not full support.
+        Implementations may tailor their response and catalog metadata to the
+        offer. Retain any selected behavior in attachment-scoped state (or the
+        returned opaque token) so subsequent calls on other worker processes
+        honor the same agreement. Do not store it on the shared catalog
+        instance or reuse attachment-independent metadata caches for content
+        that varies with this agreement. Client offers are not authorization.
 
         ``ctx`` is injected by the RPC dispatcher when available. Over HTTP it
         enables setting a per-session routing cookie via ``ctx.set_cookie()``;
@@ -1948,9 +2054,65 @@ class CatalogInterface(ABC):
         on_conflict: OnConflict = OnConflict.ERROR,
         comment: str | None,
         tags: dict[str, str],
+        options: TypedValueBatch | None = None,
     ) -> None:
         """Create a new schema with the given path, comment, and tags."""
         raise UnsupportedOperationError("Schema create not implemented.")
+
+    def schema_option_definitions(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: SchemaPath,
+    ) -> OptionDefinitions:
+        """Describe literal options for an existing or proposed schema path.
+
+        Defaults come from this transaction snapshot. Implementations validate
+        again within each mutation; discovery does not reserve defaults.
+        """
+        raise UnsupportedOperationError("Schema option discovery not implemented.")
+
+    def schema_alter_metadata(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: SchemaPath,
+        changes: CatalogMetadataChanges,
+        ignore_not_found: bool = False,
+    ) -> None:
+        """Apply a complete metadata patch atomically, preserving options and contents.
+
+        Validate the patch even when ignoring a missing target. Missing targets
+        without IGNORE raise; an empty patch is not a schema-existence bypass.
+        Effective no-ops preserve versions and etags. Metadata changes advance
+        the transaction-visible version and invalidate committed snapshots on
+        commit, under the provider's declared transaction guarantees.
+        """
+        raise UnsupportedOperationError("Schema metadata alteration not implemented.")
+
+    def schema_alter_options(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        path: SchemaPath,
+        changes: OptionChanges,
+    ) -> None:
+        """Validate and apply the entire SET/RESET operation atomically."""
+        raise UnsupportedOperationError("Schema option alteration not implemented.")
+
+    def catalog_dependencies(
+        self, *, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None
+    ) -> DependencySnapshot:
+        """Return a complete authoritative graph from one transaction snapshot.
+
+        Do not omit inaccessible dependencies to make the graph appear complete.
+        Reject this read when policy prevents disclosure; mutations still enforce
+        all dependencies. Discovery does not reserve or authorize later changes.
+        """
+        raise UnsupportedOperationError("Catalog dependency discovery not implemented.")
 
     def schema_drop(
         self,
@@ -2154,26 +2316,59 @@ class CatalogInterface(ABC):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: SchemaPath,
         name: str,
-        # The contents of the table is a serialized PyArrow schema
-        # the nullability for each field is ignored.
-        # schema.serialize().to_pybytes()
+        # Nullability must agree with the canonical enforced constraints.
         columns: SerializedSchema,
         on_conflict: OnConflict,
-        # These are constraints listed by field index
-        not_null_constraints: list[int],  # [] = no not null constraints
-        unique_constraints: list[list[int]],  # [] = no unique constraints
-        # These are general check constraints specified as SQL expressions.
-        check_constraints: list[str],  # [] = no check constraints
-        # Primary key constraints as column index groups
-        primary_key_constraints: list[list[int]] | None = None,
-        # Foreign key constraints as IPC-serialized bytes (same format as TableInfo)
-        foreign_key_constraints: list[bytes] | None = None,
+        constraint_definitions: list[bytes],
+        comment: str | None = None,
+        tags: dict[str, str] | None = None,
+        options: TypedValueBatch | None = None,
+        layout: TableLayout | None = None,
     ) -> None:
         """Create a new table with the given name and schema.
 
-        Comments and tags are not supported on table creation.
+        New metadata, typed options and layout require their selected profiles.
         """
         raise UnsupportedOperationError("Table create not implemented.")
+
+    def table_constraints_apply(self, request: ConstraintsApplyRequest) -> ConstraintSnapshot:
+        """Apply all canonical changes atomically; opaque attachment/tx are unwrapped."""
+        raise UnsupportedOperationError("Canonical constraint mutation is not implemented")
+
+    def table_option_definitions(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        schema_path: SchemaPath,
+        name: str,
+    ) -> OptionDefinitions:
+        """Return typed definitions for a prospective or existing table."""
+        raise UnsupportedOperationError("Table option definitions not implemented")
+
+    def table_alter_options(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        schema_path: SchemaPath,
+        name: str,
+        changes: OptionChanges,
+    ) -> None:
+        """Validate and persist the whole option change atomically."""
+        raise UnsupportedOperationError("Table option alteration not implemented")
+
+    def table_alter_layout(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        schema_path: SchemaPath,
+        name: str,
+        changes: TableLayoutChange,
+    ) -> None:
+        """Apply the requested future-write policy or atomic existing-data rewrite."""
+        raise UnsupportedOperationError("Table layout alteration not implemented")
 
     def table_drop(
         self,
@@ -2208,7 +2403,7 @@ class CatalogInterface(ABC):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: SchemaPath,
         name: str,
-        column_name: str,
+        column_path: list[str],
         comment: str | None,
         ignore_not_found: bool,
     ) -> None:
@@ -2237,6 +2432,7 @@ class CatalogInterface(ABC):
         name: str,
         # Arrow schema with single field for column to add.
         # Serialized via schema.serialize().to_pybytes()
+        column_path: list[str],
         column_definition: SerializedSchema,
         ignore_not_found: bool,
         if_column_not_exists: bool,
@@ -2251,7 +2447,7 @@ class CatalogInterface(ABC):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: SchemaPath,
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool,
         if_column_exists: bool,
         cascade: bool,
@@ -2266,7 +2462,7 @@ class CatalogInterface(ABC):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: SchemaPath,
         name: str,
-        column_name: str,
+        column_path: list[str],
         new_column_name: str,
         ignore_not_found: bool,
     ) -> None:
@@ -2280,7 +2476,7 @@ class CatalogInterface(ABC):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: SchemaPath,
         name: str,
-        column_name: str,
+        column_path: list[str],
         expression: SqlExpression,
         ignore_not_found: bool,
     ) -> None:
@@ -2294,7 +2490,7 @@ class CatalogInterface(ABC):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: SchemaPath,
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool,
     ) -> None:
         """Drop the default expression for the column."""
@@ -2309,13 +2505,14 @@ class CatalogInterface(ABC):
         name: str,
         # Arrow schema with single field for the new column type.
         # Serialized via schema.serialize().to_pybytes()
+        column_path: list[str],
         column_definition: SerializedSchema,
         expression: SqlExpression | None,
         ignore_not_found: bool,
     ) -> None:
         """Change the type of the column in the table with the given name.
 
-        The name of the column to change is taken from the field in the provided schema.
+        The explicit path selects the field; the definition name must match its final component.
         """
         raise UnsupportedOperationError("Table column type change not implemented.")
 
@@ -2326,7 +2523,7 @@ class CatalogInterface(ABC):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: SchemaPath,
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool,
     ) -> None:
         """Drop the NOT NULL constraint from the column."""
@@ -2339,7 +2536,7 @@ class CatalogInterface(ABC):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: SchemaPath,
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool,
     ) -> None:
         """Set the NOT NULL constraint on the column."""
@@ -2523,6 +2720,11 @@ class CatalogInterface(ABC):
         name: str,
         definition: str,
         on_conflict: OnConflict,
+        aliases: list[str] | None = None,
+        security: str = "regular",
+        comment: str | None = None,
+        tags: dict[str, str] | None = None,
+        column_comments: dict[str, str] | None = None,
     ) -> None:
         """Create a new view with the given definition."""
         raise UnsupportedOperationError("View create not implemented.")
@@ -2580,6 +2782,20 @@ class CatalogInterface(ABC):
         """Set the comment for the view with the given name."""
         raise UnsupportedOperationError("View comment set not implemented.")
 
+    def view_column_comment_set(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        schema_path: SchemaPath,
+        name: str,
+        column_path: list[str],
+        comment: str | None,
+        ignore_not_found: bool,
+    ) -> None:
+        """Set or clear the comment keyed by a raw view output name."""
+        raise UnsupportedOperationError("View column comment set not implemented.")
+
     # ---- Macros ----
 
     @abstractmethod
@@ -2604,28 +2820,13 @@ class CatalogInterface(ABC):
         schema_path: SchemaPath,
         name: str,
         macro_type: "MacroType",
-        parameters: list[str],
-        definition: str,
+        overloads: list[MacroOverload],
         on_conflict: OnConflict,
-        parameter_default_values: pa.RecordBatch | None = None,
-        arguments_schema: pa.Schema | None = None,
     ) -> None:
-        """Create a new macro with the given definition.
+        """Bind and atomically store a complete macro family.
 
-        Args:
-            attach_opaque_data: Per-attach catalog session token.
-            transaction_opaque_data: Optional transaction handle.
-            schema_path: Schema to create the macro in.
-            name: Name for the new macro.
-            macro_type: Whether this is a scalar or table macro.
-            parameters: Ordered list of parameter names.
-            definition: SQL expression (scalar) or query (table).
-            on_conflict: Behavior if the macro already exists.
-            parameter_default_values: One-row ``RecordBatch`` with typed defaults.
-            arguments_schema: Optional Arrow schema (one nullable field per
-                parameter, in ``parameters`` order) carrying per-parameter
-                descriptions via the ``vgi_doc`` field metadata key. ``None`` when
-                no per-parameter docs are supplied.
+        Providers resolve supported expression defaults once at creation and
+        return resolved literal defaults on discovery.
         """
         raise UnsupportedOperationError("Macro create not implemented.")
 
@@ -2658,6 +2859,17 @@ class CatalogInterface(ABC):
         """
         return None
 
+    def index_option_definitions(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        table: CatalogObjectRef,
+        algorithm: str,
+    ) -> OptionDefinitions:
+        """Return supported typed options for the exact table and algorithm."""
+        raise UnsupportedOperationError("Index option definitions not implemented.")
+
     def index_create(
         self,
         *,
@@ -2665,14 +2877,10 @@ class CatalogInterface(ABC):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: SchemaPath,
         name: str,
-        table_name: str,
-        index_type: str,
-        constraint_type: IndexConstraintType,
-        expressions: list[str],
+        definition: IndexDefinition,
         on_conflict: OnConflict,
-        options: dict[str, str] | None = None,
     ) -> None:
-        """Create a new index on the specified table."""
+        """Bind and atomically construct a physical index before publishing it."""
         raise UnsupportedOperationError("Index create not implemented.")
 
     def index_drop(
@@ -2805,8 +3013,10 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         catalog_transaction_commit: DDL stub that raises `[`CatalogReadOnlyError`][].
         catalog_transaction_rollback: DDL stub that raises `[`CatalogReadOnlyError`][].
         schema_create: DDL stub that raises `[`CatalogReadOnlyError`][].
+        schema_alter_metadata: DDL stub that raises `[`CatalogReadOnlyError`][].
         schema_drop: DDL stub that raises `[`CatalogReadOnlyError`][].
         table_create: DDL stub that raises `[`CatalogReadOnlyError`][].
+        table_constraints_apply: DDL stub that raises `[`CatalogReadOnlyError`][].
         table_drop: DDL stub that raises `[`CatalogReadOnlyError`][].
         table_comment_set: DDL stub that raises `[`CatalogReadOnlyError`][].
         table_column_comment_set: DDL stub that raises `[`CatalogReadOnlyError`][].
@@ -2822,6 +3032,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         view_create: DDL stub that raises `[`CatalogReadOnlyError`][].
         view_drop: DDL stub that raises `[`CatalogReadOnlyError`][].
         view_rename: DDL stub that raises `[`CatalogReadOnlyError`][].
+        view_column_comment_set: DDL stub that raises `[`CatalogReadOnlyError`][].
         view_comment_set: DDL stub that raises `[`CatalogReadOnlyError`][].
         macro_create: DDL stub that raises `[`CatalogReadOnlyError`][].
         macro_drop: DDL stub that raises `[`CatalogReadOnlyError`][].
@@ -2992,7 +3203,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         return self.catalog_name
 
     @property
-    def _default_schema_name(self) -> str:
+    def _default_schema_name(self) -> str | None:
         """Get default schema name."""
         if self.catalog is not None:
             return self.catalog.default_schema
@@ -3021,6 +3232,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         options: dict[str, Any],
         data_version_spec: str | None,
         implementation_version: str | None,
+        client_capabilities: "ClientCapabilities | None" = None,
         ctx: "CallContext | None" = None,
     ) -> CatalogAttachResult:
         """Attach to the catalog. Version constraints are ignored by default."""
@@ -3268,7 +3480,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         ]
         available_str = ", ".join(sorted(available)) if available else "(none)"
 
-        raise NotImplementedError(
+        raise UnsupportedOperationError(
             f"table_scan_function_get not implemented for table "
             f"{self._effective_catalog_name}.{schema_path_display(schema_path)}::{name!r}. "
             f"Available tables: {available_str}. "
@@ -3720,8 +3932,10 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     catalog_transaction_commit = _read_only("commit transaction")
     catalog_transaction_rollback = _read_only("rollback transaction")
     schema_create = _read_only("create schema")
+    schema_alter_metadata = _read_only("alter schema metadata")
     schema_drop = _read_only("drop schema")
     table_create = _read_only("create table")
+    table_constraints_apply = _read_only("mutate constraints")
     table_drop = _read_only("drop table")
     table_comment_set = _read_only("set table comment")
     table_column_comment_set = _read_only("set column comment")
@@ -3737,6 +3951,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     view_create = _read_only("create view")
     view_drop = _read_only("drop view")
     view_rename = _read_only("rename view")
+    view_column_comment_set = _read_only("set view column comment")
     view_comment_set = _read_only("set view comment")
     macro_create = _read_only("create macro")
     macro_drop = _read_only("drop macro")

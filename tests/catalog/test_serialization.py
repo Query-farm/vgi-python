@@ -2,7 +2,11 @@
 
 """Tests for catalog dataclass serialization/deserialization."""
 
+from __future__ import annotations
+
+from collections.abc import Callable
 from decimal import Decimal
+from typing import Any, cast
 
 import pyarrow as pa
 import pytest
@@ -23,6 +27,32 @@ from vgi.catalog import (
     TableInfo,
     ViewInfo,
 )
+from vgi.catalog.evaluation_context import QueryEvaluationContext
+from vgi.catalog.macros import MacroOverload, normalize_macro_overloads
+
+from .typing_helpers import present
+
+
+def canonical_unique(owner: str, *paths: list[str]) -> list[bytes]:
+    """Explicit provider records for transport tests; no trust inferred from indices."""
+    from vgi.catalog.constraints import (
+        ConstraintDefinition,
+        ConstraintEnforcement,
+        ConstraintInfo,
+        ConstraintKind,
+        ConstraintValidation,
+    )
+    from vgi.catalog.dependencies import CatalogObjectRef
+
+    return [
+        ConstraintInfo(
+            ref=CatalogObjectRef(kind="constraint", schema_path=["main"], owner_table=owner, name=f"provider-key-{i}"),
+            definition=ConstraintDefinition(kind=ConstraintKind.UNIQUE, column_paths=[[p] for p in path]),
+            enforcement=ConstraintEnforcement.METADATA_ONLY,
+            validation=ConstraintValidation.UNVALIDATED,
+        ).serialize_to_bytes()
+        for i, path in enumerate(paths)
+    ]
 
 
 class TestCatalogAttachResultSerialization:
@@ -203,9 +233,8 @@ class TestTableInfoSerialization:
             name="users",
             schema_path=["main"],
             columns=columns_bytes,
-            not_null_constraints=[0],
-            unique_constraints=[[0]],
-            check_constraints=["id > 0"],
+            constraints=canonical_unique("users", ["id"]),
+            definition_revision=b"opaque-revision",
             comment="Users table",
             tags={"category": "core"},
         )
@@ -216,9 +245,8 @@ class TestTableInfoSerialization:
         assert restored.name == original.name
         assert restored.schema_path == original.schema_path
         assert restored.columns == original.columns
-        assert restored.not_null_constraints == original.not_null_constraints
-        assert restored.unique_constraints == original.unique_constraints
-        assert restored.check_constraints == original.check_constraints
+        assert restored.constraints == original.constraints
+        assert restored.definition_revision == original.definition_revision
         assert restored.comment == original.comment
         assert restored.tags == original.tags
 
@@ -231,9 +259,7 @@ class TestTableInfoSerialization:
             name="simple",
             schema_path=["main"],
             columns=columns_bytes,
-            not_null_constraints=[],
-            unique_constraints=[],
-            check_constraints=[],
+            constraints=[],
             comment=None,
             tags={},
         )
@@ -241,9 +267,7 @@ class TestTableInfoSerialization:
         batch, _ = deserialize_record_batch(serialized)
         restored = TableInfo.deserialize_from_batch(batch)
 
-        assert restored.not_null_constraints == []
-        assert restored.unique_constraints == []
-        assert restored.check_constraints == []
+        assert restored.constraints == []
 
     def test_multiple_unique_constraints(self) -> None:
         """Test with multiple unique constraints on multiple columns."""
@@ -254,9 +278,7 @@ class TestTableInfoSerialization:
             name="multi",
             schema_path=["main"],
             columns=columns_bytes,
-            not_null_constraints=[0, 1],
-            unique_constraints=[[0], [1, 2]],
-            check_constraints=["a > 0", "b < 100"],
+            constraints=canonical_unique("multi", ["a"], ["b", "c"]),
             comment=None,
             tags={},
         )
@@ -264,7 +286,7 @@ class TestTableInfoSerialization:
         batch, _ = deserialize_record_batch(serialized)
         restored = TableInfo.deserialize_from_batch(batch)
 
-        assert restored.unique_constraints == [[0], [1, 2]]
+        assert [info.definition.column_paths for info in restored.constraint_infos()] == [[["a"]], [["b"], ["c"]]]
 
     def test_inlined_scan_function_round_trip(self) -> None:
         """``scan_function`` IPC bytes round-trip through TableInfo serialize/deserialize.
@@ -284,9 +306,7 @@ class TestTableInfoSerialization:
             name="t",
             schema_path=["s"],
             columns=columns_bytes,
-            not_null_constraints=[],
-            unique_constraints=[],
-            check_constraints=[],
+            constraints=[],
             comment=None,
             tags={},
             scan_function=sfr.serialize(),
@@ -319,9 +339,7 @@ class TestTableInfoSerialization:
             name="t",
             schema_path=["s"],
             columns=columns_bytes,
-            not_null_constraints=[],
-            unique_constraints=[],
-            check_constraints=[],
+            constraints=[],
             comment=None,
             tags={},
             cardinality_estimate=12345,
@@ -342,9 +360,7 @@ class TestTableInfoSerialization:
                 name="t",
                 schema_path=["s"],
                 columns=columns_bytes,
-                not_null_constraints=[],
-                unique_constraints=[],
-                check_constraints=[],
+                constraints=[],
                 comment=None,
                 tags={},
                 cardinality_estimate=estimate,
@@ -367,9 +383,7 @@ class TestTableInfoSerialization:
             name="t",
             schema_path=["s"],
             columns=SerializedSchema(columns_schema.serialize().to_pybytes()),
-            not_null_constraints=[],
-            unique_constraints=[],
-            check_constraints=[],
+            constraints=[],
             comment=None,
             tags={},
         )
@@ -403,9 +417,7 @@ class TestTableInfoSerialization:
             name="t",
             schema_path=["s"],
             columns=columns_bytes,
-            not_null_constraints=[],
-            unique_constraints=[],
-            check_constraints=[],
+            constraints=[],
             comment=None,
             tags={},
             bind_result=bind_blob,
@@ -447,9 +459,7 @@ class TestTableInfoSerialization:
             name="t",
             schema_path=["s"],
             columns=columns_bytes,
-            not_null_constraints=[],
-            unique_constraints=[],
-            check_constraints=[],
+            constraints=[],
             comment=None,
             tags={},
             supports_column_statistics=True,
@@ -474,6 +484,7 @@ class TestViewInfoSerialization:
             name="user_summary",
             schema_path=["main"],
             definition="SELECT id, name FROM users",
+            aliases=["a.b", 'with"quote'],
             comment="Summary view",
             tags={"type": "summary"},
         )
@@ -484,8 +495,15 @@ class TestViewInfoSerialization:
         assert restored.name == original.name
         assert restored.schema_path == original.schema_path
         assert restored.definition == original.definition
+        assert restored.aliases == original.aliases
         assert restored.comment == original.comment
         assert restored.tags == original.tags
+
+    @pytest.mark.parametrize("aliases", [[None], [""], ["bad\0name"], "a.b"])
+    def test_invalid_aliases(self, aliases: Any) -> None:
+        """Malformed aliases must not disappear or change output positions."""
+        with pytest.raises(ValueError, match="view aliases"):
+            ViewInfo(name="v", schema_path=["main"], definition="SELECT 1", comment=None, tags={}, aliases=aliases)
 
     def test_complex_definition(self) -> None:
         """Test with complex SQL definition."""
@@ -508,181 +526,105 @@ class TestViewInfoSerialization:
         restored = ViewInfo.deserialize_from_batch(batch)
 
         assert restored.definition == original.definition
+        assert restored.aliases == original.aliases
 
 
 class TestMacroInfoSerialization:
-    """Test MacroInfo serialization round-trip."""
+    """The required complete family retains identity, values, types, and docs."""
 
-    def test_scalar_macro_round_trip(self) -> None:
-        """Test round-trip with scalar macro and all fields."""
+    @pytest.mark.parametrize("macro_type,definition", [(MacroType.SCALAR, "x + 1"), (MacroType.TABLE, "SELECT x")])
+    def test_family_round_trip(self, macro_type: MacroType, definition: str) -> None:
+        """Required families preserve scalar and table definitions."""
         original = MacroInfo(
-            name="multiply",
+            name="macro",
+            schema_path=["literal.schema"],
+            macro_type=macro_type,
+            overloads=normalize_macro_overloads(
+                macro_type=macro_type.value,
+                schema_path=["literal.schema"],
+                parameters=["x"],
+                definition=definition,
+                evaluation_context=QueryEvaluationContext(),
+            ),
+            comment="retained",
+            tags={"purpose": "test"},
+        )
+        restored = MacroInfo.deserialize_from_bytes(original.serialize_to_bytes())
+        assert restored == original
+        assert restored.overloads[0].parameters[0].name == "x"
+        assert restored.overloads[0].definition == definition
+        assert not {"parameters", "definition", "arguments_schema", "parameter_default_values"}.intersection(
+            MacroInfo.ARROW_SCHEMA.names
+        )
+        assert not MacroInfo.ARROW_SCHEMA.field("overloads").nullable
+
+    def test_typed_null_and_documentation_are_independent(self) -> None:
+        """Declared types, NULL defaults, and empty documentation survive independently."""
+        from vgi.catalog.macros import MACRO_PROFILE, MacroOverload, MacroParameter
+        from vgi.typed_values import TypedValueBatch
+
+        field = pa.field("x", pa.int64(), metadata={b"type_note": b"retained"})
+        declared = pa.schema([field], metadata={b"owner": b"schema"})
+        literal = TypedValueBatch(pa.RecordBatch.from_arrays([pa.array([None], type=pa.int64())], schema=declared))
+        original = MacroInfo(
+            name="m",
             schema_path=["main"],
             macro_type=MacroType.SCALAR,
-            parameters=["x", "y"],
-            definition="x * y",
-            comment="Multiply two values",
-            tags={"category": "math"},
-        )
-        serialized = original.serialize_to_bytes()
-        batch, _ = deserialize_record_batch(serialized)
-        restored = MacroInfo.deserialize_from_batch(batch)
-
-        assert restored.name == original.name
-        assert restored.schema_path == original.schema_path
-        assert restored.macro_type == MacroType.SCALAR
-        assert restored.parameters == ["x", "y"]
-        assert restored.definition == "x * y"
-        assert restored.comment == "Multiply two values"
-        assert restored.tags == {"category": "math"}
-
-    def test_table_macro_round_trip(self) -> None:
-        """Test round-trip with table macro."""
-        original = MacroInfo(
-            name="my_range",
-            schema_path=["main"],
-            macro_type=MacroType.TABLE,
-            parameters=["n"],
-            definition="SELECT * FROM range(n)",
             comment=None,
             tags={},
+            overloads=[
+                MacroOverload(
+                    parameters=[
+                        MacroParameter(name="x", declared_type=declared, default_value=literal, documentation="")
+                    ],
+                    definition="x",
+                    profile=MACRO_PROFILE,
+                    schema_path=["main"],
+                    macro_type="scalar",
+                    evaluation_context=QueryEvaluationContext(),
+                )
+            ],
         )
-        serialized = original.serialize_to_bytes()
-        batch, _ = deserialize_record_batch(serialized)
-        restored = MacroInfo.deserialize_from_batch(batch)
+        restored = MacroInfo.deserialize_from_bytes(original.serialize_to_bytes()).overloads[0].parameters[0]
+        assert present(restored.declared_type).equals(declared, check_metadata=True)
+        assert present(restored.default_value).batch.equals(present(literal).batch, check_metadata=True)
+        assert restored.has_default and restored.default_expression is None and restored.documentation == ""
 
-        assert restored.macro_type == MacroType.TABLE
-        assert restored.parameters == ["n"]
-        assert restored.definition == "SELECT * FROM range(n)"
-
-    def test_parameter_default_values_round_trip(self) -> None:
-        """Test parameter_default_values RecordBatch survives round-trip with types."""
-        defaults = pa.RecordBatch.from_pydict(
-            {"lo": pa.array([0], type=pa.int64()), "hi": pa.array([100], type=pa.int64())}
-        )
-        original = MacroInfo(
-            name="clamp",
-            schema_path=["main"],
-            macro_type=MacroType.SCALAR,
-            parameters=["val", "lo", "hi"],
-            parameter_default_values=defaults,
-            definition="GREATEST(lo, LEAST(hi, val))",
-            comment=None,
-            tags={},
-        )
-        serialized = original.serialize_to_bytes()
-        batch, _ = deserialize_record_batch(serialized)
-        restored = MacroInfo.deserialize_from_batch(batch)
-
-        assert restored.parameter_default_values is not None
-        assert restored.parameter_default_values.num_rows == 1
-        assert restored.parameter_default_values.schema.names == ["lo", "hi"]
-        assert restored.parameter_default_values.column("lo").type == pa.int64()
-        assert restored.parameter_default_values.column("hi").type == pa.int64()
-        assert restored.parameter_default_values.column("lo")[0].as_py() == 0
-        assert restored.parameter_default_values.column("hi")[0].as_py() == 100
-
-    def test_none_parameter_default_values(self) -> None:
-        """Test with None parameter_default_values."""
-        original = MacroInfo(
-            name="simple",
-            schema_path=["main"],
-            macro_type=MacroType.SCALAR,
-            parameters=["x"],
-            parameter_default_values=None,
-            definition="x",
-            comment=None,
-            tags={},
-        )
-        serialized = original.serialize_to_bytes()
-        batch, _ = deserialize_record_batch(serialized)
-        restored = MacroInfo.deserialize_from_batch(batch)
-
-        assert restored.parameter_default_values is None
-
-    def test_macro_type_enum_survival(self) -> None:
-        """MacroType enum survives serialization round-trip."""
-        for macro_type in MacroType:
-            original = MacroInfo(
-                name="test",
+    @pytest.mark.parametrize("family", [None, []])
+    def test_missing_or_empty_family_rejects(self, family: list[MacroOverload] | None) -> None:
+        """A wire macro always contains at least one complete member."""
+        with pytest.raises(ValueError, match="nonempty"):
+            MacroInfo(
+                name="m",
                 schema_path=["main"],
-                macro_type=macro_type,
+                macro_type=MacroType.SCALAR,
+                overloads=cast(list[MacroOverload], family),
+                comment=None,
+                tags={},
+            )
+
+    def test_no_legacy_wire_constructor(self) -> None:
+        """Legacy single fields cannot construct the successor wire record."""
+        with pytest.raises(TypeError, match="parameters"):
+            cast("Callable[..., MacroInfo]", MacroInfo)(
+                name="m",
+                schema_path=["main"],
+                macro_type=MacroType.SCALAR,
                 parameters=[],
                 definition="1",
                 comment=None,
                 tags={},
             )
-            serialized = original.serialize_to_bytes()
-            batch, _ = deserialize_record_batch(serialized)
-            restored = MacroInfo.deserialize_from_batch(batch)
-            assert restored.macro_type == macro_type
-
-    def test_arguments_schema_round_trip(self) -> None:
-        """arguments_schema carries vgi_doc per documented param; absent doc -> no key."""
-        from vgi.argument_spec import VGI_DOC_KEY, macro_arguments_schema, macro_parameter_docs_from_schema
-
-        defaults = pa.RecordBatch.from_pydict({"lo": pa.array([0], type=pa.int64())})
-        args = macro_arguments_schema(
-            parameters=["val", "lo", "hi"],
-            parameter_default_values=defaults,
-            parameter_docs={"val": "value to clamp", "hi": "upper bound"},
-        )
-        original = MacroInfo(
-            name="clamp",
-            schema_path=["main"],
-            macro_type=MacroType.SCALAR,
-            parameters=["val", "lo", "hi"],
-            parameter_default_values=defaults,
-            definition="GREATEST(lo, LEAST(hi, val))",
-            comment=None,
-            tags={},
-            arguments_schema=args,
-        )
-        serialized = original.serialize_to_bytes()
-        batch, _ = deserialize_record_batch(serialized)
-        restored = MacroInfo.deserialize_from_batch(batch)
-
-        assert restored.arguments_schema is not None
-        rs = restored.arguments_schema
-        # One field per parameter, in order.
-        assert rs.names == ["val", "lo", "hi"]
-        # Field type tracks the default value type when known, else null.
-        assert rs.field("lo").type == pa.int64()
-        assert rs.field("val").type == pa.null()
-        assert rs.field("hi").type == pa.null()
-        # Documented params carry vgi_doc; undocumented (lo) has no key.
-        assert (rs.field("val").metadata or {}).get(VGI_DOC_KEY) == b"value to clamp"
-        assert (rs.field("hi").metadata or {}).get(VGI_DOC_KEY) == b"upper bound"
-        assert VGI_DOC_KEY not in (rs.field("lo").metadata or {})
-        # Convenience extractor returns only documented params.
-        assert macro_parameter_docs_from_schema(rs) == {"val": "value to clamp", "hi": "upper bound"}
-
-    def test_none_arguments_schema(self) -> None:
-        """arguments_schema defaults to None (older workers) and survives round-trip."""
-        original = MacroInfo(
-            name="simple",
-            schema_path=["main"],
-            macro_type=MacroType.SCALAR,
-            parameters=["x"],
-            definition="x",
-            comment=None,
-            tags={},
-        )
-        serialized = original.serialize_to_bytes()
-        batch, _ = deserialize_record_batch(serialized)
-        restored = MacroInfo.deserialize_from_batch(batch)
-        assert restored.arguments_schema is None
 
 
 class TestMacroArgumentsSchemaWire:
-    """Macro per-parameter docs flow over create/list wire types."""
+    """Local single-definition adapters publish canonical parameter records."""
 
-    def test_declarative_macro_to_info_carries_docs(self) -> None:
-        """Declarative Macro.parameter_docs -> MacroInfo.arguments_schema vgi_doc."""
-        from vgi.argument_spec import macro_parameter_docs_from_schema
+    def test_declarative_macro_to_info_carries_docs_and_literal_defaults(self) -> None:
+        """Local convenience declarations normalize into parameter records."""
         from vgi.catalog.descriptors import Macro
 
-        m = Macro(
+        source = Macro(
             name="clamp",
             macro_type=MacroType.SCALAR,
             parameters=["x", "lo", "hi"],
@@ -692,13 +634,15 @@ class TestMacroArgumentsSchemaWire:
             parameter_docs={"x": "value to clamp"},
             definition="GREATEST(lo, LEAST(hi, x))",
         )
-        info = m.to_macro_info(["main"])
-        assert info.arguments_schema is not None
-        assert info.arguments_schema.names == ["x", "lo", "hi"]
-        assert macro_parameter_docs_from_schema(info.arguments_schema) == {"x": "value to clamp"}
+        parameters = source.to_macro_info(["main"]).overloads[0].parameters
+        assert [p.name for p in parameters] == ["x", "lo", "hi"]
+        assert parameters[0].documentation == "value to clamp" and parameters[0].default_value is None
+        assert present(parameters[1].default_value).batch.column(0)[0].as_py() == 0
+        assert present(parameters[2].default_value).batch.column(0)[0].as_py() == 100
+        assert all(p.declared_type is None for p in parameters)
 
     def test_declarative_macro_rejects_unknown_doc_param(self) -> None:
-        """parameter_docs keys must be in parameters (validated like defaults)."""
+        """Unknown documentation keys reject before normalization."""
         from vgi.catalog.descriptors import Macro
 
         with pytest.raises(ValueError, match="documented parameter 'bogus' not found"):
@@ -710,46 +654,36 @@ class TestMacroArgumentsSchemaWire:
                 definition="x",
             )
 
-    def test_macro_create_request_round_trip(self) -> None:
-        """MacroCreateRequest carries arguments_schema over the wire."""
-        from vgi.argument_spec import macro_arguments_schema, macro_parameter_docs_from_schema
+    def test_create_request_preserves_complete_family(self) -> None:
+        """CREATE uses only the mandatory family fields."""
         from vgi.catalog import OnConflict
         from vgi.protocol import MacroCreateRequest
 
-        args = macro_arguments_schema(
-            parameters=["x", "y"],
-            parameter_docs={"x": "first", "y": "second"},
+        family = normalize_macro_overloads(
+            macro_type="scalar",
+            schema_path=["main"],
+            parameters=["x"],
+            definition="x",
+            evaluation_context=QueryEvaluationContext(),
         )
-        req = MacroCreateRequest(
+        request = MacroCreateRequest(
             attach_opaque_data=b"attach",
             schema_path=["main"],
-            name="add",
+            name="m",
             macro_type=MacroType.SCALAR,
-            parameters=["x", "y"],
-            definition="x + y",
-            on_conflict=OnConflict.ERROR,
-            arguments_schema=args,
-        )
-        restored = MacroCreateRequest.deserialize_from_bytes(req.serialize_to_bytes())
-        assert restored.arguments_schema is not None
-        assert macro_parameter_docs_from_schema(restored.arguments_schema) == {"x": "first", "y": "second"}
-
-    def test_macro_create_request_none_arguments_schema(self) -> None:
-        """MacroCreateRequest.arguments_schema defaults to None and round-trips."""
-        from vgi.catalog import OnConflict
-        from vgi.protocol import MacroCreateRequest
-
-        req = MacroCreateRequest(
-            attach_opaque_data=b"attach",
-            schema_path=["main"],
-            name="add",
-            macro_type=MacroType.SCALAR,
-            parameters=["x", "y"],
-            definition="x + y",
+            overloads=family,
             on_conflict=OnConflict.ERROR,
         )
-        restored = MacroCreateRequest.deserialize_from_bytes(req.serialize_to_bytes())
-        assert restored.arguments_schema is None
+        assert MacroCreateRequest.deserialize_from_bytes(request.serialize_to_bytes()) == request
+        assert MacroCreateRequest.ARROW_SCHEMA.names == [
+            "attach_opaque_data",
+            "schema_path",
+            "name",
+            "macro_type",
+            "overloads",
+            "on_conflict",
+            "transaction_opaque_data",
+        ]
 
 
 class TestFunctionInfoSerialization:
@@ -1170,7 +1104,7 @@ class TestArrowSchemaCorrectness:
     def test_catalog_attach_result_schema(self) -> None:
         """Verify CatalogAttachResult Arrow schema."""
         schema = CatalogAttachResult.ARROW_SCHEMA
-        assert len(schema) == 18
+        assert len(schema) == 21
         assert schema.field("supports_catalog_contents").type == pa.bool_()
         assert schema.field("attach_opaque_data").type == pa.binary()
         assert schema.field("supports_transactions").type == pa.bool_()
@@ -1190,7 +1124,7 @@ class TestArrowSchemaCorrectness:
     def test_schema_info_schema(self) -> None:
         """Verify SchemaInfo Arrow schema."""
         schema = SchemaInfo.ARROW_SCHEMA
-        assert len(schema) == 4
+        assert len(schema) == 5
         assert "attach_opaque_data" not in schema.names
         assert schema.field("path").type == pa.list_(pa.string())
         assert schema.field("comment").type == pa.string()
@@ -1204,18 +1138,19 @@ class TestArrowSchemaCorrectness:
         assert schema.field("name").type == pa.string()
         assert schema.field("schema_path").type == pa.list_(pa.string())
         assert schema.field("columns").type == pa.binary()
-        assert schema.field("not_null_constraints").type == pa.list_(pa.int32())
-        assert schema.field("unique_constraints").type == pa.list_(pa.list_(pa.int32()))
-        assert schema.field("check_constraints").type == pa.list_(pa.string())
+        assert schema.field("constraints").type == pa.list_(pa.binary())
+        assert not schema.field("constraints").nullable
+        assert schema.field("definition_revision").type == pa.binary()
+        assert schema.field("definition_revision").nullable
         # Inlined optional fields — populated to skip per-bind RPCs.
         assert schema.field("scan_function").type == pa.binary()
         assert schema.field("cardinality_estimate").type == pa.int64()
         assert schema.field("column_statistics").type == pa.binary()
         assert schema.field("bind_result").type == pa.binary()
-        assert schema.field("required_filters").type == pa.list_(pa.list_(pa.string()))
-        # required_filters is the LAST field (positional schema compatibility:
-        # old C++ extensions ignore-by-position trailing fields).
-        assert schema.field(len(schema) - 1).name == "required_filters"
+        assert schema.field("required_filters").type == pa.list_(pa.list_(pa.list_(pa.string())))
+        assert schema.get_field_index("required_filters") == 17
+        assert schema.field("options").type == pa.binary() and schema.field("options").nullable
+        assert schema.field("layout").type == pa.binary() and schema.field("layout").nullable
 
     def test_view_info_schema(self) -> None:
         """Verify ViewInfo Arrow schema."""

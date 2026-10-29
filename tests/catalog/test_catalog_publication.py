@@ -319,14 +319,14 @@ def test_collections_consume_multiple_batches_and_reject_wrong_schema() -> None:
 
 
 class _S3Error(Exception):
-    def __init__(self, code: str):
+    def __init__(self, code: str) -> None:
         self.response = {"Error": {"Code": code}}
 
 
 class _S3:
     """A conditional object store fixture shared by separate repository instances."""
 
-    def __init__(self, store: _Storage):
+    def __init__(self, store: _Storage) -> None:
         self.store = store
         self.etags: dict[str, str] = {}
 
@@ -639,5 +639,87 @@ def test_import_rejects_generation_changes_during_repository_io(
             manager.import_publication(request, manifest)
         if phase == "readback":
             assert repository.lookup(manifest.cache_key) is None
+    finally:
+        _close_policy(policy)
+
+
+def test_worker_publications_preserve_capability_projection(storage: _Storage, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Shared published metadata and conditional replies stay within the negotiated projection."""
+    from vgi.catalog.capabilities import SCHEMA_OPTIONS_READ, CatalogCapabilities
+    from vgi.catalog.options import OptionState
+    from vgi.protocol import ClientCapabilities
+    from vgi.typed_values import TypedValueBatch
+
+    repository = MemoryCatalogPublicationRepository(storage, profile="projection", stable_urls=True)
+    policy = replace(
+        _policy(repository),
+        identity=lambda req: SnapshotIdentity(
+            catalog_namespace="test",
+            source_revision="deploy-1",
+            catalog_version=req.catalog_version,
+            visibility_scope="shared",
+        ),
+        validator=lambda req: "raw-provider-etag",
+    )
+    monkeypatch.setattr(ContentsProbeCatalog, "catalog_snapshot_policy", policy)
+    available = CatalogCapabilities(read=[SCHEMA_OPTIONS_READ])
+    monkeypatch.setattr(ContentsProbeCatalog, "catalog_capabilities", lambda self, **kwargs: available)
+    original = ContentsProbeCatalog.catalog_contents
+    options = OptionState(values=TypedValueBatch(pa.record_batch([pa.array([7], type=pa.int32())], names=["limit"])))
+
+    def contents(self: Any, **kwargs: Any) -> Any:
+        result = original(self, **kwargs)
+        return replace(
+            result, schemas=[replace(item, schema=replace(item.schema, options=options)) for item in result.schemas]
+        )
+
+    monkeypatch.setattr(ContentsProbeCatalog, "catalog_contents", contents)
+    worker = ContentsProbeWorker()
+    worker._signing_key = b"k" * 32
+
+    def attach(read: list[str]) -> bytes:
+        return worker.catalog_attach(
+            CatalogAttachRequest(
+                name=CATALOG_PROBE,
+                options=None,
+                data_version_spec=None,
+                implementation_version=None,
+                client_capabilities=ClientCapabilities(
+                    engine="test",
+                    native_formats=[],
+                    catalogs=[],
+                    can_stream=True,
+                    filter_encodings=[],
+                    catalog=CatalogCapabilities(read=read),
+                ),
+            )
+        ).attach_opaque_data
+
+    try:
+        full = attach([SCHEMA_OPTIONS_READ])
+        limited = attach([])
+        full_ref = worker.catalog_contents(full)
+        limited_ref = worker.catalog_contents(limited)
+        assert isinstance(full_ref, ExternalRef) and isinstance(limited_ref, ExternalRef)
+        assert full_ref != limited_ref
+        assert storage.uploads == 2
+        assert worker.catalog_contents(full) == full_ref
+        assert worker.catalog_contents(limited) == limited_ref
+        assert worker.catalog_contents(full, "raw-provider-etag") == full_ref
+        # The same explicitly shared visibility can still reuse an identical projection.
+        assert worker.catalog_contents(attach([SCHEMA_OPTIONS_READ])) == full_ref
+        assert storage.uploads == 2
+        manager = worker._catalog_snapshot_manager(policy)
+        manifests = list(manager._validated.values())
+        assert len(manifests) == 2 and len({m.etag for m in manifests}) == 2
+        responses = []
+        for raw, encoding in storage.objects.values():
+            assert encoding is None
+            with pa.ipc.open_stream(raw) as reader:
+                payload = reader.read_all().column(0)[0].as_py()
+            responses.append(CatalogContentsResponse.deserialize_from_bytes(payload))
+        values = [decode_inventory(response)[0].schema.options for response in responses]
+        assert sum(value is None for value in values) == 1
+        assert next(value for value in values if value is not None).values.batch.to_pylist() == [{"limit": 7}]
     finally:
         _close_policy(policy)

@@ -11,6 +11,9 @@ Each document declares its own status; “proposed” means the contract is stil
 | [VGI Secrets](vgi-secrets.md) | **Normative** | How a worker asks for client-side secrets, the two-phase bind, and the layout of the secrets batch. |
 | [VGI catalog query pushdown](vgi-catalog-query-pushdown-design.md) | **Informative implementation design, proposed** | Updated 2026-10-06: proposed VGI 2.2 query preparation, DuckDB 1.5 explicit execution, and DuckDB 2.0 bound-plan SQL export for automatic pushdown. |
 | [Proposed VGI protocol changes for DuckDB 2.0](vgi-protocol-proposed-changes.md) | **Informative design/audit report** | Rationale, migration inventory, implementation status, and deferred protocol decisions. It is not an implementation specification. |
+| [View security](view-security.md) | **Successor contract, proposed** | Explicit optimization-barrier metadata, read/create profiles, unsupported-reader behavior, and current qualification limits. |
+| [Scalar projection expressions](projection-expressions.md) | **Successor contract, proposed** | Optional bind-specific offers, structured expression proposals, partial acceptance, exact appended result fields and local fallback. |
+| [Bound scan repeatability](scan-repeatability.md) | **Successor contract, proposed** | Optional per-bind stability claim, snapshot lifetime, conservative defaults and native adapter limits. |
 
 ## Reading order
 

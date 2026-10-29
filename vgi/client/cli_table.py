@@ -17,7 +17,11 @@ from __future__ import annotations
 
 import click
 
-from vgi.catalog import OnConflict, SerializedSchema, SqlExpression
+from vgi.catalog import OnConflict, SerializedSchema
+from vgi.catalog.capabilities import ROW_SCALAR_EXPRESSION
+from vgi.catalog.constraints import ConstraintDefinition, ConstraintKind
+from vgi.catalog.evaluation_context import QueryEvaluationContext
+from vgi.catalog.sql import SqlExpression as RowExpression
 from vgi.client.cli_utils import (
     SCHEMA_PATH,
     json_to_arrow_schema,
@@ -127,11 +131,32 @@ def table_create(
     columns_json = parse_json_option(columns, "--columns")
     arrow_schema = json_to_arrow_schema(columns_json)
 
-    # Parse unique constraints: each is a comma-separated list of column indices
-    unique_constraints = []
-    for u in unique:
-        indices = [int(i.strip()) for i in u.split(",")]
-        unique_constraints.append(indices)
+    def path(index: int) -> list[str]:
+        if index < 0 or index >= len(arrow_schema):
+            raise click.ClickException(f"Constraint column index {index} is out of range")
+        return [arrow_schema.field(index).name]
+
+    definitions = [ConstraintDefinition(kind=ConstraintKind.NOT_NULL, column_paths=[path(i)]) for i in not_null]
+    for group in unique:
+        try:
+            indices = [int(value.strip()) for value in group.split(",")]
+        except ValueError as error:
+            raise click.ClickException("--unique requires comma-separated column indices") from error
+        definitions.append(ConstraintDefinition(kind=ConstraintKind.UNIQUE, column_paths=[path(i) for i in indices]))
+    for sql in check:
+        definitions.append(
+            ConstraintDefinition(
+                kind=ConstraintKind.CHECK,
+                check_expression=RowExpression(
+                    sql=sql,
+                    profile=ROW_SCALAR_EXPRESSION,
+                    schema_path=schema_path,
+                    evaluation_context=QueryEvaluationContext(),
+                ),
+            )
+        )
+    for i in not_null:
+        arrow_schema = arrow_schema.set(i, arrow_schema.field(i).with_nullable(False))
 
     client.table_create(
         attach_opaque_data=resolved_attach_opaque_data,
@@ -140,9 +165,7 @@ def table_create(
         name=name,
         columns=SerializedSchema(arrow_schema.serialize().to_pybytes()),
         on_conflict=OnConflict(on_conflict),
-        not_null_constraints=list(not_null),
-        unique_constraints=unique_constraints,
-        check_constraints=list(check),
+        constraint_definitions=[definition.serialize_to_bytes() for definition in definitions],
     )
     output_json({"status": "created", "schema": schema_path, "name": name})
 
@@ -368,6 +391,7 @@ def column_add(
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_path=schema_path,
         name=table_name,
+        column_path=[arrow_schema.field(0).name],
         column_definition=SerializedSchema(arrow_schema.serialize().to_pybytes()),
         ignore_not_found=ignore_not_found,
         if_column_not_exists=if_not_exists,
@@ -420,7 +444,7 @@ def column_drop(
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_path=schema_path,
         name=table_name,
-        column_name=column_name,
+        column_path=[column_name],
         ignore_not_found=ignore_not_found,
         if_column_exists=if_exists,
         cascade=cascade,
@@ -472,7 +496,7 @@ def column_rename(
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_path=schema_path,
         name=table_name,
-        column_name=column_name,
+        column_path=[column_name],
         new_column_name=new_column_name,
         ignore_not_found=ignore_not_found,
     )
@@ -515,7 +539,8 @@ def column_set_default(
     SCHEMA_NAME is the schema containing the table.
     TABLE_NAME is the table containing the column.
     COLUMN_NAME is the column to set the default for.
-    EXPRESSION is the SQL expression for the default value.
+    EXPRESSION is the SQL expression for the default value, evaluated in the
+    owning schema with the explicit UTC/binary default evaluation context.
 
     """
     client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
@@ -524,8 +549,13 @@ def column_set_default(
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_path=schema_path,
         name=table_name,
-        column_name=column_name,
-        expression=SqlExpression(expression),
+        column_path=[column_name],
+        expression=RowExpression(
+            sql=expression,
+            profile=ROW_SCALAR_EXPRESSION,
+            schema_path=schema_path,
+            evaluation_context=QueryEvaluationContext(),
+        ),
         ignore_not_found=ignore_not_found,
     )
     output_json(
@@ -572,7 +602,7 @@ def column_drop_default(
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_path=schema_path,
         name=table_name,
-        column_name=column_name,
+        column_path=[column_name],
         ignore_not_found=ignore_not_found,
     )
     output_json(
@@ -618,7 +648,9 @@ def column_set_type(
     SCHEMA_NAME is the schema containing the table.
     TABLE_NAME is the table containing the column.
 
-    The --column option specifies the column name and new type.
+    The --column option specifies the column name and new type. --using is
+    evaluated against old rows in the owning schema with the explicit
+    UTC/binary default evaluation context.
 
     """
     client, resolved_attach_opaque_data = resolve_attach(worker, attach_opaque_data, catalog_name, attach_options)
@@ -631,8 +663,18 @@ def column_set_type(
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_path=schema_path,
         name=table_name,
+        column_path=[arrow_schema.field(0).name],
         column_definition=SerializedSchema(arrow_schema.serialize().to_pybytes()),
-        expression=SqlExpression(expression) if expression else None,
+        expression=(
+            RowExpression(
+                sql=expression,
+                profile=ROW_SCALAR_EXPRESSION,
+                schema_path=schema_path,
+                evaluation_context=QueryEvaluationContext(),
+            )
+            if expression is not None
+            else None
+        ),
         ignore_not_found=ignore_not_found,
     )
     output_json(
@@ -679,7 +721,7 @@ def column_set_not_null(
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_path=schema_path,
         name=table_name,
-        column_name=column_name,
+        column_path=[column_name],
         ignore_not_found=ignore_not_found,
     )
     output_json(
@@ -726,7 +768,7 @@ def column_drop_not_null(
         transaction_opaque_data=(optional_transaction_opaque_data(transaction_opaque_data)),
         schema_path=schema_path,
         name=table_name,
-        column_name=column_name,
+        column_path=[column_name],
         ignore_not_found=ignore_not_found,
     )
     output_json(

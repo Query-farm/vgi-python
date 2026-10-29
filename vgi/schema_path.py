@@ -12,6 +12,15 @@ SchemaPath: TypeAlias = list[str]  # noqa: UP040
 SchemaKey: TypeAlias = tuple[str, ...]  # noqa: UP040
 
 
+def validate_default_schema(default_schema: str | None) -> None:
+    """Validate an optional raw root identifier without inventing a default."""
+    if default_schema is not None:
+        if not isinstance(default_schema, str):
+            raise TypeError("default_schema must be a string or None")
+        if not default_schema or "\x00" in default_schema:
+            raise ValueError("default_schema must be a nonempty identifier without NUL")
+
+
 def schema_path_key(path: Sequence[str]) -> SchemaKey:
     """Return a case-insensitive structural lookup key for a schema path.
 

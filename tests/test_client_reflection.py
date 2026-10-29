@@ -27,7 +27,7 @@ from vgi.rpc_server import build_rpc_server
 
 _SECONDARY = "conformance.Secondary.v1"
 _REFLECTION = "vgi_rpc.Reflection.v1"
-_EXPECTED_NAMES = ["vgi.v2", _SECONDARY, _REFLECTION]
+_EXPECTED_NAMES = ["vgi.v3", _SECONDARY, _REFLECTION]
 _HASH = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -40,7 +40,7 @@ def _server_view() -> list[HostedProtocol]:
 
 
 def _assert_fixture_listing(listing: list[HostedProtocol]) -> None:
-    """The fixture's hosted set: ``vgi.v2`` first, the secondary, then reflection."""
+    """The fixture's hosted set: ``vgi.v3`` first, the secondary, then reflection."""
     assert all(isinstance(p, HostedProtocol) for p in listing)
     assert [p.name for p in listing] == _EXPECTED_NAMES
     assert listing[0].version == VgiProtocol.protocol_version
@@ -62,7 +62,7 @@ class TestListProtocols:
         with Client(SUBPROCESS_FIXTURE_WORKER, pool=None) as client:
             first = client.list_protocols()
             _assert_fixture_listing(first)
-            # The pipe is still usable for vgi.v2 after a reflection call.
+            # The pipe is still usable for vgi.v3 after a reflection call.
             assert client.list_protocols() == first
 
     def test_http(self, _shared_http_base_url: Callable[[], str]) -> None:
@@ -89,10 +89,10 @@ class TestDescribeProtocol:
         assert described.protocol_hash == listed[_SECONDARY].hash
         assert "echo_string" in described.methods
 
-    def test_describes_vgi_v2(self) -> None:
-        """``vgi.v2`` describes with its version and the client's own method set."""
+    def test_describes_vgi_v3(self) -> None:
+        """``vgi.v3`` describes with its version and the client's own method set."""
         with Client(SUBPROCESS_FIXTURE_WORKER, pool=None) as client:
-            described = client.describe_protocol("vgi.v2")
+            described = client.describe_protocol("vgi.v3")
         assert described.protocol_version == VgiProtocol.protocol_version
         assert {"bind", "init"} <= set(described.methods)
 
@@ -115,7 +115,7 @@ def _patch_listing(monkeypatch: pytest.MonkeyPatch, error: RpcError) -> None:
 
 
 class TestPreReflectionWorker:
-    """A worker without reflection is reported as hosting only ``vgi.v2``.
+    """A worker without reflection is reported as hosting only ``vgi.v3``.
 
     Which server answers mean "no reflection" is vgi-rpc's call (it raises
     ``ReflectionNotSupportedError``, tested there); the client's job is only
@@ -123,8 +123,8 @@ class TestPreReflectionWorker:
     ``ClientError``.
     """
 
-    def test_falls_back_to_vgi_v2(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """``ReflectionNotSupportedError`` yields one ``vgi.v2`` entry with an empty hash."""
+    def test_falls_back_to_vgi_v3(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``ReflectionNotSupportedError`` yields one ``vgi.v3`` entry with an empty hash."""
         error = ReflectionNotSupportedError(
             "ProtocolNotSupportedError",
             "not hosted",
@@ -134,7 +134,7 @@ class TestPreReflectionWorker:
         )
         _patch_listing(monkeypatch, error)
         with Client(SUBPROCESS_FIXTURE_WORKER, pool=None) as client:
-            assert client.list_protocols() == [HostedProtocol(name="vgi.v2", version="", hash="")]
+            assert client.list_protocols() == [HostedProtocol(name="vgi.v3", version="", hash="")]
 
     def test_other_errors_raise(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Any other reflection failure is a ``ClientError``, not a silent fallback."""

@@ -44,11 +44,18 @@ from vgi.catalog import (
     SchemaInfo,
     SchemaObjectType,
     SerializedSchema,
+    SqlExpression,
     TableInfo,
     TransactionOpaqueData,
     ViewInfo,
 )
+from vgi.catalog.layout import TableLayout
+from vgi.catalog.sql import column_expressions
+from vgi.column_path import column_definition as decode_column_definition
+from vgi.column_path import single_column_name
+from vgi.protocol import ClientCapabilities
 from vgi.schema_path import sql_qualified_name
+from vgi.typed_values import TypedValueBatch
 from vgi.worker import Worker
 
 logger = logging.getLogger("vgi.writable_worker")
@@ -206,6 +213,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         options: dict[str, Any],
         data_version_spec: str | None,
         implementation_version: str | None,
+        client_capabilities: ClientCapabilities | None = None,
         ctx: CallContext | None = None,
     ) -> CatalogAttachResult:
         """Attach: generate unique attach_opaque_data and register a fresh database in the transactor."""
@@ -264,6 +272,19 @@ class WritableCatalog(ReadOnlyCatalogInterface):
 
     # ========== DDL helpers ==========
 
+    @staticmethod
+    def _reject_unqualified_column_expressions(field: pa.Field[Any]) -> None:
+        """Reject definitions the transactor cannot preserve or evaluate faithfully."""
+        expressions = column_expressions(field)
+        if (
+            expressions.default is not None
+            or expressions.generated is not None
+            or {b"default", b"generated_expression"}.intersection(field.metadata or {})
+        ):
+            raise NotImplementedError("writable transactor does not preserve canonical column expression contexts")
+        for index in range(field.type.num_fields):
+            WritableCatalog._reject_unqualified_column_expressions(field.type.field(index))
+
     def _execute_ddl(
         self, attach_opaque_data: AttachOpaqueData, transaction_opaque_data: TransactionOpaqueData | None, sql: str
     ) -> None:
@@ -284,11 +305,11 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         name: str,
         columns: SerializedSchema,
         on_conflict: OnConflict,
-        not_null_constraints: list[int],
-        unique_constraints: list[list[int]],
-        check_constraints: list[str],
-        primary_key_constraints: list[list[int]] | None = None,
-        foreign_key_constraints: list[bytes] | None = None,
+        constraint_definitions: list[bytes],
+        comment: str | None = None,
+        tags: dict[str, str] | None = None,
+        options: TypedValueBatch | None = None,
+        layout: TableLayout | None = None,
     ) -> None:
         """Create a new table in the transactor's DuckDB database.
 
@@ -296,6 +317,11 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         DuckDB's built-in rowid pseudocolumn provides the row identifier
         automatically — no extra column or sequence needed.
         """
+        if constraint_definitions:
+            raise NotImplementedError("writable fixture has not implemented canonical constraint identities")
+        if any(value is not None for value in (comment, tags, options, layout)):
+            raise NotImplementedError("table creation metadata/options/layout profiles are not supported")
+
         # Deserialize columns schema
         col_schema = pa.ipc.read_schema(pa.BufferReader(columns))  # type: ignore[arg-type]
 
@@ -303,46 +329,14 @@ class WritableCatalog(ReadOnlyCatalogInterface):
 
         # Build column definitions (including defaults from Arrow field metadata)
         col_defs: list[str] = []
-        for i, field in enumerate(col_schema):
+        for field in col_schema:
+            if not field.nullable:
+                raise NotImplementedError("writable fixture requires canonical NOT_NULL support")
             col_def = f"{_qi(field.name)} {_arrow_type_to_sql(field.type)}"
-            if i in not_null_constraints:
-                col_def += " NOT NULL"
-            # Default values are passed as Arrow field metadata with key "default"
-            if field.metadata and b"default" in field.metadata:
-                default_expr = field.metadata[b"default"].decode("utf-8")
-                col_def += f" DEFAULT {default_expr}"
+            self._reject_unqualified_column_expressions(field)
             col_defs.append(col_def)
 
-        # Table-level constraints
-        constraints: list[str] = []
-
-        # Primary key
-        if primary_key_constraints:
-            for pk_group in primary_key_constraints:
-                pk_cols = ", ".join(_qi(col_schema.field(i).name) for i in pk_group)
-                constraints.append(f"PRIMARY KEY ({pk_cols})")
-
-        # Unique constraints
-        for unique_group in unique_constraints:
-            uq_cols = ", ".join(_qi(col_schema.field(i).name) for i in unique_group)
-            constraints.append(f"UNIQUE ({uq_cols})")
-
-        # Check constraints
-        for check_expr in check_constraints:
-            constraints.append(f"CHECK ({check_expr})")
-
-        # Foreign key constraints
-        if foreign_key_constraints:
-            for fk_bytes in foreign_key_constraints:
-                fk = _deserialize_fk(fk_bytes)
-                fk_cols = ", ".join(_qi(c) for c in fk["fk_columns"])
-                pk_cols = ", ".join(_qi(c) for c in fk["pk_columns"])
-                ref_table = _qi(fk["referenced_table"])
-                constraints.append(f"FOREIGN KEY ({fk_cols}) REFERENCES {ref_table}({pk_cols})")
-
-        # Combine into CREATE TABLE
-        all_parts = col_defs + constraints
-        columns_sql = ",\n  ".join(all_parts)
+        columns_sql = ",\n  ".join(col_defs)
         ddl = f"CREATE TABLE{if_not_exists} {_qn(schema_path, name)} (\n  {columns_sql}\n);"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
         logger.info("table_create: %s (on_conflict=%s)", name, on_conflict.value)
@@ -390,15 +384,21 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: list[str],
         name: str,
+        column_path: list[str],
         column_definition: SerializedSchema,
         ignore_not_found: bool,
         if_column_not_exists: bool,
     ) -> None:
         """Add a column to a table."""
-        col_schema = pa.ipc.read_schema(pa.BufferReader(column_definition))  # type: ignore[arg-type]
-        field = col_schema.field(0)
+        column_name = single_column_name(column_path)
+        field = decode_column_definition(column_definition, [column_name])
+        if not field.nullable:
+            raise NotImplementedError("NOT NULL on ADD COLUMN is not supported; use a separate nullability change")
+        if any(key in (field.metadata or {}) for key in (b"comment", b"tags", b"compression")):
+            raise NotImplementedError("ADD COLUMN comments, tags, and compression require a definition profile")
         if_not_exists = " IF NOT EXISTS" if if_column_not_exists else ""
-        col_sql = f"{_qi(field.name)} {_arrow_type_to_sql(field.type)}"
+        col_sql = f"{_qi(column_name)} {_arrow_type_to_sql(field.type)}"
+        self._reject_unqualified_column_expressions(field)
         ddl = f"ALTER TABLE {_qn(schema_path, name)} ADD COLUMN{if_not_exists} {col_sql};"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
         logger.info("table_column_add: %s.%s", name, field.name)
@@ -410,12 +410,13 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool,
         if_column_exists: bool,
         cascade: bool,
     ) -> None:
         """Drop a column from a table."""
+        column_name = single_column_name(column_path)
         if_exists = " IF EXISTS" if if_column_exists else ""
         cascade_sql = " CASCADE" if cascade else ""
         ddl = f"ALTER TABLE {_qn(schema_path, name)} DROP COLUMN{if_exists} {_qi(column_name)}{cascade_sql};"
@@ -429,11 +430,12 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         new_column_name: str,
         ignore_not_found: bool,
     ) -> None:
         """Rename a column in a table."""
+        column_name = single_column_name(column_path)
         ddl = f"ALTER TABLE {_qn(schema_path, name)} RENAME COLUMN {_qi(column_name)} TO {_qi(new_column_name)};"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
         logger.info("table_column_rename: %s.%s -> %s", name, column_name, new_column_name)
@@ -460,11 +462,12 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         comment: str | None,
         ignore_not_found: bool,
     ) -> None:
         """Set or clear the comment on a table column."""
+        column_name = single_column_name(column_path)
         target = f"COLUMN {_qn(schema_path, name)}.{_qi(column_name)}"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, _comment_sql(target, comment))
 
@@ -475,18 +478,18 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: list[str],
         name: str,
+        column_path: list[str],
         column_definition: SerializedSchema,
-        expression: str | None,
+        expression: SqlExpression | None,
         ignore_not_found: bool,
     ) -> None:
         """Change the type of a column in a table."""
-        col_schema = pa.ipc.read_schema(pa.BufferReader(column_definition))  # type: ignore[arg-type]
-        field = col_schema.field(0)
+        column_name = single_column_name(column_path)
+        field = decode_column_definition(column_definition, [column_name])
         col_type = _arrow_type_to_sql(field.type)
         sql = f"ALTER TABLE {_qn(schema_path, name)} ALTER COLUMN {_qi(field.name)} TYPE {col_type}"
-        if expression:
-            # expression comes from DuckDB's binder (serialized AST), not raw user input
-            sql += f" USING {expression}"
+        if expression is not None:
+            raise NotImplementedError("writable transactor has not qualified canonical USING evaluation contexts")
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, sql + ";")
 
     def table_column_default_set(
@@ -496,13 +499,12 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: list[str],
         name: str,
-        column_name: str,
-        expression: str,
+        column_path: list[str],
+        expression: SqlExpression,
         ignore_not_found: bool,
     ) -> None:
         """Set the default expression for a column."""
-        ddl = f"ALTER TABLE {_qn(schema_path, name)} ALTER COLUMN {_qi(column_name)} SET DEFAULT {expression};"
-        self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
+        raise NotImplementedError("writable transactor does not preserve canonical DEFAULT definitions and contexts")
 
     def table_column_default_drop(
         self,
@@ -511,10 +513,11 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool,
     ) -> None:
         """Drop the default expression for a column."""
+        column_name = single_column_name(column_path)
         ddl = f"ALTER TABLE {_qn(schema_path, name)} ALTER COLUMN {_qi(column_name)} DROP DEFAULT;"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
 
@@ -525,12 +528,11 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool,
     ) -> None:
         """Set NOT NULL constraint on a column."""
-        ddl = f"ALTER TABLE {_qn(schema_path, name)} ALTER COLUMN {_qi(column_name)} SET NOT NULL;"
-        self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
+        raise NotImplementedError("writable fixture has not implemented canonical constraint mutation")
 
     def table_not_null_drop(
         self,
@@ -539,12 +541,11 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         transaction_opaque_data: TransactionOpaqueData | None,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool,
     ) -> None:
         """Drop NOT NULL constraint from a column."""
-        ddl = f"ALTER TABLE {_qn(schema_path, name)} ALTER COLUMN {_qi(column_name)} DROP NOT NULL;"
-        self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
+        raise NotImplementedError("writable fixture has not implemented canonical constraint mutation")
 
     # ========== Schema discovery (merge static + dynamic) ==========
 
@@ -642,8 +643,13 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         on_conflict: OnConflict = OnConflict.ERROR,
         comment: str | None,
         tags: dict[str, str] | None,
+        options: TypedValueBatch | None = None,
     ) -> None:
         """Create a new schema in the transactor's DuckDB database."""
+        if options is not None:
+            raise NotImplementedError("Schema options are not supported by this fixture")
+        if comment is not None or tags or on_conflict == OnConflict.REPLACE:
+            raise NotImplementedError("Schema metadata and replacement are not supported by this fixture")
         if_not_exists = " IF NOT EXISTS" if on_conflict == OnConflict.IGNORE else ""
         qualified_path = ".".join(_qi(component) for component in path)
         self._execute_ddl(
@@ -678,8 +684,19 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         name: str,
         definition: str,
         on_conflict: OnConflict,
+        aliases: list[str] | None = None,
+        security: str = "regular",
+        comment: str | None = None,
+        tags: dict[str, str] | None = None,
+        column_comments: dict[str, str] | None = None,
     ) -> None:
         """Create a new view in the transactor's DuckDB database."""
+        if comment is not None or tags or column_comments:
+            raise NotImplementedError("The transactor does not preserve view creation metadata")
+        if security != "regular":
+            raise NotImplementedError("view security mode is unsupported by this provider")
+        if aliases:
+            raise NotImplementedError("The transactor view reader does not preserve explicit aliases")
         if_replace = " OR REPLACE" if on_conflict == OnConflict.REPLACE else ""
         if_not_exists = " IF NOT EXISTS" if on_conflict == OnConflict.IGNORE else ""
         sql = f"CREATE{if_replace} VIEW{if_not_exists} {_qn(schema_path, name)} AS {definition};"
@@ -829,65 +846,18 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         # Build TableInfo from the transactor schema.
         # The columns schema includes rowid with is_row_id metadata from the transactor.
         # Constraints are embedded in schema-level metadata as JSON.
+        for field in table_schema:
+            self._reject_unqualified_column_expressions(field)
         serialized = SerializedSchema(table_schema.serialize().to_pybytes())
 
-        # Parse constraints from schema-level metadata
-        not_null_constraints: list[int] = []
-        unique_constraints: list[list[int]] = []
-        check_constraints: list[str] = []
-        primary_key_constraints: list[list[int]] = []
-        foreign_key_constraints: list[bytes] = []
-
+        # The transactor has no persisted canonical identities yet. Never
+        # silently turn its existing constraints into an empty readback list.
         schema_meta = table_schema.metadata or {}
         if b"vgi.constraints" in schema_meta:
             import json
 
-            from vgi_rpc.utils import serialize_record_batch_bytes
-
-            constraints = json.loads(schema_meta[b"vgi.constraints"].decode("utf-8"))
-            # Build column name → index map in Arrow schema space (including rowid at index 0).
-            # Constraint indices must be in Arrow space so the C++ adjust_col lambda
-            # can correctly shift them to physical space (excluding rowid).
-            col_index = {f.name: i for i, f in enumerate(table_schema) if f.name != "rowid"}
-            for c in constraints:
-                ctype = c["type"]
-                cols = c.get("columns") or []
-                text = c.get("text") or ""
-                col_indices = [col_index[cn] for cn in cols if cn in col_index]
-                if ctype == "NOT NULL":
-                    not_null_constraints.extend(col_indices)
-                elif ctype == "UNIQUE":
-                    unique_constraints.append(col_indices)
-                elif ctype == "PRIMARY KEY":
-                    primary_key_constraints.append(col_indices)
-                elif ctype == "CHECK":
-                    # Extract the check expression from constraint_text
-                    # Format: "CHECK(expr)"
-                    if text.startswith("CHECK(") and text.endswith(")"):
-                        check_constraints.append(text[6:-1])
-                    elif text:
-                        check_constraints.append(text)
-                elif ctype == "FOREIGN KEY":
-                    ref_table = c.get("referenced_table") or ""
-                    ref_cols = c.get("referenced_columns") or []
-                    if ref_table and cols and ref_cols:
-                        fk_batch = pa.RecordBatch.from_pydict(
-                            {
-                                "fk_columns": [list(cols)],
-                                "pk_columns": [list(ref_cols)],
-                                "referenced_table": [ref_table],
-                                "referenced_schema_path": [schema_path],
-                            },
-                            schema=pa.schema(
-                                [
-                                    ("fk_columns", pa.list_(pa.utf8())),
-                                    ("pk_columns", pa.list_(pa.utf8())),
-                                    ("referenced_table", pa.utf8()),
-                                    ("referenced_schema_path", pa.list_(pa.utf8())),
-                                ]
-                            ),
-                        )
-                        foreign_key_constraints.append(serialize_record_batch_bytes(fk_batch))
+            if json.loads(schema_meta[b"vgi.constraints"].decode("utf-8")):
+                raise NotImplementedError("writable fixture has not implemented canonical constraint discovery")
 
         # Also fetch the table comment
         try:
@@ -901,11 +871,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
             name=name,
             schema_path=schema_path,
             columns=serialized,
-            not_null_constraints=not_null_constraints,
-            unique_constraints=unique_constraints,
-            check_constraints=check_constraints,
-            primary_key_constraints=primary_key_constraints,
-            foreign_key_constraints=foreign_key_constraints,
+            constraints=[],
             write_result_modes={"insert": "changes", "update": "changes", "delete": "changes"},
             comment=table_comment,
             tags={},

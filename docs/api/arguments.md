@@ -8,6 +8,10 @@ schemas from these declarations and validates inputs before your function runs. 
 
 ::: vgi.arguments
 
+## Typed values
+
+::: vgi.typed_values
+
 ## Argument specifications
 
 ::: vgi.argument_spec

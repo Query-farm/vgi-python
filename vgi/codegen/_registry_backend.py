@@ -214,7 +214,7 @@ def rebuild(derived: Sequence[DerivedMethod]) -> list[RegistryMethod]:
     out: list[RegistryMethod] = []
     for d in derived:
         base = model.get(d.name)
-        expect(base is not None, f"the rendered file registers {d.name}, which is not a vgi.v2 method")
+        expect(base is not None, f"the rendered file registers {d.name}, which is not a vgi.v3 method")
         assert base is not None
         expect(d.name not in {m.name for m in out}, f"{d.name} is registered twice")
         names = [f.name for f in d.params]

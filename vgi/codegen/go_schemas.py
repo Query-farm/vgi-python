@@ -136,7 +136,7 @@ def _emit_type(dtype: pa.DataType, *, origin: str) -> str:
         child_exprs = [
             _emit_field_literal(dtype.field(i), origin=f"{origin}[struct child {i}]") for i in range(dtype.num_fields)
         ]
-        return "arrow.StructOf(\n" + ",\n".join("\t\t" + c for c in child_exprs) + ",\n\t)"
+        return "arrow.StructOf(\n" + ",\n".join("\t\t" + c.replace("\n", "\n\t") for c in child_exprs) + ",\n\t)"
 
     if pa.types.is_timestamp(dtype):
         unit_map = {

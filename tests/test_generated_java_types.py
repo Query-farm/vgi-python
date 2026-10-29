@@ -103,15 +103,14 @@ def _derive(java_type: str, annotations: str) -> pa.DataType:
         return _OVERRIDES[override.group(1)]
     if java_type.startswith("List<"):
         element = java_type[5:-1]
-        if element in _INFERRED:
-            return pa.list_(pa.field("item", _INFERRED[element], nullable=True))
-        # A nested generated record derives as an inline struct of its components.
-        nested = _derived_schema(java_types.render(element))
-        return pa.list_(pa.field("item", pa.struct(list(nested)), nullable=True))
+        return pa.list_(pa.field("item", _derive(element, ""), nullable=True))
     if java_type.startswith("Map<"):
         key, value = (t.strip() for t in java_type[4:-1].split(","))
         return pa.map_(_INFERRED[key], _INFERRED[value])
-    return _INFERRED[java_type]
+    if java_type in _INFERRED:
+        return _INFERRED[java_type]
+    # A nested generated record derives as an inline struct of its components.
+    return pa.struct(list(_derived_schema(java_types.render(java_type))))
 
 
 def _derived_schema(text: str) -> pa.Schema:
@@ -146,3 +145,9 @@ def test_unsupported_arrow_type_is_refused() -> None:
         java_types._component(pa.field("t", pa.timestamp("us")), "X")
     with pytest.raises(GeneratorError):
         java_types._component(pa.field("l", pa.list_(pa.field("item", pa.binary(), nullable=False))), "X")
+    with pytest.raises(GeneratorError):
+        java_types._component(
+            pa.field("nested", pa.list_(pa.list_(pa.field("item", pa.string(), nullable=False)))), "X"
+        )
+    with pytest.raises(GeneratorError):
+        java_types._component(pa.field("nested", pa.list_(pa.list_(pa.field("renamed", pa.string())))), "X")

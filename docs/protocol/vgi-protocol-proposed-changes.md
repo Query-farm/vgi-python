@@ -1,5 +1,10 @@
 # Proposed VGI protocol changes for DuckDB 2.0
 
+**Current scope:** the [October 23 combined review](shared-catalog-values.md#combined-protocol-review--october-23-2026)
+and [manifest](duckdb-2.0-manifest.json) supersede this historical survey's release
+sequence, version candidates and unresolved inclusion lists. Keep this report
+as source rationale; it is not the current implementation backlog.
+
 **Status:** design/audit report; the argument-monotonicity subsection records an accepted VGI 2.0 protocol addition
 **Audit date:** 2026-09-09
 **Filter-v2 decision:** 2026-09-09 — mandatory in VGI 2.0; no v1 compatibility path
@@ -391,9 +396,18 @@ Leave the callback unset for the initial port. If implemented later, reuse a saf
 
 ### Repeatability
 
-`TableFunction::is_repeatable` tells the optimizer whether executions with identical bind data are stable within one query. If the callback is absent, DuckDB treats the function conservatively as not repeatable. That is correct.
+The selected [bound scan contract](scan-repeatability.md) appends
+`BindResponse.repeatability`, with `UNKNOWN` and `STABLE_WITHIN_QUERY` wire
+values. A stable claim belongs to one complete bind state within one statement;
+it is independent of scalar-function stability. The native 1.5 adapter carries
+the claim and guards snapshot lifetime but has no repeatability callback.
 
-A future `repeatability` metadata value could improve plans, but it must be defined separately from scalar-function stability. A remote table may change between calls even when its schema and arguments do not. Suggested values are `unknown` and `stable_within_query`; do not infer repeatability merely from a read-only-looking function.
+DuckDB 2.0's `TableFunction::is_repeatable` supplies the optimizer hook. Its
+table-backed scan shortcut classifies a catalog table before consulting that
+hook, so the later native port must also address that shortcut to keep unknown
+VGI scans conservative. The bounded source implementation and mutable-provider tests passed on the
+pinned 1.5 build; production providers and the native 2.0 optimizer port remain
+separate qualification work.
 
 ### Partition selection
 
@@ -542,6 +556,13 @@ Upstream PR: [duckdb/duckdb#25539 — Support triggers on custom table catalog e
 The `ScanTriggers` contract also implies that returned catalog entries remain alive beyond the callback: both trigger selection and introspection retain references. VGI should materialize trigger entries in a table-owned metadata cache, invalidated through the existing catalog-version mechanism, rather than returning callback-local objects.
 
 ### 6.5 Proposed VGI trigger protocol
+
+**Historical proposal, superseded for the combined successor release:** use
+[the shared trigger/statement contract](shared-catalog-values.md#trigger-definitions-and-statement-ownership).
+It replaces the engine-to-definition map and broad `supports_triggers` flag with
+profiled SQL/context, exclusive execution ownership, current write requirements
+and an authoritative statement lifecycle. The names and delivery phases below
+are historical source material, not an independent release plan or current RPCs.
 
 The remote VGI catalog should be authoritative for persistent trigger definitions. Keeping definitions only in a local extension cache would lose them on detach and would give different clients inconsistent catalogs.
 

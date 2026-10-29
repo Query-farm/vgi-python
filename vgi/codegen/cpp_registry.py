@@ -1,6 +1,6 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
-r"""Emit vgi-c++'s ``vgi_service.hpp``: the whole ``vgi.v2`` registry, for the C++ SDK.
+r"""Emit vgi-c++'s ``vgi_service.hpp``: the whole ``vgi.v3`` registry, for the C++ SDK.
 
 vgi-rpc-c++ does not reflect over anything. A method is registered by calling
 ``ServerBuilder::add_unary`` / ``add_void`` / ``add_exchange`` with its name, its
@@ -8,7 +8,7 @@ params schema, its result (or header) schema and a ``std::function`` handler. So
 this port needs both halves of the registry generated (see
 :mod:`vgi.codegen._registry` for the model and the reasons):
 
-- ``class VgiService``: one ``virtual`` member per ``vgi.v2`` method, every one
+- ``class VgiService``: one ``virtual`` member per ``vgi.v3`` method, every one
   taking ``(const vgi_rpc::Request&, vgi_rpc::CallContext&)`` and returning
   ``vgi_rpc::Result`` (a unary with a return), ``void`` (a unary without one) or
   ``vgi_rpc::Stream`` (a stream). Each default body throws
@@ -77,7 +77,7 @@ DEFAULT_NAMESPACE = "vgi::generated"
 TARGET = "src/generated/vgi_service.hpp"
 
 #: The schema factory for each ``result`` column a unary may declare, by
-#: nullability. Every vgi.v2 result is one ``binary`` column (a record's IPC
+#: nullability. Every vgi.v3 result is one ``binary`` column (a record's IPC
 #: bytes, or raw bytes); a result of any other type is a protocol change this
 #: generator has to learn about, not one it should guess at.
 _RESULT_ENVELOPES: dict[bool, str] = {
@@ -134,7 +134,7 @@ def _row(m: RegistryMethod, available: set[str]) -> list[str]:
     if stems.header is not None:
         header = _factory(sanitize_name(stems.header), available, m.name)
     if m.is_stream and header is None:
-        raise GeneratorError(f"{m.name}: a vgi.v2 stream without a header")
+        raise GeneratorError(f"{m.name}: a vgi.v3 stream without a header")
     fields = [f'.name = "{m.name}"', f".params = {params}"]
     if result is not None:
         fields.append(f".result = {result}")
@@ -170,9 +170,9 @@ def _envelope(name: str, nullable: bool) -> str:
 
 
 _PREAMBLE = """\
-// The vgi.v2 method registry.
+// The vgi.v3 method registry.
 //
-// Every vgi.v2 method is registered, with exactly the reference's method type
+// Every vgi.v3 method is registered, with exactly the reference's method type
 // and params / result / header schemas, so vgi_rpc.Reflection.v1 reports the
 // reference's protocol hash. A method this worker does not override answers
 // UNIMPLEMENTED (kind `method_not_implemented`).
@@ -187,7 +187,7 @@ _PREAMBLE = """\
 // the IPC bytes of a one-row batch in `payload` -- or, when `payload` is null,
 // raw bytes. A handler builds its answer in `payload`, never in `result`.
 
-/// What a vgi.v2 method a worker does not implement answers: code
+/// What a vgi.v3 method a worker does not implement answers: code
 /// UNIMPLEMENTED, kind `method_not_implemented`, "<method> is not implemented by
 /// this worker". The body of every `VgiService` default.
 [[noreturn]] inline void method_not_implemented(std::string_view method) {
@@ -220,7 +220,7 @@ def _render_body(methods: Sequence[RegistryMethod], namespace: list[str]) -> str
         body.write(_envelope(name, nullable))
         body.write("\n")
 
-    body.write("/// Every vgi.v2 method, each defaulting to `method_not_implemented`.\n")
+    body.write("/// Every vgi.v3 method, each defaulting to `method_not_implemented`.\n")
     body.write("class VgiService {\n")
     body.write("public:\n")
     body.write("\tvirtual ~VgiService() = default;\n")
@@ -255,7 +255,7 @@ def _render_body(methods: Sequence[RegistryMethod], namespace: list[str]) -> str
     body.write("\tstd::string_view doc;\n")
     body.write("};\n\n")
 
-    body.write("/// Every vgi.v2 method, by wire name.\n")
+    body.write("/// Every vgi.v3 method, by wire name.\n")
     body.write(f"inline constexpr std::array<VgiMethod, {len(methods)}> VGI_METHODS = {{{{\n")
     for m in methods:
         for line in _row(m, available):

@@ -62,6 +62,7 @@ class SnapshotRequest:
     attach_opaque_data: bytes = field(repr=False)
     attachment_scope: str
     catalog_version: int
+    capability_projection: str = ""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -430,6 +431,7 @@ class CatalogSnapshotManager:
             identity.source_revision,
             identity.visibility_scope if identity.visibility_scope is not None else request.attachment_scope,
             str(identity.catalog_version),
+            request.capability_projection,
             self.repository.profile,
             compression,
         ]
@@ -606,7 +608,7 @@ class CatalogSnapshotManager:
         self, request: SnapshotRequest, build: Callable[[], CatalogContentsResponse], if_none_match: str | None = None
     ) -> CatalogContentsResponse | ExternalRef:
         """Resolve after authorization; warm hits perform no object GET or serialization."""
-        if self.policy.validator is not None and if_none_match is not None:
+        if self.policy.validator is not None and if_none_match is not None and not request.capability_projection:
             etag = self.policy.validator(request)
             if etag is not None and etag == if_none_match:
                 return CatalogContentsResponse(catalog_version=request.catalog_version, etag=etag, not_modified=True)

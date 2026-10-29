@@ -85,7 +85,7 @@ def test_attach_result_shape() -> None:
     assert fields["comment"].go_type == "*string"
     assert fields["catalog_version"].go_type == "int64"
     last = record.fields[-1]
-    assert (last.wire_name, last.name, last.go_type) == ("supports_catalog_contents", "SupportsCatalogContents", "bool")
+    assert (last.wire_name, last.name, last.go_type) == ("query_pushdown", "QueryPushdown", "*QueryCapabilities")
 
 
 @pytest.mark.parametrize(

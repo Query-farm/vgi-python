@@ -37,7 +37,9 @@ import pyarrow as pa
 from vgi_rpc.rpc import OutputCollector
 
 from vgi import Worker
+from vgi._test_fixtures.constraint_facts import fixed_not_null
 from vgi.catalog import Catalog, Schema
+from vgi.catalog.capabilities import CONSTRAINT_ENFORCE, CONSTRAINT_RECORDS_READ, CatalogCapabilities
 from vgi.catalog.catalog_interface import (
     AttachOpaqueData,
     ReadOnlyCatalogInterface,
@@ -56,6 +58,7 @@ from vgi.table_function import (
     TableFunctionGenerator,
 )
 from vgi.table_in_out_function import TableInOutGenerator
+from vgi.typed_values import TypedValueBatch
 
 CATALOG_NAME = "schema_reconcile"
 _SCHEMA_NAME = "main"
@@ -217,6 +220,7 @@ def _all_rows(spec: TableSpec) -> list[tuple[Any, dict[str, Any]]]:
 
 
 def _insert_row(spec: TableSpec, rid: Any, payload: dict[str, Any]) -> None:
+    TypedValueBatch(pa.RecordBatch.from_pylist([{**payload, "rowid": rid}], schema=spec.table_schema))
     with _lock, _connect() as conn:
         conn.execute(
             f"INSERT OR REPLACE INTO {spec.storage_table} (rid_blob, payload) VALUES (?, ?)",
@@ -234,6 +238,7 @@ def _update_row(spec: TableSpec, rid: Any, updates: dict[str, Any]) -> bool:
             return False
         payload = pickle.loads(row[0])
         payload.update(updates)
+        TypedValueBatch(pa.RecordBatch.from_pylist([{**payload, "rowid": rid}], schema=spec.table_schema))
         conn.execute(
             f"UPDATE {spec.storage_table} SET payload = ? WHERE rid_blob = ?",
             (pickle.dumps(payload), _rid_key(rid)),
@@ -518,16 +523,27 @@ class SchemaReconcileCatalog(ReadOnlyCatalogInterface):
     catalog = _CATALOG
     catalog_name = CATALOG_NAME
 
+    def catalog_capabilities(self, *, attach_opaque_data: AttachOpaqueData) -> CatalogCapabilities:
+        """Every fixture insert/update checks required values before publication."""
+        return CatalogCapabilities(read=[CONSTRAINT_RECORDS_READ], write=[CONSTRAINT_ENFORCE])
+
     def _table_info(self, spec: TableSpec) -> TableInfo:
+        # Qualify ALL_ROWS for storage created by a previous fixture process,
+        # as well as the writes validated by the current implementation.
+        for rid, payload in _all_rows(spec):
+            TypedValueBatch(pa.RecordBatch.from_pylist([{**payload, "rowid": rid}], schema=spec.table_schema))
         return TableInfo(
             comment=f"Schema-reconcile {spec.name} (rowid type {spec.rowid_field.type})",
             tags={},
             name=spec.name,
             schema_path=[_SCHEMA_NAME],
             columns=SerializedSchema(_serialize_schema(spec.table_schema)),
-            not_null_constraints=[],
-            unique_constraints=[],
-            check_constraints=[],
+            constraints=[
+                fact.serialize_to_bytes()
+                for fact in fixed_not_null(
+                    spec.name, [_SCHEMA_NAME], (("id",), ("ts",), ("nested",), ("nested", "a"), ("tags",))
+                )
+            ],
             write_result_modes={"insert": "changes", "update": "changes", "delete": "changes"},
         )
 

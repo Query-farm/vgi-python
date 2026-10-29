@@ -47,12 +47,15 @@ from vgi_rpc.rpc import (
 
 from vgi.arguments import Arguments
 from vgi.cache_control import CACHE_SCOPE_CATALOG, CacheControl
+from vgi.catalog.capabilities import (
+    ROW_SCALAR_EXPRESSION,
+    CatalogCapabilities,
+)
 from vgi.catalog.catalog_interface import (
     CatalogAttachResult,
     CatalogInfo,
     CopyFromFormatInfo,
     FunctionInfo,
-    IndexConstraintType,
     IndexInfo,
     MacroInfo,
     MacroType,
@@ -63,6 +66,16 @@ from vgi.catalog.catalog_interface import (
     TableInfo,
     ViewInfo,
 )
+from vgi.catalog.column_metadata import validate_column_metadata
+from vgi.catalog.constraints import ConstraintsApplyRequest, ConstraintSnapshot, constraint_definitions
+from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot
+from vgi.catalog.evaluation_context import _SqlRecord
+from vgi.catalog.indexes import IndexDefinition
+from vgi.catalog.layout import TableLayout
+from vgi.catalog.macros import MAX_MACRO_BYTES, MacroOverload, validate_macro_family
+from vgi.catalog.options import OptionDefinitions
+from vgi.catalog.query import CatalogQueryPrepareRequest, CatalogQueryPrepareResult, ClientQueryCapabilities
+from vgi.catalog.sql import SqlExpression
 from vgi.filter_v2 import delta_revisions, replaying_accepted_state
 from vgi.function import StreamStateCodec, _is_state_codec
 from vgi.function_storage import BoundStorage, FrameworkNS, attach_catalog_bytes
@@ -84,9 +97,12 @@ from vgi.table_function import (
     project_schema,
 )
 from vgi.table_in_out_function import TableInOutGenerator
+from vgi.typed_values import TypedValueBatch
 
 __all__ = [
     "BindRequest",
+    "TableFunctionProjectionRequest",
+    "TableFunctionProjectionResponse",
     "ClientCapabilities",
     "CatalogAttachRequest",
     "CatalogCreateRequest",
@@ -243,6 +259,107 @@ class BindRequest(ArrowSerializableDataclass):
     schema_path: SchemaPath | None = None
 
     argument_names: Annotated[list[str | None] | None, ArrowType(pa.list_(pa.string()))] = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class TableFunctionProjectionRequest(_SqlRecord):
+    """Propose pure scalar outputs after bind, before modifying an execution plan.
+
+    Expressions address the complete original worker output schema. Their result
+    fields are parallel by index; accepted fields append to that schema. Planning
+    allocates no execution resources and cannot consume rows or produce effects.
+    """
+
+    bind_call: Annotated[BindRequest, ArrowType(pa.binary())]
+    bind_result: Annotated[BindResponse, ArrowType(pa.binary())]
+    expressions: Annotated[list[bytes], ArrowType(pa.list_(pa.large_binary()))]
+    result_schema: Annotated[pa.Schema, ArrowType(pa.binary())]
+
+    def __post_init__(self) -> None:
+        """Validate the source contract, offered profiles, owner and scalar records."""
+        if not isinstance(self.bind_call, BindRequest) or self.bind_call.function_type != FunctionType.TABLE:
+            raise ValueError("scalar projection requires an ordinary table bind")
+        if self.bind_call.input_schema is not None or self.bind_call.schema_path is None:
+            raise ValueError("scalar projection requires a source table and explicit owner schema")
+        if not isinstance(self.bind_result, BindResponse):
+            raise TypeError("scalar projection requires the original BindResponse")
+        self.bind_result.__post_init__()
+        if any((self.bind_result.lookup_secret_types, self.bind_result.lookup_scopes, self.bind_result.lookup_names)):
+            raise ValueError("scalar projection cannot use a secret-scope bind response")
+        if not isinstance(self.expressions, list) or not 1 <= len(self.expressions) <= 1024:
+            raise ValueError("scalar projection requires between one and 1024 expressions")
+        if not isinstance(self.result_schema, pa.Schema) or len(self.result_schema) != len(self.expressions):
+            raise ValueError("scalar projection result fields must match its expressions")
+        if self.result_schema.metadata:
+            raise ValueError("scalar projection result schema cannot replace source schema metadata")
+        source = self.bind_result.output_schema
+        ascii_fold = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+        names = [name.translate(ascii_fold) for name in [*source.names, *self.result_schema.names]]
+        if any(not name or "\0" in name for name in names) or len(set(names)) != len(names):
+            raise ValueError("scalar projection requires unique unambiguous source and result names")
+        context = None
+        for expression in self.expression_records():
+            expression.validate_owner(self.bind_call.schema_path)
+            if (
+                expression.profile != ROW_SCALAR_EXPRESSION
+                or expression.profile not in self.bind_result.projection_expression_profiles
+            ):
+                raise ValueError("scalar projection expression profile was not offered by this bind")
+            if context is not None and context != expression.evaluation_context:
+                raise ValueError("scalar projection expressions must share one evaluation context")
+            context = expression.evaluation_context
+
+    def expression_records(self) -> list[SqlExpression]:
+        """Decode the canonical, bounded scalar records without interpreting SQL."""
+        return [SqlExpression.deserialize_from_bytes(value) for value in self.expressions]
+
+
+@dataclass(frozen=True, kw_only=True)
+class TableFunctionProjectionResponse(_SqlRecord):
+    """Accept an ordered subset of proposed outputs, or decline without effects."""
+
+    accepted_indices: list[int] = field(default_factory=list)
+    bind_result: Annotated[BindResponse | None, ArrowType(pa.binary())] = None
+
+    def __post_init__(self) -> None:
+        """Reject contradictory acceptance and malformed output indices."""
+        indices = self.accepted_indices
+        if (
+            not isinstance(indices, list)
+            or len(indices) > 1024
+            or any(type(index) is not int or index < 0 for index in indices)
+        ):
+            raise ValueError("invalid accepted projection indices")
+        if indices != sorted(set(indices)):
+            raise ValueError("accepted projection indices must be strictly increasing")
+        if bool(indices) != (self.bind_result is not None):
+            raise ValueError("accepted projection indices and replacement bind result must occur together")
+        if self.bind_result is not None:
+            self.bind_result.__post_init__()
+            if any(
+                (self.bind_result.lookup_secret_types, self.bind_result.lookup_scopes, self.bind_result.lookup_names)
+            ):
+                raise ValueError("accepted scalar projection cannot request secret resolution")
+
+    def validate_request(self, request: TableFunctionProjectionRequest) -> None:
+        """Check the complete append-only replacement before optimizer changes."""
+        self.__post_init__()
+        request.__post_init__()
+        if self.bind_result is None:
+            return
+        if any(index >= len(request.expressions) for index in self.accepted_indices):
+            raise ValueError("accepted projection index is outside the proposal")
+        if self.bind_result.projection_expression_profiles != request.bind_result.projection_expression_profiles:
+            raise ValueError("accepted scalar projection cannot change the bind profile offer")
+        if self.bind_result.repeatability != request.bind_result.repeatability:
+            raise ValueError("accepted scalar projection cannot change bind repeatability")
+        source = request.bind_result.output_schema
+        expected = pa.schema(
+            [*source, *(request.result_schema.field(index) for index in self.accepted_indices)],
+            metadata=cast(Any, source.metadata),
+        )
+        if not self.bind_result.output_schema.equals(expected, check_metadata=True):
+            raise ValueError("accepted scalar projection output schema differs from the requested append-only contract")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -712,6 +829,8 @@ class ClientCapabilities(ArrowSerializableDataclass):
         catalogs: Companion catalog types the client can attach.
         can_stream: Whether the client can consume an unbounded streaming scan.
         filter_encodings: Filter representations understood by the client.
+        catalog: Optional offer of versioned catalog profiles. Absence selects none.
+        query_pushdown: Optional query encoding and semantic profile offer. Absence disables query execution.
     """
 
     engine: str
@@ -719,6 +838,8 @@ class ClientCapabilities(ArrowSerializableDataclass):
     catalogs: list[str]
     can_stream: bool
     filter_encodings: list[str]
+    catalog: Annotated[CatalogCapabilities | None, ArrowType(pa.binary())] = None
+    query_pushdown: ClientQueryCapabilities | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -784,13 +905,14 @@ class TableCreateRequest(ArrowSerializableDataclass):
         columns: The columns of the table as a PyArrow schema serialized as bytes.
         on_conflict: Behavior when the object already exists ([`OnConflict`][]:
             ERROR/IGNORE/REPLACE).
-        not_null_constraints: Column indices with a NOT NULL constraint.
-        unique_constraints: Column-index groups with a UNIQUE constraint.
-        check_constraints: SQL CHECK constraint expressions.
-        primary_key_constraints: Column-index groups forming the primary key.
-        foreign_key_constraints: Serialized foreign-key constraint specs.
+        constraint_definitions: Required canonical ConstraintDefinition IPC list.
+            Empty means no constraints; nonempty requests ENFORCED + ALL_ROWS.
         transaction_opaque_data: Opaque DuckDB transaction handle (bytes); ``None``
             when not inside a transaction.
+        comment: Optional creation comment; requires the table metadata profile.
+        tags: Optional creation tags; an empty map is an explicit request.
+        options: Optional typed literal options; requires the table options profile.
+        layout: Optional partition/sort policy; requires layout and expression profiles.
     """
 
     attach_opaque_data: bytes
@@ -798,16 +920,26 @@ class TableCreateRequest(ArrowSerializableDataclass):
     name: str
     columns: bytes  # SerializedSchema
     on_conflict: OnConflict
-    not_null_constraints: Annotated[list[int], ArrowType(pa.list_(pa.int32()))] = field(default_factory=list)
-    unique_constraints: Annotated[list[list[int]], ArrowType(pa.list_(pa.list_(pa.int32())))] = field(
-        default_factory=list
-    )
-    check_constraints: list[str] = field(default_factory=list)
-    primary_key_constraints: Annotated[list[list[int]], ArrowType(pa.list_(pa.list_(pa.int32())))] = field(
-        default_factory=list
-    )
-    foreign_key_constraints: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))] = field(default_factory=list)
+    constraint_definitions: list[bytes]
     transaction_opaque_data: bytes | None = None
+
+    comment: str | None = None
+    tags: dict[str, str] | None = None
+    options: Annotated[TypedValueBatch | None, ArrowType(pa.binary())] = None
+    layout: Annotated[TableLayout | None, ArrowType(pa.binary())] = None
+
+    def __post_init__(self) -> None:
+        """Reject missing, malformed or conflicting canonical definitions."""
+        validate_column_metadata(pa.ipc.read_schema(pa.py_buffer(self.columns)))
+        constraint_definitions(
+            self.constraint_definitions,
+            CatalogObjectRef(kind="table", schema_path=self.schema_path, name=self.name),
+        )
+
+    def serialize_to_bytes(self) -> bytes:
+        """Recheck column metadata before a CREATE request reaches a provider."""
+        self.__post_init__()
+        return ArrowSerializableDataclass.serialize_to_bytes(self)
 
 
 # ---------------------------------------------------------------------------
@@ -1010,41 +1142,27 @@ else:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class MacroCreateRequest(ArrowSerializableDataclass):
-    """Request for catalog_macro_create with `RecordBatch` for parameter defaults.
-
-    Attributes:
-        attach_opaque_data: Opaque per-attach catalog session token (bytes) echoed
-            back so the worker can scope catalog state to the attachment.
-        schema_path: Raw identifier components of the schema containing the object.
-        name: Name of the target object/function.
-        macro_type: Whether this is a scalar or table macro.
-        parameters: Ordered list of parameter names.
-        definition: The SQL expression (scalar) or query (table).
-        on_conflict: Behavior when the object already exists ([`OnConflict`][]:
-            ERROR/IGNORE/REPLACE).
-        parameter_default_values: One-row `RecordBatch` where column names are
-            parameter names and values are typed defaults; ``None`` if no defaults.
-        arguments_schema: Optional Arrow schema (serialized as IPC bytes) with one
-            nullable field per parameter, in ``parameters`` order. Each field's type
-            is the parameter's default value type when known (else null), and the
-            ``vgi_doc`` field metadata key carries the parameter's description (UTF-8,
-            presence-only — omitted when undocumented). Mirrors the per-argument doc
-            channel functions expose. ``None`` when no per-parameter docs are
-            supplied. Built with ``vgi.argument_spec.macro_arguments_schema``.
-        transaction_opaque_data: Opaque DuckDB transaction handle (bytes); ``None``
-            when not inside a transaction.
-    """
+    """Create one complete macro family; the provider resolves expression defaults."""
 
     attach_opaque_data: bytes
     schema_path: SchemaPath
     name: str
     macro_type: MacroType
-    parameters: list[str]
-    definition: str
+    overloads: list[MacroOverload]
     on_conflict: OnConflict
-    parameter_default_values: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
-    arguments_schema: Annotated[pa.Schema | None, ArrowType(pa.binary())] = None
     transaction_opaque_data: bytes | None = None
+
+    def __post_init__(self) -> None:
+        """Validate the mandatory complete replacement family."""
+        validate_macro_family(macro_type=self.macro_type.value, schema_path=self.schema_path, overloads=self.overloads)
+
+    def serialize_to_bytes(self) -> bytes:
+        """Revalidate mutable overload families before sending a create request."""
+        self.__post_init__()
+        result = ArrowSerializableDataclass.serialize_to_bytes(self)
+        if len(result) > MAX_MACRO_BYTES:
+            raise ValueError("macro record is too large")
+        return result
 
 
 if TYPE_CHECKING:
@@ -1114,36 +1232,26 @@ class CatalogContentsResponse(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class IndexCreateRequest(ArrowSerializableDataclass):
-    """Request for catalog_index_create.
-
-    Attributes:
-        attach_opaque_data: Opaque per-attach catalog session token (bytes) echoed
-            back so the worker can scope catalog state to the attachment.
-        schema_path: Raw identifier components of the schema containing the object.
-        name: Name of the target object/function.
-        table_name: The name of the table this index is on.
-        index_type: The index type string (e.g., "ART", or empty for default).
-        constraint_type: The constraint enforcement type (NONE, UNIQUE, PRIMARY).
-        expressions: SQL expression strings defining the indexed expressions. For
-            column-based indexes these are column references (e.g., "col_a"); for
-            expression indexes, arbitrary SQL (e.g., "lower(col_a)").
-        on_conflict: Behavior when the object already exists ([`OnConflict`][]:
-            ERROR/IGNORE/REPLACE).
-        options: Key-value index options (WITH clause).
-        transaction_opaque_data: Opaque DuckDB transaction handle (bytes); ``None``
-            when not inside a transaction.
-    """
+    """Create a typed index under a negotiated provider algorithm profile."""
 
     attach_opaque_data: bytes
     schema_path: SchemaPath
     name: str
-    table_name: str
-    index_type: str = ""
-    constraint_type: IndexConstraintType = IndexConstraintType.NONE
-    expressions: list[str] = field(default_factory=list)
+    definition: Annotated[IndexDefinition, ArrowType(pa.binary())]
     on_conflict: OnConflict = OnConflict.ERROR
-    options: dict[str, str] = field(default_factory=dict)
     transaction_opaque_data: bytes | None = None
+
+    def __post_init__(self) -> None:
+        """Require the complete definition and a consistent owning schema."""
+        self.definition.__post_init__()
+        OnConflict(self.on_conflict)
+        if not self.name or "\0" in self.name:
+            raise ValueError("index name must be a nonempty raw identifier")
+
+    def serialize_to_bytes(self) -> bytes:
+        """Revalidate mutable nested records before dispatch."""
+        self.__post_init__()
+        return super().serialize_to_bytes()
 
 
 # ---------------------------------------------------------------------------
@@ -2174,6 +2282,7 @@ class TableProducerState(_VgiCallStateHolder, ProducerState):
                 attach_plaintext=self._attach_pt,
             ),
             attach_opaque_data=attach_catalog_bytes(self._attach_pt),
+            transaction_opaque_data=worker._unwrap_transaction_for(self._call.init_call),
         )
         # Re-derive pushdown filters before any fallback initial_state() call so
         # manual consumers see the same required/current state after HTTP rehydrate.
@@ -2366,6 +2475,7 @@ class TableInOutExchangeState(_VgiCallStateHolder, ExchangeState):
                 attach_plaintext=self._attach_pt,
             ),
             attach_opaque_data=attach_catalog_bytes(self._attach_pt),
+            transaction_opaque_data=worker._unwrap_transaction_for(self._call.init_call),
         )
         self._auto_apply = func_cls._should_auto_apply_filters()
         if self._call.init_call.pushdown_filters is not None:
@@ -3364,7 +3474,7 @@ class VgiProtocol(Protocol):
     # The wire name carries the major version, so an incompatible major is a
     # *different* protocol and therefore a 404 -- an answer every proxy, WAF and
     # load balancer understands without an Arrow parser, and one that lets
-    # ``vgi.v2`` and a future ``vgi.v3`` be served side by side while clients
+    # ``vgi.v2`` and ``vgi.v3`` be served side by side while clients
     # migrate. That matters here specifically: the DuckDB extension ships to
     # users and cannot be flag-dayed.
     #
@@ -3372,11 +3482,15 @@ class VgiProtocol(Protocol):
     # name, which left the six implementations disagreeing four ways -- Python
     # ``VgiProtocol``, Java and C# ``VgiService``, Go the framework default
     # ``Service``, TypeScript ``vgi`` -- so no client could address them all.
-    protocol_name: ClassVar[str] = "vgi.v2"
-    protocol_version: ClassVar[str] = "2.2.0"
+    protocol_name: ClassVar[str] = "vgi.v3"
+    protocol_version: ClassVar[str] = "3.0.0"
 
     def bind(self, request: BindRequest) -> BindResponse:
         """Resolve output schema and validate arguments."""
+        ...
+
+    def table_function_projection(self, request: TableFunctionProjectionRequest) -> TableFunctionProjectionResponse:
+        """Accept optional scalar outputs before optimizer rewrite, or decline normally."""
         ...
 
     def init(self, request: InitRequest) -> Stream[ProcessState, GlobalInitResponse]:
@@ -3542,6 +3656,16 @@ class VgiProtocol(Protocol):
         """Rollback a transaction."""
         ...
 
+    def catalog_query_prepare(self, request: CatalogQueryPrepareRequest) -> CatalogQueryPrepareResult:
+        """Authorize and describe the negotiated query or statement without executing it."""
+        ...
+
+    def catalog_query_release(
+        self, attach_opaque_data: bytes, prepared_query_token: bytes, transaction_opaque_data: bytes | None = None
+    ) -> None:
+        """Idempotently release an owned preparation; existing executions retain their lifetime."""
+        ...
+
     # ========== Catalog - Schemas ==========
 
     def catalog_schemas(
@@ -3564,8 +3688,45 @@ class VgiProtocol(Protocol):
         comment: str | None = None,
         tags: dict[str, str] | None = None,
         transaction_opaque_data: bytes | None = None,
+        options: bytes | None = None,
     ) -> None:
         """Create a new schema."""
+        ...
+
+    def catalog_schema_option_definitions(
+        self,
+        attach_opaque_data: bytes,
+        path: SchemaPath,
+        transaction_opaque_data: bytes | None = None,
+    ) -> OptionDefinitions:
+        """Discover literal option definitions for an existing or proposed schema."""
+        ...
+
+    def catalog_schema_alter_metadata(
+        self,
+        attach_opaque_data: bytes,
+        path: SchemaPath,
+        changes: bytes,
+        ignore_not_found: bool = False,
+        transaction_opaque_data: bytes | None = None,
+    ) -> None:
+        """Atomically apply a CatalogMetadataChanges patch under the selected DDL profile."""
+        ...
+
+    def catalog_schema_alter_options(
+        self,
+        attach_opaque_data: bytes,
+        path: SchemaPath,
+        changes: bytes,
+        transaction_opaque_data: bytes | None = None,
+    ) -> None:
+        """Atomically SET/RESET schema options under the selected capability."""
+        ...
+
+    def catalog_dependencies(
+        self, attach_opaque_data: bytes, transaction_opaque_data: bytes | None = None
+    ) -> DependencySnapshot:
+        """Read a complete dependency graph under vgi.catalog.dependencies.read.v1."""
         ...
 
     def catalog_schema_drop(
@@ -3652,6 +3813,42 @@ class VgiProtocol(Protocol):
 
     def catalog_table_create(self, request: TableCreateRequest) -> None:
         """Create a new table."""
+        ...
+
+    def catalog_table_constraints_apply(self, request: ConstraintsApplyRequest) -> ConstraintSnapshot:
+        """Atomically apply canonical changes at the expected table revision."""
+        ...
+
+    def catalog_table_option_definitions(
+        self,
+        attach_opaque_data: bytes,
+        schema_path: list[str],
+        name: str,
+        transaction_opaque_data: bytes | None = None,
+    ) -> OptionDefinitions:
+        """Discover provider table-option definitions under the read profile."""
+        ...
+
+    def catalog_table_alter_options(
+        self,
+        attach_opaque_data: bytes,
+        schema_path: list[str],
+        name: str,
+        changes: bytes,
+        transaction_opaque_data: bytes | None = None,
+    ) -> None:
+        """Apply an IPC OptionChanges record atomically."""
+        ...
+
+    def catalog_table_alter_layout(
+        self,
+        attach_opaque_data: bytes,
+        schema_path: list[str],
+        name: str,
+        changes: bytes,
+        transaction_opaque_data: bytes | None = None,
+    ) -> None:
+        """Apply an IPC TableLayoutChange under its explicit existing-data mode."""
         ...
 
     def catalog_table_drop(
@@ -3773,7 +3970,7 @@ class VgiProtocol(Protocol):
         attach_opaque_data: bytes,
         schema_path: SchemaPath,
         name: str,
-        column_name: str,
+        column_path: list[str],
         comment: str | None = None,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
@@ -3798,6 +3995,7 @@ class VgiProtocol(Protocol):
         attach_opaque_data: bytes,
         schema_path: SchemaPath,
         name: str,
+        column_path: list[str],
         column_definition: bytes,
         ignore_not_found: bool = False,
         if_column_not_exists: bool = False,
@@ -3811,7 +4009,7 @@ class VgiProtocol(Protocol):
         attach_opaque_data: bytes,
         schema_path: SchemaPath,
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool = False,
         if_column_exists: bool = False,
         cascade: bool = False,
@@ -3825,7 +4023,7 @@ class VgiProtocol(Protocol):
         attach_opaque_data: bytes,
         schema_path: SchemaPath,
         name: str,
-        column_name: str,
+        column_path: list[str],
         new_column_name: str,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
@@ -3838,12 +4036,12 @@ class VgiProtocol(Protocol):
         attach_opaque_data: bytes,
         schema_path: SchemaPath,
         name: str,
-        column_name: str,
-        expression: str,
+        column_path: list[str],
+        expression: bytes,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
-        """Set the default value expression for a column."""
+        """Set a column default using one canonical SqlExpression IPC record."""
         ...
 
     def catalog_table_column_default_drop(
@@ -3851,7 +4049,7 @@ class VgiProtocol(Protocol):
         attach_opaque_data: bytes,
         schema_path: SchemaPath,
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
@@ -3863,12 +4061,13 @@ class VgiProtocol(Protocol):
         attach_opaque_data: bytes,
         schema_path: SchemaPath,
         name: str,
+        column_path: list[str],
         column_definition: bytes,
-        expression: str | None = None,
+        expression: bytes | None = None,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
-        """Change the type of a column."""
+        """Change a column type, optionally using canonical SqlExpression IPC."""
         ...
 
     def catalog_table_not_null_drop(
@@ -3876,7 +4075,7 @@ class VgiProtocol(Protocol):
         attach_opaque_data: bytes,
         schema_path: SchemaPath,
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
@@ -3888,7 +4087,7 @@ class VgiProtocol(Protocol):
         attach_opaque_data: bytes,
         schema_path: SchemaPath,
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
@@ -3915,6 +4114,11 @@ class VgiProtocol(Protocol):
         definition: str,
         on_conflict: OnConflict,
         transaction_opaque_data: bytes | None = None,
+        aliases: list[str] | None = None,
+        security: str = "regular",
+        comment: str | None = None,
+        tags: dict[str, str] | None = None,
+        column_comments: dict[str, str] | None = None,
     ) -> None:
         """Create a new view."""
         ...
@@ -3953,6 +4157,19 @@ class VgiProtocol(Protocol):
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Set or clear the comment on a view."""
+        ...
+
+    def catalog_view_column_comment_set(
+        self,
+        attach_opaque_data: bytes,
+        schema_path: SchemaPath,
+        name: str,
+        column_path: list[str],
+        comment: str | None = None,
+        ignore_not_found: bool = False,
+        transaction_opaque_data: bytes | None = None,
+    ) -> None:
+        """Set or clear a view output comment; column_path has one raw component."""
         ...
 
     # ========== Catalog - Macros ===========
@@ -4002,6 +4219,16 @@ class VgiProtocol(Protocol):
         transaction_opaque_data: bytes | None = None,
     ) -> IndexesResponse:
         """Get information about an index. Returns 0 or 1 items."""
+        ...
+
+    def catalog_index_option_definitions(
+        self,
+        attach_opaque_data: bytes,
+        table: bytes,
+        algorithm: str,
+        transaction_opaque_data: bytes | None = None,
+    ) -> OptionDefinitions:
+        """Discover typed option definitions for an exact table and algorithm."""
         ...
 
     def catalog_index_create(self, request: IndexCreateRequest) -> None:

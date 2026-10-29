@@ -22,6 +22,7 @@ from dataclasses import dataclass
 import pyarrow as pa
 from vgi_rpc.rpc._types import MethodType, rpc_methods  # type: ignore[attr-defined]
 
+from vgi.catalog.capabilities import CatalogCapabilities
 from vgi.catalog.catalog_interface import (
     AttachCatalogInfo,
     CatalogInfo,
@@ -38,6 +39,30 @@ from vgi.catalog.catalog_interface import (
     TableInfo,
     ViewInfo,
 )
+from vgi.catalog.constraints import (
+    ConstraintChange,
+    ConstraintDefinition,
+    ConstraintInfo,
+    ConstraintsApplyRequest,
+    ConstraintSnapshot,
+    ForeignKeyDefinition,
+)
+from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot, ObjectDependency
+from vgi.catalog.indexes import IndexDefinition, IndexKey
+from vgi.catalog.layout import SortKey, SqlExpression, TableLayout, TableLayoutChange
+from vgi.catalog.macros import MacroOverload, MacroParameter
+from vgi.catalog.metadata_changes import CatalogMetadataChanges
+from vgi.catalog.options import OptionChanges, OptionDefinitions, OptionState
+from vgi.catalog.query import (
+    CatalogQueryPrepareRequest,
+    CatalogQueryPrepareResult,
+    ClientQueryCapabilities,
+    QueryCapabilities,
+    QueryEvaluationContext,
+    QueryObjectReference,
+)
+from vgi.catalog.sql import SqlStatement
+from vgi.column_path import RequiredFilterPaths
 from vgi.invocation import GlobalInitResponse
 from vgi.protocol import (
     AggregateBindRequest,
@@ -70,6 +95,7 @@ from vgi.protocol import (
     TableFunctionCardinalityRequest,
     TableFunctionDynamicToStringRequest,
     TableFunctionPlanRequest,
+    TableFunctionProjectionRequest,
     TableFunctionStatisticsRequest,
     VgiProtocol,
 )
@@ -88,15 +114,52 @@ INFO_TYPES: tuple[type, ...] = (
     CopyFromFormatInfo,
 )
 
+# Shared successor-contract records are emitted in every SDK during protocol
+# preparation, before the catalog methods using them are frozen. Keep a single
+# inventory for schemas and typed models, including otherwise opaque IPC bodies.
+SHARED_CONTRACT_TYPES: tuple[type, ...] = (
+    MacroParameter,
+    MacroOverload,
+    ClientQueryCapabilities,
+    QueryCapabilities,
+    QueryEvaluationContext,
+    QueryObjectReference,
+    CatalogQueryPrepareRequest,
+    CatalogQueryPrepareResult,
+    CatalogCapabilities,
+    CatalogMetadataChanges,
+    CatalogObjectRef,
+    ObjectDependency,
+    DependencySnapshot,
+    OptionDefinitions,
+    SqlExpression,
+    SqlStatement,
+    ForeignKeyDefinition,
+    ConstraintDefinition,
+    ConstraintInfo,
+    ConstraintChange,
+    ConstraintSnapshot,
+    ConstraintsApplyRequest,
+    IndexKey,
+    IndexDefinition,
+    SortKey,
+    TableLayout,
+    TableLayoutChange,
+    OptionChanges,
+    OptionState,
+    RequiredFilterPaths,
+)
+
 # Extra dataclasses whose ARROW_SCHEMA is referenced by methods whose return
 # type is `bytes` (raw IPC). Not inferable from method signatures alone.
 EXTRA_RESPONSE_TYPES: tuple[type, ...] = (
+    *SHARED_CONTRACT_TYPES,
     ScanFunctionResult,  # catalog_table_{scan,insert,update,delete}_function_get
     ScanBranchesResult,  # catalog_table_scan_branches_get (top-level wrapper)
     ScanBranch,  # one entry inside ScanBranchesResult.branches (binary blob)
     ScanSplit,  # one entry inside PlanResponse.splits (binary blob)
     AttachCatalogInfo,  # one entry inside CatalogAttachResult.attach_catalogs (binary blob)
-    ForeignKeyInfo,  # one entry inside TableInfo.foreign_key_constraints (binary blob)
+    ForeignKeyInfo,  # legacy convenience record; no longer carried by TableInfo
     # The struct row type of CatalogContentsResponse.schemas. It is inline (a
     # struct column, not a blob), so the catalog_contents result schema already
     # spells it out; it is also emitted standalone so each language's generated
@@ -117,6 +180,8 @@ EXTRA_RESPONSE_TYPES: tuple[type, ...] = (
 # Emitted for the languages that need to CHECK these shapes: Java (its records
 # mirror them) and C++ (it hand-builds them, and had no way to verify that).
 REQUEST_TYPES: tuple[type, ...] = (
+    ConstraintsApplyRequest,
+    CatalogQueryPrepareRequest,
     AggregateBindRequest,
     AggregateCombineRequest,
     AggregateDestructorRequest,
@@ -146,6 +211,7 @@ REQUEST_TYPES: tuple[type, ...] = (
     TableFunctionCardinalityRequest,
     TableFunctionDynamicToStringRequest,
     TableFunctionPlanRequest,
+    TableFunctionProjectionRequest,
     TableFunctionStatisticsRequest,
 )
 

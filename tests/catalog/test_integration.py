@@ -9,6 +9,8 @@ The module-level _catalog_pool is replaced with a fresh pool between tests
 to ensure each test gets a fresh worker process with a fresh InMemoryCatalog.
 """
 
+from __future__ import annotations
+
 import sys
 from collections.abc import Iterator
 
@@ -18,9 +20,14 @@ from vgi_rpc import WorkerPool
 
 from vgi import schema
 from vgi.catalog import MacroType, OnConflict, SchemaObjectType, SerializedSchema
+from vgi.catalog.constraints import ConstraintDefinition, ConstraintKind
+from vgi.catalog.evaluation_context import QueryEvaluationContext
+from vgi.catalog.macros import legacy_macro_fields, normalize_macro_overloads
 from vgi.client import Client
 from vgi.client import catalog_mixin as _cm
 from vgi.client.catalog_mixin import CatalogClientError
+
+from .typing_helpers import CatalogObjectArgs, CatalogPathArgs, present
 
 CATALOG_WORKER = f"{sys.executable} -m vgi._test_fixtures.catalog"
 
@@ -166,7 +173,7 @@ class TestCatalogTables:
     """Test table operations via client→worker round-trip."""
 
     def test_table_create_and_get(self) -> None:
-        """Can create and retrieve a table with constraints."""
+        """Metadata-only catalogs return the explicit empty canonical list."""
         client = Client(CATALOG_WORKER)
         result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
 
@@ -179,9 +186,7 @@ class TestCatalogTables:
             name="users",
             columns=columns,
             on_conflict=OnConflict.ERROR,
-            not_null_constraints=[0],
-            unique_constraints=[[0]],
-            check_constraints=[],
+            constraint_definitions=[],
         )
 
         table = client.table_get(
@@ -194,8 +199,33 @@ class TestCatalogTables:
         assert table.name == "users"
         assert table.schema_path == ["main"]
         assert table.columns == columns
-        assert table.not_null_constraints == [0]
-        assert table.unique_constraints == [[0]]
+        assert table.constraints == []
+        assert table.definition_revision is None
+
+    def test_metadata_only_catalog_rejects_constraint_creation_and_mutation(self) -> None:
+        """An unqualified catalog cannot claim or silently ignore enforcement."""
+        client = Client(CATALOG_WORKER)
+        result = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
+        args: CatalogObjectArgs = dict(
+            attach_opaque_data=result.attach_opaque_data, schema_path=["main"], name="constrained"
+        )
+        version = client.catalog_version(attach_opaque_data=result.attach_opaque_data)
+        columns = pa.schema([pa.field("id", pa.int64(), nullable=False)])
+        with pytest.raises(CatalogClientError, match="vgi.constraint.create.v1"):
+            client.table_create(
+                **args,
+                columns=SerializedSchema(columns.serialize().to_pybytes()),
+                constraint_definitions=[
+                    ConstraintDefinition(kind=ConstraintKind.NOT_NULL, column_paths=[["id"]]).serialize_to_bytes()
+                ],
+            )
+        assert client.table_get(**args) is None
+        assert client.catalog_version(attach_opaque_data=result.attach_opaque_data) == version
+        client.table_create(**args, columns=SerializedSchema(schema(id=pa.int64()).serialize().to_pybytes()))
+        for operation in (client.table_not_null_set, client.table_not_null_drop):
+            with pytest.raises(CatalogClientError, match="vgi.constraint.mutate.v1"):
+                operation(**args, column_path=["id"])
+        assert present(client.table_get(**args)).constraints == []
 
     def test_table_get_nonexistent(self) -> None:
         """Getting nonexistent table returns None."""
@@ -312,6 +342,7 @@ class TestCatalogViews:
             schema_path=["main"],
             name="user_view",
             definition="SELECT * FROM users",
+            aliases=["a.b", 'with"quote'],
             on_conflict=OnConflict.ERROR,
         )
 
@@ -322,8 +353,20 @@ class TestCatalogViews:
         )
 
         assert view is not None
+        assert view.aliases == ["a.b", 'with"quote']
         assert view.name == "user_view"
         assert view.definition == "SELECT * FROM users"
+
+    def test_aliases_survive_rename_and_comment_update(self) -> None:
+        """Metadata-only mutations retain output identifiers."""
+        client = Client(CATALOG_WORKER)
+        attached = client.catalog_attach(name="memory", options={}, data_version_spec=None, implementation_version=None)
+        target: CatalogPathArgs = dict(attach_opaque_data=attached.attach_opaque_data, schema_path=["main"])
+        client.view_create(**target, name="old", definition="SELECT 1 AS x", aliases=["a.b"])
+        client.view_rename(**target, name="old", new_name="renamed")
+        client.view_comment_set(**target, name="renamed", comment="kept")
+        info = client.view_get(**target, name="renamed")
+        assert info is not None and info.aliases == ["a.b"] and info.comment == "kept"
 
     def test_view_drop(self) -> None:
         """Can create and drop a view."""
@@ -561,8 +604,15 @@ class TestCatalogMacros:
             schema_path=["main"],
             name="double",
             macro_type=MacroType.SCALAR,
-            parameters=["x"],
-            definition="x * 2",
+            overloads=normalize_macro_overloads(
+                macro_type=(MacroType.SCALAR).value,
+                schema_path=["main"],
+                parameters=["x"],
+                definition="x * 2",
+                parameter_default_values=None,
+                arguments_schema=None,
+                evaluation_context=QueryEvaluationContext(),
+            ),
         )
 
         macro = client.macro_get(
@@ -575,8 +625,8 @@ class TestCatalogMacros:
         assert macro.name == "double"
         assert macro.schema_path == ["main"]
         assert macro.macro_type == MacroType.SCALAR
-        assert macro.parameters == ["x"]
-        assert macro.definition == "x * 2"
+        assert [p.name for p in macro.overloads[0].parameters] == ["x"]
+        assert macro.overloads[0].definition == "x * 2"
 
     def test_macro_drop(self) -> None:
         """Can create and drop a macro."""
@@ -588,8 +638,15 @@ class TestCatalogMacros:
             schema_path=["main"],
             name="to_drop",
             macro_type=MacroType.SCALAR,
-            parameters=["x"],
-            definition="x",
+            overloads=normalize_macro_overloads(
+                macro_type=(MacroType.SCALAR).value,
+                schema_path=["main"],
+                parameters=["x"],
+                definition="x",
+                parameter_default_values=None,
+                arguments_schema=None,
+                evaluation_context=QueryEvaluationContext(),
+            ),
         )
 
         client.macro_drop(
@@ -640,16 +697,30 @@ class TestCatalogMacros:
             schema_path=["main"],
             name="scalar_one",
             macro_type=MacroType.SCALAR,
-            parameters=["x"],
-            definition="x",
+            overloads=normalize_macro_overloads(
+                macro_type=(MacroType.SCALAR).value,
+                schema_path=["main"],
+                parameters=["x"],
+                definition="x",
+                parameter_default_values=None,
+                arguments_schema=None,
+                evaluation_context=QueryEvaluationContext(),
+            ),
         )
         client.macro_create(
             attach_opaque_data=result.attach_opaque_data,
             schema_path=["main"],
             name="table_one",
             macro_type=MacroType.TABLE,
-            parameters=["n"],
-            definition="SELECT * FROM range(n)",
+            overloads=normalize_macro_overloads(
+                macro_type=(MacroType.TABLE).value,
+                schema_path=["main"],
+                parameters=["n"],
+                definition="SELECT * FROM range(n)",
+                parameter_default_values=None,
+                arguments_schema=None,
+                evaluation_context=QueryEvaluationContext(),
+            ),
         )
 
         scalar_macros = client.schema_contents(
@@ -682,9 +753,15 @@ class TestCatalogMacros:
             schema_path=["main"],
             name="clamp",
             macro_type=MacroType.SCALAR,
-            parameters=["val", "lo", "hi"],
-            definition="GREATEST(lo, LEAST(hi, val))",
-            parameter_default_values=defaults,
+            overloads=normalize_macro_overloads(
+                macro_type=(MacroType.SCALAR).value,
+                schema_path=["main"],
+                parameters=["val", "lo", "hi"],
+                definition="GREATEST(lo, LEAST(hi, val))",
+                parameter_default_values=defaults,
+                arguments_schema=None,
+                evaluation_context=QueryEvaluationContext(),
+            ),
         )
 
         macro = client.macro_get(
@@ -694,8 +771,15 @@ class TestCatalogMacros:
         )
 
         assert macro is not None
-        assert macro.parameter_default_values is not None
-        restored = macro.parameter_default_values
+        assert (
+            legacy_macro_fields(macro.overloads, evaluation_context=QueryEvaluationContext())[
+                "parameter_default_values"
+            ]
+            is not None
+        )
+        restored = legacy_macro_fields(macro.overloads, evaluation_context=QueryEvaluationContext())[
+            "parameter_default_values"
+        ]
         assert restored.num_rows == 1
         assert set(restored.schema.names) == {"lo", "hi"}
         assert restored.column("lo").type == pa.int64()

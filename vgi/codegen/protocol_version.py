@@ -9,11 +9,9 @@ custom_metadata key. The semver comes from ``VgiProtocol.protocol_version``.
 
 Workflow:
 
-1. Bump ``VgiProtocol.protocol_version`` in ``vgi/protocol.py``.
-2. ``uv run vgi-gen-protocol-version > vgi/protocol_version.txt``.
-3. Also regenerate ``vgi_protocol_constants.hpp`` in the C++ tree (see
-   ``vgi.codegen.cpp_constants``).
-4. Commit both regenerated files in the same change.
+1. Set ``VgiProtocol.protocol_name`` and ``protocol_version`` in ``vgi/protocol.py``.
+2. Run ``python scripts/regen_generated.py --require-all`` with all SDK roots configured.
+3. Commit the regenerated version, names, registries and contract fixtures together.
 
 ``tests/test_generated_protocol_version.py`` enforces that the checked-in
 file matches what the generator would emit right now — CI catches a stale

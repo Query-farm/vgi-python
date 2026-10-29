@@ -1,6 +1,6 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
-r"""Emit vgi-csharp's ``IVgiService``: the whole ``vgi.v2`` registry, for vgi-csharp.
+r"""Emit vgi-csharp's ``IVgiService``: the whole ``vgi.v3`` registry, for vgi-csharp.
 
 vgi-rpc-csharp registers a protocol by reflecting over a C# interface: every
 method is a wire method (``BindAsync`` is ``bind``), its parameters derive the
@@ -11,7 +11,7 @@ stream's header record. So the interface *is* the registration table, and this
 module generates it from :class:`vgi.protocol.VgiProtocol` (see
 :mod:`vgi.codegen._registry` for the model and the reasons):
 
-- every ``vgi.v2`` method, typed with the records and enums
+- every ``vgi.v3`` method, typed with the records and enums
   :mod:`vgi.codegen.csharp_types` already generates, so the derivation
   reproduces the reference schemas exactly;
 - a default interface method body on every one that throws vgi-csharp's
@@ -41,6 +41,7 @@ rendered interface back by vgi-rpc-csharp's ``SchemaDerivation`` rules.
 from __future__ import annotations
 
 import enum
+import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -76,6 +77,10 @@ CSHARP_RAW_RESULTS: dict[str, str] = {
 
 #: The C# type a stream method returns (inside its ``Task``).
 CSHARP_STREAM_TYPE = "RpcStream<StreamState>"
+
+#: Preserve canonical projection-envelope bytes until the service validates its
+#: exact schema, single row/batch and complete framing. The wire stays binary.
+CSHARP_RAW_PARAMS = {("table_function_projection", "request")}
 
 _CTX = "ICallContext? ctx = null"
 
@@ -122,6 +127,8 @@ def _default(p: RegistryParam, clr: str) -> str | None:
         return "true" if value else "false"
     if isinstance(value, enum.Enum):
         return f"{clr}.{csharp_types._pascal(value.name)}"
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=True)
     raise GeneratorError(f"{p.name}: cannot render the default {value!r} in C#")
 
 
@@ -132,14 +139,19 @@ def _param(m: RegistryMethod, p: RegistryParam, model: csharp_types._Model) -> C
         raise GeneratorError(f"{origin}: C# parameter {name} does not convert back to its wire name")
     nullable = "?" if p.field.nullable else ""
     token = f"<c>{csharp_types._xml_text(str(p.field.type))}</c>{', nullable' if p.field.nullable else ''}"
-    if p.record is not None:
+    if (m.name, p.name) in CSHARP_RAW_PARAMS:
+        require_binary(p.field, origin, "a canonical record's raw envelope")
+        clr = "byte[]"
+        doc = f"The packed <c>{p.record}</c> envelope, validated by the service ({token})."
+        attrs: tuple[str, ...] = ()
+    elif p.record is not None:
         require_binary(p.field, origin, "a record's column")
         record = csharp_types.csharp_name(p.record)
         if record not in model.records:
             raise GeneratorError(f"{origin}: {record} is not a generated C# record")
         clr = record
         doc = f"The packed <c>{p.record}</c> ({token})."
-        attrs: tuple[str, ...] = ()
+        attrs = ()
     else:
         mapped = csharp_types._map(p.field.type, p.annotation, model=model, origin=origin)
         clr = mapped.clr.replace(_GENERIC_NS, "")
@@ -180,7 +192,7 @@ def _method_name(wire: str) -> str:
 
 
 def csharp_methods(methods: Sequence[RegistryMethod] | None = None) -> list[CSharpMethod]:
-    """Every ``vgi.v2`` method as vgi-csharp declares it."""
+    """Every ``vgi.v3`` method as vgi-csharp declares it."""
     methods = registry_methods() if methods is None else methods
     model = csharp_types.build_model()
     check_raw_results(CSHARP_RAW_RESULTS, methods, what="CSHARP_RAW_RESULTS")
@@ -229,7 +241,7 @@ def _render_method(cm: CSharpMethod) -> list[str]:
 
 _INTERFACE_DOC = """\
 /// <summary>
-/// The <c>vgi.v2</c> protocol: every method a VGI worker serves, generated from the reference
+/// The <c>vgi.v3</c> protocol: every method a VGI worker serves, generated from the reference
 /// (<c>vgi.protocol.VgiProtocol</c> in vgi-python).
 /// </summary>
 /// <remarks>
@@ -237,7 +249,7 @@ _INTERFACE_DOC = """\
 /// below <em>are</em> the wire contract: a parameter's CLR type and nullability derive its
 /// params-schema column, the return type derives the <c>result</c> column, and
 /// <c>[StreamHeader]</c> names a stream's header. They reproduce the reference's schemas exactly,
-/// which is what makes <c>vgi_rpc.Reflection.v1</c> report one <c>vgi.v2</c> hash in every SDK. The
+/// which is what makes <c>vgi_rpc.Reflection.v1</c> report one <c>vgi.v3</c> hash in every SDK. The
 /// protocol is the unit of optionality: every method is registered, whether or not this worker
 /// implements it.</para>
 /// <para>Every method has a default body that answers <c>UNIMPLEMENTED</c> /
@@ -362,7 +374,7 @@ class CSharpRegistry(RegistryBackend):
             elif inner.startswith("RpcStream<"):
                 kind = MethodKind.STREAM
                 if hm := re.search(r"\[StreamHeader\(typeof\((\w+)\)\)\]", attrs):
-                    expect(hm.group(1) in headers, f"{name}: [StreamHeader] {hm.group(1)} is no vgi.v2 header")
+                    expect(hm.group(1) in headers, f"{name}: [StreamHeader] {hm.group(1)} is no vgi.v3 header")
                     header = headers[hm.group(1)]
             else:
                 kind = MethodKind.UNARY

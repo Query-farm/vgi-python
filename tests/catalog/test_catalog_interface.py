@@ -37,7 +37,11 @@ from vgi.catalog.catalog_interface import (
     OrderPreservation,
     ReadOnlyCatalogInterface,
 )
+from vgi.catalog.evaluation_context import QueryEvaluationContext
+from vgi.catalog.macros import normalize_macro_overloads
+from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.exceptions import CatalogReadOnlyError
+from vgi.protocol import ClientCapabilities
 
 # Common test data
 TEST_ATTACH_ID = AttachOpaqueData(b"test")
@@ -81,6 +85,7 @@ class MinimalCatalog(CatalogInterface):
         options: dict[str, Any],
         data_version_spec: str | None,
         implementation_version: str | None,
+        client_capabilities: "ClientCapabilities | None" = None,
         ctx: Any = None,
     ) -> CatalogAttachResult:
         """Attach to catalog."""
@@ -238,6 +243,16 @@ def _not_implemented_test_cases() -> list[tuple[str, str, Callable[[MinimalCatal
             ),
         ),
         (
+            "schema_alter_metadata",
+            "Schema metadata alteration not implemented",
+            lambda c: c.schema_alter_metadata(
+                attach_opaque_data=TEST_ATTACH_ID,
+                transaction_opaque_data=None,
+                path=["main"],
+                changes=CatalogMetadataChanges(),
+            ),
+        ),
+        (
             "schema_drop",
             "Schema drop not implemented",
             lambda c: c.schema_drop(
@@ -268,9 +283,7 @@ def _not_implemented_test_cases() -> list[tuple[str, str, Callable[[MinimalCatal
                 name="table",
                 columns=SerializedSchema(b""),
                 on_conflict=OnConflict.ERROR,
-                not_null_constraints=[],
-                unique_constraints=[],
-                check_constraints=[],
+                constraint_definitions=[],
             ),
         ),
         (
@@ -294,9 +307,16 @@ def _not_implemented_test_cases() -> list[tuple[str, str, Callable[[MinimalCatal
                 schema_path=["main"],
                 name="my_macro",
                 macro_type=MacroType.SCALAR,
-                parameters=["x"],
-                definition="x * 2",
                 on_conflict=OnConflict.ERROR,
+                overloads=normalize_macro_overloads(
+                    macro_type=(MacroType.SCALAR).value,
+                    schema_path=["main"],
+                    parameters=["x"],
+                    definition="x * 2",
+                    parameter_default_values=None,
+                    arguments_schema=None,
+                    evaluation_context=QueryEvaluationContext(),
+                ),
             ),
         ),
         (
@@ -347,6 +367,7 @@ class MinimalReadOnlyCatalog(ReadOnlyCatalogInterface):
         options: dict[str, Any],
         data_version_spec: str | None,
         implementation_version: str | None,
+        client_capabilities: "ClientCapabilities | None" = None,
         ctx: Any = None,
     ) -> CatalogAttachResult:
         """Attach to catalog."""
@@ -442,6 +463,15 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
             ),
         ),
         (
+            "schema_alter_metadata",
+            lambda c: c.schema_alter_metadata(
+                attach_opaque_data=TEST_ATTACH_ID,
+                transaction_opaque_data=None,
+                path=["main"],
+                changes=CatalogMetadataChanges(),
+            ),
+        ),
+        (
             "schema_drop",
             lambda c: c.schema_drop(
                 attach_opaque_data=TEST_ATTACH_ID,
@@ -460,9 +490,7 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
                 name="table",
                 columns=SerializedSchema(b""),
                 on_conflict=OnConflict.ERROR,
-                not_null_constraints=[],
-                unique_constraints=[],
-                check_constraints=[],
+                constraint_definitions=[],
             ),
         ),
         (
@@ -515,9 +543,16 @@ def _readonly_test_cases() -> list[tuple[str, Callable[[MinimalReadOnlyCatalog],
                 schema_path=["main"],
                 name="my_macro",
                 macro_type=MacroType.SCALAR,
-                parameters=["x"],
-                definition="x * 2",
                 on_conflict=OnConflict.ERROR,
+                overloads=normalize_macro_overloads(
+                    macro_type=(MacroType.SCALAR).value,
+                    schema_path=["main"],
+                    parameters=["x"],
+                    definition="x * 2",
+                    parameter_default_values=None,
+                    arguments_schema=None,
+                    evaluation_context=QueryEvaluationContext(),
+                ),
             ),
         ),
         (

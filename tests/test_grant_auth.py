@@ -7,7 +7,7 @@ automation as an ordinary bearer". These tests close that loop through
 vgi-python's own HTTP surface (``create_app``), not vgi-rpc in isolation:
 
 - with ``VGI_RPC_GRANT_KEYS`` set, ``issue_grant`` mints a sealed grant and a
-  ``vgi.v2`` call presenting it is authenticated as the grant's owner;
+  ``vgi.v3`` call presenting it is authenticated as the grant's owner;
 - a worker that overrides ``resolve_token`` has it consulted for bearers;
 - the shared vectors (``vgi_rpc/conformance/grant_token_vectors.json``) are
   accepted and rejected through the full chain;
@@ -73,7 +73,7 @@ def _header_authenticate(req: Any) -> AuthContext:
 
 
 def _whoami(app: Any, *, bearer: str) -> str:
-    """Call ``peer_auth_echo`` (a vgi.v2 scalar function) and return its principal."""
+    """Call ``peer_auth_echo`` (a vgi.v3 scalar function) and return its principal."""
     client = _SyncTestClient(app, default_headers={"Authorization": f"Bearer {bearer}"})
     with Client.from_http("http://vgi.test", httpx_client=client) as vgi:
         out = list(
@@ -136,7 +136,7 @@ class TestGrantKeyConfiguration:
 
 
 class TestSealedGrantEndToEnd:
-    """issue_grant with fresh auth, then a vgi.v2 call with ``Bearer <grant>``, as the owner."""
+    """issue_grant with fresh auth, then a vgi.v3 call with ``Bearer <grant>``, as the owner."""
 
     def test_minted_grant_authenticates_as_its_owner(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Minted grant authenticates as its owner."""

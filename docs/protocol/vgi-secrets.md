@@ -1,7 +1,7 @@
 # VGI Secrets
 
 **Status:** Normative. It records the contract the DuckDB extension and the SDKs already implement.
-**Protocol:** `vgi.v2`. No wire change.
+**Protocol:** `vgi.v3`. No wire change.
 **Reference implementations:** client, `BuildSecretsBatch` and `ExtractVgiSecrets` in the DuckDB
 extension; worker, `SecretsAccessor` and `ResolvedSecrets` in vgi-python `vgi/table_function.py`.
 

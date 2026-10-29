@@ -56,6 +56,7 @@ from vgi.catalog import (
 )
 from vgi.catalog.descriptors import Catalog, Schema
 from vgi.invocation import BindResponse, GlobalInitResponse
+from vgi.protocol import ClientCapabilities
 from vgi.schema_utils import schema as build_schema
 from vgi.table_function import BindParams, InitParams, ProcessParams, TableFunctionGenerator
 from vgi.table_in_out_function import TableInOutGenerator
@@ -336,6 +337,7 @@ class SimpleScan(TableFunctionGenerator[None, "_ScanState"]):
         state.cursor = len(state.rows)
         arrow_arrays = [pa.array(col, type=state.schema.field(i).type) for i, col in enumerate(col_arrays)]
         out.emit(pa.RecordBatch.from_arrays(arrow_arrays, schema=state.schema))
+        out.finish()
 
 
 @dataclass(kw_only=True)
@@ -599,6 +601,7 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
         options: dict[str, Any],
         data_version_spec: str | None,
         implementation_version: str | None,
+        client_capabilities: ClientCapabilities | None = None,
         ctx: Any | None = None,
     ) -> CatalogAttachResult:
         del options, data_version_spec, implementation_version, ctx
@@ -653,11 +656,7 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
             name=name,
             schema_path=schema_path,
             columns=SerializedSchema(full.serialize().to_pybytes()),
-            not_null_constraints=[],
-            unique_constraints=[],
-            check_constraints=[],
-            primary_key_constraints=[],
-            foreign_key_constraints=[],
+            constraints=[],
             write_result_modes={
                 operation: _table_result_mode(name)
                 for operation, supported in (("insert", True), ("update", ud), ("delete", ud))

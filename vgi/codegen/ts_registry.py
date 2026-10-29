@@ -1,6 +1,6 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
-r"""Emit vgi-typescript's ``vgi-service.ts``: the whole ``vgi.v2`` registry, for vgi-typescript.
+r"""Emit vgi-typescript's ``vgi-service.ts``: the whole ``vgi.v3`` registry, for vgi-typescript.
 
 ``@query-farm/vgi-rpc`` registers methods explicitly --
 ``protocol.unary(name, {params, result, handler})`` and
@@ -10,7 +10,7 @@ registry has to carry the schemas themselves. This module generates, from
 :class:`vgi.protocol.VgiProtocol` (see :mod:`vgi.codegen._registry` for the
 model and the reasons):
 
-- ``VGI_V2_METHODS``: the registration table. Every ``vgi.v2`` method with its
+- ``VGI_V3_METHODS``: the registration table. Every ``vgi.v3`` method with its
   wire name, its ``VgiService`` key, and its params / result / header schemas,
   written in the vgi-typescript Arrow facade's DSL by
   :mod:`vgi.codegen.ts_schemas`' own field renderer, so they are the reference
@@ -124,7 +124,7 @@ def _field_ts_type(f: pa.Field[Any], origin: str) -> str:
 
 @dataclass(frozen=True)
 class TsMethod:
-    """One rendered ``vgi.v2`` method."""
+    """One rendered ``vgi.v3`` method."""
 
     method: RegistryMethod
     key: str
@@ -141,7 +141,7 @@ def _result_type(m: RegistryMethod) -> str | None:
 
 
 def ts_methods(methods: Sequence[RegistryMethod] | None = None) -> list[TsMethod]:
-    """Every ``vgi.v2`` method as vgi-typescript declares it."""
+    """Every ``vgi.v3`` method as vgi-typescript declares it."""
     methods = registry_methods() if methods is None else methods
     keys = identifiers((m.name for m in methods), camel, what="VgiService key")
     return [TsMethod(m, keys[m.name], m.schema_names.params, _result_type(m)) for m in methods]
@@ -307,12 +307,12 @@ export function producerStream<S>(callbacks: Omit<VgiProducerStream<S>, "kind">)
 """
 
 _SERVICE_DOC = [
-    "The `vgi.v2` protocol: every method a VGI worker serves, generated from the",
+    "The `vgi.v3` protocol: every method a VGI worker serves, generated from the",
     "reference (`vgi.protocol.VgiProtocol` in vgi-python).",
     "",
     "The protocol is the unit of optionality: every method is registered, whether",
     "or not this worker implements it, so `vgi_rpc.Reflection.v1` reports one",
-    "`vgi.v2` hash in every SDK. Build an implementation by spreading handlers",
+    "`vgi.v3` hash in every SDK. Build an implementation by spreading handlers",
     "over {@link UNIMPLEMENTED_VGI_SERVICE}; register it with",
     "{@link registerVgiService}. Never change a signature here by hand:",
     "regenerate it, so the change comes from the protocol.",
@@ -339,11 +339,11 @@ function unimplementedStream(method: string): VgiStream {
 }
 
 /**
- * Register every `vgi.v2` method on *protocol*, with the reference's schemas
- * from {@link VGI_V2_METHODS} and the handlers from *service*.
+ * Register every `vgi.v3` method on *protocol*, with the reference's schemas
+ * from {@link VGI_V3_METHODS} and the handlers from *service*.
  */
 export function registerVgiService(protocol: Protocol, service: VgiService): Protocol {
-  for (const m of VGI_V2_METHODS) {
+  for (const m of VGI_V3_METHODS) {
     if (m.type === "unary") {
       const handler = service[m.key] as (params: object, ctx: CallContext) => ReturnType<UnaryHandler>;
       protocol.unary(m.name, {
@@ -442,7 +442,7 @@ def _render_body(model: Sequence[RegistryMethod]) -> str:
     lines.append("// The registration table")
     lines.append("// " + "-" * 76)
     lines.append("")
-    lines += _jsdoc(["One `vgi.v2` method: its wire name, its `VgiService` member, and its schemas."], "")
+    lines += _jsdoc(["One `vgi.v3` method: its wire name, its `VgiService` member, and its schemas."], "")
     lines += [
         "export type VgiMethodSpec =",
         "  | {",
@@ -466,13 +466,13 @@ def _render_body(model: Sequence[RegistryMethod]) -> str:
     ]
     lines += _jsdoc(
         [
-            "Every `vgi.v2` method, sorted by wire name, with the reference's",
+            "Every `vgi.v3` method, sorted by wire name, with the reference's",
             "params / result / header schemas. This table is what",
             "{@link registerVgiService} registers, so it is what reflection hashes.",
         ],
         "",
     )
-    lines.append("export const VGI_V2_METHODS: readonly VgiMethodSpec[] = [")
+    lines.append("export const VGI_V3_METHODS: readonly VgiMethodSpec[] = [")
     lines += specs
     lines.append("];")
 

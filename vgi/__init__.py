@@ -79,6 +79,7 @@ from vgi.filter_v2_builder import (
     type_payload,
     value_payload,
 )
+from vgi.invocation import BindRepeatability
 from vgi.metadata import (
     ArgumentMonotonicity,
     CatalogFunctionType,
@@ -99,6 +100,8 @@ from vgi.metadata import (
 from vgi.protocol import (
     BindRequest,
     InitRequest,
+    TableFunctionProjectionRequest,
+    TableFunctionProjectionResponse,
     VgiOutputCollector,
 )
 from vgi.scalar_function import (
@@ -132,6 +135,8 @@ from vgi.worker import Worker
 from vgi.write_results import WriteOperation, WriteResultMode, write_changes_batch, write_result_schema
 
 __all__ = [
+    "TableFunctionProjectionRequest",
+    "TableFunctionProjectionResponse",
     "AggregateBindParams",
     "AggregateFunction",
     "WriteOperation",
@@ -151,6 +156,7 @@ __all__ = [
     "argument_specs_to_schema",
     "parameter_default_values_from_specs",
     "BindRequest",
+    "BindRepeatability",
     "ColumnBounds",
     "ColumnRefNode",
     "ComparisonNode",

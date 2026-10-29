@@ -83,26 +83,86 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast, final, overload
 import pyarrow as pa
 from vgi_rpc.rpc import AuthContext, CallContext, Stream, current_auth, serve_stdio
 
-from vgi import attach_header
+from vgi import attach_capabilities, attach_header
 from vgi._redact import short_hash
 from vgi.aggregate_function import AggregateBindParams, AggregateFunction
 from vgi.argument_spec import ArgumentSpec, extract_argument_specs
 from vgi.arguments import Arguments
 from vgi.catalog import CatalogInterface
 from vgi.catalog.attach_option import AttachOptionSpec, extract_attach_option_specs
+from vgi.catalog.capabilities import (
+    CATALOG_DEPENDENCIES_READ,
+    COLUMN_NESTED_ADD,
+    COLUMN_NESTED_COMMENT,
+    COLUMN_NESTED_DEFAULT,
+    COLUMN_NESTED_DROP,
+    COLUMN_NESTED_NULLABILITY,
+    COLUMN_NESTED_RENAME,
+    COLUMN_NESTED_TYPE,
+    CONSTRAINT_CREATE,
+    CONSTRAINT_ENFORCE,
+    CONSTRAINT_MUTATE,
+    CONSTRAINT_RECORDS_READ,
+    INDEX_DEFINITION_CREATE,
+    INDEX_DEFINITION_READ,
+    INDEX_DROP,
+    ROW_SCALAR_EXPRESSION,
+    SCHEMA_LIFECYCLE,
+    SCHEMA_METADATA_ALTER,
+    SCHEMA_OPTIONS_ALTER,
+    SCHEMA_OPTIONS_CREATE,
+    SCHEMA_OPTIONS_READ,
+    TABLE_LAYOUT_ALTER_FUTURE,
+    TABLE_LAYOUT_ALTER_REWRITE,
+    TABLE_LAYOUT_CREATE,
+    TABLE_LAYOUT_READ,
+    TABLE_METADATA_CREATE,
+    TABLE_OPTIONS_ALTER,
+    TABLE_OPTIONS_CREATE,
+    TABLE_OPTIONS_READ,
+    TRANSACTION_DDL,
+    VIEW_BARRIER_CREATE,
+    VIEW_BARRIER_READ,
+    CatalogCapabilities,
+)
 from vgi.catalog.catalog_interface import (
     AttachOpaqueData,
     CatalogAttachResult,
+    IndexInfo,
+    MacroInfo,
     OnConflict,
+    SchemaInfo,
     SchemaObjectType,
     SerializedSchema,
     SqlExpression,
+    TableInfo,
     TransactionOpaqueData,
+    ViewInfo,
     _validate_at_params,
     serialize_column_statistics,
 )
+from vgi.catalog.column_metadata import validate_column_metadata
+from vgi.catalog.constraints import (
+    ConstraintDefinition,
+    ConstraintEnforcement,
+    ConstraintsApplyRequest,
+    ConstraintSnapshot,
+    ForeignKeyMatch,
+    ReferentialAction,
+    constraint_definitions,
+    validate_constraint_schema,
+)
+from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot
+from vgi.catalog.indexes import IndexConstraintType, IndexDefinition
+from vgi.catalog.layout import LayoutChangeMode, LayoutCoverage, TableLayout, TableLayoutChange
+from vgi.catalog.metadata_changes import CatalogMetadataChanges
+from vgi.catalog.options import OptionChanges, OptionDefinitions
+from vgi.catalog.query import QUERY_EXECUTOR, CatalogQueryPrepareRequest, CatalogQueryPrepareResult
 from vgi.catalog.secret_type import SecretTypeSpec
 from vgi.catalog.setting import SettingSpec, extract_setting_specs
+from vgi.catalog.sql import column_expressions
+from vgi.column_path import column_definition as decode_column_definition
+from vgi.column_path import column_path_key
 from vgi.exceptions import (
     InvalidArgumentError,
     NotFoundError,
@@ -118,6 +178,7 @@ from vgi.invocation import (
     GlobalInitResponse,
 )
 from vgi.logging_config import LogFormat, LogLevel
+from vgi.logical_types import require_logical_profiles, require_logical_values
 from vgi.otel import VgiTracer, get_noop_tracer
 from vgi.protocol import (
     BindRequest,
@@ -145,6 +206,8 @@ from vgi.protocol import (
     TableFunctionDynamicToStringRequest,
     TableFunctionDynamicToStringResponse,
     TableFunctionPlanRequest,
+    TableFunctionProjectionRequest,
+    TableFunctionProjectionResponse,
     TableFunctionStatisticsRequest,
     TableInOutExchangeState,
     TableProducerState,
@@ -156,7 +219,7 @@ from vgi.protocol import (
 )
 from vgi.rpc_server import build_rpc_server
 from vgi.scalar_function import ScalarFunctionGenerator
-from vgi.schema_path import schema_path_display, schema_path_key
+from vgi.schema_path import schema_path_display, schema_path_key, validate_default_schema
 from vgi.table_buffering_function import (
     TableBufferingFunction,
     TableBufferingParams,
@@ -176,6 +239,7 @@ from vgi.table_function import (
 from vgi.table_in_out_function import (
     TableInOutGenerator,
 )
+from vgi.typed_values import TypedValueBatch
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -1341,6 +1405,8 @@ class Worker:
 
         def add_function(func_cls: type[Function], schema_path: list[str] | None) -> None:
             meta = func_cls.get_metadata()
+            if meta.name.casefold() == QUERY_EXECUTOR:
+                raise ValueError(f"{QUERY_EXECUTOR} is reserved for the catalog query executor")
             if schema_path is not None:
                 key = (schema_path_key(schema_path), meta.name)
                 bucket = schema_registry.setdefault(key, [])
@@ -1356,6 +1422,23 @@ class Worker:
         # them into, so a qualified call has to find them there.
         default_schema = catalog_obj.default_schema if catalog_obj is not None else "main"
         for func_cls in cls.functions:
+            if default_schema is None:
+                assert catalog_obj is not None
+                explicitly_registered = any(
+                    func_cls in schema.functions
+                    or any(
+                        func_cls is getattr(table, attribute, None)
+                        for table in schema.tables
+                        for attribute in ("function", "insert_function", "update_function", "delete_function")
+                    )
+                    for schema in catalog_obj.schemas
+                )
+                if explicitly_registered:
+                    continue
+                raise ValueError(
+                    f"Function '{func_cls.get_metadata().name}' requires explicit schema registration "
+                    "when catalog.default_schema is None"
+                )
             add_function(func_cls, [default_schema])
 
         # Declarative pattern: functions in catalog schemas
@@ -1493,7 +1576,7 @@ class Worker:
         result is hosted on every transport this worker serves (stdin/stdout,
         AF_UNIX or named pipe, TCP, the Iroh raw upstream and HTTP), after the
         worker's own protocol and in the order returned, so reflection's
-        ``list_protocols`` reports ``vgi.v2`` first and then these.
+        ``list_protocols`` reports ``vgi.v3`` first and then these.
 
         Called **once**, when the server is built (see
         [`build_rpc_server`][vgi.rpc_server.build_rpc_server]). It may consult
@@ -1513,7 +1596,7 @@ class Worker:
         error naming this method.
 
         Requests are routed on their ``vgi_rpc.protocol`` key, so hosting more
-        protocols never changes how a ``vgi.v2`` request is dispatched.
+        protocols never changes how a ``vgi.v3`` request is dispatched.
 
         Returns:
             The pairs to host; empty by default.
@@ -2515,6 +2598,11 @@ class Worker:
             ValueError: If function not found or ambiguous.
 
         """
+        if request.function_name == QUERY_EXECUTOR:
+            from vgi.query_execution import _check_bind, executor_type
+
+            _check_bind(request)
+            return executor_type(self)
         candidates = self._candidates_for(request.function_name, request.schema_path)
         if len(candidates) == 1:
             return candidates[0]
@@ -2622,10 +2710,10 @@ class Worker:
             crypto.seal_bytes(plaintext, key, aad=_attach_aad(current_auth()), version=_ATTACH_ENVELOPE_VERSION)
         )
 
-    def _unwrap_attach_full_with_auth(self, envelope: bytes | None, auth: AuthContext | None) -> bytes | None:
-        """Open an attach envelope under an explicit ``auth``, returning the full plaintext.
+    def _open_attach_context(self, envelope: bytes | None, auth: AuthContext | None) -> bytes | None:
+        """Authenticate and open an attachment, retaining its capability context.
 
-        The full framework plaintext is ``uuid(16) || catalog_bytes``. Pass-through
+        Strips only MetaWorker routing; the inner context stays cached. Pass-through
         when there is no signing key. Raises the uniform
         :meth:`_opaque_data_rejected` error on any open failure.
 
@@ -2674,6 +2762,287 @@ class Worker:
             self._attach_unwrap_cache.put(cache_key, plaintext)
         return plaintext
 
+    def _unwrap_attach_full_with_auth(self, envelope: bytes | None, auth: AuthContext | None) -> bytes | None:
+        """Return UUID/provider bytes without routing or capability context."""
+        plaintext = self._open_attach_context(envelope, auth)
+        if plaintext is None:
+            return None
+        try:
+            return attach_capabilities.split(plaintext)[1]
+        except ValueError as exc:
+            raise self._opaque_data_rejected("attach_opaque_data") from exc
+
+    def _catalog_agreement(self, envelope: bytes) -> CatalogCapabilities:
+        """Read the immutable selected profiles from an authenticated attach."""
+        plaintext = self._open_attach_context(envelope, current_auth())
+        assert plaintext is not None
+        try:
+            return attach_capabilities.agreement(plaintext)
+        except (ValueError, TypeError, KeyError) as exc:
+            raise self._opaque_data_rejected("attach_opaque_data") from exc
+
+    def _require_catalog_capability(
+        self,
+        envelope: bytes,
+        profile: str,
+        operation: str,
+        transaction: bytes | None = None,
+    ) -> None:
+        """Reject unsupported/stale operations before invoking provider effects."""
+        available = self._get_catalog().catalog_capabilities(attach_opaque_data=self._unwrap_attach(envelope))
+        selected = self._catalog_agreement(envelope)
+        selected.require(profile, available=available, operation=operation)
+        if transaction is not None and profile in CatalogCapabilities._known["ddl"]:
+            selected.require(TRANSACTION_DDL, available=available, operation=operation)
+
+    def _effective_catalog_capabilities(self, envelope: bytes) -> CatalogCapabilities:
+        selected = self._catalog_agreement(envelope)
+        available = self._get_catalog().catalog_capabilities(attach_opaque_data=self._unwrap_attach(envelope))
+        return available.select(selected)
+
+    def _require_dependency_transaction(self, attach: bytes, transaction: bytes | None, operation: str) -> None:
+        """Keep dependency-aware metadata and DDL in the negotiated transaction."""
+        if transaction is None:
+            return
+        selected = self._catalog_agreement(attach)
+        available = self._get_catalog().catalog_capabilities(attach_opaque_data=self._unwrap_attach(attach))
+        # Omitting the graph read profile cannot weaken a provider's dependency
+        # mutation contract. Legacy providers without it retain their behavior.
+        if CATALOG_DEPENDENCIES_READ in selected.read or CATALOG_DEPENDENCIES_READ in available.read:
+            self._require_catalog_capability(attach, TRANSACTION_DDL, operation)
+
+    @staticmethod
+    def _require_column_expression_profiles(
+        schema: pa.Schema,
+        selected: CatalogCapabilities,
+        operation: str,
+        owner_schema_path: list[str] | None = None,
+    ) -> bool:
+        """Validate canonical field expressions recursively without rewriting metadata.
+
+        DEFAULT and generated definitions use the mandatory owned scalar
+        representation, including fields nested inside struct, dictionary or
+        extension storage types. Receiving providers qualify execution support.
+        """
+        pending = list(schema)
+        found = False
+        while pending:
+            field = pending.pop()
+            if b"generated_expression" in (field.metadata or {}):
+                raise ValueError("generated columns require canonical SqlExpression metadata")
+            expressions = column_expressions(field)
+            if expressions.generated is not None and expressions.generation != "virtual":
+                raise NotImplementedError("stored generated columns are not supported")
+            for expression in (expressions.default, expressions.generated):
+                if expression is not None:
+                    if owner_schema_path is not None:
+                        expression.validate_owner(owner_schema_path)
+                    if expression.profile != ROW_SCALAR_EXPRESSION:
+                        raise ValueError("unsupported column expression profile")
+                    found = True
+            dtype = field.type
+            while isinstance(dtype, pa.BaseExtensionType) or pa.types.is_dictionary(dtype):
+                dtype = dtype.storage_type if isinstance(dtype, pa.BaseExtensionType) else dtype.value_type
+            pending.extend(dtype.field(index) for index in range(dtype.num_fields))
+        return found
+
+    def _validate_column_definition_expressions(
+        self,
+        attach: bytes,
+        transaction: bytes | None,
+        schema: pa.Schema,
+        owner_schema_path: list[str],
+        operation: str,
+    ) -> None:
+        """Validate CREATE/ADD expression metadata before provider effects."""
+        validate_column_metadata(schema)
+        found = self._require_column_expression_profiles(
+            schema, self._effective_catalog_capabilities(attach), operation, owner_schema_path
+        )
+        pending = list(schema)
+        while pending:
+            field = pending.pop()
+            if {b"default", b"generated_expression"}.intersection(field.metadata or {}):
+                raise ValueError("column definitions require canonical SqlExpression metadata, not legacy SQL text")
+            dtype = field.type
+            while isinstance(dtype, pa.BaseExtensionType) or pa.types.is_dictionary(dtype):
+                dtype = dtype.storage_type if isinstance(dtype, pa.BaseExtensionType) else dtype.value_type
+            pending.extend(dtype.field(index) for index in range(dtype.num_fields))
+        if found and transaction is not None:
+            self._require_catalog_capability(attach, TRANSACTION_DDL, operation)
+
+    @staticmethod
+    def _column_expression(payload: bytes, owner_schema_path: list[str]) -> SqlExpression:
+        """Decode the mandatory owned scalar representation without negotiation."""
+        expression = SqlExpression.deserialize_from_bytes(payload)
+        expression.validate_owner(owner_schema_path)
+        if expression.profile != ROW_SCALAR_EXPRESSION:
+            raise ValueError("unsupported column expression profile")
+        return expression
+
+    @staticmethod
+    def _schema_for_capabilities(info: SchemaInfo, selected: CatalogCapabilities) -> SchemaInfo:
+        if SCHEMA_OPTIONS_READ not in selected.read and info.options is not None:
+            return _dataclass_replace(info, options=None)
+        return info
+
+    def _check_existing_view_security(
+        self,
+        attach: bytes,
+        transaction: bytes | None,
+        path: list[str],
+        name: str,
+        *,
+        replace: bool = False,
+    ) -> None:
+        """An unaware caller cannot replace a barrier with an ordinary view."""
+        info = self._get_catalog().view_get(
+            attach_opaque_data=self._unwrap_attach(attach),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction, attach),
+            schema_path=path,
+            name=name,
+        )
+        if info is not None:
+            self._view_for_capabilities(info, self._effective_catalog_capabilities(attach))
+            if transaction is not None and info.security == "barrier":
+                self._require_catalog_capability(attach, TRANSACTION_DDL, "mutate barrier view")
+            if replace and info.security == "barrier":
+                self._require_catalog_capability(attach, VIEW_BARRIER_CREATE, "replace barrier view", transaction)
+
+    @staticmethod
+    def _view_for_capabilities(info: ViewInfo, selected: CatalogCapabilities) -> ViewInfo:
+        """Require barrier support even for discovery; never strip security metadata."""
+        ViewInfo.validate_security(info.security)
+        if info.security == "barrier":
+            selected.require(VIEW_BARRIER_READ, available=selected, operation="read barrier view")
+        return info
+
+    @staticmethod
+    def _macro_for_capabilities(info: MacroInfo, selected: CatalogCapabilities) -> MacroInfo:
+        """Validate mandatory macro families and their independently negotiated logical types."""
+        info.__post_init__()
+        for member in info.overloads:
+            for parameter in member.parameters:
+                if parameter.declared_type is not None:
+                    require_logical_profiles(parameter.declared_type, selected_profiles=selected.read)
+                if parameter.default_value is not None:
+                    require_logical_values(parameter.default_value, selected_profiles=selected.read)
+        return info
+
+    @staticmethod
+    def _index_for_capabilities(info: IndexInfo, selected: CatalogCapabilities) -> IndexInfo:
+        """Never expose typed definitions without the selected read profile."""
+        info.__post_init__()
+        selected.require(INDEX_DEFINITION_READ, available=selected, operation="read typed index")
+        definition = info.definition
+        require_logical_values(definition.options, selected_profiles=selected.read)
+        for key in definition.key_definitions():
+            if key.expression is not None:
+                selected.require(key.expression.profile, available=selected, operation="read index expression")
+        if definition.associated_constraint is not None:
+            selected.require(CONSTRAINT_RECORDS_READ, available=selected, operation="read associated index")
+        return info
+
+    def _require_index_definition_profiles(self, attach: bytes, definition: IndexDefinition) -> None:
+        """Gate expressions and enforcement before provider index construction."""
+        definition.__post_init__()
+        selected = self._effective_catalog_capabilities(attach)
+        require_logical_values(definition.options, selected_profiles=selected.read)
+        for key in definition.key_definitions():
+            if key.expression is not None:
+                self._require_catalog_capability(attach, key.expression.profile, "create index expression")
+        if definition.constraint_type != IndexConstraintType.NONE:
+            self._require_catalog_capability(attach, CONSTRAINT_ENFORCE, "create enforcing index")
+        if definition.associated_constraint is not None:
+            self._require_catalog_capability(attach, CONSTRAINT_MUTATE, "associate index with constraint")
+
+    @staticmethod
+    def _table_for_capabilities(info: TableInfo, selected: CatalogCapabilities) -> TableInfo:
+        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
+        validate_column_metadata(schema)
+        require_logical_profiles(schema, selected_profiles=selected.read)
+        Worker._require_column_expression_profiles(schema, selected, "read column expressions", info.schema_path)
+        infos = info.constraint_infos()
+        validate_constraint_schema(
+            schema, [item.definition for item in infos], trusted=[item.definition for item in infos if item.trusted]
+        )
+        if infos:
+            selected.require(CONSTRAINT_RECORDS_READ, available=selected, operation="read canonical constraints")
+            for item in infos:
+                if item.definition.check_expression is not None:
+                    selected.require(
+                        item.definition.check_expression.profile, available=selected, operation="read CHECK constraint"
+                    )
+        if CONSTRAINT_MUTATE in selected.ddl and not info.definition_revision:
+            raise ValueError("canonical mutation requires a nonempty table definition revision")
+        write_allowed = CONSTRAINT_ENFORCE in selected.write or not any(
+            item.enforcement == ConstraintEnforcement.ENFORCED for item in infos
+        )
+        return _dataclass_replace(
+            info,
+            write_result_modes=info.write_result_modes if write_allowed else {},
+            insert_function=info.insert_function if write_allowed else None,
+            update_function=info.update_function if write_allowed else None,
+            delete_function=info.delete_function if write_allowed else None,
+            options=info.options if TABLE_OPTIONS_READ in selected.read else None,
+            layout=info.layout
+            if (
+                TABLE_LAYOUT_READ in selected.read
+                and info.layout is not None
+                and all(
+                    expr.profile in selected.read
+                    for expr in (
+                        info.layout.partition_expressions() + [key.expression for key in info.layout.sort_keys()]
+                    )
+                )
+            )
+            else None,
+        )
+
+    def _require_constraint_definition_profiles(
+        self, attach: bytes, definitions: list[ConstraintDefinition], operation: str
+    ) -> None:
+        """Reject unqualified expression and propagating FK semantics before effects."""
+        for definition in definitions:
+            if definition.check_expression is not None:
+                self._require_catalog_capability(attach, definition.check_expression.profile, operation)
+            foreign_key = definition.foreign_key
+            if foreign_key is not None and (
+                foreign_key.match != ForeignKeyMatch.SIMPLE
+                or foreign_key.on_update not in {ReferentialAction.NO_ACTION, ReferentialAction.RESTRICT}
+                or foreign_key.on_delete not in {ReferentialAction.NO_ACTION, ReferentialAction.RESTRICT}
+            ):
+                raise NotImplementedError("additional foreign-key match/action profiles are not implemented")
+
+    def _check_table_constraint_write(
+        self, attach: bytes, transaction: bytes | None, path: list[str], name: str
+    ) -> None:
+        """Require canonical discovery and enforcement before exposing write endpoints."""
+        info = self._get_catalog().table_get(
+            attach_opaque_data=self._unwrap_attach(attach),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction, attach),
+            schema_path=path,
+            name=name,
+        )
+        if info is not None:
+            self._table_for_capabilities(info, self._effective_catalog_capabilities(attach))
+            if any(item.enforcement == ConstraintEnforcement.ENFORCED for item in info.constraint_infos()):
+                self._require_catalog_capability(attach, CONSTRAINT_ENFORCE, "write constrained table")
+
+    def _check_table_constraint_mutation(
+        self, attach: bytes, transaction: bytes | None, path: list[str], name: str
+    ) -> None:
+        """Legacy structural DDL must preserve canonical identities and revisions."""
+        info = self._get_catalog().table_get(
+            attach_opaque_data=self._unwrap_attach(attach),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction, attach),
+            schema_path=path,
+            name=name,
+        )
+        if info is not None and info.constraints:
+            self._table_for_capabilities(info, self._effective_catalog_capabilities(attach))
+            self._require_catalog_capability(attach, CONSTRAINT_MUTATE, "mutate constrained table", transaction)
+
     def _attach_catalog_name(self, envelope: bytes | None) -> str | None:
         """Read the catalog name MetaWorker sealed into an attach envelope.
 
@@ -2700,7 +3069,7 @@ class Worker:
         seals again. Used by [`MetaWorker`][] at ``catalog_attach`` — the one
         place that knows both the catalog name and the freshly minted attach.
         """
-        plaintext = self._unwrap_attach_full_with_auth(envelope, current_auth())
+        plaintext = self._open_attach_context(envelope, current_auth())
         assert plaintext is not None  # a non-None envelope always yields plaintext
         return self._seal_attach(attach_header.encode(catalog_name, plaintext))
 
@@ -2817,6 +3186,13 @@ class Worker:
         """
         return self._unwrap_transaction(envelope, attach_envelope) if envelope else None
 
+    def _unwrap_transaction_for(self, request: Any) -> TransactionOpaqueData | None:
+        """Open a function request's transaction without changing its sealed wire state."""
+        bind = getattr(request, "bind_call", request)
+        return self._unwrap_tx_opt(
+            getattr(bind, "transaction_opaque_data", None), getattr(bind, "attach_opaque_data", None) or b""
+        )
+
     def _get_catalog(self) -> CatalogInterface:
         """Get the [`CatalogInterface`][] instance for this worker.
 
@@ -2880,7 +3256,44 @@ class Worker:
         self._validate_required_settings(func_cls, request)
         self._validate_bind_shape(func_cls, request)
         instance = func_cls(logger=_logger)
-        return instance.bind(request, ctx=ctx, attach_plaintext=attach_plaintext)  # type: ignore[attr-defined, no-any-return]
+        if isinstance(instance, TableFunctionBase):
+            result = instance.bind(
+                request,
+                ctx=ctx,
+                attach_plaintext=attach_plaintext,
+                transaction_plaintext=self._unwrap_transaction_for(request),
+            )
+        else:
+            result = instance.bind(request, ctx=ctx, attach_plaintext=attach_plaintext)  # type: ignore[attr-defined]
+        if not isinstance(result, BindResponse):
+            raise TypeError("bind must return BindResponse")
+        result.__post_init__()
+        return result
+
+    def table_function_projection(
+        self, request: TableFunctionProjectionRequest, ctx: CallContext
+    ) -> TableFunctionProjectionResponse:
+        """Validate a pure optional projection proposal before any plan rewrite."""
+        request.__post_init__()
+        attach_plaintext = self._unwrap_attach_full(request.bind_call.attach_opaque_data)
+        func_cls = self._resolve_function(request.bind_call)
+        self._validate_required_settings(func_cls, request.bind_call)
+        self._validate_bind_shape(func_cls, request.bind_call)
+        if not issubclass(func_cls, TableFunctionGenerator):
+            raise ValueError("scalar projection only applies to ordinary source table functions")
+        params = func_cls._make_bind_params(
+            request.bind_call,
+            auth_context=ctx.auth,
+            attach_plaintext=attach_plaintext,
+            transaction_plaintext=self._unwrap_transaction_for(request),
+        )
+        result = func_cls.on_projection(params, request)
+        if params.secrets.needs_resolution:
+            raise ValueError("scalar projection cannot initiate secret resolution")
+        if not isinstance(result, TableFunctionProjectionResponse):
+            raise TypeError("on_projection must return TableFunctionProjectionResponse")
+        result.validate_request(request)
+        return result
 
     def _validate_bind_shape(self, func_cls: type[Function], request: BindRequest) -> None:
         """Reject a bind() call whose input_schema doesn't match the function's shape.
@@ -2946,7 +3359,12 @@ class Worker:
                 f" functions, but '{func_cls.__name__}' is not a TableFunctionGenerator."
             )
         return func_cls.cardinality(
-            func_cls._make_bind_params(request.bind_call, auth_context=ctx.auth, attach_plaintext=attach_plaintext)
+            func_cls._make_bind_params(
+                request.bind_call,
+                auth_context=ctx.auth,
+                attach_plaintext=attach_plaintext,
+                transaction_plaintext=self._unwrap_transaction_for(request),
+            )
         )
 
     def _current_split_anchor(self, request: Any, ctx: CallContext | None) -> bytes | None:
@@ -3099,7 +3517,12 @@ class Worker:
                 "scan planning only applies to table functions."
             )
             raise TypeError(msg)
-        params = func_cls._make_bind_params(request.bind_call, auth_context=ctx.auth, attach_plaintext=attach_plaintext)
+        params = func_cls._make_bind_params(
+            request.bind_call,
+            auth_context=ctx.auth,
+            attach_plaintext=attach_plaintext,
+            transaction_plaintext=self._unwrap_transaction_for(request),
+        )
         response = on_plan(params, request)
         if isinstance(response, PlanResponse):
             response = self._stamp_split_tokens(response, request, ctx)
@@ -3119,7 +3542,12 @@ class Worker:
         if not issubclass(func_cls, TableFunctionGenerator):
             return None
         stats = func_cls.statistics(
-            func_cls._make_bind_params(request.bind_call, auth_context=ctx.auth, attach_plaintext=attach_plaintext)
+            func_cls._make_bind_params(
+                request.bind_call,
+                auth_context=ctx.auth,
+                attach_plaintext=attach_plaintext,
+                transaction_plaintext=self._unwrap_transaction_for(request),
+            )
         )
         if not stats:
             return None
@@ -3150,6 +3578,7 @@ class Worker:
                 auth_context=ctx.auth,
                 execution_id=request.global_execution_id,
                 attach_plaintext=attach_plaintext,
+                transaction_plaintext=self._unwrap_transaction_for(request),
             )
             mapping = func_cls.dynamic_to_string(params, request.global_execution_id)
         except Exception:
@@ -3618,6 +4047,7 @@ class Worker:
             storage=cold_storage,
             auth_context=ctx.auth,
             attach_opaque_data=catalog_bytes,
+            transaction_opaque_data=self._unwrap_transaction_for(init_call),
             execution_id=request.execution_id,
             attach_id=attach_id,
             transaction_id=transaction_id,
@@ -4271,8 +4701,15 @@ class Worker:
         # off the wire, because serialized state reaches the access log in
         # plaintext — see VgiCallState in vgi/protocol.py.
         attach_plaintext = self._unwrap_attach_full(getattr(request.bind_call, "attach_opaque_data", None))
+        if request.bind_call.function_name == QUERY_EXECUTOR:
+            from vgi.query_execution import check_init
+
+            check_init(request)
         func_cls = self._resolve_function(request.bind_call)
         instance = func_cls(logger=_logger)
+        transaction_plaintext = (
+            self._unwrap_transaction_for(request) if isinstance(instance, TableFunctionBase) else None
+        )
 
         # A SPLIT init looks secondary — it joins an execution the planner already
         # minted — but it MUST run user code, because a split *names* work and only
@@ -4292,6 +4729,7 @@ class Worker:
                     request,
                     ctx=ctx,
                     attach_plaintext=attach_plaintext,
+                    transaction_plaintext=transaction_plaintext,
                     signing_key=self._signing_key,
                     current_anchor=(self._current_split_anchor(request, ctx) if request.split_tokens else None),
                 )
@@ -4369,6 +4807,7 @@ class Worker:
                 storage=cold_storage,
                 auth_context=ctx.auth,
                 attach_opaque_data=attach_catalog_bytes(attach_plaintext),
+                transaction_opaque_data=transaction_plaintext,
                 execution_id=init_response.execution_id,
                 attach_id=attach_id,
                 transaction_id=getattr(
@@ -4443,6 +4882,7 @@ class Worker:
                 ),
                 auth_context=ctx.auth,
                 attach_opaque_data=attach_catalog_bytes(attach_plaintext),
+                transaction_opaque_data=transaction_plaintext,
             )
             if request.pushdown_filters is not None:
                 current_filters = type(instance).pushdown_filters(
@@ -4543,6 +4983,7 @@ class Worker:
                 ),
                 auth_context=ctx.auth,
                 attach_opaque_data=attach_catalog_bytes(attach_plaintext),
+                transaction_opaque_data=transaction_plaintext,
                 # The key travels with the params because split_payloads is
                 # resolved lazily, per split, long after this frame.
                 signing_key=self._signing_key,
@@ -4663,7 +5104,34 @@ class Worker:
             options=options,
             data_version_spec=request.data_version_spec,
             implementation_version=request.implementation_version,
+            client_capabilities=request.client_capabilities,
             ctx=ctx,
+        )
+        validate_default_schema(result.default_schema)
+        available = cat.catalog_capabilities(attach_opaque_data=result.attach_opaque_data)
+        offered = request.client_capabilities.catalog if request.client_capabilities is not None else None
+        selected = available.select(offered)
+        if TRANSACTION_DDL in selected.transaction and not result.supports_transactions:
+            raise ValueError("DDL transaction profile requires supports_transactions")
+        from vgi.query_execution import negotiate
+
+        minted = (
+            uuid.uuid4().bytes + bytes(result.attach_opaque_data) if result.attach_opaque_data is not None else None
+        )
+        query_offer = request.client_capabilities.query_pushdown if request.client_capabilities is not None else None
+        query_selected = (
+            negotiate(self, minted, query_offer, supports_transactions=result.supports_transactions)
+            if minted is not None
+            else None
+        )
+        result = _dataclass_replace(
+            result,
+            catalog_capabilities=available,
+            selected_capabilities=selected,
+            query_pushdown=query_selected,
+            attach_opaque_data_required=result.attach_opaque_data_required
+            or bool(selected.names())
+            or query_selected is not None,
         )
         # Mint the shard identity: prepend a fresh framework UUID to the
         # catalog's plaintext (``uuid(16) || catalog_bytes``), then seal. Storage
@@ -4671,9 +5139,13 @@ class Worker:
         # the random-nonce ciphertext or the (possibly non-unique) catalog bytes.
         # ``_unwrap_attach`` strips the UUID back off, so the catalog only ever
         # sees its own bytes. See ``_AttachUnwrapper``.
-        if result.attach_opaque_data is not None:
-            minted = uuid.uuid4().bytes + bytes(result.attach_opaque_data)
-            result = _dataclass_replace(result, attach_opaque_data=self._seal_attach(minted))
+        if minted is not None:
+            result = _dataclass_replace(
+                result,
+                attach_opaque_data=self._seal_attach(
+                    attach_capabilities.encode(minted, selected, query_offer=query_offer, query_selected=query_selected)
+                ),
+            )
         loggable = dict(cat.loggable_attach_options(options))
         self._log_catalog_lifecycle(
             "catalog.attach",
@@ -4815,8 +5287,9 @@ class Worker:
         for path_key in path_keys:
             if len(path_key) > 1 and path_key[:-1] not in path_key_set:
                 raise ValueError(f"Catalog returned schema path {list(path_key)!r} without its parent")
+        selected = self._effective_catalog_capabilities(attach_opaque_data)
         ordered = sorted(info_list, key=lambda info: len(info.path))
-        return SchemasResponse.from_infos(ordered)
+        return SchemasResponse.from_infos([self._schema_for_capabilities(info, selected) for info in ordered])
 
     def catalog_schema_get(
         self, attach_opaque_data: bytes, path: list[str], transaction_opaque_data: bytes | None = None
@@ -4829,7 +5302,10 @@ class Worker:
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             path=path,
         )
-        return SchemasResponse.from_optional(info)
+        selected = self._effective_catalog_capabilities(attach_opaque_data)
+        return SchemasResponse.from_optional(
+            self._schema_for_capabilities(info, selected) if info is not None else None
+        )
 
     def catalog_schema_create(
         self,
@@ -4839,10 +5315,23 @@ class Worker:
         comment: str | None = None,
         tags: dict[str, str] | None = None,
         transaction_opaque_data: bytes | None = None,
+        options: bytes | None = None,
     ) -> None:
         """Create a new schema."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "create schema")
+        schema_path_key(path)
+        if any("\0" in component for component in path):
+            raise ValueError("schema target components must contain no NUL")
+        if SCHEMA_LIFECYCLE in self._catalog_agreement(attach_opaque_data).ddl:
+            self._require_catalog_capability(
+                attach_opaque_data, SCHEMA_LIFECYCLE, "catalog_schema_create", transaction_opaque_data
+            )
         self._enrich_catalog_span(vgi_schema_path=path)
         cat = self._get_catalog()
+        if options is not None:
+            self._require_catalog_capability(
+                attach_opaque_data, SCHEMA_OPTIONS_CREATE, "catalog_schema_create", transaction_opaque_data
+            )
         cat.schema_create(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
@@ -4850,7 +5339,90 @@ class Worker:
             on_conflict=on_conflict,
             comment=comment,
             tags=tags or {},
+            options=TypedValueBatch.deserialize_from_bytes(options) if options is not None else None,
         )
+
+    def catalog_schema_option_definitions(
+        self,
+        attach_opaque_data: bytes,
+        path: list[str],
+        transaction_opaque_data: bytes | None = None,
+    ) -> OptionDefinitions:
+        """Return definitions only under a current, selected read profile."""
+        self._require_catalog_capability(attach_opaque_data, SCHEMA_OPTIONS_READ, "catalog_schema_option_definitions")
+        return self._get_catalog().schema_option_definitions(
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            path=path,
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
+        )
+
+    def catalog_schema_alter_metadata(
+        self,
+        attach_opaque_data: bytes,
+        path: list[str],
+        changes: bytes,
+        ignore_not_found: bool = False,
+        transaction_opaque_data: bytes | None = None,
+    ) -> None:
+        """Validate the full metadata patch before invoking the provider."""
+        self._require_catalog_capability(
+            attach_opaque_data, SCHEMA_METADATA_ALTER, "catalog_schema_alter_metadata", transaction_opaque_data
+        )
+        schema_path_key(path)
+        if any("\0" in component for component in path):
+            raise ValueError("schema metadata target components must contain no NUL")
+        patch = CatalogMetadataChanges.deserialize_from_bytes(changes)
+        self._get_catalog().schema_alter_metadata(
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
+            path=path,
+            changes=patch,
+            ignore_not_found=ignore_not_found,
+        )
+
+    def catalog_schema_alter_options(
+        self,
+        attach_opaque_data: bytes,
+        path: list[str],
+        changes: bytes,
+        transaction_opaque_data: bytes | None = None,
+    ) -> None:
+        """Apply the complete change under selected DDL/transaction profiles."""
+        self._require_catalog_capability(
+            attach_opaque_data, SCHEMA_OPTIONS_ALTER, "catalog_schema_alter_options", transaction_opaque_data
+        )
+        self._get_catalog().schema_alter_options(
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            path=path,
+            changes=OptionChanges.deserialize_from_bytes(changes),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
+        )
+
+    def catalog_query_prepare(self, request: CatalogQueryPrepareRequest) -> CatalogQueryPrepareResult:
+        """Prepare under the authenticated attachment's immutable query agreement."""
+        from vgi.query_execution import prepare
+
+        return prepare(self, request)
+
+    def catalog_query_release(
+        self, attach_opaque_data: bytes, prepared_query_token: bytes, transaction_opaque_data: bytes | None = None
+    ) -> None:
+        """Release this owner's receipt, including after expiry or capability withdrawal."""
+        from vgi.query_execution import release
+
+        release(self, attach_opaque_data, prepared_query_token, transaction_opaque_data)
+
+    def catalog_dependencies(
+        self, attach_opaque_data: bytes, transaction_opaque_data: bytes | None = None
+    ) -> DependencySnapshot:
+        """Read and validate a complete graph from one provider snapshot."""
+        self._require_catalog_capability(attach_opaque_data, CATALOG_DEPENDENCIES_READ, "catalog_dependencies")
+        result = self._get_catalog().catalog_dependencies(
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
+        )
+        result.__post_init__()
+        return result
 
     def catalog_schema_drop(
         self,
@@ -4861,6 +5433,14 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a schema."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "drop schema")
+        schema_path_key(path)
+        if any("\0" in component for component in path):
+            raise ValueError("schema target components must contain no NUL")
+        if SCHEMA_LIFECYCLE in self._catalog_agreement(attach_opaque_data).ddl:
+            self._require_catalog_capability(
+                attach_opaque_data, SCHEMA_LIFECYCLE, "catalog_schema_drop", transaction_opaque_data
+            )
         self._enrich_catalog_span(vgi_schema_path=path)
         cat = self._get_catalog()
         cat.schema_drop(
@@ -4886,7 +5466,8 @@ class Worker:
             path=path,
             type=SchemaObjectType.TABLE,
         )
-        return TablesResponse.from_infos(list(infos))
+        selected = self._effective_catalog_capabilities(attach_opaque_data)
+        return TablesResponse.from_infos([self._table_for_capabilities(info, selected) for info in infos])
 
     def catalog_schema_contents_views(
         self,
@@ -4903,7 +5484,8 @@ class Worker:
             path=path,
             type=SchemaObjectType.VIEW,
         )
-        return ViewsResponse.from_infos(list(infos))
+        selected = self._effective_catalog_capabilities(attach_opaque_data)
+        return ViewsResponse.from_infos([self._view_for_capabilities(info, selected) for info in infos])
 
     def catalog_schema_contents_functions(
         self,
@@ -4941,6 +5523,21 @@ class Worker:
         # Open the envelope first even on a cache hit: it is the auth check.
         attach = self._unwrap_attach(attach_opaque_data)
         version = cat.catalog_version(attach_opaque_data=attach, transaction_opaque_data=None)
+        selected = self._catalog_agreement(attach_opaque_data)
+        available = cat.catalog_capabilities(attach_opaque_data=attach)
+        effective = available.select(selected)
+        projected = bool(selected.names() or available.names())
+        projection_key = hashlib.sha256(effective.serialize_to_bytes()).hexdigest() if projected else ""
+
+        def build_response() -> CatalogContentsResponse:
+            response = self._catalog_contents_response(cat, attach, version, None, effective)
+            if projected:
+                etag = hashlib.sha256(
+                    effective.serialize_to_bytes() + catalog_contents_digest(response).encode()
+                ).hexdigest()
+                response = _dataclass_replace(response, etag=etag)
+            return response
+
         policy = cat.catalog_snapshot_policy
         if policy is not None and policy.delivery == "published":
             from vgi.catalog.contents_codec import decode_inventory
@@ -4952,13 +5549,14 @@ class Worker:
                 attach_opaque_data=attach,
                 attachment_scope=hashlib.sha256(attach_opaque_data).hexdigest(),
                 catalog_version=version,
+                capability_projection=projection_key,
             )
             built: CatalogContentsResponse | None = None
 
             def build() -> CatalogContentsResponse:
                 nonlocal built
                 if built is None:
-                    candidate = self._catalog_contents_response(cat, attach, version, None)
+                    candidate = build_response()
                     decode_inventory(candidate)
                     after_version = cat.catalog_version(attach_opaque_data=attach, transaction_opaque_data=None)
                     if after_version != version:
@@ -4979,6 +5577,11 @@ class Worker:
                 if response.etag is not None and response.etag == if_none_match:
                     return CatalogContentsResponse(catalog_version=version, etag=response.etag, not_modified=True)
                 return response
+        if projected:
+            response = build_response()
+            if response.etag == if_none_match:
+                return CatalogContentsResponse(catalog_version=version, etag=response.etag, not_modified=True)
+            return response
         if type(cat).catalog_contents_attach_independent and getattr(type(cat), "catalog_version_frozen", False):
             snapshot = self._contents_cache
             if snapshot is None or snapshot.catalog is not cat or snapshot.catalog_version != version:
@@ -5026,11 +5629,18 @@ class Worker:
         if policy is None or policy.delivery != "published":
             raise ValueError("catalog has no published snapshot policy")
         version = cat.catalog_version(attach_opaque_data=attach, transaction_opaque_data=None)
+        selected = self._catalog_agreement(attach_opaque_data)
+        available = cat.catalog_capabilities(attach_opaque_data=attach)
+        effective = available.select(selected)
+        projection_key = (
+            hashlib.sha256(effective.serialize_to_bytes()).hexdigest() if selected.names() or available.names() else ""
+        )
         request = SnapshotRequest(
             catalog=cat,
             attach_opaque_data=attach,
             attachment_scope=hashlib.sha256(attach_opaque_data).hexdigest(),
             catalog_version=version,
+            capability_projection=projection_key,
         )
         return self._catalog_snapshot_manager(policy).import_publication(request, manifest)
 
@@ -5044,11 +5654,18 @@ class Worker:
         if policy is None or policy.delivery != "published":
             raise ValueError("catalog has no published snapshot policy")
         version = cat.catalog_version(attach_opaque_data=attach, transaction_opaque_data=None)
+        selected = self._catalog_agreement(attach_opaque_data)
+        available = cat.catalog_capabilities(attach_opaque_data=attach)
+        effective = available.select(selected)
+        projection_key = (
+            hashlib.sha256(effective.serialize_to_bytes()).hexdigest() if selected.names() or available.names() else ""
+        )
         request = SnapshotRequest(
             catalog=cat,
             attach_opaque_data=attach,
             attachment_scope=hashlib.sha256(attach_opaque_data).hexdigest(),
             catalog_version=version,
+            capability_projection=projection_key,
         )
         manager = self._catalog_snapshot_manager(policy)
         return bool(manager.invalidate(manager.cache_key(request), manifest_id))
@@ -5061,6 +5678,7 @@ class Worker:
         attach: AttachOpaqueData,
         version: int,
         if_none_match: str | None,
+        selected: CatalogCapabilities | None = None,
     ) -> CatalogContentsResponse:
         """Ask the catalog for its contents and shape the typed wire response.
 
@@ -5082,7 +5700,23 @@ class Worker:
 
         from vgi.catalog.contents_codec import contents_digest, encode_inventory
 
-        categories = encode_inventory(list(result.schemas))
+        infos = [
+            _dataclass_replace(
+                item,
+                schema=Worker._schema_for_capabilities(item.schema, selected or CatalogCapabilities()),
+                tables=[Worker._table_for_capabilities(t, selected or CatalogCapabilities()) for t in item.tables],
+                views=[Worker._view_for_capabilities(v, selected or CatalogCapabilities()) for v in item.views],
+                scalar_macros=[
+                    Worker._macro_for_capabilities(m, selected or CatalogCapabilities()) for m in item.scalar_macros
+                ],
+                table_macros=[
+                    Worker._macro_for_capabilities(m, selected or CatalogCapabilities()) for m in item.table_macros
+                ],
+                indexes=[Worker._index_for_capabilities(ix, selected or CatalogCapabilities()) for ix in item.indexes],
+            )
+            for item in result.schemas
+        ]
+        categories = encode_inventory(infos)
         etag = result.etag
         if etag is None and type(cat).catalog_contents_etag == "content-hash":
             etag = contents_digest(categories)
@@ -5137,12 +5771,70 @@ class Worker:
             at_unit=at_unit,
             at_value=at_value,
         )
-        return TablesResponse.from_optional(info)
+        return TablesResponse.from_optional(
+            self._table_for_capabilities(info, self._effective_catalog_capabilities(attach_opaque_data))
+            if info is not None
+            else None
+        )
 
     def catalog_table_create(self, request: TableCreateRequest) -> None:
         """Create a new table."""
+        request.__post_init__()
+        self._require_dependency_transaction(
+            request.attach_opaque_data, request.transaction_opaque_data, "create table"
+        )
         self._enrich_catalog_span(vgi_schema_path=request.schema_path, vgi_table_name=request.name)
         cat = self._get_catalog()
+        if request.on_conflict == OnConflict.REPLACE:
+            self._check_table_constraint_mutation(
+                request.attach_opaque_data, request.transaction_opaque_data, request.schema_path, request.name
+            )
+        schema = pa.ipc.read_schema(pa.py_buffer(request.columns))
+        self._validate_column_definition_expressions(
+            request.attach_opaque_data,
+            request.transaction_opaque_data,
+            schema,
+            request.schema_path,
+            "create column expressions",
+        )
+        definitions = constraint_definitions(
+            request.constraint_definitions,
+            CatalogObjectRef(kind="table", schema_path=request.schema_path, name=request.name),
+        )
+        validate_constraint_schema(schema, definitions)
+        if definitions:
+            self._require_catalog_capability(
+                request.attach_opaque_data, CONSTRAINT_CREATE, "catalog_table_create", request.transaction_opaque_data
+            )
+            self._require_catalog_capability(request.attach_opaque_data, CONSTRAINT_ENFORCE, "catalog_table_create")
+            self._require_constraint_definition_profiles(
+                request.attach_opaque_data, definitions, "catalog_table_create"
+            )
+        require_logical_profiles(
+            schema,
+            selected_profiles=self._effective_catalog_capabilities(request.attach_opaque_data).read,
+        )
+        extra: dict[str, Any] = {}
+        for key, profile in (
+            ("options", TABLE_OPTIONS_CREATE),
+            ("layout", TABLE_LAYOUT_CREATE),
+            ("comment", TABLE_METADATA_CREATE),
+            ("tags", TABLE_METADATA_CREATE),
+        ):
+            value = getattr(request, key)
+            if value is not None:
+                self._require_catalog_capability(
+                    request.attach_opaque_data, profile, "catalog_table_create", request.transaction_opaque_data
+                )
+                extra[key] = value
+        if request.layout is not None:
+            request.layout.__post_init__()
+            for expression in request.layout.partition_expressions() + [
+                key.expression for key in request.layout.sort_keys()
+            ]:
+                self._require_catalog_capability(request.attach_opaque_data, expression.profile, "catalog_table_create")
+            if request.layout.coverage != LayoutCoverage.ALL_ROWS:
+                raise ValueError("new table layout must cover all rows")
         cat.table_create(
             attach_opaque_data=self._unwrap_attach(request.attach_opaque_data),
             transaction_opaque_data=self._unwrap_transaction(
@@ -5154,16 +5846,108 @@ class Worker:
             name=request.name,
             columns=SerializedSchema(request.columns),
             on_conflict=request.on_conflict,
-            not_null_constraints=list(request.not_null_constraints),
-            unique_constraints=[list(c) for c in request.unique_constraints],
-            check_constraints=list(request.check_constraints),
-            primary_key_constraints=(
-                [list(c) for c in request.primary_key_constraints] if request.primary_key_constraints else None
-            ),
-            foreign_key_constraints=(
-                list(request.foreign_key_constraints) if request.foreign_key_constraints else None
-            ),
+            constraint_definitions=list(request.constraint_definitions),
+            **extra,
         )
+
+    def catalog_table_constraints_apply(self, request: ConstraintsApplyRequest) -> ConstraintSnapshot:
+        """Validate the complete atomic request before invoking the provider once."""
+        request.__post_init__()
+        self._require_catalog_capability(
+            request.attach_opaque_data,
+            CONSTRAINT_MUTATE,
+            "catalog_table_constraints_apply",
+            request.transaction_opaque_data,
+        )
+        changes = request.constraint_changes()
+        definitions = [change.definition for change in changes if change.definition is not None]
+        self._require_constraint_definition_profiles(
+            request.attach_opaque_data, definitions, "catalog_table_constraints_apply"
+        )
+        if any(change.enforcement == ConstraintEnforcement.ENFORCED for change in changes):
+            self._require_catalog_capability(
+                request.attach_opaque_data, CONSTRAINT_ENFORCE, "catalog_table_constraints_apply"
+            )
+        result = self._get_catalog().table_constraints_apply(
+            _dataclass_replace(
+                request,
+                attach_opaque_data=self._unwrap_attach(request.attach_opaque_data),
+                transaction_opaque_data=self._unwrap_tx_opt(
+                    request.transaction_opaque_data, request.attach_opaque_data
+                ),
+            )
+        )
+        result.__post_init__()
+        if result.table != request.table:
+            raise ValueError("constraint mutation returned a different table")
+        return result
+
+    def catalog_table_option_definitions(
+        self,
+        attach_opaque_data: bytes,
+        schema_path: list[str],
+        name: str,
+        transaction_opaque_data: bytes | None = None,
+    ) -> OptionDefinitions:
+        """Return current provider definitions under the table-option read profile."""
+        self._require_catalog_capability(attach_opaque_data, TABLE_OPTIONS_READ, "catalog_table_option_definitions")
+        return self._get_catalog().table_option_definitions(
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
+            schema_path=schema_path,
+            name=name,
+        )
+
+    def catalog_table_alter_options(
+        self,
+        attach_opaque_data: bytes,
+        schema_path: list[str],
+        name: str,
+        changes: bytes,
+        transaction_opaque_data: bytes | None = None,
+    ) -> None:
+        """Check capabilities before applying the complete table-option change."""
+        self._require_catalog_capability(
+            attach_opaque_data, TABLE_OPTIONS_ALTER, "catalog_table_alter_options", transaction_opaque_data
+        )
+        self._get_catalog().table_alter_options(
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
+            schema_path=schema_path,
+            name=name,
+            changes=OptionChanges.deserialize_from_bytes(changes),
+        )
+
+    def catalog_table_alter_layout(
+        self,
+        attach_opaque_data: bytes,
+        schema_path: list[str],
+        name: str,
+        changes: bytes,
+        transaction_opaque_data: bytes | None = None,
+    ) -> None:
+        """Require the selected mode before asking a provider to alter its layout."""
+        value = TableLayoutChange.deserialize_from_bytes(changes)
+        profile = TABLE_LAYOUT_ALTER_REWRITE if value.mode == LayoutChangeMode.REWRITE else TABLE_LAYOUT_ALTER_FUTURE
+        self._require_catalog_capability(
+            attach_opaque_data, profile, "catalog_table_alter_layout", transaction_opaque_data
+        )
+        catalog = self._get_catalog()
+        args: dict[str, Any] = dict(
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
+            schema_path=schema_path,
+            name=name,
+        )
+        current = catalog.table_get(**args)
+        candidate = value.apply_to(
+            current.layout if current is not None and current.layout is not None else TableLayout()
+        )
+        for expression in candidate.partition_expressions() + [key.expression for key in candidate.sort_keys()]:
+            self._require_catalog_capability(attach_opaque_data, expression.profile, "catalog_table_alter_layout")
+        # The provider revalidates the candidate in its mutation snapshot, since
+        # another request may change the table after this capability check.
+        catalog.table_alter_layout(**args, changes=value)
 
     def catalog_table_drop(
         self,
@@ -5175,6 +5959,8 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a table."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "drop table")
+        self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_drop(
@@ -5268,6 +6054,7 @@ class Worker:
         writable_branch_function_name: str | None = None,
     ) -> bytes:
         """Get the insert function for a table. Returns `WriteFunctionResult` as IPC bytes."""
+        self._check_table_constraint_write(attach_opaque_data, transaction_opaque_data, schema_path, name)
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         result = cat.table_insert_function_get(
@@ -5287,6 +6074,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> bytes:
         """Get the update function for a table. Returns `WriteFunctionResult` as IPC bytes."""
+        self._check_table_constraint_write(attach_opaque_data, transaction_opaque_data, schema_path, name)
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         result = cat.table_update_function_get(
@@ -5305,6 +6093,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> bytes:
         """Get the delete function for a table. Returns `WriteFunctionResult` as IPC bytes."""
+        self._check_table_constraint_write(attach_opaque_data, transaction_opaque_data, schema_path, name)
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         result = cat.table_delete_function_get(
@@ -5325,6 +6114,7 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Set or clear the comment on a table."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "set table comment")
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_comment_set(
@@ -5341,12 +6131,17 @@ class Worker:
         attach_opaque_data: bytes,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         comment: str | None = None,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Set or clear the comment on a table column."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "set column comment")
+        if len(column_path_key(column_path)) > 1:
+            self._require_catalog_capability(
+                attach_opaque_data, COLUMN_NESTED_COMMENT, "catalog_table_column_comment_set", transaction_opaque_data
+            )
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_comment_set(
@@ -5354,7 +6149,7 @@ class Worker:
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
             name=name,
-            column_name=column_name,
+            column_path=column_path,
             comment=comment,
             ignore_not_found=ignore_not_found,
         )
@@ -5369,6 +6164,8 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Rename a table."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "rename table")
+        self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_rename(
@@ -5385,12 +6182,23 @@ class Worker:
         attach_opaque_data: bytes,
         schema_path: list[str],
         name: str,
+        column_path: list[str],
         column_definition: bytes,
         ignore_not_found: bool = False,
         if_column_not_exists: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Add a new column to a table."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "add column")
+        self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
+        if len(column_path_key(column_path)) > 1:
+            self._require_catalog_capability(
+                attach_opaque_data, COLUMN_NESTED_ADD, "catalog_table_column_add", transaction_opaque_data
+            )
+        field = decode_column_definition(column_definition, column_path, type_only=False)
+        self._validate_column_definition_expressions(
+            attach_opaque_data, transaction_opaque_data, pa.schema([field]), schema_path, "add column expressions"
+        )
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_add(
@@ -5398,6 +6206,7 @@ class Worker:
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
             name=name,
+            column_path=column_path,
             column_definition=SerializedSchema(column_definition),
             ignore_not_found=ignore_not_found,
             if_column_not_exists=if_column_not_exists,
@@ -5408,13 +6217,19 @@ class Worker:
         attach_opaque_data: bytes,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool = False,
         if_column_exists: bool = False,
         cascade: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a column from a table."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "drop column")
+        self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
+        if len(column_path_key(column_path)) > 1:
+            self._require_catalog_capability(
+                attach_opaque_data, COLUMN_NESTED_DROP, "catalog_table_column_drop", transaction_opaque_data
+            )
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_drop(
@@ -5422,7 +6237,7 @@ class Worker:
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
             name=name,
-            column_name=column_name,
+            column_path=column_path,
             ignore_not_found=ignore_not_found,
             if_column_exists=if_column_exists,
             cascade=cascade,
@@ -5433,12 +6248,19 @@ class Worker:
         attach_opaque_data: bytes,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         new_column_name: str,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Rename a column."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "rename column")
+        self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
+        if len(column_path_key(column_path)) > 1:
+            self._require_catalog_capability(
+                attach_opaque_data, COLUMN_NESTED_RENAME, "catalog_table_column_rename", transaction_opaque_data
+            )
+        column_path_key([new_column_name])
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_rename(
@@ -5446,7 +6268,7 @@ class Worker:
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
             name=name,
-            column_name=column_name,
+            column_path=column_path,
             new_column_name=new_column_name,
             ignore_not_found=ignore_not_found,
         )
@@ -5456,12 +6278,19 @@ class Worker:
         attach_opaque_data: bytes,
         schema_path: list[str],
         name: str,
-        column_name: str,
-        expression: str,
+        column_path: list[str],
+        expression: bytes,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
-        """Set the default value expression for a column."""
+        """Set the default using its mandatory owned canonical expression."""
+        definition = self._column_expression(expression, schema_path)
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "set column default")
+        self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
+        if len(column_path_key(column_path)) > 1:
+            self._require_catalog_capability(
+                attach_opaque_data, COLUMN_NESTED_DEFAULT, "catalog_table_column_default_set", transaction_opaque_data
+            )
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_default_set(
@@ -5469,8 +6298,8 @@ class Worker:
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
             name=name,
-            column_name=column_name,
-            expression=SqlExpression(expression),
+            column_path=column_path,
+            expression=definition,
             ignore_not_found=ignore_not_found,
         )
 
@@ -5479,11 +6308,17 @@ class Worker:
         attach_opaque_data: bytes,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Remove the default value from a column."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "drop column default")
+        self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
+        if len(column_path_key(column_path)) > 1:
+            self._require_catalog_capability(
+                attach_opaque_data, COLUMN_NESTED_DEFAULT, "catalog_table_column_default_drop", transaction_opaque_data
+            )
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_default_drop(
@@ -5491,7 +6326,7 @@ class Worker:
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
             name=name,
-            column_name=column_name,
+            column_path=column_path,
             ignore_not_found=ignore_not_found,
         )
 
@@ -5500,12 +6335,21 @@ class Worker:
         attach_opaque_data: bytes,
         schema_path: list[str],
         name: str,
+        column_path: list[str],
         column_definition: bytes,
-        expression: str | None = None,
+        expression: bytes | None = None,
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Change the type of a column."""
+        definition = self._column_expression(expression, schema_path) if expression is not None else None
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "change column type")
+        self._check_table_constraint_mutation(attach_opaque_data, transaction_opaque_data, schema_path, name)
+        if len(column_path_key(column_path)) > 1:
+            self._require_catalog_capability(
+                attach_opaque_data, COLUMN_NESTED_TYPE, "catalog_table_column_type_change", transaction_opaque_data
+            )
+        decode_column_definition(column_definition, column_path, type_only=True)
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_column_type_change(
@@ -5513,8 +6357,9 @@ class Worker:
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
             name=name,
+            column_path=column_path,
             column_definition=SerializedSchema(column_definition),
-            expression=SqlExpression(expression) if expression else None,
+            expression=definition,
             ignore_not_found=ignore_not_found,
         )
 
@@ -5523,11 +6368,18 @@ class Worker:
         attach_opaque_data: bytes,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Remove NOT NULL constraint from a column."""
+        self._require_catalog_capability(
+            attach_opaque_data, CONSTRAINT_MUTATE, "catalog_table_not_null_drop", transaction_opaque_data
+        )
+        if len(column_path_key(column_path)) > 1:
+            self._require_catalog_capability(
+                attach_opaque_data, COLUMN_NESTED_NULLABILITY, "catalog_table_not_null_drop", transaction_opaque_data
+            )
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_not_null_drop(
@@ -5535,7 +6387,7 @@ class Worker:
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
             name=name,
-            column_name=column_name,
+            column_path=column_path,
             ignore_not_found=ignore_not_found,
         )
 
@@ -5544,11 +6396,19 @@ class Worker:
         attach_opaque_data: bytes,
         schema_path: list[str],
         name: str,
-        column_name: str,
+        column_path: list[str],
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Add NOT NULL constraint to a column."""
+        self._require_catalog_capability(
+            attach_opaque_data, CONSTRAINT_MUTATE, "catalog_table_not_null_set", transaction_opaque_data
+        )
+        self._require_catalog_capability(attach_opaque_data, CONSTRAINT_ENFORCE, "catalog_table_not_null_set")
+        if len(column_path_key(column_path)) > 1:
+            self._require_catalog_capability(
+                attach_opaque_data, COLUMN_NESTED_NULLABILITY, "catalog_table_not_null_set", transaction_opaque_data
+            )
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
         cat.table_not_null_set(
@@ -5556,7 +6416,7 @@ class Worker:
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
             name=name,
-            column_name=column_name,
+            column_path=column_path,
             ignore_not_found=ignore_not_found,
         )
 
@@ -5580,6 +6440,8 @@ class Worker:
             schema_path=schema_path,
             name=name,
         )
+        if info is not None:
+            info = self._view_for_capabilities(info, self._effective_catalog_capabilities(attach_opaque_data))
         return ViewsResponse.from_optional(info)
 
     def catalog_view_create(
@@ -5590,9 +6452,27 @@ class Worker:
         definition: str,
         on_conflict: OnConflict,
         transaction_opaque_data: bytes | None = None,
+        aliases: list[str] | None = None,
+        security: str = "regular",
+        comment: str | None = None,
+        tags: dict[str, str] | None = None,
+        column_comments: dict[str, str] | None = None,
     ) -> None:
         """Create a new view."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "create view")
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_view_name=name)
+        aliases = [] if aliases is None else aliases
+        ViewInfo.validate_aliases(aliases)
+        ViewInfo.validate_security(security)
+        ViewInfo.validate_create_metadata(comment, tags, column_comments)
+        if security == "barrier":
+            self._require_catalog_capability(
+                attach_opaque_data, VIEW_BARRIER_CREATE, "catalog_view_create", transaction_opaque_data
+            )
+        if on_conflict == OnConflict.REPLACE:
+            self._check_existing_view_security(
+                attach_opaque_data, transaction_opaque_data, schema_path, name, replace=True
+            )
         cat = self._get_catalog()
         cat.view_create(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
@@ -5600,6 +6480,11 @@ class Worker:
             schema_path=schema_path,
             name=name,
             definition=definition,
+            aliases=list(aliases),
+            security=security,
+            comment=comment,
+            tags=dict(tags or {}),
+            column_comments=dict(column_comments or {}),
             on_conflict=on_conflict,
         )
 
@@ -5613,7 +6498,9 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Drop a view."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "drop view")
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_view_name=name)
+        self._check_existing_view_security(attach_opaque_data, transaction_opaque_data, schema_path, name)
         cat = self._get_catalog()
         cat.view_drop(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
@@ -5634,7 +6521,9 @@ class Worker:
         transaction_opaque_data: bytes | None = None,
     ) -> None:
         """Rename a view."""
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "rename view")
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_view_name=name)
+        self._check_existing_view_security(attach_opaque_data, transaction_opaque_data, schema_path, name)
         cat = self._get_catalog()
         cat.view_rename(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
@@ -5656,12 +6545,40 @@ class Worker:
     ) -> None:
         """Set or clear the comment on a view."""
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_view_name=name)
+        self._check_existing_view_security(attach_opaque_data, transaction_opaque_data, schema_path, name)
         cat = self._get_catalog()
         cat.view_comment_set(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
             name=name,
+            comment=comment,
+            ignore_not_found=ignore_not_found,
+        )
+
+    def catalog_view_column_comment_set(
+        self,
+        attach_opaque_data: bytes,
+        schema_path: list[str],
+        name: str,
+        column_path: list[str],
+        comment: str | None = None,
+        ignore_not_found: bool = False,
+        transaction_opaque_data: bytes | None = None,
+    ) -> None:
+        """Set or clear a view output comment; column_path has one raw component."""
+        if len(column_path_key(column_path)) != 1:
+            raise ValueError("view column comments require one raw output identifier")
+        if comment is not None and not isinstance(comment, str):
+            raise ValueError("view column comment must be a string or None")
+        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_view_name=name)
+        self._check_existing_view_security(attach_opaque_data, transaction_opaque_data, schema_path, name)
+        self._get_catalog().view_column_comment_set(
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
+            schema_path=schema_path,
+            name=name,
+            column_path=list(column_path),
             comment=comment,
             ignore_not_found=ignore_not_found,
         )
@@ -5686,27 +6603,32 @@ class Worker:
             schema_path=schema_path,
             name=name,
         )
+        if info is not None:
+            info = self._macro_for_capabilities(info, self._effective_catalog_capabilities(attach_opaque_data))
         return MacrosResponse.from_optional(info)
 
     def catalog_macro_create(self, request: MacroCreateRequest) -> None:
-        """Create a new macro."""
+        """Create one mandatory macro family without representation negotiation."""
+        request.__post_init__()
         self._enrich_catalog_span(vgi_schema_path=request.schema_path, vgi_macro_name=request.name)
-        cat = self._get_catalog()
-        cat.macro_create(
+        self._require_dependency_transaction(
+            request.attach_opaque_data, request.transaction_opaque_data, "create macro family"
+        )
+        selected = self._effective_catalog_capabilities(request.attach_opaque_data)
+        for member in request.overloads:
+            for parameter in member.parameters:
+                if parameter.declared_type is not None:
+                    require_logical_profiles(parameter.declared_type, selected_profiles=selected.read)
+                if parameter.default_value is not None:
+                    require_logical_values(parameter.default_value, selected_profiles=selected.read)
+        self._get_catalog().macro_create(
             attach_opaque_data=self._unwrap_attach(request.attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(
-                request.transaction_opaque_data, request.attach_opaque_data
-            )
-            if request.transaction_opaque_data
-            else None,
+            transaction_opaque_data=self._unwrap_tx_opt(request.transaction_opaque_data, request.attach_opaque_data),
             schema_path=request.schema_path,
             name=request.name,
             macro_type=request.macro_type,
-            parameters=request.parameters,
-            definition=request.definition,
+            overloads=request.overloads,
             on_conflict=request.on_conflict,
-            parameter_default_values=request.parameter_default_values,
-            arguments_schema=request.arguments_schema,
         )
 
     def catalog_macro_drop(
@@ -5717,10 +6639,10 @@ class Worker:
         ignore_not_found: bool = False,
         transaction_opaque_data: bytes | None = None,
     ) -> None:
-        """Drop a macro."""
+        """Drop the complete family through the existing provider operation."""
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_macro_name=name)
-        cat = self._get_catalog()
-        cat.macro_drop(
+        self._require_dependency_transaction(attach_opaque_data, transaction_opaque_data, "drop macro family")
+        self._get_catalog().macro_drop(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
@@ -5744,7 +6666,8 @@ class Worker:
             path=path,
             type=type,
         )
-        return MacrosResponse.from_infos(list(infos))
+        selected = self._effective_catalog_capabilities(attach_opaque_data)
+        return MacrosResponse.from_infos([self._macro_for_capabilities(info, selected) for info in infos])
 
     # ---------------------------------------------------------------------------
     # VgiProtocol implementation - Catalog Indexes
@@ -5766,28 +6689,74 @@ class Worker:
             schema_path=schema_path,
             name=name,
         )
-        return IndexesResponse.from_optional(info)
+        return IndexesResponse.from_optional(
+            self._index_for_capabilities(info, self._effective_catalog_capabilities(attach_opaque_data))
+            if info is not None
+            else None
+        )
+
+    def catalog_index_option_definitions(
+        self,
+        attach_opaque_data: bytes,
+        table: bytes,
+        algorithm: str,
+        transaction_opaque_data: bytes | None = None,
+    ) -> OptionDefinitions:
+        """Read complete provider option definitions for one exact algorithm."""
+        self._require_catalog_capability(attach_opaque_data, INDEX_DEFINITION_READ, "read index options")
+        ref = CatalogObjectRef.deserialize_from_bytes(table)
+        if ref.kind != "table" or not algorithm or "\0" in algorithm:
+            raise ValueError("index options require a table reference and nonempty algorithm")
+        result = self._get_catalog().index_option_definitions(
+            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
+            table=ref,
+            algorithm=algorithm,
+        )
+        result.__post_init__()
+        require_logical_profiles(
+            result.schema, selected_profiles=self._effective_catalog_capabilities(attach_opaque_data).read
+        )
+        return result
 
     def catalog_index_create(self, request: IndexCreateRequest) -> None:
-        """Create a new index."""
+        """Require the negotiated contract before an atomic provider mutation."""
+        request.__post_init__()
         self._enrich_catalog_span(vgi_schema_path=request.schema_path, vgi_index_name=request.name)
-        cat = self._get_catalog()
-        cat.index_create(
-            attach_opaque_data=self._unwrap_attach(request.attach_opaque_data),
-            transaction_opaque_data=self._unwrap_transaction(
-                request.transaction_opaque_data, request.attach_opaque_data
+        self._require_catalog_capability(
+            request.attach_opaque_data, INDEX_DEFINITION_CREATE, "create typed index", request.transaction_opaque_data
+        )
+        self._require_index_definition_profiles(request.attach_opaque_data, request.definition)
+        if request.on_conflict == OnConflict.REPLACE:
+            self._require_catalog_capability(
+                request.attach_opaque_data, INDEX_DROP, "replace typed index", request.transaction_opaque_data
             )
-            if request.transaction_opaque_data
-            else None,
+            self._check_index_drop_association(
+                request.attach_opaque_data, request.transaction_opaque_data, request.schema_path, request.name
+            )
+        self._get_catalog().index_create(
+            attach_opaque_data=self._unwrap_attach(request.attach_opaque_data),
+            transaction_opaque_data=self._unwrap_tx_opt(request.transaction_opaque_data, request.attach_opaque_data),
             schema_path=request.schema_path,
             name=request.name,
-            table_name=request.table_name,
-            index_type=request.index_type,
-            constraint_type=request.constraint_type,
-            expressions=list(request.expressions),
+            definition=request.definition,
             on_conflict=request.on_conflict,
-            options=dict(request.options) if request.options else None,
         )
+
+    def _check_index_drop_association(
+        self, attach: bytes, transaction: bytes | None, path: list[str], name: str
+    ) -> None:
+        """Gate associated-index mutations; providers authorize their atomic closure."""
+        info = self._get_catalog().index_get(
+            attach_opaque_data=self._unwrap_attach(attach),
+            transaction_opaque_data=self._unwrap_tx_opt(transaction, attach),
+            schema_path=path,
+            name=name,
+        )
+        if info is not None:
+            self._index_for_capabilities(info, self._effective_catalog_capabilities(attach))
+            if info.definition.associated_constraint is not None:
+                self._require_catalog_capability(attach, CONSTRAINT_MUTATE, "mutate associated index", transaction)
 
     def catalog_index_drop(
         self,
@@ -5800,6 +6769,8 @@ class Worker:
     ) -> None:
         """Drop an index."""
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_index_name=name)
+        self._require_catalog_capability(attach_opaque_data, INDEX_DROP, "drop typed index", transaction_opaque_data)
+        self._check_index_drop_association(attach_opaque_data, transaction_opaque_data, schema_path, name)
         cat = self._get_catalog()
         cat.index_drop(
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
@@ -5825,7 +6796,8 @@ class Worker:
             path=path,
             type=SchemaObjectType.INDEX,
         )
-        return IndexesResponse.from_infos(list(infos))
+        selected = self._effective_catalog_capabilities(attach_opaque_data)
+        return IndexesResponse.from_infos([self._index_for_capabilities(info, selected) for info in infos])
 
     # ---------------------------------------------------------------------------
     # Lifecycle

@@ -45,7 +45,7 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 
 from vgi.catalog.catalog_interface import CatalogAttachResult
-from vgi.codegen._common import GeneratorError, provenance_comment
+from vgi.codegen._common import SHARED_CONTRACT_TYPES, GeneratorError, provenance_comment
 from vgi.codegen.csharp_types import _base, _hints, _parse_docstring
 from vgi.protocol import CatalogContentsResponse, SchemaContents
 
@@ -64,6 +64,7 @@ GENERATOR_VERSION = "1"
 #:   derives as ``list<struct<...>>``); it is checked on its own against
 #:   ``generated.SchemaContentsSchema``.
 GO_TYPE_RECORDS: tuple[type, ...] = (
+    *SHARED_CONTRACT_TYPES,
     CatalogAttachResult,
     CatalogContentsResponse,
     SchemaContents,

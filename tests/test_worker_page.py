@@ -31,6 +31,7 @@ from vgi.http.worker_page import (
     build_worker_page,
 )
 from vgi.metadata import FunctionStability, resolve_metadata
+from vgi.protocol import ClientCapabilities
 from vgi.scalar_function import ScalarFunction
 from vgi.table_function import TableFunctionGenerator
 from vgi.table_in_out_function import TableInOutGenerator
@@ -438,6 +439,7 @@ class _TestMultiCatalogInterface(ReadOnlyCatalogInterface):
         options: dict[str, Any],
         data_version_spec: str | None,
         implementation_version: str | None,
+        client_capabilities: ClientCapabilities | None = None,
         ctx: Any = None,
     ) -> CatalogAttachResult:
         """Stub — describe-page tests don't actually attach."""
@@ -747,6 +749,7 @@ class _ReleasesCatalogInterface(ReadOnlyCatalogInterface):
         options: dict[str, Any],
         data_version_spec: str | None,
         implementation_version: str | None,
+        client_capabilities: ClientCapabilities | None = None,
         ctx: Any = None,
     ) -> CatalogAttachResult:
         """Stub — accept any version so the timeline renders cleanly."""

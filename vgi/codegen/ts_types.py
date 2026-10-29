@@ -59,6 +59,7 @@ from vgi.codegen import ts_client
 from vgi.codegen._common import (
     EXTRA_RESPONSE_TYPES,
     REQUEST_TYPES,
+    SHARED_CONTRACT_TYPES,
     GeneratorError,
     collect_schemas,
     provenance_comment,
@@ -74,6 +75,7 @@ GENERATOR_VERSION = "1"
 
 #: The records this module emits builders and codecs for. Append to extend.
 TS_RECORD_TYPES: tuple[type, ...] = (
+    *SHARED_CONTRACT_TYPES,
     CatalogAttachResult,
     SchemaContents,
     CatalogContentsResponse,
@@ -298,7 +300,10 @@ def _render_record(r: _Record) -> str:
     lines.append(f"export function build{r.name}(init: {r.name}Init): {r.name} {{")
     lines.append("  return {")
     for f in r.fields:
-        if f.default is not None:
+        if f.default is not None and f.default != "null" and f.nullable:
+            # Explicit NULL is a wire value; only omission selects a default.
+            lines.append(f"    {f.name}: init.{f.name} === undefined ? {f.default} : init.{f.name},")
+        elif f.default is not None:
             lines.append(f"    {f.name}: init.{f.name} ?? {f.default},")
         elif f.nullable:
             lines.append(f"    {f.name}: init.{f.name} ?? null,")

@@ -115,6 +115,7 @@ from vgi_rpc.rpc import (
 )
 
 from vgi.arguments import Arguments
+from vgi.catalog.query import QUERY_EXECUTOR, CatalogQueryPrepareResult, read_query_schema
 from vgi.client.aggregate import AggregateClientMixin
 from vgi.client.catalog_mixin import CatalogClientMixin
 from vgi.client.errors import ClientError as ClientError  # re-exported for callers
@@ -140,6 +141,7 @@ from vgi.protocol import (
     VgiProtocol,
     _decode_parent_rows,
 )
+from vgi.query_parameters import QueryParameters
 from vgi.table_function import TableInOutFunctionInitPhase
 
 _logger = logging.getLogger("vgi.client")
@@ -240,7 +242,7 @@ def _validate_accepted_max_response_bytes(value: int | None) -> int | None:
 
 
 #: Wire name of the primary VGI protocol, the first protocol every worker hosts.
-VGI_PROTOCOL_NAME = "vgi.v2"
+VGI_PROTOCOL_NAME = VgiProtocol.protocol_name
 
 
 @dataclass
@@ -1641,7 +1643,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
 
         Calls ``vgi_rpc.Reflection.v1.list_protocols`` through
         ``vgi_rpc.list_protocols`` on the primary worker's connection, whatever
-        the transport, without opening a new one. ``vgi.v2`` is always first; a
+        the transport, without opening a new one. ``vgi.v3`` is always first; a
         worker's extra protocols (``Worker.hosted_protocols()``) follow, then
         the framework's own. Use it to discover an optional protocol before
         calling it, rather than calling it and reading an error.
@@ -1651,7 +1653,7 @@ class Client(CatalogClientMixin, AggregateClientMixin):
 
         A worker that does not host reflection (vgi-rpc raises
         ``ReflectionNotSupportedError``) is not an error: the result is a single
-        ``HostedProtocol("vgi.v2", "", "")``, since ``vgi.v2`` is the one
+        ``HostedProtocol("vgi.v3", "", "")``, since ``vgi.v3`` is the one
         protocol every worker hosts. The empty hash marks the entry as inferred.
 
         Returns:
@@ -3203,6 +3205,70 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         except ClientError as e:
             raise self._client_error_with_stderr(e) from e.__cause__
 
+    def catalog_query_execute(
+        self,
+        *,
+        attach_opaque_data: bytes,
+        prepared: CatalogQueryPrepareResult,
+        parameters: QueryParameters,
+        transaction_opaque_data: bytes | None = None,
+    ) -> Generator[pa.RecordBatch]:
+        """Execute a prepared query once through the ordinary single-reader TABLE stream.
+
+        Every call starts a fresh execution. An error is propagated without a
+        retry or local fallback. Releasing the preparation is a separate action;
+        it may be reused with new values of exactly the same parameter schema.
+        Closing this generator early cancels its execution.
+
+        Explicit statement preparations reuse this method. The caller must
+        consume the stream to EOS before reporting statement success or calling
+        commit. Constructing this lazy generator alone executes nothing.
+        Statement cancellation/failure requires whole-transaction rollback.
+        """
+        prepared.__post_init__()
+        if prepared.status != "accepted" or prepared.prepared_query_token is None:
+            raise ValueError("query execution requires an accepted preparation")
+        if self._primary is None:
+            raise ClientError("Client not started. Call start() or use context manager.")
+        expected = read_query_schema(prepared.output_schema)
+        request = BindRequest(
+            function_name=QUERY_EXECUTOR,
+            schema_path=[],
+            function_type=FunctionType.TABLE,
+            arguments=Arguments(
+                positional=(
+                    pa.scalar(prepared.prepared_query_token, type=pa.binary()),
+                    pa.scalar(parameters.serialize_to_bytes(), type=pa.binary()),
+                )
+            ),
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=transaction_opaque_data,
+        )
+        proxy = self._primary.proxy
+        bound = self._do_bind(proxy, request, None)
+        if not bound.output_schema.equals(expected, check_metadata=True):
+            raise ClientError("query bind changed its prepared output schema")
+        stream = self._do_init(proxy, request, bound, projection_ids=None, pushdown_filters_batch=None, phase=None)
+        self._primary.stream = stream
+        complete = False
+        try:
+            if stream.typed_header(GlobalInitResponse).max_workers != 1:
+                raise ClientError("catalog query requires exactly one result reader")
+            for output in stream:
+                if not output.batch.schema.equals(expected, check_metadata=True):
+                    raise ClientError("query execution changed its prepared output schema")
+                yield output.batch
+            complete = True
+        except RpcError as error:
+            raise ClientError.from_rpc_error(error) from error
+        finally:
+            if not complete:
+                with contextlib.suppress(Exception):
+                    stream.cancel()
+            stream.close()
+            if self._primary is not None and self._primary.stream is stream:
+                self._primary.stream = None
+
     @property
     def supports_resumable_scan(self) -> bool:
         """Whether this client's transport can drive :meth:`table_scan_resumable`.
@@ -3267,6 +3333,8 @@ class Client(CatalogClientMixin, AggregateClientMixin):
                 f"table_scan_resumable requires the HTTP transport; this client uses {self._transport!r}. "
                 "Use table_function() and keep the live stream in-process."
             )
+        if function_name == QUERY_EXECUTOR and resume_token is not None:
+            raise ValueError("resume catalog queries with table_scan_continue; rebinding would start a new execution")
         if arguments is None:
             arguments = Arguments()
         if self._primary is None:

@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import io
 import os
+import re
 from pathlib import Path
 
 import pytest
 
+from vgi.codegen._registry import registry_methods
 from vgi.codegen.cpp_request_builders import emit
 
 
@@ -38,6 +40,27 @@ _REGEN_HINT = (
     "truncates the file before the generator runs, so any failure destroys\n"
     "the checked-in artifact. The script renders to memory first."
 )
+
+
+def test_native_runtime_registry_covers_protocol_requests_and_responses() -> None:
+    """A generated builder alone does not register a method with the native dispatcher."""
+    path = _vgi_generated_path().parents[1] / "vgi_schema_registry.cpp"
+    if not path.exists():
+        pytest.skip(f"native runtime registry not found at {path}")
+    source = path.read_text()
+    # The dispatcher now derives both contracts from the generated method table;
+    # only response policies (dynamic, opaque record, item lists) are handwritten.
+    assert "for (const auto &method : AllMethodSchemas())" in source
+    assert "entry.request_schema = method.params;" in source
+    assert "entry.schema = method.result;" in source
+    assert "m.emplace(method.method, std::move(entry));" in source
+    records = (path.parent / "generated" / "vgi_protocol_records.cpp").read_text()
+    method_table = records.split("&AllMethodSchemas()", 1)[1].split("return methods;", 1)[0]
+    declared = {method.name for method in registry_methods()}
+    registered = set(re.findall(r'\{"([a-z_]+)",\s*\w+ParamsSchema\(\),', method_table))
+    assert registered == declared, (
+        f"Native method contracts missing: {declared - registered}; stale: {registered - declared}"
+    )
 
 
 def test_generator_is_deterministic() -> None:

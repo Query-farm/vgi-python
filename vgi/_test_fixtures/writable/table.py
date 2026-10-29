@@ -72,9 +72,8 @@ def _result_mode(params: BindParams[None]) -> WriteResultMode:
 
 
 def _get_tx_id(params: ProcessParams[None]) -> bytes:
-    """Get transaction_opaque_data from the bind request."""
-    assert params.init_call is not None
-    tx_id = params.init_call.bind_call.transaction_opaque_data
+    """Get the authenticated provider transaction bytes from callback params."""
+    tx_id = params.transaction_opaque_data
     if tx_id:
         return tx_id
     msg = "transaction_opaque_data is required but was not provided in the bind request"

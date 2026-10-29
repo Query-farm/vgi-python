@@ -21,7 +21,11 @@ from vgi.catalog import (
     TableInfo,
     ViewInfo,
 )
+from vgi.catalog.capabilities import INDEX_DEFINITION_READ, CatalogCapabilities
+from vgi.catalog.evaluation_context import QueryEvaluationContext
+from vgi.catalog.macros import legacy_macro_fields
 from vgi.client import Client
+from vgi.protocol import ClientCapabilities
 
 # Worker command for catalog tests
 EXAMPLE_WORKER = FIXTURE_WORKER
@@ -419,7 +423,7 @@ class TestExampleWorkerIndexes:
     """Test ExampleWorker's index catalog entries."""
 
     def test_schema_contents_returns_indexes_in_data(self) -> None:
-        """`data` has 2 real indexes on `numbers`.
+        """`data` has two metadata-only index declarations for `numbers`.
 
         Regression: `type=SchemaObjectType.INDEX` used to silently fall
         through to the functions RPC (`catalog_schema_contents_functions`)
@@ -427,7 +431,18 @@ class TestExampleWorkerIndexes:
         """
         client = Client(EXAMPLE_WORKER)
         attach_result = client.catalog_attach(
-            name="example", options={}, data_version_spec=None, implementation_version=None
+            name="example",
+            options={},
+            data_version_spec=None,
+            implementation_version=None,
+            client_capabilities=ClientCapabilities(
+                engine="test",
+                native_formats=[],
+                catalogs=[],
+                can_stream=False,
+                filter_encodings=[],
+                catalog=CatalogCapabilities(read=[INDEX_DEFINITION_READ]),
+            ),
         )
 
         indexes = list(
@@ -442,8 +457,9 @@ class TestExampleWorkerIndexes:
         assert index_names == {"idx_numbers_value", "idx_numbers_value_unique"}
         for index in indexes:
             assert isinstance(index, IndexInfo)
-            assert index.table_name == "numbers"
-            assert index.expressions == ["value"]
+            assert index.definition.table.name == "numbers"
+            assert index.definition.key_definitions()[0].column_path == ["value"]
+            assert index.definition.algorithm == "fixture.metadata"
 
 
 class TestExampleWorkerMacros:
@@ -492,7 +508,7 @@ class TestExampleWorkerMacros:
         assert isinstance(info, MacroInfo)
         assert info.name == "vgi_multiply"
         assert info.schema_path == ["main"]
-        assert info.definition == "x * y"
+        assert info.overloads[0].definition == "x * y"
         assert info.comment == "Multiply two values"
 
     def test_macro_info_has_correct_types(self) -> None:
@@ -533,7 +549,7 @@ class TestExampleWorkerMacros:
         )
 
         assert info is not None
-        assert info.parameters == ["x", "y"]
+        assert [p.name for p in info.overloads[0].parameters] == ["x", "y"]
 
     def test_macro_info_has_parameter_default_values(self) -> None:
         """RecordBatch parameter defaults survive round-trip with types."""
@@ -549,9 +565,14 @@ class TestExampleWorkerMacros:
         )
 
         assert info is not None
-        assert info.parameters == ["val", "lo", "hi"]
-        assert info.parameter_default_values is not None
-        defaults = info.parameter_default_values
+        assert [p.name for p in info.overloads[0].parameters] == ["val", "lo", "hi"]
+        assert (
+            legacy_macro_fields(info.overloads, evaluation_context=QueryEvaluationContext())["parameter_default_values"]
+            is not None
+        )
+        defaults = legacy_macro_fields(info.overloads, evaluation_context=QueryEvaluationContext())[
+            "parameter_default_values"
+        ]
         assert defaults.num_rows == 1
         assert set(defaults.schema.names) == {"lo", "hi"}
         assert defaults.column("lo")[0].as_py() == 0

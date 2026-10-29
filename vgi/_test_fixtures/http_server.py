@@ -310,16 +310,6 @@ def main() -> None:
             )
             sys.stderr.flush()
 
-        import socket
-
-        if port == 0:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.bind((host, 0))
-                port = int(s.getsockname()[1])
-
-        if demo_storage:
-            demo_blob_storage.set_base_url(f"http://{host}:{port}")
-
         from vgi.serve import _resolve_authenticate, _resolve_oauth_resource_metadata
 
         authenticate = _resolve_authenticate()
@@ -487,6 +477,15 @@ def main() -> None:
         # we serve the Falcon app directly.
         serving_app: Any = wsgi_app
 
+        # Keep the selected socket bound while publishing its port. Selecting
+        # and releasing a free port first lets another test worker take it.
+        # Auto-selection has always used IPv4; retain one listener for port 0.
+        http_server = waitress.create_server(serving_app, host=host, port=port, ipv6=port != 0)
+        if port == 0:
+            port = int(http_server.effective_port)
+        if demo_storage:
+            demo_blob_storage.set_base_url(f"http://{host}:{port}")
+
         if port_file is not None:
             # Atomic side-channel publication so test harnesses can watch
             # for the file without racing a partial write. Same helper the
@@ -498,7 +497,7 @@ def main() -> None:
         print(f"PORT:{port}", flush=True)
         sys.stderr.write(f"Serving ExampleWorker on http://{host}:{port}{prefix}\n")
         sys.stderr.flush()
-        waitress.serve(serving_app, host=host, port=port, _quiet=True)
+        http_server.run()
 
     app()
 

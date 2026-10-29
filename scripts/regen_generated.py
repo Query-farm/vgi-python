@@ -5,6 +5,7 @@ Run from anywhere:
 
     uv run --project ~/Development/vgi-python python scripts/regen_generated.py
     uv run --project ~/Development/vgi-python python scripts/regen_generated.py --check
+    uv run --project ~/Development/vgi-python python scripts/regen_generated.py --check --require-all
 
 Why this exists rather than a shell one-liner per artifact: the obvious form,
 ``python -m vgi.codegen.X > path/to/generated.file``, truncates the destination
@@ -21,6 +22,7 @@ nobody has all of them. A registry backend's ``root_env`` (``VGI_JAVA_ROOT``,
 so regenerating one SDK's worktree writes nothing into any other checkout:
 
     uv run python scripts/regen_generated.py --only vgi-go --root vgi-go=~/Development/vgi-go-feature
+Release checks use ``--require-all`` to reject missing selected repositories before writing.
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ from pathlib import Path
 #: ``vgi-java`` lives at ``~/vgi-java`` for some checkouts and beside the other
 #: SDKs for others; both are probed.
 _TARGETS: list[tuple[str, str, str]] = [
+    ("vgi.codegen.protocol_version", "vgi/protocol_version.txt", "vgi-python"),
     ("vgi.codegen.cpp_schemas", "src/generated/vgi_protocol_schemas.hpp", "vgi"),
     ("vgi.codegen.cpp_request_builders", "src/generated/vgi_request_builders.hpp", "vgi"),
     ("vgi.codegen.cpp_constants", "src/generated/vgi_protocol_constants.hpp", "vgi"),
@@ -79,6 +82,18 @@ _TARGETS: list[tuple[str, str, str]] = [
     ),
 ]
 
+# One codec corpus, checked into each SDK so its conformance tests are standalone.
+_TARGETS += [
+    ("vgi.codegen.catalog_contract_fixtures", "conformance/catalog-contracts.json", repo)
+    for repo in ("vgi-python", "vgi-go", "vgi-rust", "vgi-typescript", "vgi-java", "vgi-csharp", "vgi-c++")
+]
+
+# Reporting contracts have an index plus one reference page per source module.
+_TARGETS += [
+    (f"vgi.codegen.reporting_docs:{record}", relative, "vgi-python")
+    for record, relative in importlib.import_module("vgi.codegen.reporting_docs").targets()
+]
+
 # vgi-java's generated wire records: one file per record (Java allows one public
 # top-level type per file), so one target each. ``module:record`` tells
 # `_render` to call ``emit(out, record=...)``. Derived from the generator's own
@@ -89,20 +104,32 @@ _TARGETS += [
 ]
 
 
-# The vgi.v2 registries: one generator, one backend per SDK (see
+# The vgi.v3 registries: one generator, one backend per SDK (see
 # vgi.codegen._registry). Each declares its own target, checkout and override.
 _REGISTRY_BACKENDS = importlib.import_module("vgi.codegen._registry_backend").registry_backends()
 _TARGETS += [(b.module, b.target, b.repo) for b in _REGISTRY_BACKENDS]
 
+# The C++ worker's public headers use a different namespace from the native
+# extension. They belong in the same required inventory as its method registry.
+_TARGETS += [
+    (f"vgi.codegen.cpp_sdk:{record}", f"include/vgi/generated/vgi_protocol_{suffix}.hpp", "vgi-c++")
+    for record, suffix in (
+        ("schemas", "schemas"),
+        ("constants", "constants"),
+        ("version", "version"),
+        ("names", "names"),
+    )
+]
+
 #: Environment overrides for a checkout's location (``VGI_TYPESCRIPT_ROOT=...``).
-_ROOT_ENV: dict[str, str] = {b.repo: b.root_env for b in _REGISTRY_BACKENDS}
-# The DuckDB extension checkout (e.g. a worktree of it).
-_ROOT_ENV.setdefault("vgi", "VGI_EXTENSION_ROOT")
+_ROOT_ENV: dict[str, str] = {"vgi": "VGI_NATIVE_ROOT", **{b.repo: b.root_env for b in _REGISTRY_BACKENDS}}
 
 
 def _repo_root(name: str, roots: dict[str, str]) -> Path | None:
     """Locate a sibling checkout, or ``None`` when it is not present."""
     override = roots.get(name) or os.environ.get(_ROOT_ENV.get(name, ""))
+    if not override and name == "vgi":
+        override = os.environ.get("VGI_EXTENSION_ROOT")
     if override:
         return Path(override) if Path(override).is_dir() else None
     siblings = Path(__file__).resolve().parents[2]
@@ -112,7 +139,7 @@ def _repo_root(name: str, roots: dict[str, str]) -> Path | None:
     return None
 
 
-def _render(module_name: str) -> str:
+def _render(module_name: str, native_cpp_backend: str | None = None) -> str:
     """Render one artifact into memory. Raises if the generator fails.
 
     ``module:record`` renders one file of a generator that emits several
@@ -121,10 +148,10 @@ def _render(module_name: str) -> str:
     module_name, _, record = module_name.partition(":")
     module = importlib.import_module(module_name)
     buf = io.StringIO()
-    if record:
-        module.emit(buf, record=record)
-    else:
-        module.emit(buf)
+    kwargs = {"record": record} if record else {}
+    if native_cpp_backend is not None:
+        kwargs["backend"] = native_cpp_backend
+    module.emit(buf, **kwargs)
     text = buf.getvalue()
     if not text.strip():
         raise RuntimeError(f"{module_name}.emit() produced no output")
@@ -153,6 +180,17 @@ def main() -> int:
         metavar="REPO=PATH",
         help="the checkout to use for REPO (repeatable), e.g. --root vgi-go=../vgi-go-feature",
     )
+    parser.add_argument(
+        "--require-all",
+        action="store_true",
+        help="fail before writing if any selected repository is missing",
+    )
+    parser.add_argument(
+        "--native-cpp-backend",
+        choices=("arrow", "nanoarrow"),
+        default="arrow",
+        help="native extension runtime only; standalone C++ SDK stays Arrow C++",
+    )
     args = parser.parse_args()
     known = {repo for _, _, repo in _TARGETS}
     unknown = set(args.only) - known
@@ -165,18 +203,37 @@ def main() -> int:
             parser.error(f"--root expects REPO=PATH with REPO one of {sorted(known)}, got {spec!r}")
         roots[repo] = str(Path(path).expanduser())
 
+    targets = [(module, relative, repo) for module, relative, repo in _TARGETS if not args.only or repo in args.only]
+    roots = {repo: _repo_root(repo, roots) for _, _, repo in targets}
+    if args.require_all:
+        missing = sorted(repo for repo, root in roots.items() if root is None)
+        if missing:
+            for repo in missing:
+                print(f"FAIL   required repository {repo} is not checked out", file=sys.stderr)
+            return 2
+
     stale, wrote, skipped, failed = [], [], [], []
 
-    for module_name, relative, repo in _TARGETS:
-        if args.only and repo not in args.only:
-            continue
-        root = _repo_root(repo, roots)
+    for module_name, relative, repo in targets:
+        root = roots[repo]
         if root is None:
             skipped.append(f"{repo} (not checked out)")
             continue
         dest = root / relative
         try:
-            text = _render(module_name)
+            native_runtime_modules = {
+                "vgi.codegen.cpp_schemas",
+                "vgi.codegen.cpp_request_builders",
+                "vgi.codegen.cpp_records",
+                "vgi.codegen.cpp_secret_schemas",
+                "vgi.codegen.cpp_secret_request_builders",
+            }
+            backend = (
+                args.native_cpp_backend
+                if repo == "vgi" and module_name.partition(":")[0] in native_runtime_modules
+                else None
+            )
+            text = _render(module_name, backend) if backend is not None else _render(module_name)
         except Exception as exc:  # noqa: BLE001 - report every failure, don't stop
             failed.append(f"{module_name}: {exc}")
             continue

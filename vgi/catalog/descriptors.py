@@ -21,11 +21,11 @@ import pyarrow as pa
 
 from vgi.argument_spec import macro_arguments_schema
 from vgi.arguments import Arguments
+from vgi.catalog.capabilities import ROW_SCALAR_EXPRESSION
 from vgi.catalog.catalog_interface import (
     AttachOpaqueData,
     ColumnStatistics,
     ForeignKeyInfo,
-    IndexConstraintType,
     IndexInfo,
     MacroInfo,
     MacroType,
@@ -38,9 +38,17 @@ from vgi.catalog.catalog_interface import (
     scan_arguments_from,
     serialize_column_statistics,
 )
+from vgi.catalog.column_metadata import column_metadata, with_column_metadata
+from vgi.catalog.constraints import ConstraintInfo
+from vgi.catalog.evaluation_context import QueryEvaluationContext
+from vgi.catalog.indexes import IndexDefinition
+from vgi.catalog.macros import normalize_macro_overloads
+from vgi.catalog.options import OptionState
+from vgi.catalog.sql import ColumnExpressions, SqlExpression, column_expressions, with_column_expressions
+from vgi.column_path import RequiredFilterPaths, column_path_key
 from vgi.invocation import BindResponse, FunctionType
 from vgi.metadata import CatalogFunctionType
-from vgi.schema_path import SchemaPath, schema_path_display, schema_path_key
+from vgi.schema_path import SchemaPath, schema_path_display, schema_path_key, validate_default_schema
 from vgi.write_results import validate_write_result_modes
 
 if TYPE_CHECKING:
@@ -272,7 +280,10 @@ class Table:
         write_result_modes: Maximum result mode for each configured write
             function. Omitted operations default to ``count``. Modes are ordered
             ``count < rows < changes``.
-        not_null: Tuple of column names with NOT NULL constraints.
+        constraints: Provider-issued canonical constraint records, including explicit
+            identity, enforcement and validation state.
+        definition_revision: Opaque table-definition revision for mutation.
+        not_null: Legacy declarations; nonempty values require explicit migration.
         unique: Tuple of column name tuples for UNIQUE constraints.
         check: Tuple of SQL expressions for CHECK constraints.
         primary_key: Tuple of column-name tuples forming the primary key. At
@@ -280,7 +291,7 @@ class Table:
         foreign_key: Tuple of [`ForeignKeyDef`][] foreign-key constraints.
         defaults: Dict mapping column names to default values. Accepts
             Python literals (str, int, float, bool, None) which are
-            auto-converted, or `SqlExpression` for raw SQL.
+            auto-converted, or `Sql` for raw SQL.
         generated_columns: Dict mapping column names to SQL expressions
             for generated (virtual) columns. Generated columns are
             computed on read by DuckDB and are mutually exclusive with
@@ -288,21 +299,13 @@ class Table:
         column_comments: Dict mapping column names to comment strings.
             Comments are transported as Arrow field metadata and visible
             via ``duckdb_columns()`` in DuckDB.
-        required_filters: Required WHERE-filter groups in conjunctive normal
-            form — an AND (outer tuple) of OR-groups (inner tuples) of dotted-path
-            column references that MUST appear in a WHERE expression for any scan
-            of this table. A group is satisfied when any one of its paths has a
-            filter; every group must be satisfied. So
-            ``(("accession_number",), ("ticker", "cik"))`` means "accession_number
-            AND one of (ticker, cik)"; a single-path group ``(("country",),)`` is
-            a plain mandatory filter. Paths are top-level names (``"country"``) or
-            struct subfields (``"bbox.xmin"``, ``"nested.outer.inner"``). Empty
-            (default) means no enforcement. Satisfaction is prefix-based: a present
-            filter on a shorter path satisfies any required path it is a prefix of
-            (a whole-struct filter on ``bbox`` satisfies all of ``bbox.xmin`` /
-            ``.xmax`` / ``.ymin`` / ``.ymax``). The VGI DuckDB extension's
-            optimizer pass consults this at bind time and throws
-            ``BinderException`` listing any unsatisfied groups.
+        required_filters: AND-of-OR groups of raw component paths, e.g.
+            ``((("bbox", "xmin"),), (("ticker",), ("cik",)))``. Dots and quotes
+            are literal characters. Every path must resolve in ``columns``.
+            A filter on a parent struct satisfies requirements on its children;
+            a child filter does not satisfy a requirement on its parent.
+            Empty means no enforcement. Use ``RequiredFilterPaths.from_legacy``
+            explicitly when migrating old dotted strings; ambiguous names fail.
         statistics: Mapping of column name to ``ColumnStatisticsInput``
             providing inlined column statistics for the optimizer.
         statistics_cache_max_age_seconds: How long clients may cache the inlined
@@ -337,6 +340,8 @@ class Table:
     update_function: type[TableInOutGenerator[Any, Any]] | None = None
     delete_function: type[TableInOutGenerator[Any, Any]] | None = None
     write_result_modes: dict[str, str] = field(default_factory=dict)
+    constraints: tuple[ConstraintInfo, ...] = ()
+    definition_revision: bytes | None = None
     not_null: tuple[str, ...] = ()
     unique: tuple[tuple[str, ...], ...] = ()
     check: tuple[str, ...] = ()
@@ -345,7 +350,7 @@ class Table:
     defaults: dict[str, DefaultValue] = field(default_factory=dict)
     generated_columns: dict[str, str] = field(default_factory=dict)
     column_comments: dict[str, str] = field(default_factory=dict)
-    required_filters: tuple[tuple[str, ...], ...] = ()
+    required_filters: tuple[tuple[tuple[str, ...], ...], ...] = ()
     statistics: dict[str, ColumnStatisticsInput] = field(default_factory=dict)
     statistics_cache_max_age_seconds: int | None = None
     cardinality_estimate: int | None = None
@@ -488,22 +493,11 @@ class Table:
                     f"in schema. Available columns: {sorted(column_names)}"
                 )
 
-        # Validate required_filters: each OR-group must be non-empty, and the
-        # leading dotted segment of each path must be a real column on this table.
-        # Struct subfield validity is not checked here — DuckDB's binder catches
-        # typos at scan time, and the descriptor doesn't unpack STRUCT subfields.
-        for group in self.required_filters:
-            if not group:
-                raise ValueError(f"Table '{self.name}': required_filters must not contain empty groups")
-            for path in group:
-                if not path:
-                    raise ValueError(f"Table '{self.name}': required_filters must not contain empty strings")
-                head = path.split(".", 1)[0]
-                if head not in column_names:
-                    raise ValueError(
-                        f"Table '{self.name}': required_filters path '{path}' references "
-                        f"unknown column '{head}'. Available columns: {sorted(column_names)}"
-                    )
+        # Validate full raw paths; never reinterpret dotted names.
+        required = RequiredFilterPaths(
+            groups=[[list(column_path_key(path)) for path in group] for group in self.required_filters]
+        )
+        required.validate_schema(resolved)
 
         # Validate statistics column names
         for col in self.statistics:
@@ -613,16 +607,26 @@ class Table:
             schema = schema.set(idx, f.with_metadata(existing))  # type: ignore[arg-type]
         return schema
 
-    def _apply_generated_columns_to_schema(self, schema: pa.Schema) -> pa.Schema:
+    def _apply_generated_columns_to_schema(self, schema: pa.Schema, schema_path: SchemaPath) -> pa.Schema:
         """Return schema with generated expression metadata applied to fields."""
         if not self.generated_columns:
             return schema
         for col_name, expression in self.generated_columns.items():
             idx = schema.get_field_index(col_name)
             f = schema.field(idx)
-            existing = dict(f.metadata) if f.metadata else {}
-            existing[b"generated_expression"] = expression.encode("utf-8")
-            schema = schema.set(idx, f.with_metadata(existing))  # type: ignore[arg-type]
+            existing = column_expressions(f)
+            generated = SqlExpression(
+                sql=expression,
+                profile=ROW_SCALAR_EXPRESSION,
+                schema_path=list(schema_path),
+                evaluation_context=QueryEvaluationContext(),
+            )
+            schema = schema.set(
+                idx,
+                with_column_expressions(
+                    f, ColumnExpressions(default=existing.default, generated=generated, generation="virtual")
+                ),
+            )
         return schema
 
     def _apply_column_comments_to_schema(self, schema: pa.Schema) -> pa.Schema:
@@ -630,19 +634,17 @@ class Table:
         if not self.column_comments:
             return schema
         for col_name, comment in self.column_comments.items():
-            if not comment:
-                continue
             idx = schema.get_field_index(col_name)
             f = schema.field(idx)
-            existing = dict(f.metadata) if f.metadata else {}
-            existing[b"comment"] = comment.encode("utf-8")
-            schema = schema.set(idx, f.with_metadata(existing))  # type: ignore[arg-type]
+            schema = schema.set(idx, with_column_metadata(f, replace(column_metadata(f), comment=comment)))
         return schema
 
     def to_table_info(self, schema_path: SchemaPath) -> TableInfo:
         """Convert to [`TableInfo`][] for catalog response."""
+        if any((self.not_null, self.unique, self.check, self.primary_key, self.foreign_key)):
+            raise ValueError("legacy constraint declarations require explicit canonical ConstraintInfo records")
         cols = self._apply_defaults_to_schema(self.resolved_columns)
-        cols = self._apply_generated_columns_to_schema(cols)
+        cols = self._apply_generated_columns_to_schema(cols, schema_path)
         cols = self._apply_column_comments_to_schema(cols)
         # Inline the resolved stats blob so the C++ extension can short-circuit
         # the per-scan ``table_function_statistics`` and per-table
@@ -663,11 +665,8 @@ class Table:
             name=self.name,
             schema_path=schema_path,
             columns=SerializedSchema(cols.serialize().to_pybytes()),
-            not_null_constraints=self._resolve_not_null_indices(),
-            unique_constraints=self._resolve_unique_indices(),
-            check_constraints=list(self.check),
-            primary_key_constraints=self._resolve_primary_key_indices(),
-            foreign_key_constraints=self._serialize_foreign_keys(schema_path),
+            constraints=[info.serialize_to_bytes() for info in self.constraints],
+            definition_revision=self.definition_revision,
             write_result_modes={
                 operation: self.write_result_modes.get(operation, "count")
                 for operation, function in (
@@ -687,7 +686,7 @@ class Table:
             cardinality_estimate=self.cardinality_estimate,
             cardinality_max=self.cardinality_max,
             column_statistics=column_statistics_blob,
-            required_filters=[list(group) for group in self.required_filters],
+            required_filters=[[list(path) for path in group] for group in self.required_filters],
         )
 
     def resolve_column_statistics(self) -> TableColumnStatisticsResult | None:
@@ -725,6 +724,9 @@ class View:
             from the view's query, so only the names that actually appear in the
             result need entries; unmatched names are ignored.
         tags: Optional metadata tags.
+        aliases: Ordered raw output identifiers, including any literal dots or quotes.
+        security: ``regular`` or ``barrier``; an executing reader must enforce
+            the optimization barrier or reject the view.
 
     """
 
@@ -733,6 +735,8 @@ class View:
     comment: str | None = None
     column_comments: dict[str, str] = field(default_factory=dict)
     tags: dict[str, str] = field(default_factory=dict)
+    aliases: list[str] = field(default_factory=list)
+    security: str = "regular"
 
     def to_view_info(self, schema_path: SchemaPath) -> ViewInfo:
         """Convert to [`ViewInfo`][] for catalog response."""
@@ -740,6 +744,8 @@ class View:
             name=self.name,
             schema_path=schema_path,
             definition=self.definition,
+            aliases=list(self.aliases),
+            security=self.security,
             comment=self.comment,
             column_comments=dict(self.column_comments),
             tags=dict(self.tags),
@@ -758,13 +764,12 @@ class Macro:
             names and values are typed defaults. None if no defaults.
             Example: pa.RecordBatch.from_pydict({"b": [5]}) for b := 5.
         parameter_docs: Optional mapping of parameter name to a human/agent-facing
-            description. Keys must appear in ``parameters``. Descriptions flow over
-            the wire via the macro ``arguments_schema``'s ``vgi_doc`` field metadata
-            (the same channel functions use), so the DuckDB extension's
-            ``vgi_function_arguments()`` can surface them. Empty/default = no docs.
+            description. Keys must appear in ``parameters``. Descriptions become
+            canonical MacroParameter documentation. Empty/default = no docs.
         definition: SQL expression (scalar) or query (table).
         comment: Optional macro comment.
         tags: Optional metadata tags.
+        evaluation_context: Explicit owner context used by the local single-definition adapter.
 
     """
 
@@ -776,6 +781,8 @@ class Macro:
     definition: str = ""
     comment: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
+
+    evaluation_context: QueryEvaluationContext = field(default_factory=QueryEvaluationContext)
 
     def __post_init__(self) -> None:
         """Validate macro configuration."""
@@ -802,70 +809,44 @@ class Macro:
                 )
 
     def to_macro_info(self, schema_path: SchemaPath) -> MacroInfo:
-        """Convert to [`MacroInfo`][] for catalog response."""
+        """Normalize the local single declaration into its sole wire representation."""
         return MacroInfo(
             name=self.name,
             schema_path=schema_path,
             macro_type=self.macro_type,
-            parameters=list(self.parameters),
-            parameter_default_values=self.parameter_default_values,
-            definition=self.definition,
+            overloads=normalize_macro_overloads(
+                macro_type=self.macro_type.value,
+                schema_path=schema_path,
+                parameters=list(self.parameters),
+                parameter_default_values=self.parameter_default_values,
+                definition=self.definition,
+                arguments_schema=macro_arguments_schema(
+                    self.parameters, self.parameter_default_values, self.parameter_docs
+                ),
+                evaluation_context=self.evaluation_context,
+            ),
             comment=self.comment,
             tags=dict(self.tags),
-            arguments_schema=macro_arguments_schema(
-                self.parameters,
-                self.parameter_default_values,
-                self.parameter_docs,
-            ),
         )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Index:
-    """Declarative index definition.
-
-    Immutable.
-
-    Attributes:
-        name: Index name.
-        table_name: Name of the table this index is on.
-        expressions: SQL expression strings or column names defining the index.
-            For column-based indexes: ("col_a", "col_b")
-            For expression indexes: ("lower(col_a)", "col_b + 1")
-        index_type: The index type (e.g., "" for default).
-        constraint_type: NONE for regular, UNIQUE for unique indexes.
-        options: Key-value index options.
-        comment: Optional index comment.
-        tags: Optional metadata tags.
-
-    """
+    """Explicit resolved index declaration; no physical index is inferred."""
 
     name: str
-    table_name: str
-    expressions: tuple[str, ...] = ()
-    index_type: str = ""
-    constraint_type: IndexConstraintType = IndexConstraintType.NONE
-    options: dict[str, str] = field(default_factory=dict)
+    definition: IndexDefinition
+    options: OptionState
     comment: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
 
-    def __post_init__(self) -> None:
-        """Validate index configuration."""
-        if not self.expressions:
-            raise ValueError(f"Index '{self.name}': must specify at least one expression")
-        if not self.table_name:
-            raise ValueError(f"Index '{self.name}': must specify a table_name")
-
     def to_index_info(self, schema_path: SchemaPath) -> IndexInfo:
-        """Convert to [`IndexInfo`][] for catalog response."""
+        """Publish the exact typed definition and effective option provenance."""
         return IndexInfo(
             name=self.name,
             schema_path=schema_path,
-            table_name=self.table_name,
-            index_type=self.index_type,
-            constraint_type=self.constraint_type,
-            expressions=list(self.expressions),
-            options=dict(self.options),
+            definition=self.definition,
+            options=self.options,
             comment=self.comment,
             tags=dict(self.tags),
         )
@@ -951,7 +932,7 @@ class Catalog:
 
     Attributes:
         name: The catalog name (used in SQL as the database name).
-        default_schema: Schema to use for unqualified table/view/function names.
+        default_schema: Raw root schema name for unqualified names, or None for no implicit default.
         schemas: Sequence of Schema objects defining the catalog contents.
         comment: Optional comment describing the catalog.
         tags: Optional key-value tags associated with the catalog.
@@ -984,7 +965,7 @@ class Catalog:
     """
 
     name: str
-    default_schema: str = "main"
+    default_schema: str | None = "main"
     schemas: Sequence[Schema] = ()
     comment: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
@@ -996,8 +977,9 @@ class Catalog:
         """Validate catalog configuration."""
         schema_paths = {schema_path_key(s.path) for s in self.schemas}
 
-        # Validate default_schema exists
-        if (self.default_schema.lower(),) not in schema_paths:
+        # A present default names one root; dots are literal identifier text.
+        validate_default_schema(self.default_schema)
+        if self.default_schema is not None and (self.default_schema.lower(),) not in schema_paths:
             available = sorted(schema_path_display(s.path) for s in self.schemas) or ["(none)"]
             raise ValueError(
                 f"Catalog '{self.name}': default_schema '{self.default_schema}' "

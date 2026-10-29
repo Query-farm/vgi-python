@@ -34,6 +34,7 @@ from vgi.catalog import (
     TransactionOpaqueData,
 )
 from vgi.catalog.descriptors import Catalog, Schema
+from vgi.protocol import ClientCapabilities
 from vgi.worker import Worker
 
 if TYPE_CHECKING:
@@ -78,6 +79,7 @@ class VersionedCatalog(ReadOnlyCatalogInterface):
         options: dict[str, Any],
         data_version_spec: str | None,
         implementation_version: str | None,
+        client_capabilities: ClientCapabilities | None = None,
         ctx: CallContext | None = None,
     ) -> CatalogAttachResult:
         """Validate requested versions and pin an HTTP session."""
