@@ -79,7 +79,8 @@ def check_inventory(manifest: dict[str, Any], native_root: Path) -> list[str]:
     source_path = native_root / manifest["sources"]["audit_path"]
     if not source_path.is_file():
         return [f"required audit source is missing: {source_path}"]
-    source = source_path.read_bytes()
+    # Hash LF-normalized bytes so a CRLF checkout (Windows) matches the manifest.
+    source = source_path.read_bytes().replace(b"\r\n", b"\n")
     if hashlib.sha256(source).hexdigest() != manifest["sources"]["audit_sha256"]:
         errors.append("native audit digest changed; reconcile the manifest against the new evidence")
     rows = audit_rows(source.decode())

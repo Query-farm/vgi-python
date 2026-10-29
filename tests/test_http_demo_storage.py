@@ -414,6 +414,10 @@ def test_demo_servers_reserve_distinct_bound_ports() -> None:
         assert http_capabilities(base_url=second).max_upload_bytes == 16384
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="waitress sets SO_REUSEADDR, which on Windows lets a second listener bind an occupied port",
+)
 def test_demo_startup_rejects_an_occupied_port() -> None:
     """An existing server cannot make a child that failed to bind look ready."""
     with _run_demo_http_server(threshold_bytes=8192) as first:
