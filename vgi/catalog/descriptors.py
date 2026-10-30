@@ -16,6 +16,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Union
+from warnings import deprecated
 
 import pyarrow as pa
 
@@ -38,12 +39,19 @@ from vgi.catalog.catalog_interface import (
     serialize_column_statistics,
 )
 from vgi.catalog.column_metadata import column_metadata, with_column_metadata
-from vgi.catalog.constraints import ConstraintInfo, validate_constraint_records
+from vgi.catalog.constraints import ConstraintInfo, served_table_schema, validate_constraint_records
 from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.indexes import IndexDefinition
 from vgi.catalog.macros import normalize_macro_overloads
 from vgi.catalog.options import OptionState
-from vgi.catalog.sql import ColumnExpressions, SqlExpression, column_expressions, with_column_expressions
+from vgi.catalog.sql import (
+    ColumnExpressions,
+    SqlExpression,
+    canonical_generated_columns,
+    column_expressions,
+    validate_generated_columns,
+    with_column_expressions,
+)
 from vgi.column_path import RequiredFilterPaths, column_path_key
 from vgi.invocation import BindResponse, FunctionType
 from vgi.metadata import CatalogFunctionType
@@ -228,9 +236,13 @@ def _inline_function_result(
     ).serialize()
 
 
+@deprecated(
+    "ForeignKeyDef is not sent under vgi.v3; build a FOREIGN_KEY record with "
+    "vgi.catalog.constraint_record(..., references=ReferencedKey(...)) in Table.constraints"
+)
 @dataclass(frozen=True, slots=True)
 class ForeignKeyDef:
-    """A foreign key constraint definition.
+    """Removed under vgi.v3: use ``constraint_record(..., references=ReferencedKey(...))``.
 
     Attributes:
         columns: Column names in THIS table that form the FK.
@@ -282,16 +294,20 @@ class Table:
         constraints: Canonical constraint records, built with
             ``vgi.catalog.constraint_record()``.
             They are the worker's own attestation: DuckDB reads only
-            ENFORCED + ALL_ROWS records, and every Arrow field (descending
-            through ordinary structs) must be non-nullable exactly when a
-            NOT_NULL/PRIMARY_KEY record names it. Both are checked here.
-            ``ReadOnlyCatalogInterface`` negotiates the read profile.
+            ENFORCED + ALL_ROWS records. The served Arrow nullability is
+            derived from them: a field is served non-nullable exactly when a
+            NOT_NULL/PRIMARY_KEY record names it, so ``columns`` nullability
+            is never a claim. The extension's ATTACH rules are checked here.
+            ``ReadOnlyCatalogInterface`` negotiates the read profile, and the
+            write-enforcement profile when the table also has write functions
+            (records on a writable table attest that writes enforce them).
         definition_revision: Opaque table-definition revision for mutation.
-        not_null: Removed under vgi.v3; nonempty values raise. Use ``constraints``.
-        unique: Removed under vgi.v3; nonempty values raise. Use ``constraints``.
-        check: Removed under vgi.v3; nonempty values raise. Use ``constraints``.
-        primary_key: Removed under vgi.v3; nonempty values raise. Use ``constraints``.
-        foreign_key: Removed under vgi.v3; nonempty values raise. Use ``constraints``.
+        not_null: Removed under vgi.v3 (type-checks only as ``()``); nonempty
+            values raise. Use ``constraint_record(..., "NOT_NULL", [["col"]], ...)``.
+        unique: Removed under vgi.v3; use a UNIQUE ``constraint_record()``.
+        check: Removed under vgi.v3; use a CHECK ``constraint_record(check_sql=...)``.
+        primary_key: Removed under vgi.v3; use a PRIMARY_KEY ``constraint_record()``.
+        foreign_key: Removed under vgi.v3; use a FOREIGN_KEY ``constraint_record(references=...)``.
         defaults: Dict mapping column names to default values. Accepts
             Python literals (str, int, float, bool, None) which are
             auto-converted, or `Sql` for raw SQL.
@@ -345,11 +361,13 @@ class Table:
     write_result_modes: dict[str, str] = field(default_factory=dict)
     constraints: tuple[ConstraintInfo, ...] = ()
     definition_revision: bytes | None = None
-    not_null: tuple[str, ...] = ()
-    unique: tuple[tuple[str, ...], ...] = ()
-    check: tuple[str, ...] = ()
-    primary_key: tuple[tuple[str, ...], ...] = ()
-    foreign_key: tuple[ForeignKeyDef, ...] = ()
+    # Removed under vgi.v3. Typed as the empty tuple so a type checker flags
+    # any remaining use; a nonempty value also raises at construction.
+    not_null: tuple[()] = ()
+    unique: tuple[()] = ()
+    check: tuple[()] = ()
+    primary_key: tuple[()] = ()
+    foreign_key: tuple[()] = ()
     defaults: dict[str, DefaultValue] = field(default_factory=dict)
     generated_columns: dict[str, str] = field(default_factory=dict)
     column_comments: dict[str, str] = field(default_factory=dict)
@@ -417,7 +435,9 @@ class Table:
         if any((self.not_null, self.unique, self.check, self.primary_key, self.foreign_key)):
             raise ValueError(
                 f"Table '{self.name}': not_null/unique/check/primary_key/foreign_key are not sent under vgi.v3; "
-                "declare canonical records with vgi.catalog.constraint_record() in `constraints` instead"
+                "declare canonical records with vgi.catalog.constraint_record() in `constraints`, e.g. "
+                f"constraint_record(['main'], '{self.name}', 'pk', 'PRIMARY_KEY', [['id']], "
+                "enforcement='ENFORCED', validation='ALL_ROWS')"
             )
 
         # Resolve columns to validate constraints
@@ -425,7 +445,16 @@ class Table:
         column_names = {f.name for f in resolved}
         # The DuckDB extension rejects the table at ATTACH on either failure;
         # check here so a worker's own unit tests catch it.
+        owner = list(self.constraints[0].ref.schema_path) if self.constraints else ["main"]
         validate_constraint_records(self.name, resolved, self.constraints)
+        validate_generated_columns(
+            served_table_schema(
+                self._apply_generated_columns_to_schema(canonical_generated_columns(resolved, owner), owner),
+                self.constraints,
+            ),
+            owner,
+            table=self.name,
+        )
 
         # Validate defaults column names
         for col in self.defaults:
@@ -765,11 +794,17 @@ class Macro:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Index:
-    """Explicit resolved index declaration; no physical index is inferred."""
+    """Explicit resolved index declaration; no physical index is inferred.
+
+    Build ``definition`` with [`index_definition`][vgi.catalog.index_definition].
+    ``options`` defaults to the definition's effective option values with no
+    explicit overrides. ``ReadOnlyCatalogInterface`` negotiates
+    ``vgi.index.definition.read.v1`` for declared indexes.
+    """
 
     name: str
     definition: IndexDefinition
-    options: OptionState
+    options: OptionState | None = None
     comment: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
 
@@ -779,7 +814,7 @@ class Index:
             name=self.name,
             schema_path=schema_path,
             definition=self.definition,
-            options=self.options,
+            options=self.options if self.options is not None else OptionState(values=self.definition.options),
             comment=self.comment,
             tags=dict(self.tags),
         )

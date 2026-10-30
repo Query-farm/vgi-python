@@ -329,7 +329,6 @@ from vgi.catalog import (
     AttachOpaqueData,
     Catalog,
     Index,
-    IndexConstraintType,
     Macro,
     MacroType,
     ReadOnlyCatalogInterface,
@@ -346,10 +345,7 @@ from vgi.catalog import (
     View,
 )
 from vgi.catalog.capabilities import (
-    CONSTRAINT_RECORDS_READ,
-    INDEX_DEFINITION_READ,
     ROW_SCALAR_EXPRESSION,
-    CatalogCapabilities,
 )
 from vgi.catalog.catalog_interface import _validate_at_params
 from vgi.catalog.constraints import ConstraintDefinition, ConstraintInfo, ConstraintKind, ForeignKeyDefinition
@@ -357,11 +353,9 @@ from vgi.catalog.dependencies import CatalogObjectRef
 from vgi.catalog.descriptors import ColumnStatisticsInput
 from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 from vgi.catalog.evaluation_context import QueryEvaluationContext
-from vgi.catalog.indexes import IndexDefinition, IndexKey
-from vgi.catalog.options import OptionState
+from vgi.catalog.indexes import index_definition
 from vgi.catalog.sql import SqlExpression as CanonicalSqlExpression
 from vgi.schema_utils import schema
-from vgi.typed_values import TypedValueBatch
 from vgi.worker import Worker
 
 # Shared scratch dir for native-branch fixtures (read_parquet / read_csv arms).
@@ -1598,14 +1592,7 @@ _EXAMPLE_CATALOG = Catalog(
             indexes=[
                 Index(
                     name=name,
-                    definition=IndexDefinition(
-                        table=CatalogObjectRef(kind="table", schema_path=["data"], name="numbers"),
-                        algorithm="fixture.metadata",
-                        keys=[IndexKey(column_path=["value"]).serialize_to_bytes()],
-                        options=TypedValueBatch.empty(),
-                        constraint_type=IndexConstraintType.NONE,
-                    ),
-                    options=OptionState(values=TypedValueBatch.empty()),
+                    definition=index_definition(["data"], "numbers", [["value"]], algorithm="fixture.metadata"),
                     comment="Metadata-only index teaching fixture; no physical index or enforcement",
                 )
                 for name in ("idx_numbers_value", "idx_numbers_value_unique")
@@ -1624,10 +1611,6 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
     """
 
     catalog = _EXAMPLE_CATALOG
-
-    def catalog_capabilities(self, *, attach_opaque_data: AttachOpaqueData) -> CatalogCapabilities:
-        """Expose validated immutable facts; this catalog has no mutation path."""
-        return CatalogCapabilities(read=sorted([CONSTRAINT_RECORDS_READ, ROW_SCALAR_EXPRESSION, INDEX_DEFINITION_READ]))
 
     def table_get(
         self,

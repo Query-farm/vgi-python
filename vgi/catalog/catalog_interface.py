@@ -9,7 +9,7 @@ catalog interfaces in VGI workers, enabling DuckDB ATTACH support.
 import dataclasses
 import threading
 from abc import ABC, abstractmethod
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import InitVar, dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -24,6 +24,7 @@ from typing import (
     cast,
     overload,
 )
+from warnings import deprecated
 
 if TYPE_CHECKING:
     from vgi_rpc.rpc import CallContext
@@ -41,13 +42,23 @@ from vgi_rpc import ArrowSerializableDataclass, ArrowType
 from vgi_rpc.utils import IpcValidation, deserialize_record_batch, serialize_record_batch_bytes
 
 from vgi.arguments import Arguments, SecretLookupEntry
+from vgi.catalog._legacy import reject_removed_arguments
 from vgi.catalog.capabilities import (
+    CONSTRAINT_ENFORCE,
     CONSTRAINT_RECORDS_READ,
+    INDEX_DEFINITION_READ,
     ROW_SCALAR_EXPRESSION,
     CatalogCapabilities,
 )
 from vgi.catalog.column_metadata import validate_column_metadata
-from vgi.catalog.constraints import ConstraintInfo, ConstraintsApplyRequest, ConstraintSnapshot, constraint_infos
+from vgi.catalog.constraints import (
+    ConstraintInfo,
+    ConstraintsApplyRequest,
+    ConstraintSnapshot,
+    constraint_infos,
+    validate_constraint_records,
+    validate_foreign_key_targets,
+)
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot
 from vgi.catalog.indexes import IndexConstraintType, IndexDefinition
 from vgi.catalog.layout import TableLayout, TableLayoutChange
@@ -430,6 +441,16 @@ class SchemaInfo(CatalogObject, ArrowSerializableDataclass):
     options: Annotated[OptionState | None, ArrowType(pa.binary())] = None
 
 
+_LEGACY_TABLE_CONSTRAINT_MESSAGE = (
+    "declare canonical ConstraintInfo records with vgi.catalog.constraint_record() and pass "
+    "constraints=[record.serialize_to_bytes(), ...] (constraints=[] when the table has none)"
+)
+
+
+@deprecated(
+    "ForeignKeyInfo is not table wire state under vgi.v3; use a FOREIGN_KEY "
+    "vgi.catalog.constraint_record(..., references=ReferencedKey(...))"
+)
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ForeignKeyInfo(ArrowSerializableDataclass):
     """Legacy foreign-key convenience record retained for source migration.
@@ -450,6 +471,18 @@ class ForeignKeyInfo(ArrowSerializableDataclass):
     referenced_schema_path: SchemaPath
 
 
+@reject_removed_arguments(
+    {
+        name: _LEGACY_TABLE_CONSTRAINT_MESSAGE
+        for name in (
+            "not_null_constraints",
+            "unique_constraints",
+            "check_constraints",
+            "primary_key_constraints",
+            "foreign_key_constraints",
+        )
+    }
+)
 @dataclass(frozen=True)
 class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     """Information about a table in a schema.
@@ -2913,6 +2946,49 @@ class CatalogInterface(ABC):
         return []
 
 
+def _index_read_profiles(definition: IndexDefinition) -> set[str]:
+    """Read profiles DuckDB needs to accept one typed index definition."""
+    profiles = {INDEX_DEFINITION_READ}
+    for key in definition.key_definitions():
+        if key.expression is not None:
+            profiles.add(key.expression.profile)
+    if definition.associated_constraint is not None:
+        profiles.add(CONSTRAINT_RECORDS_READ)
+    return profiles
+
+
+def catalog_capabilities_for(
+    tables: Iterable[TableInfo] = (), indexes: Iterable[IndexInfo] = ()
+) -> CatalogCapabilities:
+    """Profiles a catalog must advertise for DuckDB to accept these served objects.
+
+    Use from a custom ``catalog_capabilities()`` override (``union`` it with
+    anything else the catalog implements). Tables with constraint records need
+    ``vgi.constraint.records.read.v1`` and the scalar expression profile; a
+    constrained table with write functions also needs
+    ``vgi.constraint.enforce.v1`` (the records attest that writes enforce
+    them); typed indexes need ``vgi.index.definition.read.v1``.
+
+    Args:
+        tables: Tables the catalog serves.
+        indexes: Indexes the catalog serves.
+
+    Returns:
+        The advertisement, not an agreement: the worker selects against the
+        client's offer at attach.
+    """
+    read: set[str] = set()
+    write: set[str] = set()
+    for table in tables:
+        if table.constraints:
+            read |= {CONSTRAINT_RECORDS_READ, ROW_SCALAR_EXPRESSION}
+            if table.insert_function or table.update_function or table.delete_function or table.write_result_modes:
+                write.add(CONSTRAINT_ENFORCE)
+    for index in indexes:
+        read |= _index_read_profiles(index.definition)
+    return CatalogCapabilities(read=sorted(read), write=sorted(write))
+
+
 def _read_only(operation: str) -> Any:
     """Create a [`CatalogInterface`][] method that raises [`CatalogReadOnlyError`][]."""
 
@@ -3163,6 +3239,17 @@ class ReadOnlyCatalogInterface(CatalogInterface):
                     _register_macro(schema_key, macro)
                 for index in schema.indexes:
                     _register_index(schema_key, index)
+            # Ownership and FK targets need the schema and every table; the
+            # extension rejects the table at ATTACH on either failure.
+            records = {}
+            for schema in self.catalog.schemas:
+                for table in schema.tables:
+                    if table.constraints:
+                        validate_constraint_records(
+                            table.name, table.resolved_columns, table.constraints, schema_path=schema.path
+                        )
+                    records[(tuple(schema.path), table.name)] = list(table.constraints)
+            validate_foreign_key_targets(records)
         else:
             # Backward compat: create "main" schema from legacy `functions` list.
             # The schema must carry the functions so its SchemaInfo reports
@@ -3285,21 +3372,33 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         )
 
     def catalog_capabilities(self, *, attach_opaque_data: AttachOpaqueData) -> CatalogCapabilities:
-        """Advertise constraint records when a declared table carries them.
+        """Advertise the profiles the declared catalog needs.
 
         DuckDB reads ``TableInfo.constraints`` only under a negotiated
         ``vgi.constraint.records.read.v1`` (plus the scalar expression profile
-        for CHECK). The worker selects against the client's offer after
-        ``catalog_attach``, so overriding ``catalog_attach`` cannot drop it.
-        Override and extend this result when tables are served outside the
-        declarative ``catalog``.
+        for CHECK), writes a constrained table only under
+        ``vgi.constraint.enforce.v1``, and reads declared indexes only under
+        ``vgi.index.definition.read.v1``. Records on a table with write
+        functions are the worker's attestation that writes enforce them, so
+        the enforcement profile is advertised for it. The worker selects
+        against the client's offer after ``catalog_attach``, so overriding
+        ``catalog_attach`` cannot drop them. When serving tables outside the
+        declarative ``catalog``, override and ``union`` this with
+        [`catalog_capabilities_for`][vgi.catalog.catalog_capabilities_for].
         """
         del attach_opaque_data
         self._build_registries()
-        assert self._table_registry is not None
-        if any(table.constraints for table in self._table_registry.values()):
-            return CatalogCapabilities(read=sorted([CONSTRAINT_RECORDS_READ, ROW_SCALAR_EXPRESSION]))
-        return CatalogCapabilities()
+        assert self._table_registry is not None and self._index_registry is not None
+        read: set[str] = set()
+        write: set[str] = set()
+        for table in self._table_registry.values():
+            if table.constraints:
+                read |= {CONSTRAINT_RECORDS_READ, ROW_SCALAR_EXPRESSION}
+                if table.insert_function or table.update_function or table.delete_function:
+                    write.add(CONSTRAINT_ENFORCE)
+        for index in self._index_registry.values():
+            read |= _index_read_profiles(index.definition)
+        return CatalogCapabilities(read=sorted(read), write=sorted(write))
 
     def _global_function_infos(self) -> list[FunctionInfo]:
         """Build [`FunctionInfo`][] records for ``Catalog.global_functions``.

@@ -64,8 +64,9 @@ class TestCLICatalogAttach:
         assert len(attach_result["attach_opaque_data"]) > 0
         assert attach_result["supports_transactions"] is True
         assert attach_result["catalog_version_frozen"] is True
-        # ReadOnlyCatalogInterface returns attach_opaque_data_required=False
-        assert attach_result["attach_opaque_data_required"] is False
+        # The CLI offers the profiles it decodes; the example catalog serves
+        # constraint records, so the selected agreement rides in the token.
+        assert attach_result["attach_opaque_data_required"] is True
 
 
 class TestCLISchemaContents:

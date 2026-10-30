@@ -528,7 +528,10 @@ class InMemoryCatalog(CatalogInterface):
     ) -> None:
         """Create a new table."""
         if constraint_definitions:
-            raise NotImplementedError("this metadata-only catalog does not enforce canonical constraints")
+            raise NotImplementedError(
+                "CREATE TABLE with NOT NULL/PRIMARY KEY/UNIQUE/CHECK/FOREIGN KEY constraints is unsupported: "
+                "this metadata-only catalog stores no rows, so it cannot enforce them on writes"
+            )
         if any(value is not None for value in (comment, tags, options, layout)):
             raise NotImplementedError("table creation metadata/options/layout profiles are not supported")
 

@@ -4,9 +4,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import Annotated
+from typing import Annotated, Any
 
 import pyarrow as pa
 from vgi_rpc import ArrowType
@@ -90,3 +91,49 @@ class IndexDefinition(_ConstraintRecord):
     def key_definitions(self) -> list[IndexKey]:
         """Decode keys in their declared order without splitting raw names."""
         return [IndexKey.deserialize_from_bytes(value) for value in self.keys]
+
+
+def index_definition(
+    schema_path: Sequence[str],
+    table: str,
+    columns: Sequence[Sequence[str]],
+    *,
+    algorithm: str,
+    options: Mapping[str, Any] | None = None,
+    constraint_type: IndexConstraintType | str = IndexConstraintType.NONE,
+    associated_constraint_id: str | None = None,
+) -> IndexDefinition:
+    """Build an [`IndexDefinition`][] over raw column paths without hand-encoding records.
+
+    Args:
+        schema_path: Schema path of the indexed table.
+        table: Indexed table name.
+        columns: Raw component paths of the keys in order, e.g. ``[["id"]]``.
+        algorithm: Provider index algorithm identifier, e.g. ``"art"``.
+        options: Effective option values (Python or ``pa.Scalar`` values).
+        constraint_type: NONE, UNIQUE or PRIMARY.
+        associated_constraint_id: ``id`` of the table's PRIMARY_KEY/UNIQUE
+            record this index backs; required for PRIMARY.
+
+    Returns:
+        The validated definition.
+
+    Raises:
+        TypeError: ``columns`` holds names instead of component paths.
+        ValueError: The arguments do not describe one valid definition.
+    """
+    if isinstance(columns, (str, bytes)) or any(isinstance(path, (str, bytes)) for path in columns):
+        raise TypeError("index columns are raw component paths such as [['id']], not names")
+    owner = list(schema_path)
+    return IndexDefinition(
+        table=CatalogObjectRef(kind="table", schema_path=owner, name=table),
+        algorithm=algorithm,
+        keys=[IndexKey(column_path=list(path)).serialize_to_bytes() for path in columns],
+        options=TypedValueBatch.from_values(options or {}),
+        constraint_type=constraint_type
+        if isinstance(constraint_type, IndexConstraintType)
+        else IndexConstraintType(constraint_type.lower()),
+        associated_constraint=None
+        if associated_constraint_id is None
+        else CatalogObjectRef(kind="constraint", schema_path=owner, name=associated_constraint_id, owner_table=table),
+    )

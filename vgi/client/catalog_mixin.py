@@ -74,6 +74,18 @@ from vgi.catalog import (
     TransactionOpaqueData,
     ViewInfo,
 )
+from vgi.catalog.capabilities import (
+    CONSTRAINT_CREATE,
+    CONSTRAINT_ENFORCE,
+    CONSTRAINT_MUTATE,
+    CONSTRAINT_RECORDS_READ,
+    INDEX_DEFINITION_CREATE,
+    INDEX_DEFINITION_READ,
+    INDEX_DROP,
+    ROW_SCALAR_EXPRESSION,
+    TRANSACTION_DDL,
+    CatalogCapabilities,
+)
 from vgi.catalog.catalog_interface import deserialize_column_statistics
 from vgi.catalog.constraints import ConstraintsApplyRequest, ConstraintSnapshot
 from vgi.catalog.contents_codec import decode_inventory
@@ -93,6 +105,24 @@ from vgi.protocol import (
     VgiProtocol,
 )
 from vgi.typed_values import TypedValueBatch
+
+#: The catalog profiles this client decodes, offered by default at attach.
+#: Constraint and index records are decoded by ``TableInfo.constraint_infos()``
+#: and ``IndexInfo.definition``. Pass ``client_capabilities=None`` to offer
+#: nothing (the worker then selects no profiles).
+DEFAULT_CLIENT_CAPABILITIES = ClientCapabilities(
+    engine="vgi-python",
+    native_formats=[],
+    catalogs=[],
+    can_stream=False,
+    filter_encodings=[],
+    catalog=CatalogCapabilities(
+        read=sorted([CONSTRAINT_RECORDS_READ, ROW_SCALAR_EXPRESSION, INDEX_DEFINITION_READ]),
+        ddl=sorted([CONSTRAINT_CREATE, CONSTRAINT_MUTATE, INDEX_DEFINITION_CREATE, INDEX_DROP]),
+        write=[CONSTRAINT_ENFORCE],
+        transaction=[TRANSACTION_DDL],
+    ),
+)
 
 # Module-level worker pool shared across all CatalogClientMixin instances.
 # Workers are cached by command and reused across catalog calls, avoiding
@@ -361,7 +391,7 @@ class CatalogClientMixin:
         options: dict[str, Any] | None = None,
         data_version_spec: str | None,
         implementation_version: str | None,
-        client_capabilities: ClientCapabilities | None = None,
+        client_capabilities: ClientCapabilities | None = DEFAULT_CLIENT_CAPABILITIES,
     ) -> CatalogAttachResult:
         """Attach to a catalog.
 
@@ -372,9 +402,12 @@ class CatalogClientMixin:
                 (``None`` = unconstrained — worker picks).
             implementation_version: Semver constraint for the worker's
                 implementation version (``None`` = unconstrained).
-            client_capabilities: Capabilities of the consuming engine. ``None``
-                leaves support unspecified; the worker must not infer support
-                for optional semantics from the Python SDK version.
+            client_capabilities: Capabilities of the consuming engine.
+                Defaults to ``DEFAULT_CLIENT_CAPABILITIES`` (``vgi.client``),
+                the profiles this client decodes, so constraint records and
+                typed indexes are served. ``None`` offers nothing; the worker
+                must not infer support for optional semantics from the Python
+                SDK version.
 
         Returns:
             [`CatalogAttachResult`][] with attach_opaque_data, catalog capabilities, and

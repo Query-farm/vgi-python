@@ -16,6 +16,7 @@ from typing import Any, Literal, cast
 
 import pyarrow as pa
 
+from vgi.catalog._legacy import reject_removed_arguments
 from vgi.catalog.evaluation_context import MAX_SQL_RECORD_BYTES, QueryEvaluationContext, _SqlRecord, _text
 from vgi.schema_path import SchemaPath, schema_path_key
 
@@ -44,6 +45,12 @@ def _definition(sql: str, profile: str, schema_path: SchemaPath, context: QueryE
     context.__post_init__()
 
 
+@reject_removed_arguments(
+    {},
+    positional="SqlExpression is a record under vgi.v3, not a str NewType. Use "
+    "SqlExpression.scalar(sql, schema_path) or SqlExpression(sql=..., profile=ROW_SCALAR_EXPRESSION, "
+    "schema_path=[...], evaluation_context=QueryEvaluationContext())",
+)
 @dataclass(frozen=True, kw_only=True)
 class SqlExpression(_SqlRecord):
     """One scalar expression, interpreted only by a qualified owning binder."""
@@ -56,6 +63,29 @@ class SqlExpression(_SqlRecord):
     def __post_init__(self) -> None:
         """Validate the bounded carrier and required evaluation context."""
         _definition(self.sql, self.profile, self.schema_path, self.evaluation_context)
+
+    @classmethod
+    def scalar(cls, sql: str, schema_path: SchemaPath) -> SqlExpression:
+        """Build a DuckDB scalar expression owned by ``schema_path`` in the default context.
+
+        This is the form the DuckDB extension reads for column defaults,
+        generated columns and CHECK constraints.
+
+        Args:
+            sql: DuckDB scalar expression text.
+            schema_path: The owning schema path.
+
+        Returns:
+            The validated expression.
+        """
+        from vgi.catalog.capabilities import ROW_SCALAR_EXPRESSION
+
+        return cls(
+            sql=sql,
+            profile=ROW_SCALAR_EXPRESSION,
+            schema_path=list(schema_path),
+            evaluation_context=QueryEvaluationContext(),
+        )
 
     def validate_owner(self, schema_path: SchemaPath) -> None:
         """Require the expression's raw owner path to match its operation."""
@@ -163,3 +193,109 @@ def with_column_expressions(field: pa.Field[Any], expressions: ColumnExpressions
         metadata[GENERATED_EXPRESSION_KEY] = base64.b64encode(expressions.generated.serialize_to_bytes())
         metadata[GENERATION_KEY] = str(expressions.generation).encode()
     return field.with_metadata(cast(Any, metadata))
+
+
+_LEGACY_GENERATED_KEY = b"generated_expression"
+
+
+def canonical_generated_columns(schema: pa.Schema, schema_path: SchemaPath) -> pa.Schema:
+    """Translate legacy ``generated_expression`` text metadata to the canonical record.
+
+    The legacy key held raw SQL for a VIRTUAL generated column. When a
+    top-level field carries only that key (no canonical expression keys and
+    no default), it becomes a canonical [`SqlExpression`][] owned by
+    ``schema_path`` with the default evaluation context. Anything else is
+    ambiguous and left for validation to reject.
+    """
+    from vgi.catalog.capabilities import ROW_SCALAR_EXPRESSION
+    from vgi.catalog.evaluation_context import QueryEvaluationContext
+
+    fields = []
+    for column_field in schema:
+        metadata = dict(column_field.metadata or {})
+        legacy = metadata.get(_LEGACY_GENERATED_KEY)
+        if legacy is not None and not (_EXPRESSION_KEYS | {b"default"}) & metadata.keys():
+            del metadata[_LEGACY_GENERATED_KEY]
+            expression = SqlExpression(
+                sql=legacy.decode(),
+                profile=ROW_SCALAR_EXPRESSION,
+                schema_path=list(schema_path),
+                evaluation_context=QueryEvaluationContext(),
+            )
+            column_field = with_column_expressions(
+                column_field.with_metadata(cast(Any, metadata)),
+                ColumnExpressions(generated=expression, generation="virtual"),
+            )
+        fields.append(column_field)
+    return pa.schema(fields, metadata=cast(Any, schema.metadata))
+
+
+def _generated_type_supported(dtype: pa.DataType) -> bool:
+    return (
+        pa.types.is_boolean(dtype)
+        or pa.types.is_int8(dtype)
+        or pa.types.is_int16(dtype)
+        or pa.types.is_int32(dtype)
+        or pa.types.is_int64(dtype)
+        or pa.types.is_string(dtype)
+    )
+
+
+def validate_generated_columns(schema: pa.Schema, schema_path: SchemaPath, *, table: str | None = None) -> None:
+    """Apply the DuckDB extension's generated-column rules to top-level fields.
+
+    Mirrors ``ReadNativeColumnGenerated``: VIRTUAL only, no default, the field
+    nullable, no extension type, Boolean/int8-64/utf8 storage, owned by the
+    table's schema with the default evaluation context, and an expression in
+    the extension's deterministic grammar (checked when a DuckDB engine is
+    installed).
+
+    Args:
+        schema: The table's Arrow schema (after nullability is derived).
+        schema_path: The table's schema path.
+        table: Table name for error messages.
+
+    Raises:
+        ValueError: DuckDB would reject the table at ATTACH.
+        NotImplementedError: The column is STORED or extension-typed.
+    """
+    from vgi.catalog._expression_grammar import validate_generated_sql
+    from vgi.catalog.capabilities import ROW_SCALAR_EXPRESSION
+    from vgi.catalog.evaluation_context import QueryEvaluationContext
+
+    owner = f"Table '{table}': " if table is not None else ""
+    for column_field in schema:
+        metadata = column_field.metadata or {}
+        label = f"{owner}generated column {column_field.name!r}"
+        if _LEGACY_GENERATED_KEY in metadata:
+            raise ValueError(
+                f"{label}: legacy generated_expression metadata conflicts with canonical or default metadata; "
+                "use Table(generated_columns=...) or with_column_expressions()"
+            )
+        expressions = column_expressions(column_field)
+        if expressions.generated is None:
+            continue
+        if expressions.generation != "virtual":
+            raise NotImplementedError(f"{label}: stored generated columns are not supported; DuckDB reads only VIRTUAL")
+        if b"default" in metadata:
+            raise ValueError(f"{label} cannot also have a default")
+        if not column_field.nullable:
+            raise ValueError(
+                f"{label} must be nullable; DuckDB rejects NOT NULL/PRIMARY KEY on generated columns, "
+                "so do not name it in a NOT_NULL or PRIMARY_KEY record"
+            )
+        if isinstance(column_field.type, pa.BaseExtensionType) or b"ARROW:extension:name" in metadata:
+            raise NotImplementedError(f"{label}: generated columns cannot have an extension type")
+        if not _generated_type_supported(column_field.type):
+            raise ValueError(f"{label} is {column_field.type}; generated columns must be bool, int8-64 or string")
+        generated = expressions.generated
+        if generated.profile != ROW_SCALAR_EXPRESSION:
+            raise ValueError(f"{label}: expression profile must be {ROW_SCALAR_EXPRESSION}")
+        if schema_path_key(generated.schema_path) != schema_path_key(schema_path):
+            raise ValueError(f"{label}: expression must be owned by the table's schema {list(schema_path)!r}")
+        if generated.evaluation_context != QueryEvaluationContext():
+            raise ValueError(f"{label}: expression requires the default evaluation context")
+        try:
+            validate_generated_sql(generated.sql)
+        except ValueError as error:
+            raise ValueError(f"{label}: {generated.sql!r}: {error}") from error

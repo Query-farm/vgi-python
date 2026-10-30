@@ -7,7 +7,8 @@ The DuckDB extension rejects a table at ATTACH unless (a) the constraint read
 profile was negotiated, (b) every record is ENFORCED + ALL_ROWS and (c) Arrow
 nullability equals membership in the NOT_NULL/PRIMARY_KEY paths. These tests
 pin that a declarative catalog satisfies (a) with no hand-written capability
-override and that (b) and (c) fail in the worker's own process.
+override, that (b) fails in the worker's own process, and that the worker
+derives (c) from the records instead of failing.
 """
 
 from __future__ import annotations
@@ -186,39 +187,59 @@ def test_record_for_another_table_fails_at_definition() -> None:
         Table(name="places", columns=COLUMNS, constraints=(other, *RECORDS[1:]))
 
 
-# --- (c) Arrow nullability equals NOT_NULL/PRIMARY_KEY membership ---
+# --- (c) served Arrow nullability is derived from NOT_NULL/PRIMARY_KEY records ---
 
 
-def test_non_nullable_field_without_record_fails_even_without_constraints() -> None:
-    with pytest.raises(ValueError, match=r"Table 't': .*column \['id'\]: the field is non-nullable but no"):
-        Table(name="t", columns=pa.schema([pa.field("id", pa.int64(), nullable=False)]))
-
-
-def test_nullable_field_with_record_fails() -> None:
-    record = constraint_record(["main"], "t", "nn", "NOT_NULL", [["id"]], **TRUSTED)
-    with pytest.raises(ValueError, match=r"Table 't': .*column \['id'\]: the field is nullable but"):
-        Table(name="t", columns=pa.schema([("id", pa.int64())]), constraints=(record,))
-
-
-def test_nested_struct_child_nullability_is_checked_both_ways() -> None:
-    with pytest.raises(ValueError, match=r"column \['bbox', 'xmin'\]: the field is non-nullable but no"):
-        Table(name="places", columns=COLUMNS, constraints=(RECORDS[0], RECORDS[2]))
-    nullable_child = pa.schema([COLUMNS.field("id"), pa.field("bbox", pa.struct([("xmin", pa.float64())]))])
-    with pytest.raises(ValueError, match=r"column \['bbox', 'xmin'\]: the field is nullable but"):
-        Table(name="places", columns=nullable_child, constraints=RECORDS[:2])
-
-
-def test_nested_mismatch_fails_when_served() -> None:
+def _served(columns: pa.Schema, records: tuple[ConstraintInfo, ...] = (), name: str = "places") -> pa.Schema:
     info = TableInfo(
-        name="places",
+        name=name,
         schema_path=["main"],
         comment=None,
         tags={},
-        columns=SerializedSchema(COLUMNS.serialize().to_pybytes()),
-        constraints=[RECORDS[0].serialize_to_bytes()],
+        columns=SerializedSchema(columns.serialize().to_pybytes()),
+        constraints=[record.serialize_to_bytes() for record in records],
     )
-    with pytest.raises(ValueError, match=r"Table 'places': Arrow nullability disagrees .* \['bbox', 'xmin'\]"):
-        Worker._table_for_capabilities(info, CatalogCapabilities(read=sorted(PROFILES)))
+    served = Worker._table_for_capabilities(info, CatalogCapabilities(read=sorted(PROFILES)))
+    return pa.ipc.read_schema(pa.py_buffer(served.columns))
+
+
+def test_unnamed_non_nullable_field_is_served_nullable() -> None:
+    Table(name="t", columns=pa.schema([pa.field("id", pa.int64(), nullable=False)]))
+    served = _served(pa.schema([pa.field("id", pa.int64(), nullable=False)]), name="t")
+    assert served.field("id").nullable
+
+
+def test_record_named_nullable_field_is_served_non_nullable() -> None:
+    record = constraint_record(["main"], "t", "nn", "NOT_NULL", [["id"]], **TRUSTED)
+    Table(name="t", columns=pa.schema([("id", pa.int64())]), constraints=(record,))
+    assert not _served(pa.schema([("id", pa.int64())]), (record,), name="t").field("id").nullable
+
+
+def test_nested_struct_child_nullability_follows_records() -> None:
+    # No record names bbox.xmin: the non-nullable child is served nullable.
+    served = _served(COLUMNS, (RECORDS[0], RECORDS[2]))
+    assert served.field("bbox").type.field("xmin").nullable
+    assert not served.field("id").nullable
+    # A record names a nullable child: it is served non-nullable; the parent stays nullable.
+    nullable_child = pa.schema([COLUMNS.field("id"), pa.field("bbox", pa.struct([("xmin", pa.float64())]))])
+    served = _served(nullable_child, RECORDS[:2])
+    assert not served.field("bbox").type.field("xmin").nullable
+    assert served.field("bbox").nullable
+
+
+def test_row_id_and_logical_storage_are_untouched() -> None:
+    storage = pa.struct([pa.field("x", pa.float64(), nullable=False)])
+    columns = pa.schema(
+        [
+            pa.field("rowid", pa.int64(), nullable=False, metadata={b"is_row_id": b"1"}),
+            pa.field("point", storage, nullable=False, metadata={b"ARROW:extension:name": b"example.point"}),
+        ]
+    )
+    served = _served(columns, name="t")
+    assert not served.field("rowid").nullable
+    assert served.field("point").nullable
+    assert not served.field("point").type.field("x").nullable
+    assert served.field("rowid").metadata == {b"is_row_id": b"1"}
 
 
 @pytest.mark.parametrize(

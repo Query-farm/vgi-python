@@ -172,6 +172,22 @@ class CatalogCapabilities(ArrowSerializableDataclass):
             selected = {category: names - removed for category, names in selected.items()}
         return CatalogCapabilities(**{category: sorted(names) for category, names in selected.items()})
 
+    def union(self, *others: CatalogCapabilities) -> CatalogCapabilities:
+        """Combine advertisements, e.g. a subclass extending its base's profiles.
+
+        Args:
+            *others: Advertisements to merge into this one.
+
+        Returns:
+            The canonical (sorted, de-duplicated) union.
+        """
+        return CatalogCapabilities(
+            **{
+                category: sorted(set(getattr(self, category)).union(*(getattr(o, category) for o in others)))
+                for category in self._known
+            }
+        )
+
     def validate_selected(self) -> None:
         """Reject malformed, unknown or incomplete attachment agreements."""
         if self.select(self) != self:

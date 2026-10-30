@@ -89,6 +89,7 @@ from vgi.aggregate_function import AggregateBindParams, AggregateFunction
 from vgi.argument_spec import ArgumentSpec, extract_argument_specs
 from vgi.arguments import Arguments
 from vgi.catalog import CatalogInterface
+from vgi.catalog._dispatch import call_catalog
 from vgi.catalog.attach_option import AttachOptionSpec, extract_attach_option_specs
 from vgi.catalog.capabilities import (
     CATALOG_DEPENDENCIES_READ,
@@ -150,8 +151,10 @@ from vgi.catalog.constraints import (
     ForeignKeyMatch,
     ReferentialAction,
     constraint_definitions,
+    served_table_schema,
     validate_constraint_records,
     validate_constraint_schema,
+    validate_foreign_key_targets,
 )
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot
 from vgi.catalog.indexes import IndexConstraintType, IndexDefinition
@@ -161,7 +164,7 @@ from vgi.catalog.options import OptionChanges, OptionDefinitions
 from vgi.catalog.query import QUERY_EXECUTOR, CatalogQueryPrepareRequest, CatalogQueryPrepareResult
 from vgi.catalog.secret_type import SecretTypeSpec
 from vgi.catalog.setting import SettingSpec, extract_setting_specs
-from vgi.catalog.sql import column_expressions
+from vgi.catalog.sql import canonical_generated_columns, column_expressions, validate_generated_columns
 from vgi.column_path import column_definition as decode_column_definition
 from vgi.column_path import column_path_key
 from vgi.exceptions import (
@@ -278,6 +281,9 @@ if TYPE_CHECKING:
     )
 
 _logger = logging.getLogger("vgi.worker")
+
+# Tables already reported as served read-only (warn once per process, not per listing).
+_WARNED_READ_ONLY_TABLES: set[tuple[tuple[str, ...], str]] = set()
 
 _vgi_version_cache: str | None = None
 
@@ -2959,13 +2965,22 @@ class Worker:
 
     @staticmethod
     def _table_for_capabilities(info: TableInfo, selected: CatalogCapabilities) -> TableInfo:
-        schema = pa.ipc.read_schema(pa.py_buffer(info.columns))
+        """Validate a table the way the extension does at ATTACH and shape it for the agreement.
+
+        Nullability is derived from the records (see ``served_table_schema``)
+        and legacy ``generated_expression`` metadata is translated, so the
+        served ``columns`` may differ from the provider's bytes.
+        """
+        original = pa.ipc.read_schema(pa.py_buffer(info.columns))
+        schema = canonical_generated_columns(original, info.schema_path)
+        infos = info.constraint_infos()
+        # The extension rejects the whole table at ATTACH on any of these.
+        validate_constraint_records(info.name, schema, infos, schema_path=info.schema_path)
+        schema = served_table_schema(schema, infos)
         validate_column_metadata(schema)
+        validate_generated_columns(schema, info.schema_path, table=info.name)
         require_logical_profiles(schema, selected_profiles=selected.read)
         Worker._require_column_expression_profiles(schema, selected, "read column expressions", info.schema_path)
-        infos = info.constraint_infos()
-        # The extension rejects the table at ATTACH on either failure.
-        validate_constraint_records(info.name, schema, infos)
         if infos:
             selected.require(CONSTRAINT_RECORDS_READ, available=selected, operation="read canonical constraints")
             for item in infos:
@@ -2975,11 +2990,26 @@ class Worker:
                     )
         if CONSTRAINT_MUTATE in selected.ddl and not info.definition_revision:
             raise ValueError("canonical mutation requires a nonempty table definition revision")
-        write_allowed = CONSTRAINT_ENFORCE in selected.write or not any(
-            item.enforcement == ConstraintEnforcement.ENFORCED for item in infos
-        )
+        has_writes = any(
+            function is not None for function in (info.insert_function, info.update_function, info.delete_function)
+        ) or bool(info.write_result_modes)
+        write_allowed = CONSTRAINT_ENFORCE in selected.write or not infos
+        if has_writes and not write_allowed:
+            key = (tuple(info.schema_path), info.name)
+            if key not in _WARNED_READ_ONLY_TABLES:
+                _WARNED_READ_ONLY_TABLES.add(key)
+                _logger.warning(
+                    "Table %s.%s is served read-only: it has constraint records and write functions, but this "
+                    "attachment did not select %s (the client did not offer it or catalog_capabilities() does "
+                    "not advertise it), so DuckDB could not trust writes to be enforced",
+                    ".".join(info.schema_path),
+                    info.name,
+                    CONSTRAINT_ENFORCE,
+                )
+        columns = info.columns if schema.equals(original, check_metadata=True) else schema.serialize().to_pybytes()
         return _dataclass_replace(
             info,
+            columns=SerializedSchema(columns),
             write_result_modes=info.write_result_modes if write_allowed else {},
             insert_function=info.insert_function if write_allowed else None,
             update_function=info.update_function if write_allowed else None,
@@ -2998,6 +3028,11 @@ class Worker:
             )
             else None,
         )
+
+    @staticmethod
+    def _validate_served_foreign_keys(infos: Sequence[TableInfo]) -> None:
+        """Check FOREIGN_KEY targets among tables served together (FKs stay within one schema)."""
+        validate_foreign_key_targets({(tuple(info.schema_path), info.name): info.constraint_infos() for info in infos})
 
     def _require_constraint_definition_profiles(
         self, attach: bytes, definitions: list[ConstraintDefinition], operation: str
@@ -5099,7 +5134,9 @@ class Worker:
         )
         cat = self._get_catalog()
         options = self._options_batch_to_dict(request.options)
-        result = cat.catalog_attach(
+        result: CatalogAttachResult = call_catalog(
+            cat,
+            "catalog_attach",
             name=request.name,
             options=options,
             data_version_spec=request.data_version_spec,
@@ -5332,7 +5369,9 @@ class Worker:
             self._require_catalog_capability(
                 attach_opaque_data, SCHEMA_OPTIONS_CREATE, "catalog_schema_create", transaction_opaque_data
             )
-        cat.schema_create(
+        call_catalog(
+            cat,
+            "schema_create",
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             path=path,
@@ -5467,7 +5506,9 @@ class Worker:
             type=SchemaObjectType.TABLE,
         )
         selected = self._effective_catalog_capabilities(attach_opaque_data)
-        return TablesResponse.from_infos([self._table_for_capabilities(info, selected) for info in infos])
+        served = [self._table_for_capabilities(info, selected) for info in infos]
+        self._validate_served_foreign_keys(served)
+        return TablesResponse.from_infos(served)
 
     def catalog_schema_contents_views(
         self,
@@ -5716,6 +5757,7 @@ class Worker:
             )
             for item in result.schemas
         ]
+        Worker._validate_served_foreign_keys([table for item in infos for table in item.tables])
         categories = encode_inventory(infos)
         etag = result.etag
         if etag is None and type(cat).catalog_contents_etag == "content-hash":
@@ -5803,10 +5845,15 @@ class Worker:
         )
         validate_constraint_schema(schema, definitions, table=request.name)
         if definitions:
-            self._require_catalog_capability(
-                request.attach_opaque_data, CONSTRAINT_CREATE, "catalog_table_create", request.transaction_opaque_data
+            kinds = ", ".join(sorted({str(definition.kind) for definition in definitions}))
+            operation = (
+                f"CREATE TABLE with {kinds} constraints (the catalog must store them and enforce them on "
+                "every write path; it advertises neither by default)"
             )
-            self._require_catalog_capability(request.attach_opaque_data, CONSTRAINT_ENFORCE, "catalog_table_create")
+            self._require_catalog_capability(
+                request.attach_opaque_data, CONSTRAINT_CREATE, operation, request.transaction_opaque_data
+            )
+            self._require_catalog_capability(request.attach_opaque_data, CONSTRAINT_ENFORCE, operation)
             self._require_constraint_definition_profiles(
                 request.attach_opaque_data, definitions, "catalog_table_create"
             )
@@ -5835,7 +5882,9 @@ class Worker:
                 self._require_catalog_capability(request.attach_opaque_data, expression.profile, "catalog_table_create")
             if request.layout.coverage != LayoutCoverage.ALL_ROWS:
                 raise ValueError("new table layout must cover all rows")
-        cat.table_create(
+        call_catalog(
+            cat,
+            "table_create",
             attach_opaque_data=self._unwrap_attach(request.attach_opaque_data),
             transaction_opaque_data=self._unwrap_transaction(
                 request.transaction_opaque_data, request.attach_opaque_data
@@ -6144,7 +6193,9 @@ class Worker:
             )
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
-        cat.table_column_comment_set(
+        call_catalog(
+            cat,
+            "table_column_comment_set",
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
@@ -6201,7 +6252,9 @@ class Worker:
         )
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
-        cat.table_column_add(
+        call_catalog(
+            cat,
+            "table_column_add",
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
@@ -6232,7 +6285,9 @@ class Worker:
             )
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
-        cat.table_column_drop(
+        call_catalog(
+            cat,
+            "table_column_drop",
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
@@ -6263,7 +6318,9 @@ class Worker:
         column_path_key([new_column_name])
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
-        cat.table_column_rename(
+        call_catalog(
+            cat,
+            "table_column_rename",
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
@@ -6293,7 +6350,9 @@ class Worker:
             )
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
-        cat.table_column_default_set(
+        call_catalog(
+            cat,
+            "table_column_default_set",
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
@@ -6321,7 +6380,9 @@ class Worker:
             )
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
-        cat.table_column_default_drop(
+        call_catalog(
+            cat,
+            "table_column_default_drop",
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
@@ -6352,7 +6413,9 @@ class Worker:
         decode_column_definition(column_definition, column_path, type_only=True)
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
-        cat.table_column_type_change(
+        call_catalog(
+            cat,
+            "table_column_type_change",
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
@@ -6382,7 +6445,9 @@ class Worker:
             )
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
-        cat.table_not_null_drop(
+        call_catalog(
+            cat,
+            "table_not_null_drop",
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
@@ -6411,7 +6476,9 @@ class Worker:
             )
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
-        cat.table_not_null_set(
+        call_catalog(
+            cat,
+            "table_not_null_set",
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,
@@ -6474,7 +6541,9 @@ class Worker:
                 attach_opaque_data, transaction_opaque_data, schema_path, name, replace=True
             )
         cat = self._get_catalog()
-        cat.view_create(
+        call_catalog(
+            cat,
+            "view_create",
             attach_opaque_data=self._unwrap_attach(attach_opaque_data),
             transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
             schema_path=schema_path,

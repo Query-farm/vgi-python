@@ -526,7 +526,7 @@ class UsersFunction(TableFunctionGenerator):
     """Generate user data."""
 
     FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([
-        pa.field("id", pa.int64(), nullable=False),  # NOT NULL: see constraints below
+        pa.field("id", pa.int64()),  # served NOT NULL: the PRIMARY_KEY record below names it
         ("name", pa.string()),
         ("active", pa.bool_()),
     ])
@@ -600,7 +600,7 @@ if __name__ == "__main__":
 | Feature | Description |
 |---------|-------------|
 | **No schema duplication** | Function-backed tables derive schema automatically |
-| **Constraint validation** | Constraint paths, trust and Arrow nullability validated at definition time |
+| **Constraint validation** | DuckDB's ATTACH rules for records and generated columns checked at definition time |
 | **Automatic scan handling** | Function-backed tables don't need `table_scan_function_get()` |
 | **Type safety** | Frozen dataclasses with runtime validation |
 
@@ -649,23 +649,61 @@ constraint_record(
 )
 ```
 
-DuckDB checks three things when it attaches the catalog, and `Table` checks the
-same at definition time (the worker checks again when serving each table):
+DuckDB rejects a table at ATTACH unless its records follow the extension's
+rules. `Table` checks them at definition time, `ReadOnlyCatalogInterface` checks
+ownership and foreign-key targets across the catalog when it builds its
+registries, and the worker checks every table again when serving it (so a
+custom catalog's own unit tests and RPC calls see the same errors):
 
-- It reads only `ENFORCED` + `ALL_ROWS` records; state one only when every row
-  the table can ever return satisfies it.
-- Every Arrow field — descending through ordinary structs, but not into
-  extension or logical-type storage — is non-nullable exactly when a
-  `NOT_NULL` or `PRIMARY_KEY` record names its path. This applies to tables
-  with no constraints too: a non-nullable field there is an error.
-- The records are readable only under the negotiated
-  `vgi.constraint.records.read.v1` profile (plus `vgi.expression.duckdb.scalar.v1`
-  for CHECK). `ReadOnlyCatalogInterface` advertises both automatically when any
-  declared table carries records; a catalog that serves tables some other way
-  overrides `catalog_capabilities()`.
+- Only `ENFORCED` + `ALL_ROWS` records; state one only when every row the
+  table can ever return satisfies it.
+- Each record is owned by its table and schema; ids are unique, declared names
+  are unique case-insensitively, and there is at most one `PRIMARY_KEY`.
+- Column paths resolve. Only `NOT_NULL` may name a nested struct child;
+  `PRIMARY_KEY`, `UNIQUE` and `FOREIGN_KEY` name top-level columns, never the
+  `is_row_id` column.
+- A `FOREIGN_KEY` references a served table in the same schema, whose
+  `PRIMARY_KEY` or `UNIQUE` record has the referenced id and columns, with
+  `MATCH SIMPLE` and `NO_ACTION`/`RESTRICT` actions.
+- A `CHECK` is a single comparison between signed integer or floating-point
+  columns and numeric constants, such as `amount >= 0`. The grammar is checked
+  with DuckDB's own parser when `haybarn` or `duckdb` is installed.
+
+**Nullability is derived, not declared.** DuckDB requires every Arrow field
+(descending through ordinary structs, but not into extension or logical-type
+storage) to be non-nullable exactly when a `NOT_NULL` or `PRIMARY_KEY` record
+names it. The worker serves the schema that way: a non-nullable field no record
+names is served nullable, and a field a record names is served non-nullable.
+Arrow nullability in `columns` or a function's output schema is therefore never
+a constraint claim, and there is nothing to keep in sync by hand.
+`served_table_schema()` shows the schema a table is served with.
+
+**Negotiation.** Records are readable only under
+`vgi.constraint.records.read.v1` (plus `vgi.expression.duckdb.scalar.v1` for
+CHECK), and DuckDB writes a constrained table only under
+`vgi.constraint.enforce.v1`. `ReadOnlyCatalogInterface` advertises the read
+profiles when any declared table carries records, and the enforcement profile
+when such a table also has write functions: records on a writable table attest
+that the write functions enforce them. A catalog that serves tables some other
+way returns `catalog_capabilities_for(tables, indexes)` from its
+`catalog_capabilities()` override (`union` it with anything else it
+implements). If enforcement is not negotiated, the worker serves a constrained
+table read-only and logs a warning saying why.
 
 The legacy `not_null`, `unique`, `check`, `primary_key` and `foreign_key`
-fields are rejected; replace them with records.
+fields type-check only as `()` and raise when set; `ForeignKeyDef` and
+`ForeignKeyInfo` are deprecated. Replace them with records.
+
+### Generated columns
+
+DuckDB reads only VIRTUAL generated columns of type Boolean, int8–int64 or
+string, with no default and no extension type, whose expression uses columns,
+Boolean/integer/string literals, `CAST` to those types, comparisons,
+`AND`/`OR`/`NOT`, `IS [NOT] NULL`, `COALESCE`, `+ - * %`, `||`, `abs`, `lower`
+and `upper`. A generated column must be nullable; one no record names is
+served nullable automatically, and naming it in a `NOT_NULL` or `PRIMARY_KEY`
+record is an error. Legacy `generated_expression` field metadata is translated
+to the canonical record when it is the field's only expression metadata.
 
 ### Validation
 
@@ -687,11 +725,17 @@ Table(
     ),
 )
 
-# Error: Arrow nullability must match NOT_NULL/PRIMARY_KEY records exactly
+# Error: more than one PRIMARY_KEY record
 Table(
     name="users",
-    columns=pa.schema([pa.field("id", pa.int64(), nullable=False)]),
-)  # ValueError: ... the field is non-nullable but no ... record names it
+    columns=pa.schema([("id", pa.int64()), ("email", pa.string())]),
+    constraints=(
+        constraint_record(["main"], "users", "pk1", "PRIMARY_KEY", [["id"]],
+                          enforcement="ENFORCED", validation="ALL_ROWS"),
+        constraint_record(["main"], "users", "pk2", "PRIMARY_KEY", [["email"]],
+                          enforcement="ENFORCED", validation="ALL_ROWS"),
+    ),
+)  # ValueError: Table 'users': more than one PRIMARY_KEY
 
 # Error: default_schema not in schemas
 Catalog(
@@ -1043,6 +1087,12 @@ The current CatalogInterface has the following limitations:
 - **Tags**: Cannot be updated after object creation
 - **Schema metadata**: Comments and tags cannot be updated on schemas
 - **Constraints**: Only NOT NULL can be added/dropped (no ALTER for UNIQUE/CHECK)
+- **Constrained CREATE TABLE**: `CREATE TABLE` with `NOT NULL`, `PRIMARY KEY`,
+  `UNIQUE`, `CHECK` or `FOREIGN KEY` reaches a catalog only when it advertises
+  `vgi.constraint.create.v1` and `vgi.constraint.enforce.v1`, i.e. when its
+  `table_create()` stores the records and its write paths enforce them. The SDK
+  ships no catalog that does (the in-memory test catalog stores no rows), so
+  such statements are refused with an error naming the missing profile.
 
 ### Table writes and indexes
 
@@ -1067,9 +1117,33 @@ on declarative tables. Table writes do not require the bundled
 [transactor](api/transactor.md); that is an optional database-access service with
 additional engine requirements.
 
-Index metadata can be declared with [`Index`][vgi.catalog.descriptors.Index]. Custom
-catalogs can implement `index_get()`, `index_create()`, and `index_drop()`; support
-depends on the catalog implementation and backing data source.
+Index metadata can be declared with [`Index`][vgi.catalog.descriptors.Index],
+building its definition with `index_definition()`:
+
+```python test="skip"
+from vgi.catalog import Index, index_definition
+
+Index(name="orders_customer", definition=index_definition(["main"], "orders", [["customer_id"]], algorithm="art"))
+```
+
+`ReadOnlyCatalogInterface` advertises `vgi.index.definition.read.v1` when any
+schema declares an index. Custom catalogs can implement `index_get()`,
+`index_create()`, and `index_drop()`; support depends on the catalog
+implementation and backing data source.
+
+### Overrides written for older signatures
+
+vgi.v3 added keyword arguments to several `CatalogInterface` methods
+(`catalog_attach(client_capabilities=)`, `schema_create(options=)`,
+`view_create(aliases=, security=, comment=, tags=, column_comments=)`,
+`table_create(constraint_definitions=, ...)`) and renamed `column_name` to
+`column_path`. The worker inspects an override's signature and passes only
+what it accepts, emitting a `DeprecationWarning` (and one log line) when it
+drops an argument. It drops one only when the value carries nothing the old
+override could have honoured (`None`, empty, a top-level column path); a
+barrier view, schema options or a nested column path fail with an error naming
+the parameter instead of being silently ignored. Update overrides to the
+current signatures, or accept `**kwargs`.
 
 ---
 

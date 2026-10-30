@@ -170,12 +170,12 @@ def test_discovery_never_hides_constraints_and_mutation_requires_revision() -> N
         Worker._table_for_capabilities(table_info(definition_revision=None), PROFILES)
 
 
-def test_discovery_rejects_nullability_that_does_not_match_records() -> None:
-    wrong = pa.schema([pa.field("a.b", pa.int64(), nullable=True)])
-    with pytest.raises(ValueError, match="nullability"):
-        Worker._table_for_capabilities(
-            table_info(columns=wrong.serialize().to_pybytes(), constraints=[INFO.serialize_to_bytes()]), PROFILES
-        )
+def test_discovery_serves_record_nullability() -> None:
+    nullable = pa.schema([pa.field("a.b", pa.int64(), nullable=True)])
+    served = Worker._table_for_capabilities(
+        table_info(columns=nullable.serialize().to_pybytes(), constraints=[INFO.serialize_to_bytes()]), PROFILES
+    )
+    assert not pa.ipc.read_schema(pa.py_buffer(served.columns)).field("a.b").nullable
 
 
 @pytest.mark.parametrize(

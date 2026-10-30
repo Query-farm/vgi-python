@@ -128,6 +128,24 @@ class TypedValueBatch:
         return cls(batch)
 
     @classmethod
+    def from_values(cls, values: Mapping[str, Any]) -> Self:
+        """Build one row from Python values or ``pa.Scalar`` values (types inferred for Python values).
+
+        Args:
+            values: Field name to value, in field order.
+
+        Returns:
+            The validated one-row batch; an empty mapping yields [`empty`][vgi.typed_values.TypedValueBatch.empty].
+        """
+        if not values:
+            return cls.empty()
+        arrays = [
+            pa.array([value.as_py()], type=value.type) if isinstance(value, pa.Scalar) else pa.array([value])
+            for value in values.values()
+        ]
+        return cls(pa.RecordBatch.from_arrays(arrays, names=list(values)))
+
+    @classmethod
     def empty(cls, *, metadata: Mapping[bytes, bytes] | None = None) -> Self:
         """Create a zero-column batch that still contains one set of values."""
         array = cast(pa.StructArray, pa.array([{}], type=pa.struct([])))

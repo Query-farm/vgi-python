@@ -198,6 +198,13 @@ def test_unsupported_generation_rejects_before_provider_and_during_discovery(
         tags={},
     )
     monkeypatch.setattr(backend._get_catalog(), "table_get", lambda **kwargs: info)
+    if b"generated_expression" in (field.metadata or {}):
+        # Discovery translates unambiguous top-level legacy metadata to the
+        # canonical record instead of rejecting the table; CREATE still refuses it.
+        served = backend.catalog_table_get(**args(token)).to_optional()
+        expressions = column_expressions(pa.ipc.read_schema(pa.py_buffer(served.columns)).field("g"))
+        assert expressions.generated is not None and expressions.generated.sql == "n + 1"
+        return
     with pytest.raises(error, match=message):
         backend.catalog_table_get(**args(token))
 

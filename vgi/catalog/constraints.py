@@ -9,10 +9,10 @@ No record alone establishes that a backend enforces a constraint.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Annotated, Self
+from typing import Annotated, Any, Self, cast
 
 import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass, ArrowType
@@ -427,12 +427,14 @@ def validate_constraint_schema(
     trusted: list[ConstraintDefinition] | None = None,
     table: str | None = None,
 ) -> None:
-    """Require exact raw paths and agreement between trust and Arrow nullability.
+    """Require exact raw paths and agreement between definitions and Arrow nullability.
 
-    Mirrors the DuckDB extension's ATTACH check: a field (descending through
-    ordinary STRUCTs, not logical-type storage) is non-nullable exactly when a
-    trusted NOT_NULL/PRIMARY_KEY definition names its path. ``table`` only
-    labels error messages.
+    For CREATE TABLE requests, whose column definitions the client derives
+    from the same constraints: a field (descending through ordinary STRUCTs,
+    not logical-type storage) is non-nullable exactly when a NOT_NULL or
+    PRIMARY_KEY definition names its path. Served tables do not use this
+    check; [`served_table_schema`][] derives their nullability instead.
+    ``table`` only labels error messages.
     """
     owner = f"Table '{table}': " if table is not None else ""
     for definition in definitions:
@@ -457,10 +459,9 @@ def validate_constraint_schema(
             visible_paths.add(path)
             if column_field.nullable == (path in required):
                 problem = (
-                    "the field is nullable but a NOT_NULL/PRIMARY_KEY record names it; make the field non-nullable"
+                    "the field is nullable but a NOT_NULL/PRIMARY_KEY definition names it"
                     if column_field.nullable
-                    else "the field is non-nullable but no ENFORCED + ALL_ROWS NOT_NULL/PRIMARY_KEY record names it; "
-                    "declare one with constraint_record() or make the field nullable"
+                    else "the field is non-nullable but no NOT_NULL/PRIMARY_KEY definition names it"
                 )
                 raise ValueError(
                     f"{owner}Arrow nullability disagrees with canonical NOT_NULL/PRIMARY_KEY at column {list(path)!r}: "
@@ -485,24 +486,226 @@ def validate_constraint_schema(
                 )
 
 
-def validate_constraint_records(table: str, schema: pa.Schema, constraints: Sequence[ConstraintInfo]) -> None:
+_ROW_ID_KEY = b"is_row_id"
+
+
+def _row_id_column(schema: pa.Schema) -> int | None:
+    """Index of the top-level storage-identity column, as the extension finds it."""
+    for index, column_field in enumerate(schema):
+        if _ROW_ID_KEY in (column_field.metadata or {}):
+            return index
+    return None
+
+
+def _ordinary_struct(column_field: pa.Field[Any]) -> bool:
+    """A STRUCT whose children are table column paths, not logical-type storage."""
+    if isinstance(column_field.type, pa.BaseExtensionType) or not pa.types.is_struct(column_field.type):
+        return False
+    return not any(
+        key == b"ARROW:extension:name" or key.startswith(b"vgi.logical_type.") for key in column_field.metadata or {}
+    )
+
+
+def _required_paths(constraints: Sequence[ConstraintInfo]) -> set[tuple[str, ...]]:
+    return {
+        tuple(path)
+        for info in constraints
+        if info.definition.kind in {ConstraintKind.NOT_NULL, ConstraintKind.PRIMARY_KEY}
+        for path in info.definition.column_paths
+    }
+
+
+def served_table_schema(schema: pa.Schema, constraints: Sequence[ConstraintInfo]) -> pa.Schema:
+    """Return ``schema`` with nullability derived from the table's records.
+
+    DuckDB requires every field (descending through ordinary STRUCTs) to be
+    non-nullable exactly when an ENFORCED + ALL_ROWS NOT_NULL or PRIMARY_KEY
+    record names it. Arrow nullability alone is not a claim, so a
+    non-nullable field no record names is served nullable, and a field a
+    record names is served non-nullable (the record is the worker's
+    attestation). The top-level ``is_row_id`` column, logical-type storage
+    and extension types are left untouched. Metadata is preserved.
+    """
+    required = _required_paths(constraints)
+    row_id = _row_id_column(schema)
+
+    def rewrite(column_field: pa.Field[Any], path: tuple[str, ...]) -> pa.Field[Any]:
+        if _ordinary_struct(column_field):
+            children = [
+                rewrite(column_field.type.field(i), (*path, column_field.type.field(i).name))
+                for i in range(column_field.type.num_fields)
+            ]
+            column_field = column_field.with_type(pa.struct(children))
+        nullable = path not in required
+        return column_field if column_field.nullable == nullable else column_field.with_nullable(nullable)
+
+    fields = [
+        column_field if index == row_id else rewrite(column_field, (column_field.name,))
+        for index, column_field in enumerate(schema)
+    ]
+    return pa.schema(fields, metadata=cast(Any, schema.metadata))
+
+
+def _resolve_record_path(schema: pa.Schema, path: ColumnPath, row_id: int | None, *, nested: bool) -> None:
+    """Mirror the extension's ``ResolveNotNullPath`` / top-level key resolution."""
+    if not nested and len(path) != 1:
+        raise ValueError("only NOT_NULL may name a nested column path; keys must name top-level columns")
+    matches = [index for index, column_field in enumerate(schema) if column_field.name == path[0]]
+    if not matches:
+        raise ValueError(f"column path {path!r} names a missing column")
+    if matches[0] == row_id:
+        raise ValueError(f"constraint paths cannot address storage identities: {path!r} is the is_row_id column")
+    column_field = schema.field(matches[0])
+    for depth in range(1, len(path)):
+        if not _ordinary_struct(column_field):
+            raise ValueError(
+                f"constraint paths cannot address storage identities or logical-type storage members: {path!r} "
+                "must traverse ordinary STRUCT fields"
+            )
+        children = [i for i in range(column_field.type.num_fields) if column_field.type.field(i).name == path[depth]]
+        if len(children) != 1:
+            raise ValueError(f"column path {path!r} names a missing or ambiguous nested field")
+        column_field = column_field.type.field(children[0])
+
+
+def validate_constraint_records(
+    table: str,
+    schema: pa.Schema,
+    constraints: Sequence[ConstraintInfo],
+    *,
+    schema_path: Sequence[str] | None = None,
+) -> None:
     """Check a table's records the way the DuckDB extension does at ATTACH.
 
-    The extension reads only ENFORCED + ALL_ROWS records and rejects a table
-    (even one with no records) whose Arrow nullability disagrees with its
-    NOT_NULL/PRIMARY_KEY records. Run when serving each table, and by
-    [`Table`][] at construction, so a worker's own tests catch both.
+    Mirrors ``DecodeNativeConstraints``: every record is ENFORCED + ALL_ROWS
+    and owned by this table (and ``schema_path``, when given); ids and
+    case-insensitive declared names are unique; at most one PRIMARY_KEY;
+    column paths resolve (nested paths only for NOT_NULL); FOREIGN_KEY
+    targets the same one-component schema with MATCH SIMPLE and NO_ACTION or
+    RESTRICT actions; CHECK is a numeric comparison in the extension's
+    grammar (checked when a DuckDB engine is installed). Arrow nullability is
+    not checked: [`served_table_schema`][] derives it from the records.
+    Cross-table FOREIGN_KEY targets are checked by
+    [`validate_foreign_key_targets`][].
+
+    Args:
+        table: The table name.
+        schema: The table's Arrow schema as the provider declares it.
+        constraints: The table's records.
+        schema_path: The table's schema path; when given, every record must be owned by it.
+
+    Raises:
+        ValueError: DuckDB would reject the table at ATTACH. The message
+            names the table, constraint id and column path.
     """
+    from vgi.catalog._expression_grammar import validate_check_sql
+
+    row_id = _row_id_column(schema)
+    ids: set[str] = set()
+    labels: set[str] = set()
+    primary_keys: list[str] = []
     for info in constraints:
+        label = f"Table '{table}': constraint '{info.ref.name}'"
         if info.ref.owner_table != table:
-            raise ValueError(f"Table '{table}': constraint '{info.ref.name}' belongs to table {info.ref.owner_table!r}")
+            raise ValueError(f"{label} belongs to table {info.ref.owner_table!r}")
+        if schema_path is not None and list(info.ref.schema_path) != list(schema_path):
+            raise ValueError(
+                f"{label} has schema_path {info.ref.schema_path!r}; it must equal the table's {list(schema_path)!r}"
+            )
         if not info.trusted:
             raise ValueError(
-                f"Table '{table}': constraint '{info.ref.name}' is {info.enforcement}/{info.validation}; "
-                "DuckDB accepts only ENFORCED + ALL_ROWS records, so state one only when every row the "
-                "table can return satisfies it"
+                f"{label} is {info.enforcement}/{info.validation}; DuckDB accepts only ENFORCED + ALL_ROWS "
+                "records, so state one only when every row the table can return satisfies it"
             )
-    validate_constraint_schema(schema, [info.definition for info in constraints], table=table)
+        if info.ref.name in ids:
+            raise ValueError(f"{label}: duplicate constraint id")
+        ids.add(info.ref.name)
+        definition = info.definition
+        if definition.declared_name is not None:
+            if definition.declared_name.lower() in labels:
+                raise ValueError(f"{label}: duplicate declared name {definition.declared_name!r} (case-insensitive)")
+            labels.add(definition.declared_name.lower())
+        kind = definition.kind
+        for path in definition.column_paths:
+            try:
+                _resolve_record_path(schema, path, row_id, nested=kind == ConstraintKind.NOT_NULL)
+            except ValueError as error:
+                raise ValueError(f"{label}: {error}") from error
+        if kind == ConstraintKind.PRIMARY_KEY:
+            primary_keys.append(info.ref.name)
+            if len(primary_keys) > 1:
+                raise ValueError(f"Table '{table}': more than one PRIMARY_KEY ({primary_keys!r})")
+        elif kind == ConstraintKind.CHECK:
+            expression = definition.check_expression
+            assert expression is not None
+            if expression.profile != ROW_SCALAR_EXPRESSION:
+                raise ValueError(f"{label}: CHECK profile must be {ROW_SCALAR_EXPRESSION}")
+            if expression.evaluation_context != QueryEvaluationContext():
+                raise ValueError(f"{label}: CHECK requires the default evaluation context")
+            try:
+                validate_check_sql(expression.sql, schema, row_id)
+            except ValueError as error:
+                raise ValueError(f"{label}: CHECK {expression.sql!r}: {error}") from error
+        elif kind == ConstraintKind.FOREIGN_KEY:
+            foreign_key = definition.foreign_key
+            target = info.referenced_constraint
+            assert foreign_key is not None and target is not None
+            if list(foreign_key.referenced_table.schema_path) != list(info.ref.schema_path):
+                raise ValueError(
+                    f"{label}: FOREIGN_KEY must reference a table in the same schema "
+                    f"(got {foreign_key.referenced_table.schema_path!r})"
+                )
+            if foreign_key.match != ForeignKeyMatch.SIMPLE:
+                raise ValueError(f"{label}: DuckDB reads only MATCH SIMPLE foreign keys")
+            for action in (foreign_key.on_update, foreign_key.on_delete):
+                if action not in {ReferentialAction.NO_ACTION, ReferentialAction.RESTRICT}:
+                    raise ValueError(f"{label}: DuckDB reads only NO_ACTION/RESTRICT referential actions, not {action}")
+            for path in foreign_key.referenced_column_paths:
+                if len(path) != 1:
+                    raise ValueError(f"{label}: referenced column path {path!r} must name a top-level column")
+
+
+def validate_foreign_key_targets(tables: Mapping[tuple[tuple[str, ...], str], Sequence[ConstraintInfo]]) -> None:
+    """Check every FOREIGN_KEY record against the referenced table's records.
+
+    ``tables`` maps ``(schema_path, table_name)`` to that table's records for
+    every table the catalog serves. A FOREIGN_KEY must reference a served
+    table whose PRIMARY_KEY or UNIQUE record has the referenced constraint id
+    and exactly the referenced column paths.
+
+    Args:
+        tables: ``(schema_path, table_name)`` to that table's records.
+
+    Raises:
+        ValueError: A FOREIGN_KEY names a missing table or key.
+    """
+    for (_schema, table), constraints in tables.items():
+        for info in constraints:
+            if info.definition.kind != ConstraintKind.FOREIGN_KEY:
+                continue
+            foreign_key = info.definition.foreign_key
+            target = info.referenced_constraint
+            assert foreign_key is not None and target is not None
+            label = f"Table '{table}': constraint '{info.ref.name}'"
+            key = (tuple(foreign_key.referenced_table.schema_path), foreign_key.referenced_table.name)
+            if key not in tables:
+                raise ValueError(f"{label}: referenced table {list(key[0]) + [key[1]]!r} is not served")
+            referenced = [item for item in tables[key] if item.ref.name == target.name]
+            if not referenced or referenced[0].definition.kind not in {
+                ConstraintKind.PRIMARY_KEY,
+                ConstraintKind.UNIQUE,
+            }:
+                raise ValueError(
+                    f"{label}: referenced constraint '{target.name}' is not a PRIMARY_KEY or UNIQUE record "
+                    f"of table '{key[1]}'"
+                )
+            if sorted(map(tuple, referenced[0].definition.column_paths)) != sorted(
+                map(tuple, foreign_key.referenced_column_paths)
+            ):
+                raise ValueError(
+                    f"{label}: referenced columns {foreign_key.referenced_column_paths!r} differ from "
+                    f"'{target.name}' columns {referenced[0].definition.column_paths!r}"
+                )
 
 
 @dataclass(frozen=True, kw_only=True)

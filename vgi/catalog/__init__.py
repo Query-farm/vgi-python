@@ -39,6 +39,7 @@ from vgi.catalog.catalog_interface import (
     TableInfo,
     TransactionOpaqueData,
     ViewInfo,
+    catalog_capabilities_for,
     deserialize_column_statistics,
     serialize_column_statistics,
 )
@@ -63,11 +64,13 @@ from vgi.catalog.constraints import (
     ReferencedKey,
     ReferentialAction,
     constraint_record,
+    served_table_schema,
     validate_constraint_records,
+    validate_foreign_key_targets,
 )
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot, ObjectDependency
 from vgi.catalog.descriptors import Catalog, ForeignKeyDef, Index, Macro, Schema, Sql, Table, View
-from vgi.catalog.indexes import IndexDefinition, IndexKey
+from vgi.catalog.indexes import IndexDefinition, IndexKey, index_definition
 from vgi.catalog.macros import MacroOverload, MacroParameter
 from vgi.catalog.metadata_changes import CatalogMetadataChanges
 from vgi.catalog.query import (
@@ -80,7 +83,14 @@ from vgi.catalog.query import (
 )
 from vgi.catalog.secret_type import SecretTypeSpec
 from vgi.catalog.setting import Setting, SettingSpec
-from vgi.catalog.sql import ColumnExpressions, SqlStatement, column_expressions, with_column_expressions
+from vgi.catalog.sql import (
+    ColumnExpressions,
+    SqlStatement,
+    canonical_generated_columns,
+    column_expressions,
+    validate_generated_columns,
+    with_column_expressions,
+)
 from vgi.catalog.storage import CatalogStorage, CatalogStorageSqlite
 from vgi.column_path import RequiredFilterPaths
 from vgi.write_results import WriteOperation, WriteResultMode, write_changes_batch, write_result_schema
@@ -92,6 +102,12 @@ __all__ = [
     "with_column_metadata",
     "IndexDefinition",
     "IndexKey",
+    "index_definition",
+    "catalog_capabilities_for",
+    "served_table_schema",
+    "validate_foreign_key_targets",
+    "canonical_generated_columns",
+    "validate_generated_columns",
     "ConstraintChange",
     "ConstraintDefinition",
     "ConstraintEnforcement",

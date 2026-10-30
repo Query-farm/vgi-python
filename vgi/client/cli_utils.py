@@ -523,33 +523,11 @@ def get_attach_opaque_data_from_options(
     # Auto-attach via --catalog
     assert catalog is not None
     options = attach_options or {}
-    from vgi.catalog.capabilities import (
-        CONSTRAINT_CREATE,
-        CONSTRAINT_ENFORCE,
-        CONSTRAINT_MUTATE,
-        CONSTRAINT_RECORDS_READ,
-        INDEX_DEFINITION_CREATE,
-        INDEX_DEFINITION_READ,
-        INDEX_DROP,
-        ROW_SCALAR_EXPRESSION,
-        TRANSACTION_DDL,
-        CatalogCapabilities,
-    )
-    from vgi.protocol import ClientCapabilities
+    from dataclasses import replace
 
-    offer = ClientCapabilities(
-        engine="vgi-cli",
-        native_formats=[],
-        catalogs=[],
-        can_stream=False,
-        filter_encodings=[],
-        catalog=CatalogCapabilities(
-            read=sorted([CONSTRAINT_RECORDS_READ, ROW_SCALAR_EXPRESSION, INDEX_DEFINITION_READ]),
-            ddl=sorted([CONSTRAINT_CREATE, CONSTRAINT_MUTATE, INDEX_DEFINITION_CREATE, INDEX_DROP]),
-            write=[CONSTRAINT_ENFORCE],
-            transaction=[TRANSACTION_DDL],
-        ),
-    )
+    from vgi.client.catalog_mixin import DEFAULT_CLIENT_CAPABILITIES
+
+    offer = replace(DEFAULT_CLIENT_CAPABILITIES, engine="vgi-cli")
     result = client.catalog_attach(
         name=catalog, options=options, data_version_spec=None, implementation_version=None, client_capabilities=offer
     )
