@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.13"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -2749,13 +2749,14 @@ requires-dist = [
 
 [[package]]
 name = "vgi-python"
-version = "0.48.1"
+version = "0.48.2"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
     { name = "httpx2" },
     { name = "platformdirs" },
     { name = "pyarrow" },
+    { name = "pycryptodome" },
     { name = "typer" },
     { name = "vgi-rpc" },
 ]
@@ -2859,6 +2860,7 @@ requires-dist = [
     { name = "platformdirs" },
     { name = "pyarrow" },
     { name = "pyarrow-stubs", marker = "extra == 'dev'" },
+    { name = "pycryptodome", specifier = ">=3.20" },
     { name = "pymssql", marker = "extra == 'azure'", specifier = ">=2.3.0" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-cov", marker = "extra == 'dev'" },

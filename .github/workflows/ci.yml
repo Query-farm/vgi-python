@@ -147,6 +147,26 @@ jobs:
       - name: Run hosted-protocols group (stdio, unix, http)
         run: scripts/hosted_protocols_conformance.sh
 
+  bare-install:
+    # Every other job syncs --all-extras, which hides a core-dependency gap: a
+    # worker that installs vgi-python with no extras must still import the
+    # modules catalog_attach reaches (0.48.0 shipped without pycryptodome).
+    name: Bare install (no extras)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+
+      - name: Build wheel
+        run: uv build --wheel --out-dir dist .
+
+      - name: Import attach-path modules from the bare wheel
+        run: |
+          uv run --isolated --no-project --python 3.14 --with dist/*.whl \
+            python -c "import vgi, vgi.worker, vgi.query_execution; print('ok')"
+
   s3-offload-localstack:
     name: S3 Offload Tests (LocalStack)
     runs-on: ubuntu-latest
