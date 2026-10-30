@@ -150,6 +150,7 @@ from vgi.catalog.constraints import (
     ForeignKeyMatch,
     ReferentialAction,
     constraint_definitions,
+    validate_constraint_records,
     validate_constraint_schema,
 )
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot
@@ -2963,9 +2964,8 @@ class Worker:
         require_logical_profiles(schema, selected_profiles=selected.read)
         Worker._require_column_expression_profiles(schema, selected, "read column expressions", info.schema_path)
         infos = info.constraint_infos()
-        validate_constraint_schema(
-            schema, [item.definition for item in infos], trusted=[item.definition for item in infos if item.trusted]
-        )
+        # The extension rejects the table at ATTACH on either failure.
+        validate_constraint_records(info.name, schema, infos)
         if infos:
             selected.require(CONSTRAINT_RECORDS_READ, available=selected, operation="read canonical constraints")
             for item in infos:
@@ -5801,7 +5801,7 @@ class Worker:
             request.constraint_definitions,
             CatalogObjectRef(kind="table", schema_path=request.schema_path, name=request.name),
         )
-        validate_constraint_schema(schema, definitions)
+        validate_constraint_schema(schema, definitions, table=request.name)
         if definitions:
             self._require_catalog_capability(
                 request.attach_opaque_data, CONSTRAINT_CREATE, "catalog_table_create", request.transaction_opaque_data

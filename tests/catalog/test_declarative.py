@@ -198,37 +198,6 @@ class TestTableWithExplicitColumns:
         table = Table(name="test", columns=columns)
         assert table.resolved_columns == columns
 
-    def test_table_with_not_null_constraints(self) -> None:
-        """Table validates not_null constraint column names."""
-        table = Table(
-            name="users",
-            columns=pa.schema(
-                [("id", pa.int64()), ("name", pa.string())]  # type: ignore[arg-type]
-            ),
-            not_null=("id",),
-        )
-        assert table.not_null == ("id",)
-
-    def test_table_with_unique_constraints(self) -> None:
-        """Table validates unique constraint column names."""
-        table = Table(
-            name="users",
-            columns=pa.schema(
-                [("id", pa.int64()), ("email", pa.string())]  # type: ignore[arg-type]
-            ),
-            unique=(("id",), ("email",)),
-        )
-        assert table.unique == (("id",), ("email",))
-
-    def test_table_with_check_constraints(self) -> None:
-        """Table stores check constraint expressions."""
-        table = Table(
-            name="users",
-            columns=pa.schema([("age", pa.int32())]),
-            check=("age >= 0", "age < 150"),
-        )
-        assert table.check == ("age >= 0", "age < 150")
-
     def test_table_with_comment_and_tags(self) -> None:
         """Table stores optional metadata."""
         table = Table(
@@ -266,17 +235,6 @@ class TestTableWithFunction:
         resolved = table.resolved_columns
         assert [f.name for f in resolved] == ["id", "name"]
         assert len(resolved) == 2
-
-    def test_table_function_backed_with_constraints(self) -> None:
-        """Function-backed table can have constraints validated."""
-        table = Table(
-            name="users",
-            function=UsersFunction,
-            not_null=("id",),
-            unique=(("id",),),
-        )
-        assert table.not_null == ("id",)
-        assert table.unique == (("id",),)
 
     def test_function_backed_table_inlines_scan_function(self) -> None:
         """Inline a serialized ScanFunctionResult on function-backed tables.
@@ -547,131 +505,9 @@ class TestTableValidation:
                 function=UsersFunction,
             )
 
-    def test_table_rejects_invalid_not_null_column(self) -> None:
-        """Table raises ValueError for not_null column not in schema."""
-        with pytest.raises(ValueError, match="not_null column 'invalid' not found"):
-            Table(
-                name="test",
-                columns=pa.schema([("id", pa.int64())]),
-                not_null=("invalid",),
-            )
 
-    def test_table_rejects_invalid_unique_column(self) -> None:
-        """Table raises ValueError for unique column not in schema."""
-        with pytest.raises(ValueError, match="unique column 'invalid' not found"):
-            Table(
-                name="test",
-                columns=pa.schema([("id", pa.int64())]),
-                unique=(("invalid",),),
-            )
-
-
-class TestTablePrimaryKeyConstraints:
-    """Tests for Table primary_key constraint support."""
-
-    def test_table_with_single_column_pk(self) -> None:
-        """Table accepts a single-column primary key."""
-        table = Table(
-            name="users",
-            columns=pa.schema(
-                [("id", pa.int64()), ("name", pa.string())]  # type: ignore[arg-type]
-            ),
-            primary_key=(("id",),),
-        )
-        assert table.primary_key == (("id",),)
-
-    def test_table_with_composite_pk(self) -> None:
-        """Table accepts a composite (multi-column) primary key."""
-        table = Table(
-            name="projects",
-            columns=pa.schema(
-                [("dept_id", pa.int64()), ("code", pa.string())]  # type: ignore[arg-type]
-            ),
-            primary_key=(("dept_id", "code"),),
-        )
-        assert table.primary_key == (("dept_id", "code"),)
-
-    def test_table_rejects_invalid_pk_column(self) -> None:
-        """Table raises ValueError for PK column not in schema."""
-        with pytest.raises(ValueError, match="primary_key column 'invalid' not found"):
-            Table(
-                name="test",
-                columns=pa.schema([("id", pa.int64())]),
-                primary_key=(("invalid",),),
-            )
-
-    def test_table_rejects_multiple_primary_keys(self) -> None:
-        """Table raises ValueError when more than one PK constraint is defined."""
-        with pytest.raises(ValueError, match="at most one primary_key constraint allowed"):
-            Table(
-                name="test",
-                columns=pa.schema(
-                    [("id", pa.int64()), ("code", pa.string())]  # type: ignore[arg-type]
-                ),
-                primary_key=(("id",), ("code",)),
-            )
-
-    def test_resolve_primary_key_indices(self) -> None:
-        """_resolve_primary_key_indices converts column names to indices."""
-        table = Table(
-            name="projects",
-            columns=pa.schema(
-                [("dept_id", pa.int64()), ("code", pa.string()), ("title", pa.string())]  # type: ignore[arg-type]
-            ),
-            primary_key=(("dept_id", "code"),),
-        )
-        assert table._resolve_primary_key_indices() == [[0, 1]]
-
-
-class TestTableForeignKeyConstraints:
-    """Tests for Table foreign_key constraint support."""
-
-    def test_table_with_foreign_key(self) -> None:
-        """Table accepts a foreign key definition."""
-        fk = ForeignKeyDef(
-            columns=("dept_id",),
-            referenced_table="departments",
-            referenced_columns=("id",),
-        )
-        table = Table(
-            name="employees",
-            columns=pa.schema([("id", pa.int64()), ("dept_id", pa.int64())]),
-            foreign_key=(fk,),
-        )
-        assert len(table.foreign_key) == 1
-        assert table.foreign_key[0].referenced_table == "departments"
-
-    def test_table_with_multiple_foreign_keys(self) -> None:
-        """Table accepts multiple foreign key constraints."""
-        table = Table(
-            name="assignments",
-            columns=pa.schema([("emp_id", pa.int64()), ("proj_id", pa.int64())]),
-            foreign_key=(
-                ForeignKeyDef(columns=("emp_id",), referenced_table="employees", referenced_columns=("id",)),
-                ForeignKeyDef(columns=("proj_id",), referenced_table="projects", referenced_columns=("id",)),
-            ),
-        )
-        assert len(table.foreign_key) == 2
-
-    def test_table_rejects_invalid_fk_column(self) -> None:
-        """Table raises ValueError for FK column not in schema."""
-        with pytest.raises(ValueError, match="foreign_key column 'invalid' not found"):
-            Table(
-                name="test",
-                columns=pa.schema([("id", pa.int64())]),
-                foreign_key=(
-                    ForeignKeyDef(columns=("invalid",), referenced_table="other", referenced_columns=("id",)),
-                ),
-            )
-
-    def test_table_rejects_fk_column_count_mismatch(self) -> None:
-        """Table raises ValueError when FK and referenced column counts differ."""
-        with pytest.raises(ValueError, match="counts must match"):
-            Table(
-                name="test",
-                columns=pa.schema([("a", pa.int64()), ("b", pa.int64())]),
-                foreign_key=(ForeignKeyDef(columns=("a", "b"), referenced_table="other", referenced_columns=("id",)),),
-            )
+class TestForeignKeyDef:
+    """ForeignKeyDef remains importable; Table rejects it (see legacy tests)."""
 
     def test_foreign_key_def_referenced_schema_path_default(self) -> None:
         """ForeignKeyDef defaults referenced_schema_path to None."""
@@ -688,43 +524,6 @@ class TestTableForeignKeyConstraints:
         )
         assert fk.referenced_schema_path == ["other_schema"]
 
-    def test_serialize_foreign_keys_uses_current_schema_by_default(self) -> None:
-        """_serialize_foreign_keys fills referenced_schema_path from current schema when None."""
-        table = Table(
-            name="test",
-            columns=pa.schema([("id", pa.int64()), ("ref_id", pa.int64())]),
-            foreign_key=(ForeignKeyDef(columns=("ref_id",), referenced_table="other", referenced_columns=("id",)),),
-        )
-        fk_bytes = table._serialize_foreign_keys(["my_schema"])
-        assert len(fk_bytes) == 1
-        from vgi.catalog import ForeignKeyInfo
-
-        info = ForeignKeyInfo.deserialize_from_bytes(fk_bytes[0])
-        assert info.fk_columns == ["ref_id"]
-        assert info.pk_columns == ["id"]
-        assert info.referenced_table == "other"
-        assert info.referenced_schema_path == ["my_schema"]
-
-    def test_serialize_foreign_keys_uses_explicit_schema(self) -> None:
-        """_serialize_foreign_keys uses ForeignKeyDef.referenced_schema_path when set."""
-        table = Table(
-            name="test",
-            columns=pa.schema([("id", pa.int64()), ("ref_id", pa.int64())]),
-            foreign_key=(
-                ForeignKeyDef(
-                    columns=("ref_id",),
-                    referenced_table="other",
-                    referenced_columns=("id",),
-                    referenced_schema_path=["alt_schema"],
-                ),
-            ),
-        )
-        fk_bytes = table._serialize_foreign_keys(["my_schema"])
-        from vgi.catalog import ForeignKeyInfo
-
-        info = ForeignKeyInfo.deserialize_from_bytes(fk_bytes[0])
-        assert info.referenced_schema_path == ["alt_schema"]
-
 
 class TestTableToTableInfoConstraints:
     """Canonical records preserve provider identity and trust without inference."""
@@ -739,11 +538,10 @@ class TestTableToTableInfoConstraints:
             {"foreign_key": (ForeignKeyDef(columns=("id",), referenced_table="other", referenced_columns=("id",)),)},
         ],
     )
-    def test_legacy_discovery_requires_explicit_migration(self, legacy: dict[str, Any]) -> None:
+    def test_legacy_declarations_name_the_replacement(self, legacy: dict[str, Any]) -> None:
         """Old declarations cannot invent provider identity or enforcement."""
-        table = Table(name="users", columns=pa.schema([("id", pa.int64())]), **legacy)
-        with pytest.raises(ValueError, match="explicit canonical"):
-            table.to_table_info(["main"])
+        with pytest.raises(ValueError, match=r"Table 'users': .*constraint_record\(\) in `constraints`"):
+            Table(name="users", columns=pa.schema([("id", pa.int64())]), **legacy)
 
     def test_canonical_records_preserve_identity_and_state(self) -> None:
         """Readback carries the original provider facts unchanged."""
@@ -761,8 +559,8 @@ class TestTableToTableInfoConstraints:
             definition=ConstraintDefinition(
                 kind=ConstraintKind.UNIQUE, column_paths=[["id"]], declared_name="declared"
             ),
-            enforcement=ConstraintEnforcement.METADATA_ONLY,
-            validation=ConstraintValidation.UNVALIDATED,
+            enforcement=ConstraintEnforcement.ENFORCED,
+            validation=ConstraintValidation.ALL_ROWS,
         )
         table = Table(
             name="users",
@@ -1525,27 +1323,21 @@ class TestReadOnlyCatalogWithCatalog:
 
     @pytest.fixture
     def users_table(self) -> Table:
-        """Create a users table with an explicit untrusted provider declaration."""
-        from vgi.catalog.constraints import (
-            ConstraintDefinition,
-            ConstraintEnforcement,
-            ConstraintInfo,
-            ConstraintKind,
-            ConstraintValidation,
-        )
-        from vgi.catalog.dependencies import CatalogObjectRef
+        """Create a users table carrying one canonical constraint record."""
+        from vgi.catalog import constraint_record
 
         return Table(
             name="users",
             function=UsersFunction,
             constraints=(
-                ConstraintInfo(
-                    ref=CatalogObjectRef(
-                        kind="constraint", schema_path=["main"], owner_table="users", name="fixture-user-id"
-                    ),
-                    definition=ConstraintDefinition(kind=ConstraintKind.NOT_NULL, column_paths=[["id"]]),
-                    enforcement=ConstraintEnforcement.METADATA_ONLY,
-                    validation=ConstraintValidation.UNVALIDATED,
+                constraint_record(
+                    ["main"],
+                    "users",
+                    "fixture-user-id",
+                    "UNIQUE",
+                    [["id"]],
+                    enforcement="ENFORCED",
+                    validation="ALL_ROWS",
                 ),
             ),
             comment="User accounts",

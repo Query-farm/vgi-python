@@ -25,7 +25,6 @@ from vgi.catalog.capabilities import ROW_SCALAR_EXPRESSION
 from vgi.catalog.catalog_interface import (
     AttachOpaqueData,
     ColumnStatistics,
-    ForeignKeyInfo,
     IndexInfo,
     MacroInfo,
     MacroType,
@@ -39,7 +38,7 @@ from vgi.catalog.catalog_interface import (
     serialize_column_statistics,
 )
 from vgi.catalog.column_metadata import column_metadata, with_column_metadata
-from vgi.catalog.constraints import ConstraintInfo
+from vgi.catalog.constraints import ConstraintInfo, validate_constraint_records
 from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.indexes import IndexDefinition
 from vgi.catalog.macros import normalize_macro_overloads
@@ -280,15 +279,19 @@ class Table:
         write_result_modes: Maximum result mode for each configured write
             function. Omitted operations default to ``count``. Modes are ordered
             ``count < rows < changes``.
-        constraints: Provider-issued canonical constraint records, including explicit
-            identity, enforcement and validation state.
+        constraints: Canonical constraint records, built with
+            ``vgi.catalog.constraint_record()``.
+            They are the worker's own attestation: DuckDB reads only
+            ENFORCED + ALL_ROWS records, and every Arrow field (descending
+            through ordinary structs) must be non-nullable exactly when a
+            NOT_NULL/PRIMARY_KEY record names it. Both are checked here.
+            ``ReadOnlyCatalogInterface`` negotiates the read profile.
         definition_revision: Opaque table-definition revision for mutation.
-        not_null: Legacy declarations; nonempty values require explicit migration.
-        unique: Tuple of column name tuples for UNIQUE constraints.
-        check: Tuple of SQL expressions for CHECK constraints.
-        primary_key: Tuple of column-name tuples forming the primary key. At
-            most one primary-key constraint is allowed.
-        foreign_key: Tuple of [`ForeignKeyDef`][] foreign-key constraints.
+        not_null: Removed under vgi.v3; nonempty values raise. Use ``constraints``.
+        unique: Removed under vgi.v3; nonempty values raise. Use ``constraints``.
+        check: Removed under vgi.v3; nonempty values raise. Use ``constraints``.
+        primary_key: Removed under vgi.v3; nonempty values raise. Use ``constraints``.
+        foreign_key: Removed under vgi.v3; nonempty values raise. Use ``constraints``.
         defaults: Dict mapping column names to default values. Accepts
             Python literals (str, int, float, bool, None) which are
             auto-converted, or `Sql` for raw SQL.
@@ -411,59 +414,18 @@ class Table:
                     f"without a corresponding {operation}_function"
                 )
 
+        if any((self.not_null, self.unique, self.check, self.primary_key, self.foreign_key)):
+            raise ValueError(
+                f"Table '{self.name}': not_null/unique/check/primary_key/foreign_key are not sent under vgi.v3; "
+                "declare canonical records with vgi.catalog.constraint_record() in `constraints` instead"
+            )
+
         # Resolve columns to validate constraints
         resolved = self._get_resolved_columns()
         column_names = {f.name for f in resolved}
-
-        # Validate not_null column names
-        for col in self.not_null:
-            if col not in column_names:
-                raise ValueError(
-                    f"Table '{self.name}': not_null column '{col}' not found "
-                    f"in schema. Available columns: {sorted(column_names)}"
-                )
-
-        # Validate unique column names
-        for group in self.unique:
-            for col in group:
-                if col not in column_names:
-                    raise ValueError(
-                        f"Table '{self.name}': unique column '{col}' not found "
-                        f"in schema. Available columns: {sorted(column_names)}"
-                    )
-
-        # Validate primary_key column names
-        for group in self.primary_key:
-            for col in group:
-                if col not in column_names:
-                    raise ValueError(
-                        f"Table '{self.name}': primary_key column '{col}' not found "
-                        f"in schema. Available columns: {sorted(column_names)}"
-                    )
-
-        # Validate foreign_key column names (only FK side, not referenced table)
-        for fk in self.foreign_key:
-            for col in fk.columns:
-                if col not in column_names:
-                    raise ValueError(
-                        f"Table '{self.name}': foreign_key column '{col}' not found "
-                        f"in schema. Available columns: {sorted(column_names)}"
-                    )
-
-        # Validate at most one primary key
-        if len(self.primary_key) > 1:
-            raise ValueError(
-                f"Table '{self.name}': at most one primary_key constraint allowed, got {len(self.primary_key)}"
-            )
-
-        # Validate foreign_key column count parity
-        for fk in self.foreign_key:
-            if len(fk.columns) != len(fk.referenced_columns):
-                raise ValueError(
-                    f"Table '{self.name}': foreign_key referencing '{fk.referenced_table}' "
-                    f"has {len(fk.columns)} FK columns but {len(fk.referenced_columns)} "
-                    f"referenced columns — counts must match"
-                )
+        # The DuckDB extension rejects the table at ATTACH on either failure;
+        # check here so a worker's own unit tests catch it.
+        validate_constraint_records(self.name, resolved, self.constraints)
 
         # Validate defaults column names
         for col in self.defaults:
@@ -567,33 +529,6 @@ class Table:
         """The resolved column schema (explicit or derived from function)."""
         return self._get_resolved_columns()
 
-    def _resolve_not_null_indices(self) -> list[int]:
-        """Convert column names to indices for not_null constraints."""
-        cols = self.resolved_columns
-        return [cols.get_field_index(col) for col in self.not_null]
-
-    def _resolve_unique_indices(self) -> list[list[int]]:
-        """Convert column names to indices for unique constraints."""
-        cols = self.resolved_columns
-        return [[cols.get_field_index(col) for col in group] for group in self.unique]
-
-    def _resolve_primary_key_indices(self) -> list[list[int]]:
-        """Convert column names to indices for primary_key constraints."""
-        cols = self.resolved_columns
-        return [[cols.get_field_index(col) for col in group] for group in self.primary_key]
-
-    def _serialize_foreign_keys(self, schema_path: SchemaPath) -> list[bytes]:
-        """Serialize foreign key constraints as IPC bytes."""
-        return [
-            ForeignKeyInfo(
-                fk_columns=list(fk.columns),
-                pk_columns=list(fk.referenced_columns),
-                referenced_table=fk.referenced_table,
-                referenced_schema_path=fk.referenced_schema_path or schema_path,
-            ).serialize_to_bytes()
-            for fk in self.foreign_key
-        ]
-
     def _apply_defaults_to_schema(self, schema: pa.Schema) -> pa.Schema:
         """Return schema with default value metadata applied to fields."""
         if not self.defaults:
@@ -641,8 +576,6 @@ class Table:
 
     def to_table_info(self, schema_path: SchemaPath) -> TableInfo:
         """Convert to [`TableInfo`][] for catalog response."""
-        if any((self.not_null, self.unique, self.check, self.primary_key, self.foreign_key)):
-            raise ValueError("legacy constraint declarations require explicit canonical ConstraintInfo records")
         cols = self._apply_defaults_to_schema(self.resolved_columns)
         cols = self._apply_generated_columns_to_schema(cols, schema_path)
         cols = self._apply_column_comments_to_schema(cols)

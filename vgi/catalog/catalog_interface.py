@@ -42,6 +42,8 @@ from vgi_rpc.utils import IpcValidation, deserialize_record_batch, serialize_rec
 
 from vgi.arguments import Arguments, SecretLookupEntry
 from vgi.catalog.capabilities import (
+    CONSTRAINT_RECORDS_READ,
+    ROW_SCALAR_EXPRESSION,
     CatalogCapabilities,
 )
 from vgi.catalog.column_metadata import validate_column_metadata
@@ -2984,6 +2986,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     - schemas() - Custom schema listing (default returns 'main')
     - schema_contents() - List schema contents
     - table_scan_function_get() - Get scan function for tables
+    - catalog_capabilities() - Profiles this catalog implements (default:
+      constraint records when a declared table carries ``constraints``)
 
     All DDL operations (create, drop, rename, modify) will raise
     [`CatalogReadOnlyError`][].
@@ -3279,6 +3283,23 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             # one catalog_contents call.
             supports_catalog_contents=True,
         )
+
+    def catalog_capabilities(self, *, attach_opaque_data: AttachOpaqueData) -> CatalogCapabilities:
+        """Advertise constraint records when a declared table carries them.
+
+        DuckDB reads ``TableInfo.constraints`` only under a negotiated
+        ``vgi.constraint.records.read.v1`` (plus the scalar expression profile
+        for CHECK). The worker selects against the client's offer after
+        ``catalog_attach``, so overriding ``catalog_attach`` cannot drop it.
+        Override and extend this result when tables are served outside the
+        declarative ``catalog``.
+        """
+        del attach_opaque_data
+        self._build_registries()
+        assert self._table_registry is not None
+        if any(table.constraints for table in self._table_registry.values()):
+            return CatalogCapabilities(read=sorted([CONSTRAINT_RECORDS_READ, ROW_SCALAR_EXPRESSION]))
+        return CatalogCapabilities()
 
     def _global_function_infos(self) -> list[FunctionInfo]:
         """Build [`FunctionInfo`][] records for ``Catalog.global_functions``.

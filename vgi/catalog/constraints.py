@@ -9,6 +9,7 @@ No record alone establishes that a backend enforces a constraint.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Annotated, Self
@@ -17,7 +18,9 @@ import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass, ArrowType
 from vgi_rpc.utils import IpcValidation
 
+from vgi.catalog.capabilities import ROW_SCALAR_EXPRESSION
 from vgi.catalog.dependencies import CatalogObjectRef
+from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.sql import SqlExpression
 from vgi.column_path import ColumnPath, column_path_key, resolve_column_path
 from vgi.typed_values import TypedValueBatch
@@ -422,10 +425,21 @@ def validate_constraint_schema(
     definitions: list[ConstraintDefinition],
     *,
     trusted: list[ConstraintDefinition] | None = None,
+    table: str | None = None,
 ) -> None:
-    """Require exact raw paths and agreement between trust and Arrow nullability."""
+    """Require exact raw paths and agreement between trust and Arrow nullability.
+
+    Mirrors the DuckDB extension's ATTACH check: a field (descending through
+    ordinary STRUCTs, not logical-type storage) is non-nullable exactly when a
+    trusted NOT_NULL/PRIMARY_KEY definition names its path. ``table`` only
+    labels error messages.
+    """
+    owner = f"Table '{table}': " if table is not None else ""
     for definition in definitions:
-        definition.validate_schema(schema)
+        try:
+            definition.validate_schema(schema)
+        except ValueError as error:
+            raise ValueError(f"{owner}{error}") from error
     required = {
         tuple(path)
         for definition in (definitions if trusted is None else trusted)
@@ -442,7 +456,16 @@ def validate_constraint_schema(
             path = (*prefix, column_field.name)
             visible_paths.add(path)
             if column_field.nullable == (path in required):
-                raise ValueError("Arrow nullability must agree with enforced ALL_ROWS NOT_NULL/PRIMARY constraints")
+                problem = (
+                    "the field is nullable but a NOT_NULL/PRIMARY_KEY record names it; make the field non-nullable"
+                    if column_field.nullable
+                    else "the field is non-nullable but no ENFORCED + ALL_ROWS NOT_NULL/PRIMARY_KEY record names it; "
+                    "declare one with constraint_record() or make the field nullable"
+                )
+                raise ValueError(
+                    f"{owner}Arrow nullability disagrees with canonical NOT_NULL/PRIMARY_KEY at column {list(path)!r}: "
+                    + problem
+                )
             metadata = column_field.metadata or {}
             # A logical type's storage members are not table column paths.
             # In particular Parquet Variant requires a nonnullable metadata
@@ -453,5 +476,135 @@ def validate_constraint_schema(
                 visit(column_field.type, path)
 
     visit(schema, ())
-    if any(tuple(path) not in visible_paths for definition in definitions for path in definition.column_paths):
-        raise ValueError("constraint paths cannot address storage identities or logical-type storage members")
+    for definition in definitions:
+        for path in definition.column_paths:
+            if tuple(path) not in visible_paths:
+                raise ValueError(
+                    f"{owner}constraint path {path!r} addresses a storage identity or logical-type storage member, "
+                    "not a table column"
+                )
+
+
+def validate_constraint_records(table: str, schema: pa.Schema, constraints: Sequence[ConstraintInfo]) -> None:
+    """Check a table's records the way the DuckDB extension does at ATTACH.
+
+    The extension reads only ENFORCED + ALL_ROWS records and rejects a table
+    (even one with no records) whose Arrow nullability disagrees with its
+    NOT_NULL/PRIMARY_KEY records. Run when serving each table, and by
+    [`Table`][] at construction, so a worker's own tests catch both.
+    """
+    for info in constraints:
+        if info.ref.owner_table != table:
+            raise ValueError(f"Table '{table}': constraint '{info.ref.name}' belongs to table {info.ref.owner_table!r}")
+        if not info.trusted:
+            raise ValueError(
+                f"Table '{table}': constraint '{info.ref.name}' is {info.enforcement}/{info.validation}; "
+                "DuckDB accepts only ENFORCED + ALL_ROWS records, so state one only when every row the "
+                "table can return satisfies it"
+            )
+    validate_constraint_schema(schema, [info.definition for info in constraints], table=table)
+
+
+@dataclass(frozen=True, kw_only=True)
+class ReferencedKey:
+    """The PRIMARY_KEY or UNIQUE key a FOREIGN_KEY record references.
+
+    Attributes:
+        schema_path: Schema path of the referenced table.
+        table: Referenced table name.
+        columns: Raw component paths of the referenced key, in FK column order.
+        constraint_id: ``id`` of the referenced table's PRIMARY_KEY or UNIQUE record.
+    """
+
+    schema_path: Sequence[str]
+    table: str
+    columns: Sequence[Sequence[str]]
+    constraint_id: str
+
+
+def _column_paths(columns: Sequence[Sequence[str]], label: str) -> list[ColumnPath]:
+    if isinstance(columns, (str, bytes)) or any(isinstance(path, (str, bytes)) for path in columns):
+        raise TypeError(f"{label} are raw component paths such as [['id']] or [['bbox', 'xmin']], not names")
+    return [list(path) for path in columns]
+
+
+def constraint_record(
+    schema_path: Sequence[str],
+    table: str,
+    id: str,
+    kind: ConstraintKind | str,
+    columns: Sequence[Sequence[str]],
+    *,
+    enforcement: ConstraintEnforcement | str,
+    validation: ConstraintValidation | str,
+    check_sql: str | None = None,
+    references: ReferencedKey | None = None,
+    declared_name: str | None = None,
+) -> ConstraintInfo:
+    """Build one canonical [`ConstraintInfo`][] for ``Table.constraints``.
+
+    The record is the worker's own attestation; the SDK never derives one.
+    The DuckDB extension reads only ENFORCED + ALL_ROWS records, so state that
+    only when every row the table can ever return satisfies the constraint.
+
+    Args:
+        schema_path: Schema path of the owning table.
+        table: Owning table name.
+        id: Stable provider-owned identity, unique within the table. Never
+            derived by the SDK and never a SQL label.
+        kind: The constraint kind.
+        columns: Raw component paths, e.g. ``[["id"]]`` or
+            ``[["bbox", "xmin"]]``; empty for CHECK.
+        enforcement: Whether the provider enforces it on every write path.
+        validation: Coverage of existing rows.
+        check_sql: CHECK only: a DuckDB scalar expression over the table's columns.
+        references: FOREIGN_KEY only: the referenced key and its constraint identity.
+        declared_name: Optional SQL label (``CONSTRAINT <name>``).
+
+    Returns:
+        The validated record.
+
+    Raises:
+        ValueError: The arguments do not describe one valid record.
+        TypeError: ``columns`` holds names instead of component paths.
+    """
+    kind = ConstraintKind(kind)
+    if (kind == ConstraintKind.CHECK) != (check_sql is not None):
+        raise ValueError("check_sql is required for CHECK and only CHECK")
+    if (kind == ConstraintKind.FOREIGN_KEY) != (references is not None):
+        raise ValueError("references is required for FOREIGN_KEY and only FOREIGN_KEY")
+    owner = list(schema_path)
+    return ConstraintInfo(
+        ref=CatalogObjectRef(kind="constraint", schema_path=owner, name=id, owner_table=table),
+        definition=ConstraintDefinition(
+            kind=kind,
+            column_paths=_column_paths(columns, "columns"),
+            declared_name=declared_name,
+            check_expression=None
+            if check_sql is None
+            else SqlExpression(
+                sql=check_sql,
+                profile=ROW_SCALAR_EXPRESSION,
+                schema_path=owner,
+                evaluation_context=QueryEvaluationContext(),
+            ),
+            foreign_key=None
+            if references is None
+            else ForeignKeyDefinition(
+                referenced_table=CatalogObjectRef(
+                    kind="table", schema_path=list(references.schema_path), name=references.table
+                ),
+                referenced_column_paths=_column_paths(references.columns, "references.columns"),
+            ),
+        ),
+        enforcement=ConstraintEnforcement(enforcement),
+        validation=ConstraintValidation(validation),
+        referenced_constraint=None
+        if references is None
+        else CatalogObjectRef(
+            kind="constraint",
+            schema_path=list(references.schema_path),
+            name=references.constraint_id,
+            owner_table=references.table,
+        ),
+    )

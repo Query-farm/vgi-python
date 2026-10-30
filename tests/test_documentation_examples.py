@@ -29,7 +29,7 @@ from vgi import (
     schema_like,
 )
 from vgi.arguments import AnyArrow, Arguments, TableInput
-from vgi.catalog import Catalog, Schema, Table, View
+from vgi.catalog import Catalog, Schema, Table, View, constraint_record
 from vgi.client import Client
 from vgi.metadata import OrderPreservation, ResolvedMetadata
 from vgi.table_function import TableCardinality, TableFunctionGenerator
@@ -61,6 +61,7 @@ DOC_EXAMPLE_GLOBALS: dict[str, Any] = {
     "Schema": Schema,
     "Table": Table,
     "View": View,
+    "constraint_record": constraint_record,
     # Other
     "Client": Client,
     "ResolvedMetadata": ResolvedMetadata,

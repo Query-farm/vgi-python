@@ -122,9 +122,8 @@ Information about a table:
 | `name` | `str` | Table name |
 | `schema_path` | `SchemaPath` | Parent schema path |
 | `columns` | `SerializedSchema` | Column definitions as Arrow schema bytes |
-| `not_null_constraints` | `list[int]` | Column indices with NOT NULL |
-| `unique_constraints` | `list[list[int]]` | Column index groups for UNIQUE |
-| `check_constraints` | `list[str]` | SQL check expressions |
+| `constraints` | `list[bytes]` | Canonical `ConstraintInfo` records (see [Constraints](#constraints)) |
+| `definition_revision` | `bytes \| None` | Opaque table-definition revision |
 | `comment` | `str \| None` | Optional description |
 | `tags` | `dict[str, str]` | Key-value metadata |
 
@@ -509,7 +508,7 @@ For most use cases, the declarative catalog API provides a simpler way to define
 
 ```python
 from vgi import Worker, TableFunctionGenerator
-from vgi.catalog import Catalog, Schema, Table, View
+from vgi.catalog import Catalog, Schema, Table, View, constraint_record
 ```
 
 ### Function-Backed Tables (Recommended)
@@ -527,7 +526,7 @@ class UsersFunction(TableFunctionGenerator):
     """Generate user data."""
 
     FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([
-        ("id", pa.int64()),
+        pa.field("id", pa.int64(), nullable=False),  # NOT NULL: see constraints below
         ("name", pa.string()),
         ("active", pa.bool_()),
     ])
@@ -545,8 +544,16 @@ class UsersFunction(TableFunctionGenerator):
 users_table = Table(
     name="users",
     function=UsersFunction,  # Schema derived from FIXED_SCHEMA
-    not_null=["id"],         # Constraint column names validated
-    unique=[["id"]],
+    constraints=(            # Paths and nullability validated at definition time
+        constraint_record(
+            ["main"], "users", "users.id.not_null", "NOT_NULL", [["id"]],
+            enforcement="ENFORCED", validation="ALL_ROWS",
+        ),
+        constraint_record(
+            ["main"], "users", "users.id.unique", "UNIQUE", [["id"]],
+            enforcement="ENFORCED", validation="ALL_ROWS",
+        ),
+    ),
     comment="User accounts",
 )
 ```
@@ -593,7 +600,7 @@ if __name__ == "__main__":
 | Feature | Description |
 |---------|-------------|
 | **No schema duplication** | Function-backed tables derive schema automatically |
-| **Constraint validation** | `not_null`, `unique` column names validated at definition time |
+| **Constraint validation** | Constraint paths, trust and Arrow nullability validated at definition time |
 | **Automatic scan handling** | Function-backed tables don't need `table_scan_function_get()` |
 | **Type safety** | Frozen dataclasses with runtime validation |
 
@@ -606,15 +613,59 @@ For tables not backed by functions, provide the schema explicitly:
 config_table = Table(
     name="config",
     columns=pa.schema([
-        ("key", pa.string()),
+        pa.field("key", pa.string(), nullable=False),
         ("value", pa.string()),
     ]),
-    not_null=["key"],
-    unique=[["key"]],
+    constraints=(
+        constraint_record(
+            ["main"], "config", "config.key.pk", "PRIMARY_KEY", [["key"]],
+            enforcement="ENFORCED", validation="ALL_ROWS",
+        ),
+    ),
 )
 ```
 
 **Note:** Tables with explicit columns require the worker to implement `table_scan_function_get()` to tell DuckDB how to scan the data.
+
+### Constraints
+
+A table states its constraints as canonical records built with
+`constraint_record()`. Each record is the worker's own attestation — the SDK
+never derives one — so `enforcement` and `validation` are always explicit:
+
+```python
+from vgi.catalog import ReferencedKey, constraint_record
+
+constraint_record(
+    ["main"], "orders", "orders.customer.fk", "FOREIGN_KEY", [["customer_id"]],
+    enforcement="ENFORCED", validation="ALL_ROWS",
+    references=ReferencedKey(
+        schema_path=["main"], table="customers", columns=[["id"]], constraint_id="customers.pk",
+    ),
+)
+constraint_record(
+    ["main"], "orders", "orders.amount.check", "CHECK", [],
+    enforcement="ENFORCED", validation="ALL_ROWS", check_sql="amount >= 0",
+)
+```
+
+DuckDB checks three things when it attaches the catalog, and `Table` checks the
+same at definition time (the worker checks again when serving each table):
+
+- It reads only `ENFORCED` + `ALL_ROWS` records; state one only when every row
+  the table can ever return satisfies it.
+- Every Arrow field — descending through ordinary structs, but not into
+  extension or logical-type storage — is non-nullable exactly when a
+  `NOT_NULL` or `PRIMARY_KEY` record names its path. This applies to tables
+  with no constraints too: a non-nullable field there is an error.
+- The records are readable only under the negotiated
+  `vgi.constraint.records.read.v1` profile (plus `vgi.expression.duckdb.scalar.v1`
+  for CHECK). `ReadOnlyCatalogInterface` advertises both automatically when any
+  declared table carries records; a catalog that serves tables some other way
+  overrides `catalog_capabilities()`.
+
+The legacy `not_null`, `unique`, `check`, `primary_key` and `foreign_key`
+fields are rejected; replace them with records.
 
 ### Validation
 
@@ -627,9 +678,20 @@ Table(name="bad")  # ValueError: must specify either 'columns' or 'function'
 # Error: invalid constraint column
 Table(
     name="users",
-    columns=pa.schema([("id", pa.int64())]),
-    not_null=["nonexistent"],  # ValueError: column 'nonexistent' not found
+    columns=pa.schema([pa.field("id", pa.int64(), nullable=False)]),
+    constraints=(
+        constraint_record(
+            ["main"], "users", "nn", "NOT_NULL", [["nonexistent"]],
+            enforcement="ENFORCED", validation="ALL_ROWS",
+        ),  # ValueError: column path ['nonexistent'] is missing
+    ),
 )
+
+# Error: Arrow nullability must match NOT_NULL/PRIMARY_KEY records exactly
+Table(
+    name="users",
+    columns=pa.schema([pa.field("id", pa.int64(), nullable=False)]),
+)  # ValueError: ... the field is non-nullable but no ... record names it
 
 # Error: default_schema not in schemas
 Catalog(

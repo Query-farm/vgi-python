@@ -170,14 +170,27 @@ def test_discovery_never_hides_constraints_and_mutation_requires_revision() -> N
         Worker._table_for_capabilities(table_info(definition_revision=None), PROFILES)
 
 
-@pytest.mark.parametrize("trusted", [False, True])
-def test_discovery_rejects_nullability_that_does_not_match_trust(trusted: bool) -> None:
-    info = INFO if trusted else replace(INFO, enforcement=ConstraintEnforcement.METADATA_ONLY)
-    wrong = pa.schema([pa.field("a.b", pa.int64(), nullable=trusted)])
+def test_discovery_rejects_nullability_that_does_not_match_records() -> None:
+    wrong = pa.schema([pa.field("a.b", pa.int64(), nullable=True)])
     with pytest.raises(ValueError, match="nullability"):
         Worker._table_for_capabilities(
-            table_info(columns=wrong.serialize().to_pybytes(), constraints=[info.serialize_to_bytes()]), PROFILES
+            table_info(columns=wrong.serialize().to_pybytes(), constraints=[INFO.serialize_to_bytes()]), PROFILES
         )
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        {"enforcement": ConstraintEnforcement.METADATA_ONLY},
+        {"validation": ConstraintValidation.FUTURE_WRITES},
+        {"validation": ConstraintValidation.UNVALIDATED},
+    ],
+)
+def test_discovery_rejects_records_duckdb_will_not_read(state: dict[str, Any]) -> None:
+    """The extension fails ATTACH unless every record is ENFORCED + ALL_ROWS."""
+    info = replace(INFO, **state)
+    with pytest.raises(ValueError, match="accepts only ENFORCED \\+ ALL_ROWS"):
+        Worker._table_for_capabilities(table_info(constraints=[info.serialize_to_bytes()]), PROFILES)
 
 
 def test_create_checks_negotiation_and_current_support_before_provider(monkeypatch: pytest.MonkeyPatch) -> None:

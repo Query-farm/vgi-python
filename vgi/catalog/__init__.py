@@ -60,7 +60,10 @@ from vgi.catalog.constraints import (
     ConstraintValidation,
     ForeignKeyDefinition,
     ForeignKeyMatch,
+    ReferencedKey,
     ReferentialAction,
+    constraint_record,
+    validate_constraint_records,
 )
 from vgi.catalog.dependencies import CatalogObjectRef, DependencySnapshot, ObjectDependency
 from vgi.catalog.descriptors import Catalog, ForeignKeyDef, Index, Macro, Schema, Sql, Table, View
@@ -79,6 +82,7 @@ from vgi.catalog.secret_type import SecretTypeSpec
 from vgi.catalog.setting import Setting, SettingSpec
 from vgi.catalog.sql import ColumnExpressions, SqlStatement, column_expressions, with_column_expressions
 from vgi.catalog.storage import CatalogStorage, CatalogStorageSqlite
+from vgi.column_path import RequiredFilterPaths
 from vgi.write_results import WriteOperation, WriteResultMode, write_changes_batch, write_result_schema
 
 __all__ = [
@@ -99,7 +103,11 @@ __all__ = [
     "ConstraintValidation",
     "ForeignKeyDefinition",
     "ForeignKeyMatch",
+    "ReferencedKey",
     "ReferentialAction",
+    "constraint_record",
+    "validate_constraint_records",
+    "RequiredFilterPaths",
     "ColumnExpressions",
     "SqlStatement",
     "column_expressions",
