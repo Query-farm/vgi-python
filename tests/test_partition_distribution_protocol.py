@@ -113,3 +113,58 @@ def test_distribution_records_reject_ambiguous_shapes() -> None:
                 names=["id", "extra"],
             ),
         )
+
+
+@pytest.mark.parametrize(
+    ("points", "direction", "null_order"),
+    [
+        ([20, 10], OrderByDirection.ASC, OrderByNullOrder.NULLS_LAST),
+        ([10, 20], OrderByDirection.DESC, OrderByNullOrder.NULLS_LAST),
+        ([10, 10], OrderByDirection.ASC, OrderByNullOrder.NULLS_LAST),
+        ([None, 10], OrderByDirection.ASC, OrderByNullOrder.NULLS_LAST),
+        ([10, None], OrderByDirection.ASC, OrderByNullOrder.NULLS_FIRST),
+    ],
+)
+def test_range_split_points_must_be_strictly_ordered(
+    points: list[int | None],
+    direction: OrderByDirection,
+    null_order: OrderByNullOrder,
+) -> None:
+    """Duplicate, reversed, and incorrectly null-ordered boundaries fail closed."""
+    key = RangeKey(
+        transform=encoded(identity("id")),
+        direction=direction,
+        null_order=null_order,
+    )
+    with pytest.raises(ValueError, match="strictly ordered"):
+        RangePartitioning(
+            keys=[encoded(key)],
+            split_points=pa.record_batch([pa.array(points, type=pa.int64())], names=["id"]),
+        )
+
+
+def test_range_split_points_accept_lexicographic_descending_and_null_order() -> None:
+    """The validator applies every key's direction and null placement lexicographically."""
+    first = RangeKey(
+        transform=encoded(identity("group")),
+        direction=OrderByDirection.ASC,
+        null_order=OrderByNullOrder.NULLS_FIRST,
+    )
+    second = RangeKey(
+        transform=encoded(identity("value")),
+        direction=OrderByDirection.DESC,
+        null_order=OrderByNullOrder.NULLS_LAST,
+    )
+
+    ranges = RangePartitioning(
+        keys=[encoded(first), encoded(second)],
+        split_points=pa.record_batch(
+            [
+                pa.array([None, 1, 1, 2], type=pa.int64()),
+                pa.array([None, 20, 10, 99], type=pa.int64()),
+            ],
+            names=["group", "value"],
+        ),
+    )
+
+    assert ranges.split_points.num_rows == 4
