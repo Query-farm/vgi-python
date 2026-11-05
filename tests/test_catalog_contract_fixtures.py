@@ -23,7 +23,16 @@ from vgi.catalog.sql import column_expressions
 from vgi.codegen.catalog_contract_fixtures import attach_records, constraint_records, render
 from vgi.column_path import RequiredFilterPaths
 from vgi.logical_types import LOGICAL_TYPE_PROFILES, validate_logical_values
-from vgi.protocol import MacroCreateRequest, TableCreateRequest
+from vgi.protocol import (
+    FieldPath,
+    KeyGrouping,
+    MacroCreateRequest,
+    PlanResponse,
+    RangePartitioning,
+    ScanSplit,
+    TableCreateRequest,
+    TransformSpec,
+)
 from vgi.query_parameters import QueryParameters
 from vgi.typed_values import TypedValueBatch
 from vgi.worker import Worker
@@ -207,6 +216,40 @@ def test_checked_in_corpus_and_contents() -> None:
     paths = RequiredFilterPaths.deserialize_from_bytes(fixtures["paths"])
     assert paths.groups == [[["a.b"], ["a", "b"]], [["record", 'literal."name']]]
     assert RequiredFilterPaths.deserialize_from_bytes(fixtures["empty_paths"]).groups == []
+
+
+def test_partition_distribution_corpus_is_a_populated_cross_sdk_plan() -> None:
+    fixtures = {name: base64.b64decode(value) for name, value in json.loads(render())["records"].items()}
+    path = FieldPath.deserialize_from_bytes(fixtures["partition_field_path"])
+    assert path.components == ["customer", "region"]
+
+    parameterized = TransformSpec.deserialize_from_bytes(fixtures["partition_parameterized_transform"])
+    assert parameterized.parameters is not None
+    assert parameterized.parameters.to_pydict() == {
+        "buckets": [16],
+        "algorithm": ["murmur3"],
+        "nulls_equal": [True],
+    }
+
+    grouping = KeyGrouping.deserialize_from_bytes(fixtures["partition_key_grouping"])
+    assert len(grouping.keys) == 2
+    ranges = RangePartitioning.deserialize_from_bytes(fixtures["partition_range_partitioning"])
+    assert ranges.split_points.to_pydict() == {
+        "customer.region": [None, "east", "east", "west"],
+        "event_time": [None, 20, 10, 99],
+    }
+
+    split = ScanSplit.deserialize_from_bytes(fixtures["partition_scan_split"])
+    assert split.range_index == 2 and split.location_ids == [0, 1]
+    assert split.key_value is not None
+    assert split.key_value.to_pydict() == {"customer.region": ["east"], "event_time": [15]}
+
+    plan = PlanResponse.deserialize_from_bytes(fixtures["partition_plan_response"])
+    assert plan.locations == ["worker-a", "worker-b"]
+    assert plan.max_workers == 3 and plan.scope == "transaction"
+    assert plan.key_grouping == fixtures["partition_key_grouping"]
+    assert plan.range_partitioning == fixtures["partition_range_partitioning"]
+    assert plan.splits == [fixtures["partition_scan_split"]]
 
 
 def test_layout_corpus_preserves_nested_keys_and_nullable_changes() -> None:

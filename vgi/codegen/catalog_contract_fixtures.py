@@ -75,7 +75,21 @@ from vgi.catalog.query import (
 from vgi.catalog.sql import ColumnExpressions, SqlStatement, with_column_expressions
 from vgi.column_path import RequiredFilterPaths
 from vgi.logical_types import tuple_field, variant_field
-from vgi.protocol import IndexCreateRequest, MacroCreateRequest, TableCreateRequest, VgiProtocol
+from vgi.protocol import (
+    FieldPath,
+    IndexCreateRequest,
+    KeyGrouping,
+    MacroCreateRequest,
+    OrderByDirection,
+    OrderByNullOrder,
+    PlanResponse,
+    RangeKey,
+    RangePartitioning,
+    ScanSplit,
+    TableCreateRequest,
+    TransformSpec,
+    VgiProtocol,
+)
 from vgi.query_parameters import QueryParameters
 from vgi.typed_values import TypedValueBatch
 
@@ -570,6 +584,95 @@ def index_records(values: TypedValueBatch) -> dict[str, ArrowSerializableDatacla
     }
 
 
+def partition_distribution_records() -> dict[str, ArrowSerializableDataclass]:
+    """Canonical Protocol 3.1 records shared by every SDK codec test.
+
+    The plan deliberately carries both exact-key and exact-range claims.  The
+    values exercise nested field paths, multiple typed transform parameters,
+    multi-column tuples, null placement, descending secondary ordering,
+    locality, and the split-to-range association.
+    """
+    region_path = FieldPath(components=["customer", "region"])
+    time_path = FieldPath(components=["event_time"])
+    region_identity = TransformSpec(
+        id="vgi.identity/1",
+        inputs=[region_path.serialize_to_bytes()],
+    )
+    time_identity = TransformSpec(
+        id="vgi.identity/1",
+        inputs=[time_path.serialize_to_bytes()],
+    )
+    parameterized = TransformSpec(
+        id="example.bucket/2",
+        inputs=[time_path.serialize_to_bytes()],
+        parameters=pa.record_batch(
+            [
+                pa.array([16], type=pa.int32()),
+                pa.array(["murmur3"], type=pa.string()),
+                pa.array([True], type=pa.bool_()),
+            ],
+            names=["buckets", "algorithm", "nulls_equal"],
+        ),
+    )
+    grouping = KeyGrouping(keys=[region_identity.serialize_to_bytes(), time_identity.serialize_to_bytes()])
+    region_range_key = RangeKey(
+        transform=region_identity.serialize_to_bytes(),
+        direction=OrderByDirection.ASC,
+        null_order=OrderByNullOrder.NULLS_FIRST,
+    )
+    time_range_key = RangeKey(
+        transform=time_identity.serialize_to_bytes(),
+        direction=OrderByDirection.DESC,
+        null_order=OrderByNullOrder.NULLS_LAST,
+    )
+    ranges = RangePartitioning(
+        keys=[region_range_key.serialize_to_bytes(), time_range_key.serialize_to_bytes()],
+        split_points=pa.record_batch(
+            [
+                pa.array([None, "east", "east", "west"], type=pa.string()),
+                pa.array([None, 20, 10, 99], type=pa.int64()),
+            ],
+            names=["customer.region", "event_time"],
+        ),
+    )
+    key_value = pa.record_batch(
+        [pa.array(["east"], type=pa.string()), pa.array([15], type=pa.int64())],
+        names=["customer.region", "event_time"],
+    )
+    split = ScanSplit(
+        payload=b"source=part-2",
+        token=b"opaque-split-token",
+        estimated_rows=7,
+        rows_exact=True,
+        estimated_bytes=224,
+        key_value=key_value,
+        range_index=2,
+        location_ids=[0, 1],
+    )
+    plan = PlanResponse(
+        splits=[split.serialize_to_bytes()],
+        next_cursors=[b"next-branch"],
+        estimated_total_splits=5,
+        estimated_total_rows=35,
+        max_workers=3,
+        locations=["worker-a", "worker-b"],
+        key_grouping=grouping.serialize_to_bytes(),
+        range_partitioning=ranges.serialize_to_bytes(),
+        catalog_version=42,
+        scope="transaction",
+    )
+    return {
+        "partition_field_path": region_path,
+        "partition_identity_transform": region_identity,
+        "partition_parameterized_transform": parameterized,
+        "partition_key_grouping": grouping,
+        "partition_range_key": time_range_key,
+        "partition_range_partitioning": ranges,
+        "partition_scan_split": split,
+        "partition_plan_response": plan,
+    }
+
+
 def render() -> str:
     """Return deterministic JSON with populated and empty record encodings."""
     schema = pa.schema(
@@ -766,6 +869,7 @@ def render() -> str:
     records.update(logical_and_macro_records())
     records.update(constraint_records())
     records.update(index_records(values))
+    records.update(partition_distribution_records())
     encoded = {name: record.serialize_to_bytes() for name, record in records.items()}
     parameters = QueryParameters.from_batch(values.batch, mode="named")
     context = QueryEvaluationContext()

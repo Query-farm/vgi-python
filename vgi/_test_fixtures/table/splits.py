@@ -37,7 +37,18 @@ from vgi.arguments import Arg
 from vgi.cache_control import CacheControl
 from vgi.filter_v2 import replaying_accepted_state
 from vgi.metadata import FunctionExample, PartitionKind
-from vgi.protocol import FieldPath, KeyGrouping, PlanResponse, ScanSplit, TransformSpec, VgiOutputCollector
+from vgi.protocol import (
+    FieldPath,
+    KeyGrouping,
+    OrderByDirection,
+    OrderByNullOrder,
+    PlanResponse,
+    RangeKey,
+    RangePartitioning,
+    ScanSplit,
+    TransformSpec,
+    VgiOutputCollector,
+)
 from vgi.schema_utils import partition_field, schema
 
 if TYPE_CHECKING:
@@ -858,6 +869,14 @@ class SplitPartitionArgs:
     """Arguments for the partitioned split fixture."""
 
     rows_per_country: Annotated[int, Arg("rows_per_country", default=5, doc="Rows in each partition", ge=0)]
+    key_mode: Annotated[
+        str,
+        Arg(
+            "key_mode",
+            default="valid",
+            doc="Test-only Protocol 3.1 key shape: valid, missing, two_rows, or wrong_type",
+        ),
+    ]
 
 
 @bind_fixed_schema
@@ -890,26 +909,49 @@ class SplitPartitionedFunction(TableFunctionGenerator[SplitPartitionArgs, PartSp
     @classmethod
     def on_plan(cls, params: BindParams[SplitPartitionArgs], request: Any) -> PlanResponse:
         """One split per country, carrying its exact protocol-3.1 key."""
-        key_grouping = KeyGrouping(
-            keys=[
-                TransformSpec(
-                    id="vgi.identity/1",
-                    inputs=[FieldPath(components=["country"]).serialize_to_bytes()],
-                ).serialize_to_bytes()
-            ]
+        def key_value(country: str) -> pa.RecordBatch | None:
+            if params.args.key_mode == "missing":
+                return None
+            if params.args.key_mode == "two_rows":
+                return pa.RecordBatch.from_pydict({"country": [country, country]})
+            if params.args.key_mode == "wrong_type":
+                return pa.RecordBatch.from_pydict({"country": [1]})
+            if params.args.key_mode != "valid":
+                msg = f"unknown split_partitioned key_mode: {params.args.key_mode}"
+                raise ValueError(msg)
+            return pa.RecordBatch.from_pydict({"country": [country]})
+
+        identity = TransformSpec(
+            id="vgi.identity/1",
+            inputs=[FieldPath(components=["country"]).serialize_to_bytes()],
         ).serialize_to_bytes()
+        key_grouping = KeyGrouping(keys=[identity]).serialize_to_bytes()
+        range_key = RangeKey(
+            transform=identity,
+            direction=OrderByDirection.ASC,
+            null_order=OrderByNullOrder.NULLS_LAST,
+        ).serialize_to_bytes()
+        range_partitioning = RangePartitioning(
+            keys=[range_key],
+            # Equality belongs to the range on the right, so these boundaries
+            # isolate BR, DE, JP and US into ranges 0 through 3 respectively.
+            split_points=pa.RecordBatch.from_pydict({"country": ["DE", "JP", "US"]}),
+        ).serialize_to_bytes()
+        range_index = {"BR": 0, "DE": 1, "JP": 2, "US": 3}
         return PlanResponse(
             splits=[
                 ScanSplit(
                     payload=country.encode("ascii"),
                     estimated_rows=params.args.rows_per_country,
                     rows_exact=True,
-                    key_value=pa.RecordBatch.from_pydict({"country": [country]}),
+                    key_value=key_value(country),
+                    range_index=range_index[country],
                 )
                 for country in _PART_COUNTRIES
             ],
             estimated_total_splits=len(_PART_COUNTRIES),
             key_grouping=key_grouping,
+            range_partitioning=range_partitioning,
         )
 
     @classmethod
