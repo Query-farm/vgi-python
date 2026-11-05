@@ -603,10 +603,41 @@ class RangePartitioning(ArrowSerializableDataclass):
     def __post_init__(self) -> None:
         if not self.keys:
             raise ValueError("range partitioning must contain at least one key")
-        for value in self.keys:
-            RangeKey.deserialize_from_bytes(value)
+        decoded_keys = [RangeKey.deserialize_from_bytes(value) for value in self.keys]
         if self.split_points.num_columns != len(self.keys):
             raise ValueError("range split-point width must match the range key width")
+        for row in range(1, self.split_points.num_rows):
+            if _compare_range_rows(self.split_points, row - 1, row, decoded_keys) >= 0:
+                raise ValueError("range split points must be strictly ordered by the declared comparator")
+
+
+def _compare_range_rows(
+    batch: pa.RecordBatch,
+    left_row: int,
+    right_row: int,
+    keys: list[RangeKey],
+) -> int:
+    """Compare two split-point rows using the protocol's lexicographic order."""
+    for column, key in zip(batch.columns, keys, strict=True):
+        left = column[left_row]
+        right = column[right_row]
+        if not left.is_valid or not right.is_valid:
+            if not left.is_valid and not right.is_valid:
+                continue
+            left_first = key.null_order == OrderByNullOrder.NULLS_FIRST
+            return (-1 if left_first else 1) if not left.is_valid else (1 if left_first else -1)
+        try:
+            if pc.equal(left, right).as_py() is True:
+                continue
+            less = pc.less(left, right).as_py() is True
+            greater = pc.greater(left, right).as_py() is True
+        except (pa.ArrowInvalid, pa.ArrowNotImplementedError, TypeError) as error:
+            raise ValueError("range split points contain values that cannot be ordered") from error
+        if not less and not greater:
+            raise ValueError("range split points contain unordered values")
+        result = -1 if less else 1
+        return -result if key.direction == OrderByDirection.DESC else result
+    return 0
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
