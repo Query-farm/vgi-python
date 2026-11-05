@@ -28,6 +28,7 @@ from vgi.protocol import VgiProtocol
 
 # The version the real Python client / C++ extension declares and sends.
 CLIENT_PROTOCOL_VERSION = VgiProtocol.protocol_version
+PREVIOUS_MINOR_PROTOCOL_VERSION = "3.0.0"
 
 
 def test_client_protocol_version_is_canonical() -> None:
@@ -57,3 +58,25 @@ def test_mismatched_worker_protocol_version_raises() -> None:
     assert BAD_PROTOCOL_VERSION in message
     # Directional hint: the client (3.1.0) is older than the worker (99.0.0).
     assert "upgrade the VGI extension/client" in message
+
+
+def test_previous_minor_worker_is_rejected_instead_of_silently_backfilled() -> None:
+    """A 3.1 client must not interpret a 3.0 response with a different schema."""
+    command = [
+        "env",
+        f"VGI_BAD_PROTOCOL_VERSION={PREVIOUS_MINOR_PROTOCOL_VERSION}",
+        "vgi-fixture-bad-protocol-worker",
+    ]
+    with Client(command, pool=None) as client, pytest.raises(ClientError) as exc_info:
+        list(
+            client.table_function(
+                function_name="sequence",
+                schema_path=["main"],
+                arguments=Arguments(positional=(pa.scalar(5),)),
+            )
+        )
+
+    message = str(exc_info.value)
+    assert "protocol_version mismatch" in message
+    assert CLIENT_PROTOCOL_VERSION in message
+    assert PREVIOUS_MINOR_PROTOCOL_VERSION in message
