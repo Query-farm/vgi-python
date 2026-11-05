@@ -83,9 +83,13 @@ from vgi.protocol import (
     ClientCapabilities,
     CopyFromContext,
     CopyToContext,
+    FieldPath,
     IndexCreateRequest,
     InitRequest,
+    KeyGrouping,
     MacroCreateRequest,
+    RangeKey,
+    RangePartitioning,
     ScanSplit,
     SchemaContents,
     TableBufferingCombineRequest,
@@ -97,6 +101,7 @@ from vgi.protocol import (
     TableFunctionPlanRequest,
     TableFunctionProjectionRequest,
     TableFunctionStatisticsRequest,
+    TransformSpec,
     VgiProtocol,
 )
 
@@ -118,6 +123,11 @@ INFO_TYPES: tuple[type, ...] = (
 # preparation, before the catalog methods using them are frozen. Keep a single
 # inventory for schemas and typed models, including otherwise opaque IPC bodies.
 SHARED_CONTRACT_TYPES: tuple[type, ...] = (
+    FieldPath,
+    TransformSpec,
+    KeyGrouping,
+    RangeKey,
+    RangePartitioning,
     MacroParameter,
     MacroOverload,
     ClientQueryCapabilities,

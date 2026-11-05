@@ -37,7 +37,7 @@ from vgi.arguments import Arg
 from vgi.cache_control import CacheControl
 from vgi.filter_v2 import replaying_accepted_state
 from vgi.metadata import FunctionExample, PartitionKind
-from vgi.protocol import PlanResponse, ScanSplit, VgiOutputCollector
+from vgi.protocol import FieldPath, KeyGrouping, PlanResponse, ScanSplit, TransformSpec, VgiOutputCollector
 from vgi.schema_utils import partition_field, schema
 
 if TYPE_CHECKING:
@@ -889,17 +889,27 @@ class SplitPartitionedFunction(TableFunctionGenerator[SplitPartitionArgs, PartSp
 
     @classmethod
     def on_plan(cls, params: BindParams[SplitPartitionArgs], request: Any) -> PlanResponse:
-        """One split per country, each naming its own partition."""
+        """One split per country, carrying its exact protocol-3.1 key."""
+        key_grouping = KeyGrouping(
+            keys=[
+                TransformSpec(
+                    id="vgi.identity/1",
+                    inputs=[FieldPath(components=["country"]).serialize_to_bytes()],
+                ).serialize_to_bytes()
+            ]
+        ).serialize_to_bytes()
         return PlanResponse(
             splits=[
                 ScanSplit(
                     payload=country.encode("ascii"),
                     estimated_rows=params.args.rows_per_country,
                     rows_exact=True,
+                    key_value=pa.RecordBatch.from_pydict({"country": [country]}),
                 )
                 for country in _PART_COUNTRIES
             ],
             estimated_total_splits=len(_PART_COUNTRIES),
+            key_grouping=key_grouping,
         )
 
     @classmethod
@@ -940,12 +950,18 @@ class SplitPartitionedFunction(TableFunctionGenerator[SplitPartitionArgs, PartSp
             # assertion unchanged — the file could not detect the exact failure
             # it exists to detect.
             base = _PART_COUNTRIES.index(country) * 100
-            out.emit(
-                pa.RecordBatch.from_pydict(
-                    {"country": [country] * rows, "sales": [base + i + 1 for i in range(rows)]},
-                    schema=_PART_ROW,
-                )
+            batch = pa.RecordBatch.from_pydict(
+                {"country": [country] * rows, "sales": [base + i + 1 for i in range(rows)]},
+                schema=_PART_ROW,
             )
+            # Bypass the legacy per-batch vgi_partition_values metadata. The
+            # DuckDB adapter must source this split's SINGLE_VALUE partition
+            # tuple from ScanSplit.key_value; if it falls back, the existing
+            # C++ missing-metadata check makes this integration test fail.
+            inner = out
+            while hasattr(inner, "_inner"):
+                inner = inner._inner
+            inner.emit(batch)
             return
 
 
