@@ -13,7 +13,7 @@ and automatic pushdown remain read-only.
 The implementation belongs to the **combined successor protocol release**, alongside the
 catalog/type changes in the [manifest](duckdb-2.0-manifest.json). It does not reserve a separate
 minor release. Published main now uses `vgi.v2` / `2.2.0`; the prepared successor
-now uses `vgi.v3` / `3.0.0`. Separate versioned endpoints/processes, draining old
+now uses `vgi.v3` / `3.1.0`. Separate versioned endpoints/processes, draining old
 sessions, and reattaching/repreparing remain the migration policy. Coordinated
 release qualification is still required. See the
 [latest-main integration checkpoint](duckdb-2.0-main-integration-2026-10-24.md).
@@ -1361,7 +1361,7 @@ universal speedup percentage; establish budgets from these measurements before d
 ## 13. Compatibility, alternatives, and launch gates
 
 Published main now uses **2.2.0** under **`vgi.v2`**. The prepared Python SDK, other SDKs and extension
-use **3.0.0** under **`vgi.v3`**.
+use **3.1.0** under **`vgi.v3`**.
 The query capability, preparation/release RPCs and parameter metadata join the combined breaking
 successor contract. The selected major version and routing/migration policy apply to that package;
 do not publish this development surface as a compatible 2.2.0 update.

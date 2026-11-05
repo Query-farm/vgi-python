@@ -511,25 +511,102 @@ class TableFunctionStatisticsRequest(ArrowSerializableDataclass):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PartitionTransform(ArrowSerializableDataclass):
-    """How a partition column is derived, for engines that do storage-partitioned joins.
+    """Deprecated protocol-2 partition-transform description.
 
-    Spark's ``KeyGroupedPartitioning`` needs the transform *expression*, not just the
-    partition values: ``country=US`` does not say whether partitions are
-    ``identity(country)`` or ``bucket(16, user_id)``. This is Iceberg's vocabulary,
-    which ``Expressions.bucket(n, col)`` maps onto directly.
-
-    Attributes:
-        column: Name of the partition column in the function's output schema.
-        transform: Transform kind — one of ``identity``, ``bucket``, ``truncate``,
-            ``year``, ``month``, ``day``, ``hour``.
-        param: Bucket count for ``bucket`` / width for ``truncate``; ``None`` for
-            the rest.
-
+    Protocol 3.1 producers should use :class:`TransformSpec` inside
+    :class:`KeyGrouping` or :class:`RangePartitioning`. This record remains
+    available so existing producers can continue to populate the deprecated
+    :attr:`PlanResponse.partitioning` field while they migrate.
     """
 
     column: str
     transform: str
     param: int | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class FieldPath(ArrowSerializableDataclass):
+    """One raw, component-preserving field reference used by a transform."""
+
+    components: list[str]
+
+    def __post_init__(self) -> None:
+        if not self.components or any(not component for component in self.components):
+            raise ValueError("field path must contain only non-empty components")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TransformSpec(ArrowSerializableDataclass):
+    """A versioned, registry-defined partition transform.
+
+    ``id`` identifies normative semantics (for example ``vgi.identity/1`` or
+    ``iceberg.bucket/1``). ``inputs`` contains serialized :class:`FieldPath`
+    records. ``parameters`` is either absent or a one-row Arrow batch, which
+    permits any number of named, typed parameters without admitting arbitrary
+    recursive expressions.
+    """
+
+    id: str
+    inputs: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))] = field(default_factory=list)
+    parameters: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
+
+    def __post_init__(self) -> None:
+        if not self.id or "/" not in self.id:
+            raise ValueError("transform id must be a non-empty, versioned name")
+        if not self.inputs:
+            raise ValueError("transform must reference at least one input field")
+        for value in self.inputs:
+            FieldPath.deserialize_from_bytes(value)
+        if self.parameters is not None and self.parameters.num_rows != 1:
+            raise ValueError("transform parameters must contain exactly one row")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class KeyGrouping(ArrowSerializableDataclass):
+    """Transforms whose exact result tuple is constant within every split."""
+
+    keys: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))]
+
+    def __post_init__(self) -> None:
+        if not self.keys:
+            raise ValueError("key grouping must contain at least one transform")
+        for value in self.keys:
+            TransformSpec.deserialize_from_bytes(value)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RangeKey(ArrowSerializableDataclass):
+    """One transform and comparator component of a range key."""
+
+    transform: Annotated[bytes, ArrowType(pa.binary())]
+    direction: OrderByDirection
+    null_order: OrderByNullOrder
+
+    def __post_init__(self) -> None:
+        TransformSpec.deserialize_from_bytes(self.transform)
+        OrderByDirection(self.direction)
+        OrderByNullOrder(self.null_order)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RangePartitioning(ArrowSerializableDataclass):
+    """Exact half-open range distribution shared by all splits in a plan.
+
+    ``N`` split-point rows define ``N + 1`` ranges. Values equal to point ``i``
+    belong to range ``i + 1``. Each split names its range with
+    :attr:`ScanSplit.range_index`.
+    """
+
+    keys: Annotated[list[bytes], ArrowType(pa.list_(pa.binary()))]
+    split_points: Annotated[pa.RecordBatch, ArrowType(pa.binary())]
+
+    def __post_init__(self) -> None:
+        if not self.keys:
+            raise ValueError("range partitioning must contain at least one key")
+        for value in self.keys:
+            RangeKey.deserialize_from_bytes(value)
+        if self.split_points.num_columns != len(self.keys):
+            raise ValueError("range split-point width must match the range key width")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -578,10 +655,15 @@ class ScanSplit(ArrowSerializableDataclass):
         estimated_bytes: Byte estimate. Load-bearing for engines that bin-pack
             (DataFusion weight, Trino SplitWeight); ``None`` degrades them to
             round-robin by count. DuckDB claims greedily and does not need it.
-        partition_bounds: 2-row (min, max) Arrow batch in the existing
-            ``vgi_partition_values`` encoding, one column per partition column.
-            For SINGLE_VALUE_PARTITIONS min == max, so row 0 is the exact key —
-            but only report partitioning when the split really is single-valued.
+        key_value: One-row Arrow batch aligned with ``PlanResponse.key_grouping``.
+            Every row emitted by this split evaluates to this exact transformed
+            tuple under null-safe equality.
+        range_index: Zero-based range owned by this split when
+            ``PlanResponse.range_partitioning`` is present.
+        column_bounds: 2-row (min, max) Arrow batch used only for containment and
+            pruning. It is not an exact grouping key or a range assignment.
+        partition_bounds: Deprecated compatibility spelling for older protocol-2
+            producers. New protocol-3 producers use ``column_bounds``.
         column_statistics: Per-column statistics blob (same encoding as
             ``table_function_statistics``).
         location_ids: Indices into ``PlanResponse.locations`` naming hosts where
@@ -603,6 +685,9 @@ class ScanSplit(ArrowSerializableDataclass):
     estimated_rows: int | None = None
     rows_exact: bool = False
     estimated_bytes: int | None = None
+    key_value: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
+    range_index: int | None = None
+    column_bounds: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
     partition_bounds: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
     column_statistics: Annotated[bytes | None, ArrowType(pa.binary())] = None
     location_ids: list[int] | None = None
@@ -720,9 +805,12 @@ class PlanResponse(ArrowSerializableDataclass):
             ``transaction`` (reuses the CACHE_SCOPE_* vocabulary). Transaction-scoped
             plans are not cacheable and are not redeemable after commit or rollback.
         locations: Hoisted host list; splits index into it via ``location_ids``.
-        partitioning: Serialized [`PartitionTransform`][] records describing how
-            partition columns are derived. Report none unless every split really is
-            single-valued.
+        key_grouping: Serialized :class:`KeyGrouping` when each split has one
+            exact transformed key tuple.
+        range_partitioning: Serialized :class:`RangePartitioning` containing the
+            exact ordered split points and comparator.
+        partitioning: Deprecated protocol-2 partition-transform list. Protocol-3
+            producers use ``key_grouping`` and/or ``range_partitioning``.
         sort_order: Serialized [`SortField`][] records describing ordering *within*
             each split.
         cache_max_age_seconds: How long this plan may be reused. Ignored for
@@ -757,6 +845,8 @@ class PlanResponse(ArrowSerializableDataclass):
     scope: str = CACHE_SCOPE_CATALOG
 
     locations: list[str] | None = None
+    key_grouping: Annotated[bytes | None, ArrowType(pa.binary())] = None
+    range_partitioning: Annotated[bytes | None, ArrowType(pa.binary())] = None
     partitioning: Annotated[list[bytes] | None, ArrowType(pa.list_(pa.binary()))] = None
     sort_order: Annotated[list[bytes] | None, ArrowType(pa.list_(pa.binary()))] = None
 
@@ -3483,7 +3573,7 @@ class VgiProtocol(Protocol):
     # ``VgiProtocol``, Java and C# ``VgiService``, Go the framework default
     # ``Service``, TypeScript ``vgi`` -- so no client could address them all.
     protocol_name: ClassVar[str] = "vgi.v3"
-    protocol_version: ClassVar[str] = "3.0.0"
+    protocol_version: ClassVar[str] = "3.1.0"
 
     def bind(self, request: BindRequest) -> BindResponse:
         """Resolve output schema and validate arguments."""

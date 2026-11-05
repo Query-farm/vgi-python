@@ -1,6 +1,6 @@
 # Batched catalog contents and reusable publications
 
-VGI wire revision **3.0.0** uses the `vgi.v3` route and retains
+VGI wire revision **3.1.0** uses the `vgi.v3` route and retains
 `catalog_contents` with six catalog-wide Arrow IPC streams: schemas, tables,
 views, functions, macros and indexes. Each stream can contain multiple batches.
 Null means an empty category. Function and macro subtype fields remain intact.
