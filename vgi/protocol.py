@@ -101,6 +101,8 @@ from vgi.typed_values import TypedValueBatch
 
 __all__ = [
     "BindRequest",
+    "OrderByDirection",
+    "OrderByNullOrder",
     "TableFunctionProjectionRequest",
     "TableFunctionProjectionResponse",
     "ClientCapabilities",
