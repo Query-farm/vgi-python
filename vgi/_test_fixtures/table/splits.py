@@ -909,6 +909,7 @@ class SplitPartitionedFunction(TableFunctionGenerator[SplitPartitionArgs, PartSp
     @classmethod
     def on_plan(cls, params: BindParams[SplitPartitionArgs], request: Any) -> PlanResponse:
         """One split per country, carrying its exact protocol-3.1 key."""
+
         def key_value(country: str) -> pa.RecordBatch | None:
             if params.args.key_mode == "missing":
                 return None
