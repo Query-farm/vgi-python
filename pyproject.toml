@@ -289,7 +289,7 @@ dev = ["lxml>=6.0.2", "pytest-timeout>=2.4.0", "vgi-fixtures"]
 docs = [
     "mkdocs>=1.6",
     "mkdocs-material>=9.5",
-    "mkdocstrings[python]>=0.27",
+    "mkdocstrings[python]>=1.0.8",
     "mkdocs-section-index>=0.3",
     "mkdocs-d2-plugin>=1.4",
     "pygments>=2.20",
