@@ -651,6 +651,60 @@ class TestArgValidation:
         with pytest.raises(ArgumentValidationError, match="does not match the required pattern"):
             _ = obj.name
 
+    def test_pattern_is_unanchored_search(self) -> None:
+        """An unanchored pattern matches anywhere in the value (JSON Schema semantics)."""
+
+        class MyClass:
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar("xhttp://a"),)))
+            url = Arg[str](0, pattern=r"https?://")
+
+        assert MyClass().url == "xhttp://a"
+
+    def test_pattern_start_anchor_rejects_prefix(self) -> None:
+        """A ``^``-anchored pattern still rejects a value with a leading prefix."""
+
+        class MyClass:
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar("xhttp://a"),)))
+            url = Arg[str](0, pattern=r"^https?://")
+
+        with pytest.raises(ArgumentValidationError, match="does not match the required pattern"):
+            _ = MyClass().url
+
+    def test_pattern_start_anchor_accepts_match(self) -> None:
+        """A ``^``-anchored pattern accepts a value that starts with the match."""
+
+        class MyClass:
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar("https://a"),)))
+            url = Arg[str](0, pattern=r"^https?://")
+
+        assert MyClass().url == "https://a"
+
+    def test_pattern_end_anchor_enforced(self) -> None:
+        """A ``$`` anchor is honoured: trailing text after the match is rejected."""
+
+        class MyClass:
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar("ab1"),)))
+            code = Arg[str](0, pattern=r"^[a-z]+$")
+
+        with pytest.raises(ArgumentValidationError, match="does not match the required pattern"):
+            _ = MyClass().code
+
+    def test_pattern_search_on_named_arg(self) -> None:
+        """Named arguments use the same unanchored search."""
+
+        class MyClass:
+            invocation = _MockInvocation(Arguments(positional=(), named={"url": pa.scalar("xhttp://a")}))
+            url = Arg[str]("url", pattern=r"https?://")
+
+        assert MyClass().url == "xhttp://a"
+
+        class Anchored:
+            invocation = _MockInvocation(Arguments(positional=(), named={"url": pa.scalar("xhttp://a")}))
+            url = Arg[str]("url", pattern=r"^https?://")
+
+        with pytest.raises(ArgumentValidationError, match="does not match the required pattern"):
+            _ = Anchored().url
+
     def test_pattern_validation_requires_string(self) -> None:
         """Arg pattern validation should fail for non-string types."""
 
@@ -1000,6 +1054,22 @@ class TestArgVarargs:
         obj = MyClass()
         with pytest.raises(ArgumentValidationError, match="element 1.*does not match pattern"):
             _ = obj.values
+
+    def test_varargs_pattern_is_unanchored_search(self) -> None:
+        """Varargs elements use the same unanchored search as scalar args."""
+
+        class MyClass:
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar("xhttp://a"), pa.scalar("https://b"))))
+            values = Arg[str](0, varargs=True, pattern=r"https?://", arrow_type=pa.string())
+
+        assert MyClass().values == ("xhttp://a", "https://b")  # type: ignore[comparison-overlap]
+
+        class Anchored:
+            invocation = _MockInvocation(Arguments(positional=(pa.scalar("https://b"), pa.scalar("xhttp://a"))))
+            values = Arg[str](0, varargs=True, pattern=r"^https?://", arrow_type=pa.string())
+
+        with pytest.raises(ArgumentValidationError, match="element 1.*does not match pattern"):
+            _ = Anchored().values
 
     def test_varargs_must_be_positional(self) -> None:
         """Varargs with named argument should raise ValueError at definition."""

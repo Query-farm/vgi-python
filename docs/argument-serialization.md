@@ -313,7 +313,9 @@ def parse_schema(schema):
 The following are **not** serialized in the schema:
 
 - **Default values** - handled at runtime by the `Arg` descriptor
-- **Validation constraints** (`ge`, `le`, `choices`, `pattern`) - Python-side validation
+- **Validation constraints** (`ge`, `le`, `choices`, `pattern`) - Python-side validation. `pattern` is an unanchored regex search (JSON Schema
+  `pattern` semantics, same as every VGI SDK): `'https?://'` accepts `xhttp://a`;
+  use `^` and `$` to anchor (`'^https?://'`).
 - **Documentation strings** - available via `ParameterInfo` in metadata
 
 These are implementation details of the Python function runtime, not part

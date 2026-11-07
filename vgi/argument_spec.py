@@ -85,7 +85,8 @@ VGI_DOC_KEY = b"vgi_doc"
 #   vgi_choices — JSON array (the closed set of allowed values)
 #   vgi_range   — interval notation built from ge/le/gt/lt (e.g. "[0, 100]",
 #                 "(0, +inf)", "[1, 10)"); a discovery surface, not the raw bounds
-#   vgi_pattern — raw regex the value must match (open set)
+#   vgi_pattern — raw regex the value must match (open set); evaluated as an
+#                 unanchored search (JSON Schema `pattern`), anchor with ^ / $
 # Kept byte-for-byte in sync with the C++ reader in the vgi extension
 # (src/vgi_function_arguments_function.cpp / src/include/vgi_protocol_constants.hpp).
 VGI_DEFAULT_KEY = b"vgi_default"
@@ -144,8 +145,9 @@ class ArgumentSpec:
         range_notation: Optional interval-notation string built from the arg's
             numeric bounds (``vgi_range``, e.g. ``"[0, 100]"``); None when
             unbounded.
-        pattern: Optional regex the value must match (``vgi_pattern``); None
-            when there is no pattern constraint.
+        pattern: Optional regex the value must match (``vgi_pattern``),
+            evaluated as an unanchored search; None when there is no pattern
+            constraint.
 
     Note:
         For named arguments, the Python attribute name (``name``) and the SQL

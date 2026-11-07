@@ -954,7 +954,9 @@ class Arg[ArgT]:
         gt: Value must be > this (for numeric types).
         lt: Value must be < this (for numeric types).
         choices: Value must be one of these options.
-        pattern: Value must match this regex pattern (for strings).
+        pattern: Regex the value must contain (for strings). Unanchored search
+            (JSON Schema ``pattern`` semantics): ``'https?://'`` matches
+            anywhere in the value; use ``^`` and ``$`` to anchor.
 
     Note:
         For named arguments (string position), the Python attribute name should
@@ -1038,7 +1040,9 @@ class Arg[ArgT]:
             gt: Minimum value (exclusive). Value must be > this.
             lt: Maximum value (exclusive). Value must be < this.
             choices: Allowed values. Value must be one of these.
-            pattern: Regex pattern for string validation.
+            pattern: Regex for string validation. Evaluated as an unanchored
+                search (``re.search``, JSON Schema ``pattern`` semantics); use
+                ``^`` and ``$`` to anchor the whole value.
             varargs: If True, collect all remaining positional arguments from this
                 position onwards. Returns tuple[ArgT, ...]. Requires at least 1 value.
                 Must be positional (not named).
@@ -1350,7 +1354,7 @@ class Arg[ArgT]:
                     valid_range=valid_range,
                     default=self.default,
                 )
-            if not self._compiled_pattern.match(value):
+            if not self._compiled_pattern.search(value):
                 raise ArgumentValidationError(
                     f"Argument '{arg_name}' does not match the required pattern.",
                     arg_name=self._name,
@@ -1447,7 +1451,7 @@ class Arg[ArgT]:
                     doc=self.doc if self.doc else None,
                     valid_range=valid_range,
                 )
-            if not self._compiled_pattern.match(value):
+            if not self._compiled_pattern.search(value):
                 raise ArgumentValidationError(
                     f"Argument '{arg_name}' element {index} does not match pattern.",
                     arg_name=self._name,
@@ -1634,7 +1638,8 @@ class Param:
         le: Value must be <= this (inclusive upper bound). Advisory on `Param`.
         gt: Value must be > this (exclusive lower bound). Advisory on `Param`.
         lt: Value must be < this (exclusive upper bound).
-        pattern: Regex the value must match (for string parameters).
+        pattern: Regex the value must match (for string parameters). Unanchored
+            search; use ``^`` and ``$`` to anchor.
 
     Example (ScalarFunction compute() - position inferred):
         class AddColumns(ScalarFunction):
@@ -1698,6 +1703,8 @@ class ConstParam:
         gt: Value must be > this (exclusive lower bound); enforced at bind.
         lt: Value must be < this (exclusive upper bound); enforced at bind.
         pattern: Regex the value must match (string params); enforced at bind.
+            Unanchored search (JSON Schema ``pattern``); use ``^`` and ``$`` to
+            anchor.
 
     """
 
