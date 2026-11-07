@@ -355,12 +355,14 @@ export function registerVgiService(protocol: Protocol, service: VgiService): Pro
       continue;
     }
     const stream = service[m.key] as VgiStream;
+    // Optional members are spread in only when present, so the options bag
+    // type-checks under exactOptionalPropertyTypes.
     const common = {
       params: m.params,
       outputSchema: stream.outputSchema,
-      headerSchema: m.header ?? undefined,
-      headerInit: stream.headerInit,
-      onCancel: stream.onCancel,
+      ...(m.header ? { headerSchema: m.header } : {}),
+      ...(stream.headerInit ? { headerInit: stream.headerInit } : {}),
+      ...(stream.onCancel ? { onCancel: stream.onCancel } : {}),
       doc: m.doc,
     };
     if (stream.kind === "exchange") {
