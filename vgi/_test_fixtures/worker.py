@@ -137,6 +137,7 @@ from vgi._test_fixtures.secret_cache import (
     SecretCachedScalarFunction,
     SecretCacheNonceFunction,
 )
+from vgi._test_fixtures.secret_lookup import SECRET_LOOKUP_FUNCTIONS
 from vgi._test_fixtures.table import (
     _VERSIONED_CONSTRAINTS_DATA,
     _VERSIONED_CONSTRAINTS_SCHEMAS,
@@ -701,6 +702,8 @@ _EXAMPLE_CATALOG = Catalog(
                 MultiSecretDemoFunction,
                 ScopedSecretDemoFunction,
                 SecretCacheNonceFunction,
+                # Secret-lookup conformance (vgi docs/secret_lookup_fixtures.md).
+                *SECRET_LOOKUP_FUNCTIONS,
                 ExpressionFilterTestFunction,
                 SequenceFunction,
                 # Split-capable scans (plan() -> named units -> per-split init).

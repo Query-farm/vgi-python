@@ -1366,13 +1366,7 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
     meta_required_settings: list[str] = list(attrs.get("required_settings", []))
 
     # Build required_secrets from Meta and annotations
-    meta_required_secrets_raw = attrs.get("required_secrets", [])
-    meta_required_secrets: list[SecretLookupEntry] = []
-    for entry in meta_required_secrets_raw:
-        if isinstance(entry, SecretLookupEntry):
-            meta_required_secrets.append(entry)
-        elif isinstance(entry, dict):
-            meta_required_secrets.append(SecretLookupEntry.from_dict(entry))
+    meta_required_secrets = _coerce_required_secrets(cls.__name__, attrs.get("required_secrets", []))
 
     # Auto-populate from _setting_params / _secret_params class vars (set by __init_subclass__)
     annotation_setting_keys: set[str] = set()
@@ -1387,10 +1381,14 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
         if key not in existing_settings:
             meta_required_settings.append(key)
 
-    # Add annotation-derived secret requirements
-    existing_secret_types = {e.secret_type for e in meta_required_secrets}
+    # Add annotation-derived secret requirements. Dedup on the whole lookup
+    # (type, name, scope), not the type alone: two annotations of one type with
+    # different scopes or names are two requirements, and dropping the second
+    # left it unresolved at bind.
+    existing_lookups = {(e.secret_type, e.secret_name, e.scope) for e in meta_required_secrets}
     for secret in secret_params.values():
-        if secret.secret_type not in existing_secret_types:
+        lookup_key = (secret.secret_type, secret.name, secret.scope)
+        if lookup_key not in existing_lookups:
             meta_required_secrets.append(
                 SecretLookupEntry(
                     secret_type=secret.secret_type,
@@ -1398,7 +1396,7 @@ def resolve_metadata(cls: type) -> ResolvedMetadata:
                     scope=secret.scope,
                 )
             )
-            existing_secret_types.add(secret.secret_type)
+            existing_lookups.add(lookup_key)
 
     argument_monotonicity = attrs.get("argument_monotonicity")
     if argument_monotonicity is not None:
@@ -1564,6 +1562,57 @@ def _detect_has_finalize(cls: type, function_type: CatalogFunctionType) -> bool:
     if not issubclass(cls, TableInOutGenerator):
         return False
     return cls.has_finalize_override()
+
+
+def _coerce_required_secrets(owner: str, raw: object) -> list[SecretLookupEntry]:
+    """Normalize ``Meta.required_secrets`` into lookup entries.
+
+    Accepted entry forms: a bare secret-type string (``"s3"``), a
+    [`SecretLookupEntry`][], a [`Secret`][] (the annotation marker), or a dict
+    with a ``secret_type`` key. Anything else raises ``TypeError``: an entry the
+    framework cannot read is a requirement the client is never asked to resolve,
+    so the function would silently run without its credentials.
+
+    Args:
+        owner: The declaring class name, for error messages.
+        raw: The ``required_secrets`` value from ``Meta``.
+
+    Returns:
+        The entries, in declaration order.
+
+    Raises:
+        TypeError: ``raw`` is not a list/tuple, or an entry has an unsupported form.
+        ValueError: an entry has an empty secret type.
+
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, (str, bytes, dict, SecretLookupEntry, Secret)) or not isinstance(raw, (list, tuple)):
+        raise TypeError(
+            f"{owner}: Meta.required_secrets must be a list of secret requirements, got {type(raw).__name__} "
+            f"(write required_secrets = [{raw!r}] for a single requirement)"
+        )
+    entries: list[SecretLookupEntry] = []
+    for index, entry in enumerate(raw):
+        if isinstance(entry, SecretLookupEntry):
+            lookup = entry
+        elif isinstance(entry, str):
+            lookup = SecretLookupEntry(secret_type=entry)
+        elif isinstance(entry, Secret):
+            lookup = SecretLookupEntry(secret_type=entry.secret_type, secret_name=entry.name, scope=entry.scope)
+        elif isinstance(entry, dict):
+            if "secret_type" not in entry:
+                raise TypeError(f"{owner}: Meta.required_secrets[{index}] is a dict without a 'secret_type' key")
+            lookup = SecretLookupEntry.from_dict(entry)
+        else:
+            raise TypeError(
+                f"{owner}: Meta.required_secrets[{index}] has unsupported type {type(entry).__name__}; "
+                f"use a secret-type string, SecretLookupEntry, Secret, or dict"
+            )
+        if not isinstance(lookup.secret_type, str) or not lookup.secret_type:
+            raise ValueError(f"{owner}: Meta.required_secrets[{index}] has an empty secret_type")
+        entries.append(lookup)
+    return entries
 
 
 def _validate_resume_state(cls: type, max_workers: object) -> None:

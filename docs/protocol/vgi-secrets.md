@@ -31,6 +31,13 @@ A worker asks in one of two ways.
 **Statically.** Function metadata lists lookups in `required_secrets`. The client resolves them
 before the first bind, so they are in the first bind request.
 
+In vgi-python, `Meta.required_secrets` is a list whose entries may be a bare secret-type string
+(`"s3"`, the simplest form), a `SecretLookupEntry`, a `Secret`, or a dict with a `secret_type` key.
+`Secret()` annotations on `on_bind`/`compute` parameters are added to the list, one entry per
+distinct `(type, name, scope)`. Any other entry, an empty type, or a value that is not a list raises
+at metadata resolution: a requirement the SDK cannot read is one the client is never asked to
+resolve.
+
 **Dynamically.** A bind may need a lookup it can only compute from its arguments, such as the bucket
 in a path argument. The worker answers the bind with a *secret-scope request*: a `BindResponse`
 whose `lookup_secret_types` list is non-empty. `lookup_scopes` and `lookup_names` are parallel
@@ -122,10 +129,22 @@ SDKs expose these as selectors on the resolved-secrets object.
 | C# | `SecretArgCodec.AllOfType` | `SecretArgCodec.ForScopeOfType` |
 | TypeScript | `secretsOfType` | `secretForScopeOfType` |
 
-## 6. History
+## 6. Conformance
+
+The shared integration suite checks this contract against every SDK's example worker in
+`test/sql/integration/secret/secret_lookup_*.test` (vgi repo). The fixture functions those files
+call are specified in the vgi repo's `docs/secret_lookup_fixtures.md`; vgi-python implements them
+in `vgi/_test_fixtures/secret_lookup.py`.
+
+## 7. History
 
 vgi-python's bind-time `SecretsAccessor` used to expect dynamically requested secrets in columns
 named `secret_0`, `secret_1`, … with the lookup's type, name and scope in Arrow field metadata. No
 client sends that layout, so `params.secrets.get(type, name=…)` and `get(type, scope=…)` returned
 `None` on the second bind although the secret was in the batch. The accessor now reads the layout
 in §4, and `secret_0` is an ordinary secret name.
+
+`Meta.required_secrets` used to keep only `SecretLookupEntry` and dict entries and silently drop
+everything else, so `required_secrets = ["llm"]` declared nothing and the function never received
+the secret. Annotation-derived requirements were also deduplicated by type alone, so a second
+`Secret("s3", scope=...)` of an already-declared type was dropped. Both now behave as §2 describes.

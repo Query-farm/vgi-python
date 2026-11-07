@@ -235,6 +235,10 @@ export VGI_SIMPLE_WRITABLE_WORKER="${LAUNCH_PREFIX}${SIMPLE_WRITABLE}"
 # database:// installs and directly executes this package, even when the main
 # lane talks to an already-running HTTP worker.
 export VGI_DATABASE_PACKAGE_WORKER="$WORKER"
+# The example worker implements the secret-lookup conformance fixtures
+# (vgi docs/secret_lookup_fixtures.md), so opt in to secret/secret_lookup_*.test
+# on every lane.
+export VGI_SECRET_LOOKUP_FIXTURES=1
 
 case "$TRANSPORT" in
   stdio)
