@@ -3298,6 +3298,15 @@ class Worker:
                 attach_plaintext=attach_plaintext,
                 transaction_plaintext=self._unwrap_transaction_for(request),
             )
+        elif isinstance(instance, ScalarFunctionGenerator):
+            # Scalars, like table functions, see the provider's transaction
+            # plaintext in BindParameters.transaction_opaque_data.
+            result = instance.bind(
+                request,
+                ctx=ctx,
+                attach_plaintext=attach_plaintext,
+                transaction_plaintext=self._unwrap_transaction_for(request),
+            )
         else:
             result = instance.bind(request, ctx=ctx, attach_plaintext=attach_plaintext)  # type: ignore[attr-defined]
         if not isinstance(result, BindResponse):

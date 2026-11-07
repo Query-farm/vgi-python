@@ -685,6 +685,7 @@ class ScalarFunctionGenerator(vgi.function.Function):
         *,
         ctx: CallContext | None = None,
         attach_plaintext: bytes | None = None,
+        transaction_plaintext: bytes | None = None,
     ) -> BindResponse:
         """Bind protocol entry point. Do not override; use `on_bind()` instead.
 
@@ -723,10 +724,13 @@ class ScalarFunctionGenerator(vgi.function.Function):
             secrets_accessor,
             auth,
             # ``attach_plaintext`` is the full framework plaintext (uuid||catalog
-            # bytes); the body sees only the catalog bytes. transaction_opaque_data
-            # is already sealed.
+            # bytes); the body sees only the catalog bytes. The transaction is
+            # the worker-opened provider plaintext -- the same bytes the catalog's
+            # commit/rollback receive -- while ``input`` keeps its sealed wire
+            # value, as table functions do. Direct callers that pass no plaintext
+            # (no signing key: the value was never sealed) get the request's.
             attach_catalog_bytes(attach_plaintext),
-            input.transaction_opaque_data,
+            transaction_plaintext if transaction_plaintext is not None else input.transaction_opaque_data,
             input.argument_names,
         )
         result = cls.on_bind(bind_params)
