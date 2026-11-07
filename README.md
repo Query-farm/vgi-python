@@ -88,6 +88,26 @@ That's it. No C++ compilation, no extension versioning, no complex build process
 
 ---
 
+## Start a new worker
+
+The fastest way to a new Python worker is the
+[**vgi-starter-python**](https://github.com/Query-farm/vgi-starter-python) template: a complete,
+tested worker with a scalar, a table function and a paginated REST API example, recipes for
+common data-engineering tasks, SQL and unit tests, metadata that scores 100 on
+[vgi-lint](https://github.com/Query-farm/vgi-lint-check), CI, Docker, signed release workflows,
+and an `AGENTS.md` for coding agents.
+
+```bash
+gh repo create my-worker --template Query-farm/vgi-starter-python --private --clone
+cd my-worker
+make init NAME=my_worker   # rename the catalog, package and binary
+make check                 # everything CI runs
+```
+
+Or click **Use this template** on GitHub. See
+[starter templates](https://query.farm/vgi/docs/concepts/starter-templates/) for details. The
+rest of this README covers the SDK itself.
+
 ## Installation
 
 The Python package is published on PyPI as `vgi-python` (the `vgi` name was
