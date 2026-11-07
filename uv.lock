@@ -2777,7 +2777,7 @@ wheels = [
 
 [[package]]
 name = "vgi-fixtures"
-version = "0.49.1"
+version = "0.49.2"
 source = { editable = "packages/vgi-fixtures" }
 dependencies = [
     { name = "vgi-python", extra = ["duckdb", "test-fixtures-writable"] },
@@ -2793,7 +2793,7 @@ requires-dist = [
 
 [[package]]
 name = "vgi-python"
-version = "0.49.1"
+version = "0.49.2"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
