@@ -251,27 +251,9 @@ export VGI_TXFIX_STATE_DIR
 
 case "$TRANSPORT" in
   stdio)
-    # Subprocess transport — the only lane that spawns a
-    # fresh worker process per DuckDB connection, and so the only one that can
-    # host the crash / pool-recovery tests below.
+    # Subprocess transport — spawns a fresh worker process per DuckDB connection.
     export VGI_TEST_WORKER="$WORKER"
     export VGI_WRITABLE_TX_WORKER="$WRITABLE_TX"
-    # Presence gate for the crash / pool-recovery tests
-    # (table_in_out/table_buffering_{worker_crash,pool_recovery}). The value is
-    # not a worker spec — the SQL attaches the normal pooled worker; this just
-    # un-skips the tests.
-    #
-    # DEDICATED (subprocess) LANE ONLY. Those tests call the `crash_on_process`
-    # fixture, which does os.kill(getpid(), SIGKILL). Under subprocess transport
-    # that kills the per-DuckDB-process worker child and the pool recovers —
-    # exactly what the tests assert. Under a SHARED-worker transport (http://,
-    # unix://, launch:) it kills the single process serving the whole suite, and
-    # every later ATTACH fails. Exporting it unconditionally silently voided 136
-    # of 286 files on the http lane while still printing "All tests passed"
-    # (run 29979884253) — the crash landed at file 132 and the runner's default
-    # error handling swallowed the cascade. Since shm now runs over the launcher
-    # (a shared worker), stdio is the ONLY lane that may set this.
-    export VGI_TEST_DEDICATED_WORKER=1
     export VGI_VERSIONED_WORKER="$VERSIONED"
     export VGI_VERSIONED_TABLES_WORKER="$VERSIONED_TABLES"
     export VGI_ATTACH_OPTIONS_WORKER="$ATTACH_OPTIONS"
@@ -384,13 +366,6 @@ fi
 # Run the lane, streaming the native sqllogictest report (a progress line per
 # file + the final "All tests passed (.. N assertions ..)" summary). Out-of-scope
 # tests were dropped at staging; any failed assertion exits non-zero.
-#
-# simple_writable runs in its OWN invocation (a fresh DuckDB process / worker
-# pool). Its table-in-out write workers otherwise leave warm pooled connections
-# that perturb the immediately-following crash-recovery test
-# (table_in_out/table_buffering_pool_recovery). A separate process gives the
-# crash test a clean pool. Every lane does the split: simple_writable always
-# attaches a spawned binary (VGI_SIMPLE_WRITABLE_WORKER), even on the http lane.
 echo "Running suite ($SUITE_GLOB, transport=$TRANSPORT) ..."
 suite_rc=0
 
@@ -428,11 +403,7 @@ run_unittest() {
   return "$rc"
 }
 
-run_unittest "$SUITE_GLOB" "~test/sql/integration/simple_writable/*" || suite_rc=$?
-assert_bg_workers_alive || suite_rc=1
-
-echo "Running simple_writable (isolated process) ..."
-run_unittest "test/sql/integration/simple_writable/*" || suite_rc=$?
+run_unittest "$SUITE_GLOB" || suite_rc=$?
 assert_bg_workers_alive || suite_rc=1
 
 exit "$suite_rc"

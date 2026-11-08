@@ -35,8 +35,8 @@ against the matching client without waiting for a community extension release.
    `require` gates load linked extensions; unavailable optional extensions keep
    their normal skip behavior.
 5. **Run** — the harness wires the `VGI_*_WORKER` environment variables to the
-   `.venv/bin` scripts for the selected transport and executes the suite, with
-   `simple_writable` in its own process. Native mode passes `--test-dir` so the
+   `.venv/bin` scripts for the selected transport and executes the suite in one
+   runner invocation. Native mode passes `--test-dir` so the
    runner discovers the staged tree instead of its compiled source directory.
    Failed assertions, empty runs, fatal signals and dead shared HTTP workers
    fail the job. The no-error-skip configuration keeps HTTP errors from silently
@@ -99,20 +99,9 @@ lane (the tests check that transaction ids survive the HTTP sealing).
 
 The `simple_writable/*.test` write-path tests (INSERT/UPDATE/DELETE/RETURNING)
 run on **every** lane against `VGI_SIMPLE_WRITABLE_WORKER`
-(`vgi-fixture-simple-writable-worker`), in their own `haybarn-unittest`
-invocation so their warm pooled connections don't perturb the immediately
-following crash-recovery test. That env var is always a spawned binary — a
+(`vgi-fixture-simple-writable-worker`). That env var is always a spawned binary — a
 `launch:` path on the launch lane, a plain path elsewhere — so these tests run
 over subprocess even on the http lane rather than skipping.
-
-The crash / pool-recovery tests (`table_in_out/table_buffering_*`) are gated on
-`VGI_TEST_DEDICATED_WORKER`, which is set on the **`stdio` lane only**. Their
-`crash_on_process` fixture does `os.kill(getpid(), SIGKILL)`; that is a
-recoverable per-DuckDB-process child kill under subprocess transport, but under
-any shared-worker transport (`http://`, `launch:`) it kills the one process
-serving the whole suite and every later `ATTACH` fails. Because `shm` now rides
-the launcher, `stdio` is the only lane that can host them — worth knowing if you
-ever narrow the stdio lane.
 
 ### Excluded tests
 
