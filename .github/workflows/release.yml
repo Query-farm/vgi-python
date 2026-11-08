@@ -81,6 +81,7 @@ jobs:
           - { short: bad-protocol, worker: vgi-fixture-bad-protocol-worker }
           - { short: bad-enum, worker: vgi-fixture-bad-enum-worker }
           - { short: simple-writable, worker: vgi-fixture-simple-writable-worker }
+          - { short: writable-tx, worker: vgi-fixture-writable-tx-worker }
     steps:
       - uses: actions/checkout@v7
 

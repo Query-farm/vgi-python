@@ -90,6 +90,13 @@ matrix; `stdio` remains available for local compatibility testing:
   runner links httpfs; standalone mode injects `LOAD httpfs` before worker
   attachments.
 
+The `writable_tx/*.test` writable-table and transaction-hook fixtures run on
+every lane against `VGI_WRITABLE_TX_WORKER` (`vgi-fixture-writable-tx-worker`,
+the `txfix` catalog of vgi `docs/writable_tx_fixtures.md`): a plain path on
+stdio, `launch:` on the launcher lanes, and a booted HTTP server on the http
+lane (the tests check that transaction ids survive the HTTP sealing).
+`VGI_TXFIX_STATE_DIR` points at a per-run temp directory.
+
 The `simple_writable/*.test` write-path tests (INSERT/UPDATE/DELETE/RETURNING)
 run on **every** lane against `VGI_SIMPLE_WRITABLE_WORKER`
 (`vgi-fixture-simple-writable-worker`), in their own `haybarn-unittest`

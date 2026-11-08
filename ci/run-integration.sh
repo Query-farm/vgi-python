@@ -54,7 +54,8 @@ VERSIONED_TABLES="$BIN_DIR/vgi-fixture-versioned-tables-worker"
 ATTACH_OPTIONS="$BIN_DIR/vgi-fixture-attach-options-worker"
 BAD_PROTOCOL="$BIN_DIR/vgi-fixture-bad-protocol-worker"
 SIMPLE_WRITABLE="$BIN_DIR/vgi-fixture-simple-writable-worker"
-for b in "$WORKER" "$VERSIONED" "$VERSIONED_TABLES" "$ATTACH_OPTIONS" "$BAD_PROTOCOL" "$SIMPLE_WRITABLE"; do
+WRITABLE_TX="$BIN_DIR/vgi-fixture-writable-tx-worker"
+for b in "$WORKER" "$VERSIONED" "$VERSIONED_TABLES" "$ATTACH_OPTIONS" "$BAD_PROTOCOL" "$SIMPLE_WRITABLE" "$WRITABLE_TX"; do
   [ -x "$b" ] || { echo "::error::missing fixture worker $b (run: uv sync --all-extras)"; exit 1; }
 done
 
@@ -239,6 +240,14 @@ export VGI_DATABASE_PACKAGE_WORKER="$WORKER"
 # (vgi docs/secret_lookup_fixtures.md), so opt in to secret/secret_lookup_*.test
 # on every lane.
 export VGI_SECRET_LOOKUP_FIXTURES=1
+# The txfix worker implements the writable-table and transaction-hook fixtures
+# (vgi docs/writable_tx_fixtures.md), so opt in to writable_tx/*.test on every
+# lane. VGI_WRITABLE_TX_WORKER is set per lane below (a path, launch:<path>, or
+# the http:// URL of a booted server). Its state file lives in a directory
+# private to this run, so lanes running at once on one host don't share rows.
+export VGI_WRITABLE_TX_FIXTURES=1
+VGI_TXFIX_STATE_DIR="$(mktemp -d)"
+export VGI_TXFIX_STATE_DIR
 
 case "$TRANSPORT" in
   stdio)
@@ -246,6 +255,7 @@ case "$TRANSPORT" in
     # fresh worker process per DuckDB connection, and so the only one that can
     # host the crash / pool-recovery tests below.
     export VGI_TEST_WORKER="$WORKER"
+    export VGI_WRITABLE_TX_WORKER="$WRITABLE_TX"
     # Presence gate for the crash / pool-recovery tests
     # (table_in_out/table_buffering_{worker_crash,pool_recovery}). The value is
     # not a worker spec — the SQL attaches the normal pooled worker; this just
@@ -295,6 +305,7 @@ case "$TRANSPORT" in
     # left UNSET (as in test_launcher), so attach/versioned_tables_*_http and
     # versioning_http skip — they're covered over http on the stdio lane.
     export VGI_TEST_WORKER="launch:${WORKER}"
+    export VGI_WRITABLE_TX_WORKER="launch:${WRITABLE_TX}"
     export VGI_VERSIONED_WORKER="launch:${VERSIONED}"
     export VGI_VERSIONED_TABLES_WORKER="launch:${VERSIONED_TABLES}"
     export VGI_ATTACH_OPTIONS_WORKER="launch:${ATTACH_OPTIONS}"
@@ -313,6 +324,10 @@ case "$TRANSPORT" in
     # — they are covered over http on the stdio lane, which boots those workers.
     boot_http_worker "$WORKER"; port="$BOOTED_PORT"
     export VGI_TEST_WORKER="http://localhost:${port}"
+    # writable_tx/* asserts the transaction id survives the HTTP transport's
+    # sealing, so the txfix worker is served over HTTP too.
+    boot_http_worker "$WRITABLE_TX"; txfix_port="$BOOTED_PORT"
+    export VGI_WRITABLE_TX_WORKER="http://localhost:${txfix_port}"
     SUITE_GLOB="test/sql/integration/*"
     ;;
   *)

@@ -49,6 +49,7 @@ vgi-fixture-bad-protocol-worker = "vgi._test_fixtures.bad_protocol:main"
 vgi-fixture-bad-enum-worker = "vgi._test_fixtures.bad_enum:main"
 vgi-fixture-writable-worker = "vgi._test_fixtures.writable.worker:main"
 vgi-fixture-simple-writable-worker = "vgi._test_fixtures.simple_writable:main"
+vgi-fixture-writable-tx-worker = "vgi._test_fixtures.writable_tx:main"
 
 [tool.uv.sources]
 vgi-python = { workspace = true }
