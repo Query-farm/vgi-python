@@ -20,11 +20,13 @@ never wrote the column falls back to the field default.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from types import UnionType
 from typing import (
     TYPE_CHECKING,
     Annotated,
     Any,
     ClassVar,
+    Union,
     cast,
     get_args,
     get_origin,
@@ -55,7 +57,8 @@ def _resolve_arrow_type(type_hint: type | pa.DataType) -> pa.DataType:
     """Resolve Arrow type from either a Python type or Arrow DataType.
 
     Args:
-        type_hint: A Python type (bool, int, float, str, bytes) or Arrow DataType.
+        type_hint: A Python type (bool, int, float, str, bytes), the same
+            ``| None`` (``Optional``), or an Arrow DataType.
 
     Returns:
         The resolved Arrow DataType.
@@ -66,11 +69,18 @@ def _resolve_arrow_type(type_hint: type | pa.DataType) -> pa.DataType:
     """
     if isinstance(type_hint, pa.DataType):
         return type_hint
+    # ``X | None`` / ``Optional[X]``: every option may be absent (its value is
+    # then the default, or nothing), so the optional marker does not change the
+    # wire type.
+    if get_origin(type_hint) in (Union, UnionType):
+        members = [arg for arg in get_args(type_hint) if arg is not type(None)]
+        if len(members) == 1:
+            return _resolve_arrow_type(members[0])
     if type_hint in _PYTHON_TO_ARROW:
         return _PYTHON_TO_ARROW[type_hint]
     raise TypeError(
         f"Cannot resolve Arrow type from: {type_hint}. "
-        "Use a Python type (bool, int, float, str, bytes) or Arrow DataType."
+        "Use a Python type (bool, int, float, str, bytes), optionally ``| None``, or an Arrow DataType."
     )
 
 

@@ -18,6 +18,7 @@ from vgi.exceptions import CatalogReadOnlyError, NotFoundError
 from vgi.invocation import BindResponse
 from vgi.table_function import BindParams, TableFunctionGenerator
 from vgi.table_in_out_function import TableInOutGenerator
+from vgi.write_results import row_id_field
 
 
 # Minimal stub functions: just enough for the Table descriptor's bind() probe.
@@ -30,12 +31,13 @@ class WritableTableScan(TableFunctionGenerator[None, None]):
         """Metadata."""
 
         name = "generic_writable_scan"
+        projection_pushdown = True
 
     @classmethod
     def on_bind(cls, params: BindParams[None]) -> BindResponse:
-        """Return a fixed schema."""
+        """Return a fixed schema with the row-id column UPDATE/DELETE need."""
         del params
-        return BindResponse(output_schema=pa.schema([("id", pa.int64())]))
+        return BindResponse(output_schema=pa.schema([pa.field("id", pa.int64()), row_id_field()]))
 
 
 class WritableTableInsert(TableInOutGenerator[None, None]):
@@ -223,6 +225,7 @@ class TestReadOnlyCatalogInterfaceWriteMethods:
             schemas=[
                 Schema(
                     path=["main"],
+                    functions=[WritableTableScan],
                     tables=[
                         Table(
                             name="writable",

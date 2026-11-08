@@ -56,7 +56,7 @@ from vgi.column_path import RequiredFilterPaths, column_path_key
 from vgi.invocation import BindResponse, FunctionType
 from vgi.metadata import CatalogFunctionType
 from vgi.schema_path import SchemaPath, schema_path_display, schema_path_key, validate_default_schema
-from vgi.write_results import validate_write_result_modes
+from vgi.write_results import row_id_column, validate_write_result_modes
 
 if TYPE_CHECKING:
     from vgi.function import Function
@@ -282,11 +282,25 @@ class Table:
             (AT-clause) queries.
         insert_function: [`TableInOutGenerator`][] class backing INSERT. ``None``
             means INSERT is unsupported.
-        update_function: [`TableInOutGenerator`][] class backing UPDATE. Requires
-            a scan ``function`` to provide row IDs. ``None`` means UPDATE is
-            unsupported.
-        delete_function: [`TableInOutGenerator`][] class backing DELETE. Requires
-            a scan ``function`` to provide row IDs. ``None`` means DELETE is
+        update_function: [`TableInOutGenerator`][] class backing UPDATE. It
+            receives the SET columns plus the row-id column of each updated row
+            and returns the result for the requested mode (decode it with
+            [`write_options`][vgi.write_results.write_options]; build the
+            output with [`write_result_schema`][vgi.write_results.write_result_schema]
+            and [`write_result_batch`][vgi.write_results.write_result_batch]).
+            ``None`` means UPDATE is unsupported. DuckDB reads the row id as a
+            *virtual* column, so the scan ``function`` must (1) emit a row-id
+            column (a field built with
+            [`row_id_field`][vgi.write_results.row_id_field]), (2) declare
+            ``projection_pushdown = True`` in its ``Meta`` and honour
+            ``params.output_schema``, and (3) be listed in the ``functions`` of
+            this table's [`Schema`][vgi.catalog.Schema], which is how DuckDB
+            learns (2). (1) and (2) are checked here, (3) by
+            [`Catalog`][vgi.catalog.Catalog]; without them UPDATE fails with
+            DuckDB's "Virtual columns require projection pushdown".
+        delete_function: [`TableInOutGenerator`][] class backing DELETE. It
+            receives the row-id column of each deleted row. Same scan
+            requirements as ``update_function``. ``None`` means DELETE is
             unsupported.
         write_result_modes: Maximum result mode for each configured write
             function. Omitted operations default to ``count``. Modes are ordered
@@ -503,6 +517,26 @@ class Table:
             raise ValueError(
                 f"Table '{self.name}': update_function and delete_function require "
                 f"a scan function (set 'function') to provide row IDs"
+            )
+        if self.update_function is not None or self.delete_function is not None:
+            self._validate_row_id_scan(resolved)
+
+    def _validate_row_id_scan(self, resolved: pa.Schema) -> None:
+        """Check the scan can supply DuckDB's row-id virtual column for UPDATE/DELETE."""
+        assert self.function is not None
+        scan_name = self.function.get_metadata().name
+        if row_id_column(resolved) is None:
+            raise ValueError(
+                f"Table '{self.name}': update_function and delete_function identify rows by a row-id "
+                f"column, but the columns of scan function '{scan_name}' have none. Add a field built "
+                f"with vgi.write_results.row_id_field() (metadata key b'is_row_id') to its output schema."
+            )
+        if not self.function.get_metadata().projection_pushdown:
+            raise ValueError(
+                f"Table '{self.name}': update_function and delete_function need the scan function "
+                f"'{scan_name}' to support projection pushdown (set projection_pushdown = True in its "
+                f"Meta and honour params.output_schema): DuckDB reads the row id as a virtual column, "
+                f"which it requests only from a projection-pushdown scan."
             )
 
     def _get_resolved_columns(self) -> pa.Schema:
@@ -973,6 +1007,28 @@ class Catalog:
                 )
 
         self._validate_global_functions()
+        self._validate_row_id_scans_listed()
+
+    def _validate_row_id_scans_listed(self) -> None:
+        """Require the scan of every UPDATE/DELETE table to be listed in its schema's ``functions``.
+
+        DuckDB learns that a scan supports projection pushdown -- which it
+        needs to request the row-id virtual column -- from the function's
+        listing in the table's schema. An unlisted scan otherwise surfaces only
+        as DuckDB's "Virtual columns require projection pushdown" on UPDATE.
+        """
+        for schema in self.schemas:
+            for table in schema.tables:
+                if table.function is None or (table.update_function is None and table.delete_function is None):
+                    continue
+                if table.function not in schema.functions:
+                    raise ValueError(
+                        f"Catalog '{self.name}': table {schema_path_display(schema.path)}.{table.name} has an "
+                        f"update_function or delete_function, so its scan function "
+                        f"'{table.function.get_metadata().name}' must also be listed in the functions of schema "
+                        f"{schema_path_display(schema.path)} (that listing is how DuckDB learns the scan supports "
+                        f"the projection pushdown its row-id column needs)."
+                    )
 
     def _validate_global_functions(self) -> None:
         """Validate ``global_functions`` / ``global_function_prefix``.

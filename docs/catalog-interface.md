@@ -65,7 +65,7 @@ Returned by `catalog_attach()` with attachment metadata:
 | `supports_time_travel` | `bool` | Whether time travel queries work |
 | `catalog_version_frozen` | `bool` | Whether metadata will change |
 | `catalog_version` | `int` | Current version (increments on changes) |
-| `attach_opaque_data_required` | `bool` | Whether attach_opaque_data must be persisted |
+| `attach_opaque_data_required` | `bool` | `True`: the bytes name per-attach state, so the client must keep them. `False`: re-attaching yields an equivalent attach, so a client may attach per command |
 | `default_schema` | `str` | Name of the default schema (usually "main") |
 
 > **`attach_opaque_data` / `transaction_opaque_data` are opaque, implementation-owned, and may carry secrets.**
@@ -367,6 +367,16 @@ class MyWorker(Worker):
 | `required=True` | The caller must supply the option. Declare it with no class-level default; `required` plus a default is rejected. |
 | `secret=True` | The option carries a credential. |
 
+The class-level assignment is the option's default. Leaving it out makes the option optional with no
+default (it is simply absent from `options` when the caller omits it); only `required=True` makes it
+mandatory. The type may be written `T | None` (or `Optional[T]`) to say the value can be absent; it
+resolves to `T`'s Arrow type:
+
+```python test="skip"
+class AttachOptions:
+    endpoint: Annotated[str | None, AttachOption(desc="Override endpoint")] = None
+```
+
 **Credential options (API keys, tokens, passwords) MUST be declared `secret=True`.** The caller passes them inline as attach options. Clients mask secret options, and the DuckDB extension redacts them from `duckdb_databases()`, keeps only a salted hash of them in its result-cache key, and never logs them. To keep a credential out of the SQL text (shell history, scripts, shared links), write the option as an expression:
 
 ```sql
@@ -422,6 +432,60 @@ class MyFunctionCatalog(ReadOnlyCatalogInterface):
 # Functions appear in the "main" schema:
 # SELECT * FROM my_funcs.main.my_scalar_function(args);
 ```
+
+### Per-attach options and transactions
+
+"Read-only" means no DDL: a `ReadOnlyCatalogInterface` can still serve writable tables (see
+[Writable tables](#writable-tables)) and take part in DuckDB transactions. Override hooks rather than
+`catalog_attach`:
+
+| Hook | Default | Purpose |
+|------|---------|---------|
+| `attach_opaque_data_for(name=, options=)` | a fixed id | The bytes every function and hook of this attach receives as `attach_opaque_data`. |
+| `attach_supports_transactions(name=, options=, attach_opaque_data=)` | the `supports_transactions` class attribute | `CatalogAttachResult.supports_transactions`, decided per attach. |
+| `catalog_transaction_begin` / `_commit` / `_rollback` | raise `CatalogReadOnlyError` | Mint the transaction id; apply or discard the transaction's work. |
+
+`pack_attach_options(options, specs)` turns the ATTACH options into attach bytes and
+`unpack_attach_options(params.attach_opaque_data)` reads them back in any function or hook, in any
+worker process. Options declared `secret=True` never enter the bytes: they are kept in the shared
+function storage (`VGI_WORKER_SHARED_STORAGE`) under a random handle, so pass the specs.
+
+```python test="skip"
+import os
+from vgi.catalog import (
+    ReadOnlyCatalogInterface, TransactionOpaqueData, pack_attach_options, unpack_attach_options,
+)
+
+class MyCatalog(ReadOnlyCatalogInterface):
+    catalog = CATALOG
+
+    def attach_opaque_data_for(self, *, name, options):
+        return pack_attach_options(options, self.attach_option_specs)
+
+    def attach_supports_transactions(self, *, name, options, attach_opaque_data):
+        return unpack_attach_options(attach_opaque_data).get("transactional") is True
+
+    def catalog_transaction_begin(self, *, attach_opaque_data):
+        return TransactionOpaqueData(os.urandom(16))
+
+    def catalog_transaction_commit(self, *, attach_opaque_data, transaction_opaque_data):
+        ...  # apply the work staged under transaction_opaque_data
+
+    def catalog_transaction_rollback(self, *, attach_opaque_data, transaction_opaque_data):
+        ...  # discard it
+```
+
+DuckDB calls the transaction hooks, and passes `transaction_opaque_data` to functions, only on attaches
+that report `supports_transactions`. The hooks and the functions see the same plaintext id on every
+transport (over HTTP the worker seals it on the wire). Reporting transactions without overriding
+`catalog_transaction_begin` is refused at attach.
+
+`attach_opaque_data_required` follows the bytes: `False` for the default fixed id (re-attaching is
+equivalent, so a client may attach per command), `True` for custom bytes. (The
+TypeScript SDK's `ReadOnlyCatalogInterface` mints a random id per attach and so always reports `True`.)
+
+`vgi._test_fixtures.writable_tx` (`vgi-fixture-writable-tx-worker`) is a complete example: per-attach
+options including a secret, per-attach transactions, and an UPDATE that stages its changes in them.
 
 ### Usage Option 2: Custom Read-Only Catalog
 
@@ -603,6 +667,42 @@ if __name__ == "__main__":
 | **Constraint validation** | DuckDB's ATTACH rules for records and generated columns checked at definition time |
 | **Automatic scan handling** | Function-backed tables don't need `table_scan_function_get()` |
 | **Type safety** | Frozen dataclasses with runtime validation |
+
+### Writable tables
+
+A `Table` can declare `insert_function`, `update_function` and `delete_function` (table in-out
+functions) and, in `write_result_modes`, the richest result each produces: `count` (plain DML), `rows`
+(`RETURNING`) or `changes` (OLD/NEW pairs). DuckDB names the mode it wants in the `write_options`
+argument; the helpers in `vgi.write_results` decode it and build the result:
+
+```python test="skip"
+from vgi.write_results import row_id_field, write_options, write_result_batch, write_result_schema
+
+ITEMS = pa.schema([pa.field("id", pa.int32(), nullable=False), pa.field("qty", pa.int64())])
+
+class ItemsUpdate(TableInOutGenerator[None, None]):
+    @classmethod
+    def on_bind(cls, params):
+        return BindResponse(output_schema=write_result_schema(write_options(params).result_mode, ITEMS))
+
+    @classmethod
+    def process(cls, params, state, batch, out):
+        # batch: the SET columns plus "rowid" for each updated row
+        old_rows, new_rows = apply(batch)
+        out.emit(write_result_batch(write_options(params).result_mode, ITEMS, old_rows, new_rows))
+```
+
+UPDATE and DELETE identify rows by the row-id column, which DuckDB reads as a *virtual* column. The
+table's scan `function` must therefore:
+
+1. emit a row-id column, built with `row_id_field()` (`rowid BIGINT`, metadata key `is_row_id`);
+2. declare `projection_pushdown = True` in its `Meta` and honour `params.output_schema`;
+3. be listed in the `functions` of the table's `Schema`, which is how DuckDB learns (2).
+
+`Table` checks (1) and (2), `Catalog` checks (3); otherwise UPDATE/DELETE would fail with DuckDB's
+"Virtual columns require projection pushdown". Write results never include the row id:
+`write_result_schema` and the batch helpers drop it (`user_columns()` does the same for a schema).
+`write_count_batch`, `write_rows_batch` and `write_changes_batch` build one mode each.
 
 ### Tables with Explicit Columns
 

@@ -132,7 +132,22 @@ from vgi.table_in_out_function import (
     TableInOutGenerator,
 )
 from vgi.worker import Worker
-from vgi.write_results import WriteOperation, WriteResultMode, write_changes_batch, write_result_schema
+from vgi.write_results import (
+    ROW_ID_METADATA_KEY,
+    WriteOperation,
+    WriteOptions,
+    WriteResultMode,
+    is_row_id_field,
+    row_id_column,
+    row_id_field,
+    user_columns,
+    write_changes_batch,
+    write_count_batch,
+    write_options,
+    write_result_batch,
+    write_result_schema,
+    write_rows_batch,
+)
 
 __all__ = [
     "TableFunctionProjectionRequest",
@@ -143,6 +158,16 @@ __all__ = [
     "WriteResultMode",
     "write_result_schema",
     "write_changes_batch",
+    "ROW_ID_METADATA_KEY",
+    "WriteOptions",
+    "is_row_id_field",
+    "row_id_column",
+    "row_id_field",
+    "user_columns",
+    "write_count_batch",
+    "write_options",
+    "write_result_batch",
+    "write_rows_batch",
     "AnyArrow",
     "AnyArrowValue",
     "Arg",

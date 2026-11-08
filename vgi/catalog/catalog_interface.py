@@ -3068,9 +3068,52 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     All DDL operations (create, drop, rename, modify) will raise
     [`CatalogReadOnlyError`][].
 
+    **Per-attach state and transactions.** "Read-only" describes the catalog's
+    *descriptors* (no DDL); its tables may still be writable through
+    ``Table.insert_function``/``update_function``/``delete_function``, and it
+    may still take part in DuckDB transactions. Both are supported by
+    overriding hooks rather than ``catalog_attach``:
+
+    * [`attach_opaque_data_for`][vgi.catalog.ReadOnlyCatalogInterface.attach_opaque_data_for]
+      returns the bytes every function call of this attach receives as
+      ``params.attach_opaque_data`` (default: a fixed id). Return
+      [`pack_attach_options(options, self.attach_option_specs)`][vgi.catalog.attach_option.pack_attach_options]
+      to hand the ATTACH options to functions, which read them back with
+      [`unpack_attach_options`][vgi.catalog.attach_option.unpack_attach_options].
+    * [`attach_supports_transactions`][vgi.catalog.ReadOnlyCatalogInterface.attach_supports_transactions]
+      decides ``supports_transactions`` per attach (default: the
+      ``supports_transactions`` class attribute).
+    * When an attach supports transactions, override
+      ``catalog_transaction_begin`` (mint and return the transaction id),
+      ``catalog_transaction_commit`` and ``catalog_transaction_rollback``.
+      They receive the same plaintext ``attach_opaque_data`` and
+      ``transaction_opaque_data`` that functions see, on every transport (the
+      worker seals them on the wire). The defaults raise
+      [`CatalogReadOnlyError`][]; an attach that reports transaction support
+      without overriding ``catalog_transaction_begin`` is refused.
+
+    ::
+
+        class MyCatalog(ReadOnlyCatalogInterface):
+            catalog = CATALOG
+
+            def attach_opaque_data_for(self, *, name, options):
+                return pack_attach_options(options, self.attach_option_specs)
+
+            def attach_supports_transactions(self, *, name, options, attach_opaque_data):
+                return options.get("transactional") is True
+
+            def catalog_transaction_begin(self, *, attach_opaque_data):
+                return TransactionOpaqueData(os.urandom(16))
+
+            def catalog_transaction_commit(self, *, attach_opaque_data, transaction_opaque_data): ...
+
+            def catalog_transaction_rollback(self, *, attach_opaque_data, transaction_opaque_data): ...
+
     Attributes:
-        supports_transactions: Always ``False`` -- read-only catalogs do not
-            support transactions.
+        supports_transactions: Whether attaches support transactions, unless
+            ``attach_supports_transactions`` is overridden. Default ``False``;
+            set ``True`` only together with the ``catalog_transaction_*`` hooks.
         catalog_version_frozen: Always ``True`` -- the catalog version never
             changes.
         catalog_contents_attach_independent: ``True`` -- the contents are the
@@ -3089,9 +3132,9 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             catalog's schemas, tables, and views.
         catalog_create: DDL stub that raises `[`CatalogReadOnlyError`][].
         catalog_drop: DDL stub that raises `[`CatalogReadOnlyError`][].
-        catalog_transaction_begin: DDL stub that raises `[`CatalogReadOnlyError`][].
-        catalog_transaction_commit: DDL stub that raises `[`CatalogReadOnlyError`][].
-        catalog_transaction_rollback: DDL stub that raises `[`CatalogReadOnlyError`][].
+        catalog_transaction_begin: Raises `[`CatalogReadOnlyError`][] unless overridden (see above).
+        catalog_transaction_commit: Raises `[`CatalogReadOnlyError`][] unless overridden (see above).
+        catalog_transaction_rollback: Raises `[`CatalogReadOnlyError`][] unless overridden (see above).
         schema_create: DDL stub that raises `[`CatalogReadOnlyError`][].
         schema_alter_metadata: DDL stub that raises `[`CatalogReadOnlyError`][].
         schema_drop: DDL stub that raises `[`CatalogReadOnlyError`][].
@@ -3326,7 +3369,18 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         client_capabilities: "ClientCapabilities | None" = None,
         ctx: "CallContext | None" = None,
     ) -> CatalogAttachResult:
-        """Attach to the catalog. Version constraints are ignored by default."""
+        """Attach to the catalog. Version constraints are ignored by default.
+
+        Prefer overriding
+        [`attach_opaque_data_for`][vgi.catalog.ReadOnlyCatalogInterface.attach_opaque_data_for]
+        and [`attach_supports_transactions`][vgi.catalog.ReadOnlyCatalogInterface.attach_supports_transactions]
+        to overriding this method.
+
+        ``attach_opaque_data_required`` is ``False`` while the attach carries
+        the fixed default id: re-attaching then yields an equivalent attach,
+        so a client may attach per command. Custom attach bytes (from
+        ``attach_opaque_data_for``) make it ``True``.
+        """
         from vgi.catalog.attach_option import validate_required_attach_options
 
         del data_version_spec, implementation_version, ctx
@@ -3334,6 +3388,18 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         if name != effective_name:
             raise NotFoundError(f"Unknown catalog: {name!r}. Available: {effective_name}")
         validate_required_attach_options(effective_name, self.attach_option_specs, options)
+        attach_opaque_data = self.attach_opaque_data_for(name=effective_name, options=options)
+        supports_transactions = bool(
+            self.attach_supports_transactions(
+                name=effective_name, options=options, attach_opaque_data=attach_opaque_data
+            )
+        )
+        begin_hook = type(self).catalog_transaction_begin
+        if supports_transactions and begin_hook is ReadOnlyCatalogInterface.catalog_transaction_begin:
+            raise TypeError(
+                f"{type(self).__name__} reports supports_transactions for catalog {effective_name!r} but does not "
+                "override catalog_transaction_begin/commit/rollback; DuckDB would fail every BEGIN."
+            )
 
         # Serialize settings and secret types for the attach result
         serialized_settings = [s.serialize() for s in self.settings]
@@ -3349,12 +3415,12 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         serialized_global_functions = [info.serialize_to_bytes() for info in self._global_function_infos()]
 
         return CatalogAttachResult(
-            attach_opaque_data=self._FIXED_ATTACH_ID,
-            supports_transactions=getattr(self, "supports_transactions", False),
+            attach_opaque_data=attach_opaque_data,
+            supports_transactions=supports_transactions,
             supports_time_travel=has_time_travel,
             catalog_version_frozen=True,
             catalog_version=1,
-            attach_opaque_data_required=False,
+            attach_opaque_data_required=bytes(attach_opaque_data) != bytes(self._FIXED_ATTACH_ID),
             default_schema=self._default_schema_name,
             settings=serialized_settings,
             secret_types=serialized_secret_types,
@@ -3370,6 +3436,60 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             # one catalog_contents call.
             supports_catalog_contents=True,
         )
+
+    def attach_opaque_data_for(self, *, name: str, options: dict[str, Any]) -> AttachOpaqueData:
+        """Return the ``attach_opaque_data`` for one ``ATTACH`` of ``name``.
+
+        Every function call and catalog hook of the attach receives these bytes
+        (as plaintext: the worker seals them on the wire and wraps them with
+        its own per-attach identity). Keep nothing per-attach on ``self`` --
+        pooled processes and HTTP workers serve one attach from many processes
+        -- so put what functions need in the bytes. The default is a fixed id,
+        the same for every attach (options are not carried).
+
+        To hand the ATTACH options to functions, return
+        [`pack_attach_options(options, self.attach_option_specs)`][vgi.catalog.attach_option.pack_attach_options]
+        and decode them in a function with
+        [`unpack_attach_options(params.attach_opaque_data)`][vgi.catalog.attach_option.unpack_attach_options].
+        Never put a ``secret=True`` option in the bytes yourself: over stdio
+        and unix sockets they are not sealed. ``pack_attach_options`` keeps
+        secret options in the shared function storage instead.
+
+        Args:
+            name: The catalog being attached.
+            options: The options supplied at ``ATTACH`` (required ones already checked).
+
+        Returns:
+            The plaintext ``attach_opaque_data`` for this attach.
+
+        """
+        del name, options
+        return self._FIXED_ATTACH_ID
+
+    def attach_supports_transactions(
+        self, *, name: str, options: dict[str, Any], attach_opaque_data: AttachOpaqueData
+    ) -> bool:
+        """Whether this ``ATTACH`` supports transactions (``CatalogAttachResult.supports_transactions``).
+
+        DuckDB calls the ``catalog_transaction_*`` hooks, and passes a
+        ``transaction_opaque_data`` to functions, only for attaches that return
+        ``True``. The default returns the ``supports_transactions`` class
+        attribute. Override to decide per attach, e.g. from an option::
+
+            def attach_supports_transactions(self, *, name, options, attach_opaque_data):
+                return options.get("transactional") is True
+
+        Args:
+            name: The catalog being attached.
+            options: The options supplied at ``ATTACH``.
+            attach_opaque_data: What ``attach_opaque_data_for`` returned for it.
+
+        Returns:
+            ``True`` when DuckDB should drive transactions on this attach.
+
+        """
+        del name, options, attach_opaque_data
+        return bool(getattr(self, "supports_transactions", False))
 
     def catalog_capabilities(self, *, attach_opaque_data: AttachOpaqueData) -> CatalogCapabilities:
         """Advertise the profiles the declared catalog needs.
