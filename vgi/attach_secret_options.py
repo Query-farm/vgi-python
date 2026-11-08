@@ -36,6 +36,7 @@ import contextlib
 import getpass
 import os
 import stat
+import sys
 import tempfile
 import threading
 from pathlib import Path
@@ -147,7 +148,7 @@ def _key_file_error(path: Path, problem: str) -> AttachSecretKeyError:
 
 
 def _check_private(path: Path, st: os.stat_result, what: str) -> None:
-    if os.name != "posix":
+    if sys.platform == "win32":  # best effort: the per-user profile temp directory
         return
     if st.st_uid != os.getuid():
         raise _key_file_error(path, f"the {what} is not owned by the current user")
