@@ -371,15 +371,14 @@ from vgi.worker import Worker
 _BRANCH_DIR = (os.environ.get("VGI_TEST_BRANCH_DIR") or tempfile.gettempdir()).replace("\\", "/").rstrip("/")
 
 # Protocol 3.2 filtered scan planning fixtures (test/sql/integration/catalog/scan_planning_*.test).
-# Five days of data, one parquet file per day under {_BRANCH_DIR}/planned_days/. The tests create
+# Five days of data, one parquet file per day: {_BRANCH_DIR}/planned_days_<day>.parquet. The tests create
 # the files for the first four days only: the 2026-10-05 file never exists, so any scan that fails
 # to prune that day errors with "No files found" — a passing query proves the pruning happened.
 _PLANNED_DAYS: tuple[datetime.date, ...] = tuple(datetime.date(2026, 10, d) for d in range(1, 6))
-_PLANNED_DIR = f"{_BRANCH_DIR}/planned_days"
 
 
 def _planned_day_file(day: datetime.date) -> str:
-    return f"{_PLANNED_DIR}/{day.isoformat()}.parquet"
+    return f"{_BRANCH_DIR}/planned_days_{day.isoformat()}.parquet"
 
 
 def _planned_day_stats(day: datetime.date) -> list[ColumnStatistics]:
@@ -1166,6 +1165,13 @@ _EXAMPLE_CATALOG = Catalog(
                     columns=schema(event_date=pa.date32(), n=pa.int64()),
                     comment="Protocol 3.2: pruning by branch_filter contradiction — scan_planning_branch_filter.test",
                 ),
+                # Protocol 3.2: branch_filter must be ONE expression. "n < 5, n > 2"
+                # parses as two; 3.1 clients silently kept the first.
+                Table(
+                    name="multi_branch_comma_filter",
+                    columns=schema(n=pa.int64()),
+                    comment="Protocol 3.2: multi-expression branch_filter is rejected",
+                ),
                 Table(
                     name="multi_branch_numbers",
                     columns=schema(n=pa.int64()),
@@ -1773,6 +1779,19 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
 
         if [component.lower() for component in schema_path] == ["data"] and name.lower().startswith("planned_days"):
             return _planned_days_branches(name.lower(), None)
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() == "multi_branch_comma_filter":
+            return ScanBranchesResult(
+                branches=[
+                    ScanBranch(
+                        function_name="sequence",
+                        positional_arguments=[pa.scalar(10)],
+                        named_arguments={},
+                        branch_filter="n < 5, n > 2",
+                        schema_path=["main"],
+                    )
+                ],
+                required_extensions=[],
+            )
 
         # multi_branch_numbers: two arms, each sequence(50). Union size = 100.
         if [component.lower() for component in schema_path] == ["data"] and name.lower() == "multi_branch_numbers":
@@ -2370,8 +2389,7 @@ def _planned_days_branches(name: str, filters: ScanPlanningFilters | None) -> Sc
     if name == "planned_days":
         days = [d for d in _PLANNED_DAYS if filters is None or filters.may_match(_planned_day_stats(d))]
         # Record what the worker saw so tests can assert the predicates arrived.
-        os.makedirs(_PLANNED_DIR, exist_ok=True)
-        with open(f"{_PLANNED_DIR}/last_plan.json", "w", encoding="utf-8") as fh:
+        with open(f"{_BRANCH_DIR}/planned_days_last_plan.json", "w", encoding="utf-8") as fh:
             json.dump({"received_filters": filters is not None, "days": [d.isoformat() for d in days]}, fh)
         if not days:
             return ScanBranchesResult(branches=[], required_extensions=["parquet"])

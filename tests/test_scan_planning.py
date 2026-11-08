@@ -200,6 +200,38 @@ def test_may_match_prunes_by_min_max(predicates: Any, matching_days: list[int]) 
     assert days == matching_days
 
 
+def test_may_match_or_and_in() -> None:
+    def or_filters(*days: int) -> ScanPlanningFilters:
+        exprs = [
+            {
+                "node": "comparison",
+                "op": "eq",
+                "left": {"node": "column_ref", "column_index": 0, "column_name": "event_date"},
+                "right": {"node": "literal", "value_ref": i},
+            }
+            for i in range(len(days))
+        ]
+        document = {
+            "encoding": "vgi.filters.v2",
+            "semantics": "vgi.duckdb.standard.v1",
+            "kind": "snapshot",
+            "predicates": [
+                {
+                    "id": "query:0",
+                    "revision": 0,
+                    "mode": "advisory",
+                    "source": "query",
+                    "expression": {"node": "or", "children": exprs},
+                }
+            ],
+        }
+        payloads = [value_payload(i, D(2026, 10, d), pa.date32()) for i, d in enumerate(days)]
+        return ScanPlanningFilters(serialize_filter_batch(build_filter_batch(document, payloads)), lambda: COLUMNS)
+
+    filters = or_filters(1, 3)
+    assert [d for d in range(1, 6) if filters.may_match(_day_stats(D(2026, 10, d)))] == [1, 3]
+
+
 def test_may_match_keeps_candidates_without_bounds() -> None:
     filters = _filters(("event_date", "eq", D(2026, 10, 4)))
     assert filters.may_match([ColumnStatistics("event_date")])
@@ -233,7 +265,7 @@ def _attach(client: Any) -> Any:
 
 
 def _last_plan(tmp_dir: str) -> dict[str, Any]:
-    with open(f"{tmp_dir}/planned_days/last_plan.json", encoding="utf-8") as fh:
+    with open(f"{tmp_dir}/planned_days_last_plan.json", encoding="utf-8") as fh:
         return json.load(fh)  # type: ignore[no-any-return]
 
 
@@ -255,7 +287,10 @@ def test_worker_hook_receives_filters_and_prunes(client: Any) -> None:
     )
     assert len(result.branches) == 1
     files = result.branches[0].positional_arguments[0].as_py()
-    assert [f.rsplit("/", 1)[1] for f in files] == ["2026-10-04.parquet", "2026-10-05.parquet"]
+    assert [f.rsplit("/", 1)[1] for f in files] == [
+        "planned_days_2026-10-04.parquet",
+        "planned_days_2026-10-05.parquet",
+    ]
     assert result.branches[0].row_count == 20
     plan = _last_plan(_BRANCH_DIR)
     assert plan == {"received_filters": True, "days": ["2026-10-04", "2026-10-05"]}

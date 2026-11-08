@@ -61,8 +61,8 @@ class ScanPlanningFilters:
         returning branches. Columns or predicates this helper cannot reason
         about count as "may match", so the answer errs towards keeping data.
         """
-        filters = self.decode()
-        return all(_column_may_match(filters, stat) for stat in statistics)
+        by_name = {stat.column_name: stat for stat in statistics}
+        return all(_filter_may_match(f, by_name) for f in self.decode().filters)
 
 
 def _as_py(value: pa.Scalar[Any] | None) -> Any:
@@ -71,43 +71,54 @@ def _as_py(value: pa.Scalar[Any] | None) -> Any:
     return value.as_py()
 
 
-def _column_may_match(filters: PushdownFilters, stat: ColumnStatistics) -> bool:
-    lo, hi = _as_py(stat.min), _as_py(stat.max)
-    if not stat.has_not_null:
-        # Entirely NULL: comparison, equality and IN predicates never match.
-        return not _has_value_predicate(filters, stat.column_name)
-    if lo is None and hi is None:
+def _filter_may_match(f: Any, stats: dict[str, ColumnStatistics]) -> bool:
+    """Whether filter ``f`` can be true for some row described by ``stats``; unknown shapes return True."""
+    from vgi.table_filter_pushdown import (
+        AndFilter,
+        ComparisonOp,
+        ConstantFilter,
+        InFilter,
+        IsNotNullFilter,
+        IsNullFilter,
+        OrFilter,
+    )
+
+    if isinstance(f, AndFilter):
+        return all(_filter_may_match(child, stats) for child in f.children)
+    if isinstance(f, OrFilter):
+        return any(_filter_may_match(child, stats) for child in f.children)
+    stat = stats.get(f.column_name)
+    if stat is None:
         return True
+    if isinstance(f, IsNullFilter):
+        return stat.has_null
+    if isinstance(f, IsNotNullFilter):
+        return stat.has_not_null
+    if not stat.has_not_null:
+        # Entirely NULL: comparisons and IN never match.
+        return not isinstance(f, ConstantFilter | InFilter)
+    lo, hi = _as_py(stat.min), _as_py(stat.max)
     try:
-        constant = filters.get_column_constant(stat.column_name)
-        if constant is not None:
-            c = _as_py(constant)
-            if c is not None and ((lo is not None and c < lo) or (hi is not None and c > hi)):
-                return False
-        in_values = filters.get_column_in_values(stat.column_name)
-        if in_values is not None:
-            values = [v for v in in_values.to_pylist() if v is not None]
-            if values and all((lo is not None and v < lo) or (hi is not None and v > hi) for v in values):
-                return False
-        bounds = filters.get_column_bounds(stat.column_name)
-        if bounds is not None:
-            bmin, bmax = _as_py(bounds.min_value), _as_py(bounds.max_value)
-            if bmin is not None and hi is not None and (hi < bmin or (hi == bmin and not bounds.min_inclusive)):
-                return False
-            if bmax is not None and lo is not None and (lo > bmax or (lo == bmax and not bounds.max_inclusive)):
-                return False
+        if isinstance(f, InFilter):
+            values = [v for v in f.values.to_pylist() if v is not None]
+            return any((lo is None or v >= lo) and (hi is None or v <= hi) for v in values)
+        if isinstance(f, ConstantFilter):
+            c = _as_py(f.value)
+            if c is None:
+                return True
+            if f.op == ComparisonOp.EQ:
+                return (lo is None or c >= lo) and (hi is None or c <= hi)
+            if f.op == ComparisonOp.NE:
+                return not (lo is not None and hi is not None and lo == hi == c)
+            if f.op == ComparisonOp.GT:
+                return hi is None or hi > c
+            if f.op == ComparisonOp.GE:
+                return hi is None or hi >= c
+            if f.op == ComparisonOp.LT:
+                return lo is None or lo < c
+            if f.op == ComparisonOp.LE:
+                return lo is None or lo <= c
     except TypeError:
         # Incomparable types (e.g. a predicate literal of another type): keep the candidate.
         return True
     return True
-
-
-def _has_value_predicate(filters: PushdownFilters, column_name: str) -> bool:
-    try:
-        return (
-            filters.get_column_constant(column_name) is not None
-            or filters.get_column_in_values(column_name) is not None
-            or filters.get_column_bounds(column_name) is not None
-        )
-    except TypeError:
-        return False
