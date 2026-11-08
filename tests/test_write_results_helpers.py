@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 
 import pyarrow as pa
 import pytest
@@ -28,11 +29,9 @@ from vgi.write_results import (
     write_rows_batch,
 )
 
-TABLE = pa.schema(
-    [pa.field("id", pa.int32(), nullable=False), pa.field("name", pa.string()), row_id_field()],
-    metadata={b"k": b"v"},
-)
-USER = pa.schema([pa.field("id", pa.int32(), nullable=False), pa.field("name", pa.string())])
+_USER_FIELDS: list[pa.Field[Any]] = [pa.field("id", pa.int32(), nullable=False), pa.field("name", pa.string())]
+TABLE = pa.schema([*_USER_FIELDS, row_id_field()], metadata={b"k": b"v"})
+USER = pa.schema(_USER_FIELDS)
 
 
 def test_exported_from_both_packages() -> None:
@@ -134,7 +133,7 @@ def _options_bytes(**columns: object) -> bytes:
     return serialize_record_batch_bytes(pa.RecordBatch.from_pylist([columns]))
 
 
-def _bind_call(named: dict[str, pa.Scalar] | None) -> SimpleNamespace:
+def _bind_call(named: dict[str, pa.Scalar[Any]] | None) -> SimpleNamespace:
     return SimpleNamespace(arguments=Arguments(named=named or {}))
 
 
