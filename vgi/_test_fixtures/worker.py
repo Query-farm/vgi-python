@@ -2388,9 +2388,13 @@ def _planned_days_branches(name: str, filters: ScanPlanningFilters | None) -> Sc
     """Branches for the protocol 3.2 planned_days* fixtures (see _PLANNED_DAYS)."""
     if name == "planned_days":
         days = [d for d in _PLANNED_DAYS if filters is None or filters.may_match(_planned_day_stats(d))]
-        # Record what the worker saw so tests can assert the predicates arrived.
-        with open(f"{_BRANCH_DIR}/planned_days_last_plan.json", "w", encoding="utf-8") as fh:
-            json.dump({"received_filters": filters is not None, "days": [d.isoformat() for d in days]}, fh)
+        # Record what the worker saw so tests can assert the predicates arrived. Only
+        # planning calls that carried predicates write it: vgi_table_branches() and
+        # other filterless fetches run concurrently in parallel test lanes and must
+        # not overwrite the record a filtered query's test is about to read.
+        if filters is not None:
+            with open(f"{_BRANCH_DIR}/planned_days_last_plan.json", "w", encoding="utf-8") as fh:
+                json.dump({"received_filters": True, "days": [d.isoformat() for d in days]}, fh)
         if not days:
             return ScanBranchesResult(branches=[], required_extensions=["parquet"])
         return ScanBranchesResult(
