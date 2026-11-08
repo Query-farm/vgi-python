@@ -144,6 +144,7 @@ nav:
   - Protocol:
     - protocol/index.md
     - "Partition distribution (normative)": protocol/partition-distribution.md
+    - "Filtered scan planning (normative)": protocol/scan-planning.md
     - "Filter Encoding v2 (normative, proposed)": protocol/vgi-filter-encoding-v2-spec.md
     - "Runtime-filter artifacts (optional extension)": protocol/vgi-runtime-filter-artifacts.md
     - "Opaque values: sealing (normative)": protocol/vgi-opaque-data-sealing.md

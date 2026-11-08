@@ -223,6 +223,7 @@ from vgi.protocol import (
 )
 from vgi.rpc_server import build_rpc_server
 from vgi.scalar_function import ScalarFunctionGenerator
+from vgi.scan_planning import ScanPlanningFilters
 from vgi.schema_path import schema_path_display, schema_path_key, validate_default_schema
 from vgi.table_buffering_function import (
     TableBufferingFunction,
@@ -6096,6 +6097,7 @@ class Worker:
         at_unit: str | None = None,
         at_value: str | None = None,
         transaction_opaque_data: bytes | None = None,
+        pushdown_filters: bytes | None = None,
     ) -> bytes:
         """Get the list of scan branches for a multi-branch table.
 
@@ -6104,17 +6106,39 @@ class Worker:
         ``table_scan_function_get`` as a one-branch result, so every existing
         single-source worker automatically responds correctly here without
         further code changes.
+
+        Protocol 3.2: dispatches to ``table_scan_branches_plan`` with the
+        ``pushdown_filters`` decoded lazily as a [`ScanPlanningFilters`][]; its
+        default returns ``table_scan_branches_get``.
         """
         _validate_at_params(at_unit, at_value)
         self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
         cat = self._get_catalog()
-        result = cat.table_scan_branches_get(
-            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
+        attach = self._unwrap_attach(attach_opaque_data)
+        tx = self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data)
+        filters: ScanPlanningFilters | None = None
+        if pushdown_filters is not None:
+
+            def _table_columns() -> pa.Schema | None:
+                info = cat.table_get(
+                    attach_opaque_data=attach,
+                    transaction_opaque_data=tx,
+                    schema_path=schema_path,
+                    name=name,
+                    at_unit=at_unit,
+                    at_value=at_value,
+                )
+                return pa.ipc.read_schema(pa.py_buffer(info.columns)) if info is not None else None
+
+            filters = ScanPlanningFilters(pushdown_filters, _table_columns)
+        result = cat.table_scan_branches_plan(
+            attach_opaque_data=attach,
+            transaction_opaque_data=tx,
             schema_path=schema_path,
             name=name,
             at_unit=at_unit,
             at_value=at_value,
+            pushdown_filters=filters,
         )
         return result.serialize()
 

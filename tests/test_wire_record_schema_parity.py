@@ -46,6 +46,7 @@ from vgi_rpc.utils import deserialize_record_batch
 import vgi
 from vgi.catalog.attach_option import AttachOptionSpec
 from vgi.catalog.catalog_interface import (
+    ColumnStatistics,
     ScanBranch,
     ScanBranchesResult,
     ScanFunctionResult,
@@ -100,6 +101,8 @@ def _scan_branch() -> ScanBranch:
         format_locations=["s3://bucket/a.parquet"],
         format_options={"delim": pa.scalar("|", pa.string())},
         schema_path=["main"],
+        row_count=10,
+        column_statistics=[ColumnStatistics("ts", min=pa.scalar(1), max=pa.scalar(9), has_null=False)],
     )
 
 

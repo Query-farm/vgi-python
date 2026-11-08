@@ -673,6 +673,90 @@ def partition_distribution_records() -> dict[str, ArrowSerializableDataclass]:
     }
 
 
+def scan_planning_records() -> dict[str, bytes]:
+    """Canonical Protocol 3.2 filtered-scan-planning payloads (docs/protocol/scan-planning.md).
+
+    Every SDK decodes these: a branch carrying ``row_count`` and
+    ``column_statistics``, a legal empty branch list, a ``"filtered"``
+    ``TableInfo``, and the ``pushdown_filters`` snapshot a client sends for
+    ``WHERE event_date >= DATE '2026-10-03' AND n < 100``.
+    """
+    import datetime
+
+    from vgi.catalog.catalog_interface import (
+        ColumnStatistics,
+        ScanBranch,
+        ScanBranchesResult,
+        SerializedSchema,
+        TableInfo,
+    )
+    from vgi.filter_v2_builder import build_filter_batch, serialize_filter_batch, value_payload
+    from vgi.schema_utils import schema
+
+    columns = schema(event_date=pa.date32(), n=pa.int64())
+    branch = ScanBranch(
+        function_name="read_parquet",
+        positional_arguments=[pa.scalar(["s3://bucket/day=2026-10-03.parquet"], type=pa.list_(pa.string()))],
+        named_arguments={"hive_partitioning": pa.scalar(True)},
+        row_count=1000,
+        column_statistics=[
+            ColumnStatistics(
+                "event_date",
+                min=pa.scalar(datetime.date(2026, 10, 3)),
+                max=pa.scalar(datetime.date(2026, 10, 3)),
+                has_null=False,
+            ),
+            ColumnStatistics("n", min=pa.scalar(0, pa.int64()), max=pa.scalar(999, pa.int64()), has_null=True),
+        ],
+    )
+    table = TableInfo(
+        name="events",
+        schema_path=["main"],
+        columns=SerializedSchema(columns.serialize().to_pybytes()),
+        constraints=[],
+        comment=None,
+        tags={},
+        scan_planning="filtered",
+    )
+
+    def predicate(index: int, column: str, op: str) -> dict[str, object]:
+        return {
+            "id": f"query:{index}",
+            "revision": 0,
+            "mode": "advisory",
+            "source": "query",
+            "expression": {
+                "node": "comparison",
+                "op": op,
+                "left": {
+                    "node": "column_ref",
+                    "column_index": columns.get_field_index(column),
+                    "column_name": column,
+                },
+                "right": {"node": "literal", "value_ref": index},
+            },
+        }
+
+    filters = build_filter_batch(
+        {
+            "encoding": "vgi.filters.v2",
+            "semantics": "vgi.duckdb.standard.v1",
+            "kind": "snapshot",
+            "predicates": [predicate(0, "event_date", "ge"), predicate(1, "n", "lt")],
+        },
+        [value_payload(0, datetime.date(2026, 10, 3), pa.date32()), value_payload(1, 100, pa.int64())],
+    )
+    return {
+        "scan_planning_branch": branch.serialize(),
+        "scan_planning_branches_result": ScanBranchesResult(
+            branches=[branch], required_extensions=["parquet"]
+        ).serialize(),
+        "scan_planning_empty_branches_result": ScanBranchesResult(branches=[], required_extensions=[]).serialize(),
+        "scan_planning_table_info": table.serialize_to_bytes(),
+        "scan_planning_pushdown_filters": serialize_filter_batch(filters),
+    }
+
+
 def render() -> str:
     """Return deterministic JSON with populated and empty record encodings."""
     schema = pa.schema(
@@ -871,6 +955,7 @@ def render() -> str:
     records.update(index_records(values))
     records.update(partition_distribution_records())
     encoded = {name: record.serialize_to_bytes() for name, record in records.items()}
+    encoded.update(scan_planning_records())
     parameters = QueryParameters.from_batch(values.batch, mode="named")
     context = QueryEvaluationContext()
     query_offer = ClientQueryCapabilities(

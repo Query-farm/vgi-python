@@ -24,6 +24,9 @@ from vgi.argument_spec import macro_arguments_schema
 from vgi.arguments import Arguments
 from vgi.catalog.capabilities import ROW_SCALAR_EXPRESSION
 from vgi.catalog.catalog_interface import (
+    SCAN_PLANNING_BIND,
+    SCAN_PLANNING_FILTERED,
+    SCAN_PLANNING_MODES,
     AttachOpaqueData,
     ColumnStatistics,
     IndexInfo,
@@ -359,6 +362,12 @@ class Table:
             no per-call inputs) matches what's safe to freeze for the catalog
             cache lifetime. Setting this on a descriptor whose function is not
             decorated raises at descriptor build.
+        scan_planning: Protocol 3.2 — ``"bind"`` (default) or ``"filtered"``.
+            A ``"filtered"`` table resolves its scan redirect per query: the
+            client calls the catalog's ``table_scan_branches_get`` with the
+            query's predicates as ``pushdown_filters``. Requires ``columns=``
+            (the catalog's ``table_scan_branches_get`` supplies the scan), since
+            a ``function=`` table inlines a fixed scan redirect.
         comment: Optional table comment.
         tags: Optional metadata tags.
 
@@ -391,6 +400,7 @@ class Table:
     cardinality_estimate: int | None = None
     cardinality_max: int | None = None
     inline_bind: bool = False
+    scan_planning: str = SCAN_PLANNING_BIND
     comment: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
 
@@ -399,6 +409,16 @@ class Table:
         # Validate mutually exclusive options
         if self.columns is None and self.function is None:
             raise ValueError(f"Table '{self.name}': must specify either 'columns' or 'function'")
+        if self.scan_planning not in SCAN_PLANNING_MODES:
+            raise ValueError(
+                f"Table '{self.name}': scan_planning must be one of {sorted(SCAN_PLANNING_MODES)}, "
+                f"got {self.scan_planning!r}"
+            )
+        if self.scan_planning == SCAN_PLANNING_FILTERED and self.function is not None:
+            raise ValueError(
+                f"Table '{self.name}': scan_planning='filtered' requires columns=; the catalog's "
+                "table_scan_branches_get supplies the scan per query"
+            )
         if self.columns is not None and self.function is not None:
             raise ValueError(f"Table '{self.name}': cannot specify both 'columns' and 'function'")
 
@@ -683,6 +703,7 @@ class Table:
             cardinality_max=self.cardinality_max,
             column_statistics=column_statistics_blob,
             required_filters=[[list(path) for path in group] for group in self.required_filters],
+            scan_planning=self.scan_planning,
         )
 
     def resolve_column_statistics(self) -> TableColumnStatisticsResult | None:

@@ -5,7 +5,7 @@ records and bounded reference behavior on the DuckDB 2.0 preparation branch.
 The combined-design section distinguishes implemented SQL/constraint records
 and reference proofs from the remaining public API and execution work. Both are
 part of one combined successor contract. Published main now uses `vgi.v2` / `2.2.0`. The
-unpublished successor now uses `vgi.v3` / `3.1.0` for its incompatible changes.
+unpublished successor now uses `vgi.v3` / `3.2.0` for its incompatible changes.
 This selects the protocol identity; final coordinated release qualification remains open. The development snapshot
 carries typed schema/table options,
 layouts, raw column mutation paths, and capability negotiation. See the

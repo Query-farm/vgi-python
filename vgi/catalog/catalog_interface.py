@@ -80,6 +80,7 @@ from vgi.metadata import (
     PartitionKind,
     RuntimeFilterAlgorithmCapability,
 )
+from vgi.scan_planning import ScanPlanningFilters
 from vgi.schema_path import SchemaKey, SchemaPath, schema_path_display, schema_path_key, validate_default_schema
 from vgi.typed_values import TypedValueBatch
 
@@ -471,6 +472,13 @@ class ForeignKeyInfo(ArrowSerializableDataclass):
     referenced_schema_path: SchemaPath
 
 
+SCAN_PLANNING_BIND = "bind"
+"""Protocol 3.2 ``TableInfo.scan_planning``: resolve the scan redirect at bind time (3.1 behaviour)."""
+SCAN_PLANNING_FILTERED = "filtered"
+"""Protocol 3.2 ``TableInfo.scan_planning``: resolve it per scan with the query's filters."""
+SCAN_PLANNING_MODES = frozenset({SCAN_PLANNING_BIND, SCAN_PLANNING_FILTERED})
+
+
 @reject_removed_arguments(
     {
         name: _LEGACY_TABLE_CONSTRAINT_MESSAGE
@@ -556,6 +564,13 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
         options: Negotiated typed option readback, or None when unsupported.
         layout: Negotiated partition/sort policy, or None when unsupported.
             This metadata never guarantees scan output order.
+        scan_planning: Protocol 3.2 — when the client resolves the table's scan
+            redirect. ``"bind"`` (default) keeps 3.1 behaviour. ``"filtered"``
+            makes the client call ``catalog_table_scan_branches_get`` once per
+            scan after collecting the query's predicates on the table, passing
+            them as ``pushdown_filters``; zero branches then means "no rows".
+            A ``"filtered"`` table must not inline ``scan_function``. See
+            ``docs/protocol/scan-planning.md``.
     """
 
     columns: SerializedSchema
@@ -588,8 +603,19 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     options: Annotated[OptionState | None, ArrowType(pa.binary())] = None
     layout: Annotated[TableLayout | None, ArrowType(pa.binary())] = None
 
+    scan_planning: str = SCAN_PLANNING_BIND
+
     def __post_init__(self) -> None:
         """Validate canonical identities and revision without inferring enforcement."""
+        if self.scan_planning not in SCAN_PLANNING_MODES:
+            raise ValueError(
+                f"TableInfo.scan_planning must be one of {sorted(SCAN_PLANNING_MODES)}, got {self.scan_planning!r}"
+            )
+        if self.scan_planning == SCAN_PLANNING_FILTERED and self.scan_function is not None:
+            raise ValueError(
+                f"table {self.name!r}: scan_planning='filtered' cannot be combined with an inlined scan_function; "
+                "the scan redirect must be resolved per query with the query's filters"
+            )
         self.constraint_infos()
         validate_column_metadata(pa.ipc.read_schema(pa.py_buffer(self.columns)))
 
@@ -1378,6 +1404,14 @@ class ScanBranch:
             has no VGI-side schema of its own, or a native DuckDB function). Not to be confused with
             ``source_schema_path``, which names the schema of a catalog-table
             branch's *source table*, a different, older field.
+        row_count: Protocol 3.2 — estimated rows this branch produces before any
+            predicate. Cardinality estimation only; never trusted as exact.
+        column_statistics: Protocol 3.2 — conservative per-column statistics for
+            every row this branch produces, keyed by the table's declared column
+            names (columns may be omitted). A client drops the branch when a
+            query predicate is provably false against them, so wrong statistics
+            silently lose rows: leave a column out rather than guess. See
+            ``docs/protocol/scan-planning.md``.
         ARROW_SCHEMA: Arrow IPC schema used to (de)serialize this branch over the wire.
 
     """
@@ -1394,6 +1428,17 @@ class ScanBranch:
     format_locations: list[str] = field(default_factory=list)
     format_options: dict[str, pa.Scalar] = field(default_factory=dict)  # type: ignore[type-arg]
     schema_path: SchemaPath | None = None
+    row_count: int | None = None
+    column_statistics: "list[ColumnStatistics] | None" = None
+
+    def __post_init__(self) -> None:
+        """Validate the protocol 3.2 statistics fields."""
+        if self.row_count is not None and self.row_count < 0:
+            raise ValueError(f"ScanBranch.row_count must be >= 0, got {self.row_count}")
+        if self.column_statistics is not None:
+            names = [s.column_name for s in self.column_statistics]
+            if len(names) != len(set(names)):
+                raise ValueError("ScanBranch.column_statistics names a column more than once")
 
     ARROW_SCHEMA: ClassVar[pa.Schema] = pa.schema(
         [
@@ -1412,6 +1457,10 @@ class ScanBranch:
             # could express that.
             pa.field("format_options", pa.binary(), nullable=True),
             pa.field("schema_path", pa.list_(pa.string()), nullable=True),
+            # Protocol 3.2 branch statistics (docs/protocol/scan-planning.md).
+            pa.field("row_count", pa.int64(), nullable=True),
+            # serialize_column_statistics payload, same as TableInfo.column_statistics.
+            pa.field("column_statistics", pa.binary(), nullable=True),
         ]  # type: ignore[arg-type]
     )
 
@@ -1445,6 +1494,10 @@ class ScanBranch:
             "source_schema_path": self.source_schema_path,
             "source_table": self.source_table,
             "schema_path": self.schema_path,
+            "row_count": self.row_count,
+            "column_statistics": (
+                serialize_column_statistics(self.column_statistics) if self.column_statistics is not None else None
+            ),
         }
 
     def serialize(self) -> bytes:
@@ -1501,6 +1554,12 @@ class ScanBranch:
             format_locations=list(cast("list[str] | None", row.get("format_locations")) or []),
             format_options=_deserialize_named_scalars(cast("bytes | None", row.get("format_options"))),
             schema_path=list(cast("list[str]", row["schema_path"])) if row.get("schema_path") is not None else None,
+            row_count=cast("int | None", row.get("row_count")),
+            column_statistics=(
+                deserialize_column_statistics(cast(bytes, row["column_statistics"]))
+                if row.get("column_statistics") is not None
+                else None
+            ),
         )
 
 
@@ -2669,6 +2728,56 @@ class CatalogInterface(ABC):
                 ),
             ],
             required_extensions=list(legacy.required_extensions),
+        )
+
+    def table_scan_branches_plan(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        schema_path: SchemaPath,
+        name: str,
+        at_unit: str | None,
+        at_value: str | None,
+        pushdown_filters: ScanPlanningFilters | None,
+    ) -> ScanBranchesResult:
+        """Plan a table's scan branches with the query's predicates (protocol 3.2).
+
+        The worker calls this for every ``catalog_table_scan_branches_get``.
+        The default ignores ``pushdown_filters`` and returns
+        :meth:`table_scan_branches_get`, so catalogs written for 3.1 keep
+        working unchanged. Override it for tables declaring
+        ``scan_planning="filtered"`` to return fewer branches or files.
+
+        Every predicate is advisory: the client re-applies all of them, so
+        return any superset of the branches and files that could hold matching
+        rows, and never drop one that could.
+        [`ScanPlanningFilters.may_match`][] prunes candidates by min/max
+        statistics. A ``"filtered"`` table may return zero branches, meaning the
+        scan produces no rows. See ``docs/protocol/scan-planning.md``.
+
+        Args:
+            attach_opaque_data: Per-attach session token.
+            transaction_opaque_data: Optional transaction token.
+            schema_path: Schema containing the table.
+            name: Table name.
+            at_unit: Optional time-travel unit.
+            at_value: Optional time-travel value matching ``at_unit``.
+            pushdown_filters: The query's predicates on this table, or ``None``
+                when none were collected (bind-time planning, or no usable
+                predicate).
+
+        Returns:
+            A :class:`ScanBranchesResult` with zero or more branches.
+
+        """
+        return self.table_scan_branches_get(
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=transaction_opaque_data,
+            schema_path=schema_path,
+            name=name,
+            at_unit=at_unit,
+            at_value=at_value,
         )
 
     def table_column_statistics_get(

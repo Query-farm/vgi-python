@@ -1373,6 +1373,7 @@ class CatalogClientMixin:
         name: str,
         at_unit: str | None = None,
         at_value: str | None = None,
+        pushdown_filters: bytes | None = None,
     ) -> ScanBranchesResult:
         """Get the list of scan branches for a (possibly multi-source) table.
 
@@ -1400,9 +1401,12 @@ class CatalogClientMixin:
                 one branch at bind time — a worker returning multiple
                 branches should expect this to always be `None`.
             at_value: Optional time travel value.
+            pushdown_filters: Protocol 3.2 — VGI Filter Encoding v2 snapshot
+                bytes (an Arrow IPC stream) holding the predicates to send for a
+                ``scan_planning="filtered"`` table. Advisory; ``None`` sends none.
 
         Returns:
-            `ScanBranchesResult` with one or more `ScanBranch` entries plus
+            `ScanBranchesResult` with zero or more `ScanBranch` entries plus
             the union of required DuckDB extensions across all branches.
 
         """
@@ -1415,6 +1419,7 @@ class CatalogClientMixin:
                     at_unit=at_unit,
                     at_value=at_value,
                     transaction_opaque_data=transaction_opaque_data,
+                    pushdown_filters=pushdown_filters,
                 )
             except RpcError as e:
                 if "MethodNotImplemented" not in type(e).__name__ and "not implemented" not in str(e).lower():

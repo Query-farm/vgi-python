@@ -32,6 +32,8 @@ except ImportError:
 
     _sys.exit("vgi-fixture-worker requires numpy. Install it with: pip install 'vgi-python[test-fixtures]'")
 
+import datetime
+import json
 import os
 import tempfile
 import uuid
@@ -348,7 +350,7 @@ from vgi.catalog import (
 from vgi.catalog.capabilities import (
     ROW_SCALAR_EXPRESSION,
 )
-from vgi.catalog.catalog_interface import _validate_at_params
+from vgi.catalog.catalog_interface import ColumnStatistics, _validate_at_params
 from vgi.catalog.constraints import ConstraintDefinition, ConstraintInfo, ConstraintKind, ForeignKeyDefinition
 from vgi.catalog.dependencies import CatalogObjectRef
 from vgi.catalog.descriptors import ColumnStatisticsInput
@@ -356,6 +358,7 @@ from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.indexes import index_definition
 from vgi.catalog.sql import SqlExpression as CanonicalSqlExpression
+from vgi.scan_planning import ScanPlanningFilters
 from vgi.schema_utils import schema
 from vgi.worker import Worker
 
@@ -366,6 +369,21 @@ from vgi.worker import Worker
 # forward-slashed (DuckDB + Python both accept '/' on Windows) with no trailing
 # separator so f"{_BRANCH_DIR}/name" matches the test's COPY-TO target byte-for-byte.
 _BRANCH_DIR = (os.environ.get("VGI_TEST_BRANCH_DIR") or tempfile.gettempdir()).replace("\\", "/").rstrip("/")
+
+# Protocol 3.2 filtered scan planning fixtures (test/sql/integration/catalog/scan_planning_*.test).
+# Five days of data, one parquet file per day under {_BRANCH_DIR}/planned_days/. The tests create
+# the files for the first four days only: the 2026-10-05 file never exists, so any scan that fails
+# to prune that day errors with "No files found" — a passing query proves the pruning happened.
+_PLANNED_DAYS: tuple[datetime.date, ...] = tuple(datetime.date(2026, 10, d) for d in range(1, 6))
+_PLANNED_DIR = f"{_BRANCH_DIR}/planned_days"
+
+
+def _planned_day_file(day: datetime.date) -> str:
+    return f"{_PLANNED_DIR}/{day.isoformat()}.parquet"
+
+
+def _planned_day_stats(day: datetime.date) -> list[ColumnStatistics]:
+    return [ColumnStatistics("event_date", min=pa.scalar(day), max=pa.scalar(day), has_null=False)]
 
 
 # ---------------------------------------------------------------------------
@@ -1125,6 +1143,29 @@ _EXAMPLE_CATALOG = Catalog(
                 # Multi-branch fixture — two ScanBranch entries both calling
                 # sequence() with different counts. SELECT count(*) should
                 # return 100 (50 + 50). Exercises VgiMultiScanRewriter end-to-end.
+                # Protocol 3.2 filtered scan planning: the worker prunes the day files
+                # with the query's predicates (ScanPlanningFilters.may_match).
+                Table(
+                    name="planned_days",
+                    columns=schema(event_date=pa.date32(), n=pa.int64()),
+                    scan_planning="filtered",
+                    comment="Protocol 3.2: worker-side pruning of per-day files — scan_planning_filtered.test",
+                ),
+                # Protocol 3.2 branch statistics: one branch per day with event_date
+                # min/max; the worker ignores the predicates and the client prunes.
+                Table(
+                    name="planned_days_stats",
+                    columns=schema(event_date=pa.date32(), n=pa.int64()),
+                    scan_planning="filtered",
+                    comment="Protocol 3.2: client-side pruning by ScanBranch statistics — scan_planning_stats.test",
+                ),
+                # Protocol 3.2 branch_filter contradiction on a bind-time table: one
+                # branch per day with branch_filter event_date = DATE '<day>'.
+                Table(
+                    name="planned_days_bf",
+                    columns=schema(event_date=pa.date32(), n=pa.int64()),
+                    comment="Protocol 3.2: pruning by branch_filter contradiction — scan_planning_branch_filter.test",
+                ),
                 Table(
                     name="multi_branch_numbers",
                     columns=schema(n=pa.int64()),
@@ -1687,6 +1728,31 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
             at_value=at_value,
         )
 
+    def table_scan_branches_plan(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        schema_path: list[str],
+        name: str,
+        at_unit: str | None,
+        at_value: str | None,
+        pushdown_filters: ScanPlanningFilters | None,
+    ) -> ScanBranchesResult:
+        """Protocol 3.2: the planned_days* tables use the query's predicates; the rest delegate."""
+        if [component.lower() for component in schema_path] == ["data"] and name.lower().startswith("planned_days"):
+            _validate_at_params(at_unit, at_value)
+            return _planned_days_branches(name.lower(), pushdown_filters)
+        return super().table_scan_branches_plan(
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=transaction_opaque_data,
+            schema_path=schema_path,
+            name=name,
+            at_unit=at_unit,
+            at_value=at_value,
+            pushdown_filters=pushdown_filters,
+        )
+
     def table_scan_branches_get(
         self,
         *,
@@ -1704,6 +1770,9 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         as a one-branch list.
         """
         _validate_at_params(at_unit, at_value)
+
+        if [component.lower() for component in schema_path] == ["data"] and name.lower().startswith("planned_days"):
+            return _planned_days_branches(name.lower(), None)
 
         # multi_branch_numbers: two arms, each sequence(50). Union size = 100.
         if [component.lower() for component in schema_path] == ["data"] and name.lower() == "multi_branch_numbers":
@@ -2294,3 +2363,54 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def _planned_days_branches(name: str, filters: ScanPlanningFilters | None) -> ScanBranchesResult:
+    """Branches for the protocol 3.2 planned_days* fixtures (see _PLANNED_DAYS)."""
+    if name == "planned_days":
+        days = [d for d in _PLANNED_DAYS if filters is None or filters.may_match(_planned_day_stats(d))]
+        # Record what the worker saw so tests can assert the predicates arrived.
+        os.makedirs(_PLANNED_DIR, exist_ok=True)
+        with open(f"{_PLANNED_DIR}/last_plan.json", "w", encoding="utf-8") as fh:
+            json.dump({"received_filters": filters is not None, "days": [d.isoformat() for d in days]}, fh)
+        if not days:
+            return ScanBranchesResult(branches=[], required_extensions=["parquet"])
+        return ScanBranchesResult(
+            branches=[
+                ScanBranch(
+                    function_name="read_parquet",
+                    positional_arguments=[pa.scalar([_planned_day_file(d) for d in days], type=pa.list_(pa.string()))],
+                    named_arguments={},
+                    row_count=10 * len(days),
+                )
+            ],
+            required_extensions=["parquet"],
+        )
+    if name == "planned_days_stats":
+        return ScanBranchesResult(
+            branches=[
+                ScanBranch(
+                    function_name="read_parquet",
+                    positional_arguments=[pa.scalar(_planned_day_file(d))],
+                    named_arguments={},
+                    row_count=10,
+                    column_statistics=_planned_day_stats(d),
+                )
+                for d in _PLANNED_DAYS
+            ],
+            required_extensions=["parquet"],
+        )
+    if name == "planned_days_bf":
+        return ScanBranchesResult(
+            branches=[
+                ScanBranch(
+                    function_name="read_parquet",
+                    positional_arguments=[pa.scalar(_planned_day_file(d))],
+                    named_arguments={},
+                    branch_filter=f"event_date = DATE '{d.isoformat()}'",
+                )
+                for d in _PLANNED_DAYS
+            ],
+            required_extensions=["parquet"],
+        )
+    raise ValueError(f"unknown planned_days fixture table: {name}")

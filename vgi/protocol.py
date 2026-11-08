@@ -3606,7 +3606,7 @@ class VgiProtocol(Protocol):
     # ``VgiProtocol``, Java and C# ``VgiService``, Go the framework default
     # ``Service``, TypeScript ``vgi`` -- so no client could address them all.
     protocol_name: ClassVar[str] = "vgi.v3"
-    protocol_version: ClassVar[str] = "3.1.0"
+    protocol_version: ClassVar[str] = "3.2.0"
 
     def bind(self, request: BindRequest) -> BindResponse:
         """Resolve output schema and validate arguments."""
@@ -4006,8 +4006,15 @@ class VgiProtocol(Protocol):
         at_unit: str | None = None,
         at_value: str | None = None,
         transaction_opaque_data: bytes | None = None,
+        pushdown_filters: bytes | None = None,
     ) -> bytes:
         """Get the list of scan branches for a multi-branch table. Returns `ScanBranchesResult` as IPC bytes.
+
+        Protocol 3.2: ``pushdown_filters`` carries the query's predicates on the
+        table (an Arrow IPC stream holding one VGI Filter Encoding v2 snapshot
+        batch; column indexes refer to ``TableInfo.columns``) when the table
+        declares ``scan_planning = "filtered"``. Every predicate is advisory.
+        ``None`` means none were collected. See ``docs/protocol/scan-planning.md``.
 
         Additive successor to ``catalog_table_scan_function_get``. Workers that
         only implement the legacy method continue to work — the VGI extension's

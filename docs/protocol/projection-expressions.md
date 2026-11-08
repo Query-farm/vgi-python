@@ -1,7 +1,7 @@
 # Optional scalar projection expressions
 
 This contract is part of the combined, unpublished DuckDB 2.0 protocol
-transition, identified as `vgi.v3` / `3.1.0`. It can be implemented and tested
+transition, identified as `vgi.v3` / `3.2.0`. It can be implemented and tested
 while the native adapter still builds against DuckDB 1.5. The successor is
 unpublished and still requires coordinated release qualification.
 
