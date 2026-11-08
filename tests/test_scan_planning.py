@@ -340,7 +340,7 @@ def test_hooks_without_the_parameter_still_work(client: Any) -> None:
 def test_default_plan_hook_delegates_to_branches_get() -> None:
     """A 3.1-style catalog that only overrides table_scan_branches_get keeps working."""
     from vgi.catalog import ScanBranchesResult
-    from vgi.catalog.catalog_interface import ReadOnlyCatalogInterface
+    from vgi.catalog.catalog_interface import AttachOpaqueData, ReadOnlyCatalogInterface
 
     class Old(ReadOnlyCatalogInterface):
         def __init__(self) -> None:
@@ -350,7 +350,7 @@ def test_default_plan_hook_delegates_to_branches_get() -> None:
             return ScanBranchesResult(branches=[], required_extensions=["sentinel"])
 
     result = Old().table_scan_branches_plan(
-        attach_opaque_data=b"",
+        attach_opaque_data=AttachOpaqueData(b""),
         transaction_opaque_data=None,
         schema_path=["main"],
         name="t",

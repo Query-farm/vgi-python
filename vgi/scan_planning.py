@@ -2,7 +2,7 @@
 
 A table with ``TableInfo.scan_planning = "filtered"`` receives the query's
 predicates in ``catalog_table_scan_branches_get``. The worker hook gets them as a
-[`ScanPlanningFilters`][] and may use them to return fewer branches or fewer
+``ScanPlanningFilters`` and may use them to return fewer branches or fewer
 files. Every predicate is advisory: the client re-applies all of them, so a
 worker may ignore any predicate it does not understand, but it must never drop
 a branch or file that could hold a matching row.

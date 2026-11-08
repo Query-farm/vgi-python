@@ -6108,7 +6108,7 @@ class Worker:
         further code changes.
 
         Protocol 3.2: dispatches to ``table_scan_branches_plan`` with the
-        ``pushdown_filters`` decoded lazily as a [`ScanPlanningFilters`][]; its
+        ``pushdown_filters`` decoded lazily as a ``ScanPlanningFilters``; its
         default returns ``table_scan_branches_get``.
         """
         _validate_at_params(at_unit, at_value)

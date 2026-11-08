@@ -2752,7 +2752,7 @@ class CatalogInterface(ABC):
         Every predicate is advisory: the client re-applies all of them, so
         return any superset of the branches and files that could hold matching
         rows, and never drop one that could.
-        [`ScanPlanningFilters.may_match`][] prunes candidates by min/max
+        ``ScanPlanningFilters.may_match`` prunes candidates by min/max
         statistics. A ``"filtered"`` table may return zero branches, meaning the
         scan produces no rows. See ``docs/protocol/scan-planning.md``.
 
