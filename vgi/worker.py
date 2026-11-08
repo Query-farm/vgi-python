@@ -83,7 +83,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast, final, overload
 import pyarrow as pa
 from vgi_rpc.rpc import AuthContext, CallContext, Stream, current_auth, serve_stdio
 
-from vgi import attach_capabilities, attach_header
+from vgi import attach_capabilities, attach_header, attach_secret_options
 from vgi._redact import short_hash
 from vgi.aggregate_function import AggregateBindParams, AggregateFunction
 from vgi.argument_spec import ArgumentSpec, extract_argument_specs
@@ -2711,6 +2711,7 @@ class Worker:
         key = self._signing_key
         if key is None:
             return AttachOpaqueData(plaintext)
+        attach_secret_options._note_signing_key(key)
         from vgi_rpc import crypto
 
         return AttachOpaqueData(
@@ -2750,6 +2751,7 @@ class Worker:
         # The envelope bytes go in the key verbatim rather than hashed: we
         # already hold them, CPython caches a bytes object's hash, and an
         # exact key has no collision to reason about.
+        attach_secret_options._note_signing_key(key)
         cache_key = (bytes(envelope), _identity_tail(auth))
         cached = self._attach_unwrap_cache.get(cache_key)
         if cached is not None:
@@ -3125,7 +3127,28 @@ class Worker:
             return None
         full = self._unwrap_attach_full_with_auth(envelope, current_auth())
         assert full is not None  # a non-None envelope always yields plaintext
-        return AttachOpaqueData(bytes(full[_ATTACH_UUID_LEN:]))
+        view = attach_secret_options.catalog_view(bytes(full))
+        assert view is not None
+        return AttachOpaqueData(view)
+
+    def _secret_attach_option_names(self, cat: Any, catalog_name: str) -> set[str]:
+        """Lower-cased names of the attach options declared ``secret`` for ``catalog_name``."""
+        names = {spec.name.lower() for spec in self._attach_option_specs if spec.secret}
+        names |= {spec.name.lower() for spec in getattr(cat, "attach_option_specs", None) or [] if spec.secret}
+        try:
+            infos = cat.catalogs()
+        except Exception:  # noqa: BLE001 - discovery is best-effort here; declared specs above still apply
+            return names
+        from vgi_rpc.utils import deserialize_record_batch
+
+        for info in infos or []:
+            if getattr(info, "name", None) != catalog_name:
+                continue
+            for raw in getattr(info, "attach_option_specs", None) or []:
+                spec = AttachOptionSpec.deserialize(deserialize_record_batch(raw)[0])
+                if spec.secret:
+                    names.add(spec.name.lower())
+        return names
 
     def _unwrap_attach_full(self, envelope: bytes | None) -> bytes | None:
         """Open an attach envelope returning the full plaintext (not stripped).
@@ -5164,6 +5187,18 @@ class Worker:
         minted = (
             uuid.uuid4().bytes + bytes(result.attach_opaque_data) if result.attach_opaque_data is not None else None
         )
+        if minted is not None:
+            # Carry the ATTACH options in the framework part of the attach so
+            # every function and hook can read them back (attach_options());
+            # secret ones are encrypted, bound to this attach's uuid.
+            section = attach_secret_options.build_section(
+                request.options,
+                self._secret_attach_option_names(cat, request.name),
+                attach_uuid=minted[:_ATTACH_UUID_LEN],
+                signing_key=self._signing_key,
+            )
+            if section:
+                minted = minted[:_ATTACH_UUID_LEN] + section + minted[_ATTACH_UUID_LEN:]
         query_offer = request.client_capabilities.query_pushdown if request.client_capabilities is not None else None
         query_selected = (
             negotiate(self, minted, query_offer, supports_transactions=result.supports_transactions)

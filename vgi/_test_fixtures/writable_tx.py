@@ -8,8 +8,9 @@ fixtures (Query-farm/vgi ``docs/writable_tx_fixtures.md``,
 
 Built only from the SDK's public API: a declarative catalog whose ``items``
 table declares an update function and write result modes, ATTACH options (one
-secret, one typed ``str | None``) handed to every function through
-``attach_opaque_data_for`` + ``pack_attach_options``, a per-attach
+secret, one typed ``str | None``) read by every function and hook through
+the framework's ``attach_options`` accessor (the secret travels encrypted
+inside ``attach_opaque_data``; the catalog never handles it), a per-attach
 ``supports_transactions`` (``attach_supports_transactions``), the catalog's
 ``catalog_transaction_begin/commit/rollback`` hooks, and the write-result
 helpers (``row_id_field``, ``write_options``, ``write_result_schema``,
@@ -52,11 +53,10 @@ from vgi.catalog import (
     Schema,
     Table,
     TransactionOpaqueData,
+    attach_options,
     constraint_record,
-    pack_attach_options,
-    unpack_attach_options,
 )
-from vgi.catalog.attach_option import AttachOption, extract_attach_option_specs
+from vgi.catalog.attach_option import AttachOption
 from vgi.catalog.constraints import ConstraintInfo
 from vgi.invocation import BindResponse
 from vgi.metadata import FunctionStability
@@ -84,9 +84,6 @@ class TxfixAttachOptions:
     token: Annotated[str | None, AttachOption(desc="A credential every function must receive", secret=True)] = None
 
 
-_ATTACH_OPTION_SPECS = extract_attach_option_specs(TxfixAttachOptions)
-
-
 @dataclass(frozen=True, slots=True)
 class _Attach:
     token: str | None
@@ -99,9 +96,10 @@ class _Attach:
 
 
 def _attach_of(attach_opaque_data: bytes | None) -> _Attach:
-    options = unpack_attach_options(attach_opaque_data)
-    if attach_opaque_data is None or not options:
-        raise ValueError("txfix: attach_opaque_data missing or not minted by this worker")
+    """The attach's options, via the framework accessor (secret ``token`` included)."""
+    if attach_opaque_data is None:
+        raise ValueError("txfix: attach_opaque_data missing")
+    options = attach_options(attach_opaque_data)
     token = options.get("token")
     return _Attach(token=None if token is None else str(token), transactional=options.get("transactional") is True)
 
@@ -398,7 +396,11 @@ class Reset(_OneShot):
 class WhoAmI(_OneShot):
     """The attach's options as functions see them."""
 
-    OUTPUT = _schema(pa.field("token", pa.string()), pa.field("transactional", pa.bool_()))
+    OUTPUT = _schema(
+        pa.field("token", pa.string()),
+        pa.field("transactional", pa.bool_()),
+        pa.field("token_in_attach_data", pa.bool_()),
+    )
 
     class Meta:
         """Function metadata."""
@@ -409,9 +411,11 @@ class WhoAmI(_OneShot):
 
     @classmethod
     def rows(cls, params: ProcessParams[None]) -> dict[str, list[Any]]:
-        """Token and transactional flag."""
+        """Token, transactional flag, and whether the token's bytes appear in the attach bytes."""
         attach = _attach_of(params.attach_opaque_data)
-        return {"token": [attach.token], "transactional": [attach.transactional]}
+        raw = bytes(params.attach_opaque_data or b"")
+        leaked = attach.token is not None and attach.token.encode() in raw
+        return {"token": [attach.token], "transactional": [attach.transactional], "token_in_attach_data": [leaked]}
 
 
 class CurrentTx(_OneShot):
@@ -544,17 +548,12 @@ class TxfixCatalog(ReadOnlyCatalogInterface):
     catalog = CATALOG
     catalog_name = CATALOG_NAME
 
-    def attach_opaque_data_for(self, *, name: str, options: dict[str, Any]) -> AttachOpaqueData:
-        """Carry the options (token, transactional) to every function and hook of the attach."""
-        del name
-        return AttachOpaqueData(pack_attach_options(options, _ATTACH_OPTION_SPECS))
-
     def attach_supports_transactions(
         self, *, name: str, options: dict[str, Any], attach_opaque_data: AttachOpaqueData
     ) -> bool:
         """Only ``transactional true`` asks DuckDB for the hooks below."""
-        del name, options
-        return _attach_of(attach_opaque_data).transactional
+        del name, attach_opaque_data
+        return {key.lower(): value for key, value in options.items()}.get("transactional") is True
 
     def catalog_transaction_begin(self, *, attach_opaque_data: AttachOpaqueData) -> TransactionOpaqueData | None:
         """Mint a 16-byte transaction id and log ``begin``."""

@@ -103,7 +103,9 @@ class TestPerAttach:
     def test_options_reach_the_attach_bytes(self) -> None:
         """Options reach the attach bytes."""
         result = _attach(_PerAttach(), token="tok-1", TRANSACTIONAL=True)
-        assert unpack_attach_options(result.attach_opaque_data) == {"transactional": True, "token": "tok-1"}
+        # The secret token is never packed into the catalog's own bytes.
+        assert unpack_attach_options(result.attach_opaque_data) == {"transactional": True}
+        assert b"tok-1" not in result.attach_opaque_data
         assert result.supports_transactions is True
         # Custom bytes carry state: the client must keep them.
         assert result.attach_opaque_data_required is True
@@ -112,7 +114,7 @@ class TestPerAttach:
         """Transactions only when asked."""
         result = _attach(_PerAttach(), token="tok-1")
         assert result.supports_transactions is False
-        assert unpack_attach_options(result.attach_opaque_data) == {"transactional": False, "token": "tok-1"}
+        assert unpack_attach_options(result.attach_opaque_data) == {"transactional": False}
 
     def test_supports_transactions_class_attribute_still_works(self) -> None:
         """Supports transactions class attribute still works."""
@@ -135,31 +137,17 @@ class TestPackAttachOptions:
         assert unpack_attach_options(packed) == {"a": 1, "b": "x", "c": None, "d": [1, 2]}
 
     def test_specs_type_and_default(self) -> None:
-        """Specs type and default."""
+        """Specs type the options and fill defaults; secret options are dropped."""
         packed = pack_attach_options({"token": "t"}, _SPECS)
-        assert unpack_attach_options(packed) == {"transactional": False, "token": "t"}
-        # A default-less option the caller omitted is simply absent.
-        assert "token" not in unpack_attach_options(pack_attach_options({}, _SPECS))
+        assert unpack_attach_options(packed) == {"transactional": False}
 
-    def test_secret_options_stay_out_of_the_bytes(self) -> None:
-        """A secret option is kept in shared storage, never in the attach bytes."""
+    def test_secret_options_never_packed(self) -> None:
+        """A secret option never enters the catalog's own bytes."""
         packed = pack_attach_options({"token": "s3cr3t-value", "transactional": True}, _SPECS)
         assert b"s3cr3t-value" not in packed
-        assert unpack_attach_options(packed) == {"transactional": True, "token": "s3cr3t-value"}
-        # Two attaches with the same secret get distinct, unpredictable handles.
-        assert pack_attach_options({"token": "s3cr3t-value"}, _SPECS) != pack_attach_options(
-            {"token": "s3cr3t-value"}, _SPECS
-        )
+        assert unpack_attach_options(packed) == {"transactional": True}
         # Without specs nothing is known to be secret.
         assert b"plain-token" in pack_attach_options({"token": "plain-token"})
-
-    def test_missing_server_side_secret_is_an_error(self) -> None:
-        """Bytes whose secrets the shared storage lost fail loudly, not silently."""
-        packed = bytearray(pack_attach_options({"token": "t"}, _SPECS))
-        offset = len(b"vgi.attach-options.v1\x00")
-        packed[offset : offset + 16] = b"\x01" * 16
-        with pytest.raises(LookupError, match="re-ATTACH"):
-            unpack_attach_options(bytes(packed))
 
     def test_empty_and_foreign_bytes(self) -> None:
         """Empty and foreign bytes."""

@@ -117,15 +117,15 @@ def test_attach_options_and_per_attach_transactions(connect: Any, token: str) ->
     assert plain.supports_transactions is False
     assert plain.attach_opaque_data_required is True
     with client:
-        assert _table(client, "whoami") == [{"token": token, "transactional": False}]
+        assert _table(client, "whoami") == [{"token": token, "transactional": False, "token_in_attach_data": False}]
         assert _table(client, "reset") == [{"ok": True}]
     tx_result, tx_client = _attach(connect, token=token, transactional=True)
     assert tx_result.supports_transactions is True
     with tx_client:
-        assert _table(tx_client, "whoami") == [{"token": token, "transactional": True}]
+        assert _table(tx_client, "whoami") == [{"token": token, "transactional": True, "token_in_attach_data": False}]
     anonymous, anon_client = _attach(connect)
     with anon_client:
-        assert _table(anon_client, "whoami") == [{"token": None, "transactional": False}]
+        assert _table(anon_client, "whoami") == [{"token": None, "transactional": False, "token_in_attach_data": False}]
 
 
 def test_update_modes_on_a_plain_attach(connect: Any, token: str) -> None:

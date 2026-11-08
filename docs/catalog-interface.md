@@ -387,7 +387,28 @@ ATTACH 'mydb' (TYPE vgi, LOCATION 'https://worker.example.com', api_key getenv('
 
 On the wire, `required` and `secret` are nullable boolean columns appended after the four shared spec columns (`name`, `description`, `type`, `default_value`), in that order. Readers look columns up by name, so a spec from a peer that predates either column reads it as `false`, and older peers ignore columns they don't know.
 
-**Never put a secret option's value in `attach_opaque_data`.** On HTTP the worker seals the value, but over stdio and a unix socket it reaches the client, and the DuckDB extension, unsealed. Keep the credential server-side, re-derive it per call, or store a digest of it, as the `ticket_probe` fixture does (see [Opaque values: sealing](protocol/vgi-opaque-data-sealing.md), rule 5).
+**Read options, secret ones included, with the framework accessor:** `params.attach_options` in any
+function (bind, init and process, every function kind) or `vgi.catalog.attach_options(attach_opaque_data)`
+in a catalog hook such as `catalog_transaction_commit`. The worker carries the ATTACH options inside
+`attach_opaque_data` itself, so they reach every worker process on every transport, and encrypts the
+`secret=True` ones with a key the client never has (an HKDF subkey of the signing key on HTTP, or of a
+per-user host-local key file on stdio, unix sockets and launcher pools). **Never put a secret option's
+value in your catalog's own attach bytes:** over stdio and unix sockets those reach the client, and the
+DuckDB extension, unsealed. Catalogs that need only a fingerprint can still store a digest instead, as
+the `ticket_probe` fixture does (see [Opaque values: sealing](protocol/vgi-opaque-data-sealing.md),
+rule 5).
+
+```python test="skip"
+class Lookup(TableFunctionGenerator[None, None]):
+    @classmethod
+    def process(cls, params, state, out):
+        api_key = params.attach_options.get("api_key")  # decrypted by the framework
+        ...
+```
+
+On a host whose temp directory is shared or unsuitable, point `VGI_ATTACH_SECRET_KEY_FILE` at a
+private file (all worker processes of the deployment must use the same one), or call
+`vgi.attach_secret_options.set_attach_secret_options_key(key)` at startup.
 
 `secret` does not change what the worker itself logs: attach options are never logged unless the catalog opts in through `loggable_attach_options()` (below), which must never return a secret option.
 
@@ -445,30 +466,27 @@ class MyFunctionCatalog(ReadOnlyCatalogInterface):
 | `attach_supports_transactions(name=, options=, attach_opaque_data=)` | the `supports_transactions` class attribute | `CatalogAttachResult.supports_transactions`, decided per attach. |
 | `catalog_transaction_begin` / `_commit` / `_rollback` | raise `CatalogReadOnlyError` | Mint the transaction id; apply or discard the transaction's work. |
 
-`pack_attach_options(options, specs)` turns the ATTACH options into attach bytes and
-`unpack_attach_options(params.attach_opaque_data)` reads them back in any function or hook, in any
-worker process. Options declared `secret=True` never enter the bytes: they are kept in the shared
-function storage (`VGI_WORKER_SHARED_STORAGE`) under a random handle, so pass the specs.
+Functions and hooks read the ATTACH options with `params.attach_options` /
+`attach_options(attach_opaque_data)` (secret options included, see
+[Declaring Attach Options](#declaring-attach-options)), so most catalogs need not override
+`attach_opaque_data_for` at all. (`pack_attach_options(options, specs)` remains for a catalog whose
+own bytes should depend on the non-secret options; it drops secret ones.)
 
 ```python test="skip"
 import os
-from vgi.catalog import (
-    ReadOnlyCatalogInterface, TransactionOpaqueData, pack_attach_options, unpack_attach_options,
-)
+from vgi.catalog import ReadOnlyCatalogInterface, TransactionOpaqueData, attach_options
 
 class MyCatalog(ReadOnlyCatalogInterface):
     catalog = CATALOG
 
-    def attach_opaque_data_for(self, *, name, options):
-        return pack_attach_options(options, self.attach_option_specs)
-
     def attach_supports_transactions(self, *, name, options, attach_opaque_data):
-        return unpack_attach_options(attach_opaque_data).get("transactional") is True
+        return options.get("transactional") is True
 
     def catalog_transaction_begin(self, *, attach_opaque_data):
         return TransactionOpaqueData(os.urandom(16))
 
     def catalog_transaction_commit(self, *, attach_opaque_data, transaction_opaque_data):
+        token = attach_options(attach_opaque_data).get("token")  # a secret option, decrypted
         ...  # apply the work staged under transaction_opaque_data
 
     def catalog_transaction_rollback(self, *, attach_opaque_data, transaction_opaque_data):

@@ -14,7 +14,7 @@ import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass, crypto
 from vgi_rpc.rpc import AuthContext, OutputCollector, current_auth
 
-from vgi import attach_capabilities
+from vgi import attach_capabilities, attach_secret_options
 from vgi.arguments import Arg
 from vgi.catalog.query import (
     MAX_QUERY_TOKEN_BYTES,
@@ -72,7 +72,7 @@ def owner_from_plaintext(plaintext: bytes, transaction: bytes | None = None) -> 
         binding.extend(part)
     return QueryOwner(
         scope=hashlib.sha256(binding).digest(),
-        attach_opaque_data=plaintext[16:],
+        attach_opaque_data=attach_secret_options.catalog_view(plaintext) or b"",
         transaction_opaque_data=transaction,
         auth=auth,
     )

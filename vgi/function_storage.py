@@ -131,11 +131,16 @@ _ATTACH_UUID_LEN = 16
 def attach_catalog_bytes(attach_plaintext: bytes | None) -> bytes | None:
     """Strip the framework shard-UUID prefix from a full attach plaintext.
 
-    The framework unwraps an attach to ``uuid(16) || catalog_bytes``; function
-    bodies see only ``catalog_bytes`` (what the catalog returned). Returns None
+    The framework unwraps an attach to ``uuid(16) || [options] || catalog_bytes``;
+    function bodies see only ``catalog_bytes`` (what the catalog returned), on
+    which ``vgi.catalog.attach_options()`` reads the ATTACH options. Returns None
     when there is no attach.
     """
-    return attach_plaintext[_ATTACH_UUID_LEN:] if attach_plaintext else None
+    if not attach_plaintext:
+        return None
+    from vgi.attach_secret_options import catalog_view
+
+    return catalog_view(attach_plaintext)
 
 
 def _derive_shard_key(*, attach_uuid: bytes | None, _origin: str = "?") -> str:

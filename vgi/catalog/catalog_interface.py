@@ -3076,10 +3076,10 @@ class ReadOnlyCatalogInterface(CatalogInterface):
 
     * [`attach_opaque_data_for`][vgi.catalog.ReadOnlyCatalogInterface.attach_opaque_data_for]
       returns the bytes every function call of this attach receives as
-      ``params.attach_opaque_data`` (default: a fixed id). Return
-      [`pack_attach_options(options, self.attach_option_specs)`][vgi.catalog.attach_option.pack_attach_options]
-      to hand the ATTACH options to functions, which read them back with
-      [`unpack_attach_options`][vgi.catalog.attach_option.unpack_attach_options].
+      ``params.attach_opaque_data`` (default: a fixed id). The ATTACH
+      options need no override: the framework carries them (secret ones
+      encrypted) and functions read them with ``params.attach_options``,
+      hooks with [`attach_options`][vgi.catalog.attach_option.attach_options].
     * [`attach_supports_transactions`][vgi.catalog.ReadOnlyCatalogInterface.attach_supports_transactions]
       decides ``supports_transactions`` per attach (default: the
       ``supports_transactions`` class attribute).
@@ -3096,9 +3096,6 @@ class ReadOnlyCatalogInterface(CatalogInterface):
 
         class MyCatalog(ReadOnlyCatalogInterface):
             catalog = CATALOG
-
-            def attach_opaque_data_for(self, *, name, options):
-                return pack_attach_options(options, self.attach_option_specs)
 
             def attach_supports_transactions(self, *, name, options, attach_opaque_data):
                 return options.get("transactional") is True
@@ -3445,15 +3442,14 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         its own per-attach identity). Keep nothing per-attach on ``self`` --
         pooled processes and HTTP workers serve one attach from many processes
         -- so put what functions need in the bytes. The default is a fixed id,
-        the same for every attach (options are not carried).
+        the same for every attach.
 
-        To hand the ATTACH options to functions, return
-        [`pack_attach_options(options, self.attach_option_specs)`][vgi.catalog.attach_option.pack_attach_options]
-        and decode them in a function with
-        [`unpack_attach_options(params.attach_opaque_data)`][vgi.catalog.attach_option.unpack_attach_options].
-        Never put a ``secret=True`` option in the bytes yourself: over stdio
-        and unix sockets they are not sealed. ``pack_attach_options`` keeps
-        secret options in the shared function storage instead.
+        The ATTACH options themselves need no override: the framework carries
+        them beside these bytes and functions read them with
+        ``params.attach_options`` (hooks with
+        [`attach_options`][vgi.catalog.attach_option.attach_options]), secret
+        ones decrypted. Never put a ``secret=True`` option in these bytes
+        yourself: over stdio and unix sockets they are not sealed.
 
         Args:
             name: The catalog being attached.

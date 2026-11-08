@@ -92,16 +92,46 @@ the rule every SDK follows.
    - There is **no plaintext fallback**: no prefix, flag or missing call context
      may skip the open.
 5. **No secrets in plaintext.** Attach options declared `secret=True` MUST NOT
-   appear in plaintext in any opaque value.
-   - On an authenticating transport the seal satisfies this.
-   - On an OS-owned transport that skips sealing, leave secret options out of
-     the value. Re-derive them or keep them server-side.
-   - Reference: the framework never copies attach options into the value. It
-     wraps only the catalog's own bytes, so this rule binds the catalog
-     implementation. A catalog that keeps options in its attach bytes MUST drop
-     the secret ones, or keep only a digest. The `attach_options` fixture
-     catalog echoes only its declared non-secret options. The `ticket_probe`
-     fixture keeps `region` and `sha256(api_key)[:12]`, never the key.
+   appear in plaintext in any opaque value, on any transport: not on the wire,
+   and not in the opened (inner) bytes of a sealed value either.
+   - **Standard mechanism: the SDK encrypts secret options inside
+     `attach_opaque_data`.** The framework carries the ATTACH options in its
+     own part of the attach value and hands them to every function (bind,
+     init, process, every function kind) and to the transaction hooks through
+     its public attach-options accessor. Secret values are encrypted there with
+     a key the client never has, so they reach any worker process of the
+     deployment on every transport. Catalog authors never handle the
+     encryption and never put a secret into their own attach bytes.
+   - Key: `K = HKDF-SHA256(ikm = root, salt = empty,
+     info = "vgi.attach_secret_options.v1", L = 32)`. `root` is, in order: an
+     explicitly configured secret-options key; else the signing key, when the
+     worker seals (HTTP); else the host-local key. The root is never the AEAD
+     key itself.
+   - Host-local key (identical across SDKs, so workers of different SDKs on
+     one host share it): `$VGI_ATTACH_SECRET_KEY_FILE` if set and non-empty;
+     else `$XDG_RUNTIME_DIR/vgi/attach-secret-options.key` if `XDG_RUNTIME_DIR`
+     is a directory; else `<per-user temp dir>/vgi-<username>/attach-secret-options.key`.
+     Exactly 32 raw CSPRNG bytes, directory 0700 and file 0600, owned by the
+     user and not group/other accessible (refused otherwise). Created
+     atomically (a private temp file hard-linked into place; an existing key is
+     used, never overwritten) and read only when a secret option has a value.
+   - AEAD: XChaCha20-Poly1305 or ChaCha20-Poly1305 (AES-256-GCM where ChaCha
+     is unavailable), random nonce per encryption, envelope
+     `version || nonce || ciphertext || tag` (the version byte identifies the
+     algorithm). AAD `"vgi.attach_secret_options.v1" 0x00 || attach_uuid`,
+     binding the blob to its attach (rule 6): moved into another attach value it
+     fails to open, with the rule 4 error. A secret with a value but no
+     obtainable key fails the ATTACH with a clear message.
+   - Never log the values, the key or the blob (rule 7), and never put them in
+     table-function state, bind opaque data or any other client-visible value.
+   - Alternatives for catalogs that do not need the value itself: re-derive it,
+     or keep only a digest. The `ticket_probe` fixture keeps `region` and
+     `sha256(api_key)[:12]`. A catalog that keeps options in its *own* attach
+     bytes MUST drop the secret ones.
+   - Reference: vgi-python `vgi.catalog.attach_options()` /
+     `params.attach_options` (implementation `vgi/attach_secret_options.py`).
+     The `txfix` fixture's `whoami().token_in_attach_data` checks the secret
+     never appears in the attach bytes a function receives.
 6. **Unpredictable identifiers.** Any id inside an opaque value (session id,
    attach uuid) MUST come from a cryptographically secure random source, never
    a seeded PRNG such as `mt19937`. The reference uses `uuid.uuid4()`.

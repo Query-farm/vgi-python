@@ -6,7 +6,7 @@ This module provides the abstract base class and data types for implementing
 catalog interfaces in VGI workers, enabling DuckDB ATTACH support.
 """
 
-from vgi.catalog.attach_option import pack_attach_options, unpack_attach_options
+from vgi.catalog.attach_option import attach_options, pack_attach_options, unpack_attach_options
 from vgi.catalog.catalog_interface import (
     AttachCatalogInfo,
     AttachOpaqueData,
@@ -215,6 +215,7 @@ __all__ = [
     "write_options",
     "write_result_batch",
     "write_rows_batch",
+    "attach_options",
     "pack_attach_options",
     "unpack_attach_options",
     # Interfaces

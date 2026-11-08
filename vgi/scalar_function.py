@@ -129,6 +129,20 @@ class BindParameters:
     secrets: SecretsAccessor
     auth_context: AuthContext = AuthContext.anonymous()
     attach_opaque_data: bytes | None = None
+
+    @property
+    def attach_options(self) -> dict[str, Any]:
+        """The ATTACH options of this call's attach, secret ones included.
+
+        Read on every transport and in every worker process: the framework
+        carries the options inside ``attach_opaque_data`` (secret ones
+        encrypted). Names are lower-cased; an option the caller left out is
+        absent. See [`attach_options`][vgi.catalog.attach_option.attach_options].
+        """
+        from vgi.catalog.attach_option import attach_options
+
+        return attach_options(self.attach_opaque_data)
+
     transaction_opaque_data: bytes | None = None
     argument_names: list[str | None] | None = None
 

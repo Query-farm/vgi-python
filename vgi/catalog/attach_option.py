@@ -19,7 +19,6 @@ the SQL text, write the option as an expression::
     ATTACH 'mydb' (TYPE vgi, LOCATION 'https://worker.example.com', api_key getenv('MYDB_API_KEY'));
 """
 
-import os
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
@@ -34,6 +33,7 @@ __all__ = [
     "AttachOptionSpec",
     "RESERVED_ATTACH_OPTION",
     "MissingAttachOptionsError",
+    "attach_options",
     "extract_attach_option_specs",
     "pack_attach_options",
     "unpack_attach_options",
@@ -216,20 +216,10 @@ def extract_attach_option_specs(options_cls: type) -> list[AttachOptionSpec]:
 
 # Prefix of attach_opaque_data built by pack_attach_options; versioned so the
 # encoding can change without misreading older bytes. Layout after the magic:
-# a 16-byte handle (all zero when no secret option was kept server-side), then
-# the Arrow IPC bytes of a one-row batch of the non-secret options.
+# 16 reserved bytes (zero), then the Arrow IPC bytes of a one-row batch of the
+# non-secret options.
 _PACKED_OPTIONS_MAGIC = b"vgi.attach-options.v1\x00"
-_HANDLE_LEN = 16
-_NO_HANDLE = bytes(_HANDLE_LEN)
-# Shared-storage namespace holding secret option values, keyed by handle.
-_SECRET_NS = b"vgi.attach_options.secret"
-
-
-def _shared_storage() -> Any:
-    """The deployment's shared function storage (``VGI_WORKER_SHARED_STORAGE``)."""
-    from vgi.function import Function
-
-    return Function.storage
+_RESERVED_LEN = 16
 
 
 def _one_row(values: dict[str, Any], types: dict[str, pa.DataType]) -> pa.RecordBatch:
@@ -240,36 +230,52 @@ def _one_row(values: dict[str, Any], types: dict[str, pa.DataType]) -> pa.Record
     return pa.RecordBatch.from_pylist([values] if fields else [], schema=pa.schema(fields))
 
 
-def _batch_row(raw: bytes) -> dict[str, Any]:
-    batch, _ = deserialize_record_batch(raw)
-    return dict(batch.slice(0, 1).to_pylist()[0]) if batch.num_rows else {}
+def attach_options(attach_opaque_data: bytes | None) -> dict[str, Any]:
+    """Return the ATTACH options of an attach, secret options included.
+
+    The standard way for functions and catalog hooks to read the options an
+    ``ATTACH`` supplied. The worker carries them inside ``attach_opaque_data``
+    itself (so they reach every worker process, on every transport), with
+    options declared ``secret=True`` encrypted under a key the client never
+    has (see ``docs/protocol/vgi-opaque-data-sealing.md``, rule 5). Pass the
+    ``attach_opaque_data`` a function (``params.attach_opaque_data``; or just
+    use ``params.attach_options``) or a ``catalog_transaction_*`` hook
+    received. Catalog authors never put secrets into their own attach bytes.
+
+    Args:
+        attach_opaque_data: The attach bytes a function or hook received.
+
+    Returns:
+        Lower-cased option names to values; an option the caller left out is
+        absent (declared defaults are not filled in). ``{}`` when the bytes
+        carry no options (e.g. a value that has been copied or serialized:
+        the options never travel with the catalog's bytes).
+
+    Raises:
+        OpaqueDataNotRecognizedError: The encrypted part does not open (it was
+            moved from another attach, tampered with, or the key is gone).
+
+    """
+    from vgi.attach_secret_options import options_of
+
+    return options_of(attach_opaque_data)
 
 
 def pack_attach_options(options: dict[str, Any], specs: list[AttachOptionSpec] | None = None) -> bytes:
-    """Encode ATTACH options as ``attach_opaque_data`` bytes, for functions to read back.
+    """Encode the non-secret ATTACH options as catalog ``attach_opaque_data`` bytes.
 
-    Return this from
-    [`ReadOnlyCatalogInterface.attach_opaque_data_for`][vgi.catalog.ReadOnlyCatalogInterface.attach_opaque_data_for]
-    (or put it in your own ``CatalogAttachResult``); every function call and
-    catalog hook of the attach then decodes the options with
-    [`unpack_attach_options`][vgi.catalog.attach_option.unpack_attach_options].
-
-    **Secret options never enter the bytes** (rule 5 of the opaque-data
-    sealing contract: over stdio and unix sockets the worker does not seal
-    them). Options whose spec is declared ``secret=True`` are kept server-side
-    instead, in the deployment's shared function storage
-    (``VGI_WORKER_SHARED_STORAGE``, the same store that coordinates a
-    function's worker processes), under a random handle the bytes carry. So
-    pass ``specs`` whenever the catalog declares secret options; without
-    specs every option is treated as non-secret.
-
-    Option names are lower-cased (DuckDB matches them case-insensitively).
+    Rarely needed since the framework carries every ATTACH option itself (read
+    them with [`attach_options`][vgi.catalog.attach_option.attach_options]).
+    Use it when a catalog wants its own attach bytes to depend on the options.
+    Options whose spec is declared ``secret=True`` are left out: secrets reach
+    functions through ``attach_options`` (encrypted by the framework), never
+    through the catalog's own bytes.
 
     Args:
         options: The options ``catalog_attach`` received.
         specs: The catalog's attach-option specs. Options are typed by their
             spec, declared defaults fill in options the caller left out, and
-            ``secret`` options are kept out of the bytes.
+            ``secret`` options are dropped.
 
     Returns:
         The bytes to use as ``attach_opaque_data``.
@@ -278,60 +284,38 @@ def pack_attach_options(options: dict[str, Any], specs: list[AttachOptionSpec] |
     values = {str(key).lower(): value for key, value in options.items()}
     by_name = {spec.name.lower(): spec for spec in specs or []}
     plain: dict[str, Any] = {}
-    secret: dict[str, Any] = {}
     for name, spec in by_name.items():
-        if name not in values and spec.default is None:
+        if spec.secret or (name not in values and spec.default is None):
             continue
-        (secret if spec.secret else plain)[name] = values.get(name, spec.default)
+        plain[name] = values.get(name, spec.default)
     for name, value in values.items():
         if name not in by_name:
             plain[name] = value
     types = {name: spec.type for name, spec in by_name.items()}
-    handle = _NO_HANDLE
-    if secret:
-        handle = os.urandom(_HANDLE_LEN)
-        _shared_storage().state_put_many(
-            handle, _SECRET_NS, [(b"options", serialize_record_batch_bytes(_one_row(secret, types)))]
-        )
-    return _PACKED_OPTIONS_MAGIC + handle + serialize_record_batch_bytes(_one_row(plain, types))
+    return _PACKED_OPTIONS_MAGIC + bytes(_RESERVED_LEN) + serialize_record_batch_bytes(_one_row(plain, types))
 
 
 def unpack_attach_options(attach_opaque_data: bytes | None) -> dict[str, Any]:
-    """Decode options packed by [`pack_attach_options`][vgi.catalog.attach_option.pack_attach_options].
+    """Return the attach's options: those the framework carries, plus any packed by ``pack_attach_options``.
 
-    Pass a function's ``params.attach_opaque_data`` (or the
-    ``attach_opaque_data`` a catalog hook receives). Secret options are read
-    back from the shared function storage they were kept in. Returns ``{}``
-    for ``None`` and for bytes that were not built by ``pack_attach_options``
-    (such as the default fixed attach id), so a missing option reads the same
-    as an attach without options: use ``.get(name)``.
+    Equivalent to [`attach_options`][vgi.catalog.attach_option.attach_options]
+    for catalogs that do not pack their own bytes.
 
     Args:
-        attach_opaque_data: The plaintext attach bytes a function or hook received.
+        attach_opaque_data: The attach bytes a function or hook received.
 
     Returns:
-        The options, lower-cased names to values.
-
-    Raises:
-        LookupError: The attach kept secret options server-side but the
-            shared storage no longer has them (for example a different
-            storage backend, or a worker host that does not share it).
+        Lower-cased option names to values.
 
     """
+    values = attach_options(attach_opaque_data)
     if attach_opaque_data is None:
-        return {}
+        return values
     raw = bytes(attach_opaque_data)
-    if not raw.startswith(_PACKED_OPTIONS_MAGIC) or len(raw) < len(_PACKED_OPTIONS_MAGIC) + _HANDLE_LEN:
-        return {}
-    body = raw[len(_PACKED_OPTIONS_MAGIC) :]
-    handle, plain = body[:_HANDLE_LEN], body[_HANDLE_LEN:]
-    values = _batch_row(plain)
-    if handle != _NO_HANDLE:
-        (stored,) = _shared_storage().state_get_many(handle, _SECRET_NS, [b"options"])
-        if stored is None:
-            raise LookupError(
-                "this attach kept its secret options in the shared function storage "
-                "(VGI_WORKER_SHARED_STORAGE), which no longer has them; re-ATTACH"
-            )
-        values.update(_batch_row(stored))
+    head = len(_PACKED_OPTIONS_MAGIC) + _RESERVED_LEN
+    if raw.startswith(_PACKED_OPTIONS_MAGIC) and len(raw) > head:
+        batch, _ = deserialize_record_batch(raw[head:])
+        if batch.num_rows:
+            for key, value in batch.slice(0, 1).to_pylist()[0].items():
+                values.setdefault(key, value)
     return values
