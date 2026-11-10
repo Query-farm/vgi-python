@@ -708,6 +708,36 @@ class _SpatialFilterArgs:
 
     count: Annotated[int, Arg(0, doc="Number of points to generate", ge=1)]
     batch_size: Annotated[int, Arg("batch_size", default=1024, doc="Rows per batch")]
+    edge_rows: Annotated[
+        bool,
+        Arg("edge_rows", default=False, doc="Append rows with empty, NaN and infinite geometries after the grid"),
+    ]
+
+
+# Rows appended by edge_rows=true (x and y NULL), as DuckDB 2.0 writes their WKB.
+# Each is a case where a bounding-box filter could wrongly drop a row: empty
+# geometries (`&&` is FALSE, yet ST_Equals(EMPTY, EMPTY) is TRUE), and NaN
+# vertices, which make a box unbounded on that axis (except an all-NaN POINT,
+# which is empty).
+_SPATIAL_EDGE_ROWS: tuple[tuple[str, str], ...] = (
+    ("POINT EMPTY", "0101000000000000000000f87f000000000000f87f"),
+    ("POLYGON EMPTY", "010300000000000000"),
+    ("GEOMETRYCOLLECTION EMPTY", "010700000000000000"),
+    ("POINT(nan 0.25)", "0101000000000000000000f87f000000000000d03f"),
+    (
+        "LINESTRING(nan nan, 0.25 0.25)",
+        "010200000002000000000000000000f87f000000000000f87f000000000000d03f000000000000d03f",
+    ),
+    (
+        "MULTIPOINT((nan nan), (0.25 0.25))",
+        "0104000000020000000101000000000000000000f87f000000000000f87f0101000000000000000000d03f000000000000d03f",
+    ),
+    (
+        "GEOMETRYCOLLECTION(POINT EMPTY, POINT(0.25 0.25))",
+        "0107000000020000000101000000000000000000f87f000000000000f87f0101000000000000000000d03f000000000000d03f",
+    ),
+    ("POINT(inf 0.25)", "0101000000000000000000f07f000000000000d03f"),
+)
 
 
 @dataclass(kw_only=True)
@@ -717,6 +747,7 @@ class _SpatialFilterState(ArrowSerializableDataclass):
     remaining: int
     total_count: int
     current_index: int = 0
+    edge_rows_pending: bool = False
 
 
 @init_single_worker
@@ -739,6 +770,10 @@ class SpatialFilterExampleFunction(TableFunctionGenerator[_SpatialFilterArgs, _S
         x = (i % cols) / cols
         y = (i // cols) / cols
     where cols = ceil(sqrt(N)).
+
+    With ``edge_rows := true``, the grid is followed by one row per geometry in
+    ``_SPATIAL_EDGE_ROWS`` (empty, NaN and infinite coordinates), with NULL x
+    and y, numbered after the grid.
 
     Example:
     -------
@@ -778,7 +813,11 @@ class SpatialFilterExampleFunction(TableFunctionGenerator[_SpatialFilterArgs, _S
     @classmethod
     def initial_state(cls, params: ProcessParams[_SpatialFilterArgs]) -> _SpatialFilterState:
         """Create initial state."""
-        return _SpatialFilterState(remaining=params.args.count, total_count=params.args.count)
+        return _SpatialFilterState(
+            remaining=params.args.count,
+            total_count=params.args.count,
+            edge_rows_pending=params.args.edge_rows,
+        )
 
     @classmethod
     def process(
@@ -787,8 +826,23 @@ class SpatialFilterExampleFunction(TableFunctionGenerator[_SpatialFilterArgs, _S
         state: _SpatialFilterState,
         out: OutputCollector,
     ) -> None:
-        """Generate grid points with WKB geometry."""
+        """Generate grid points with WKB geometry, then any edge rows."""
         if state.remaining <= 0:
+            if state.edge_rows_pending:
+                state.edge_rows_pending = False
+                start = state.total_count
+                out.emit(
+                    pa.RecordBatch.from_pydict(
+                        {
+                            "n": list(range(start, start + len(_SPATIAL_EDGE_ROWS))),
+                            "x": [None] * len(_SPATIAL_EDGE_ROWS),
+                            "y": [None] * len(_SPATIAL_EDGE_ROWS),
+                            "geom": [bytes.fromhex(wkb) for _, wkb in _SPATIAL_EDGE_ROWS],
+                        },
+                        schema=params.output_schema,
+                    )
+                )
+                return
             out.finish()
             return
 

@@ -1174,7 +1174,10 @@ def _expression_sql(expression: FilterExpression) -> str:
         if (identity.namespace, identity.name, identity.version) == ("duckdb.spatial", "intersects_extent", 1):
             if len(expression.arguments) != 2 or expression.options:
                 raise FilterV2Error("duckdb.spatial/intersects_extent@1 requires exactly two arguments and no options")
-            return f"({_expression_sql(expression.arguments[0])} && {_expression_sql(expression.arguments[1])})"
+            # Not the engine's `&&`: DuckDB 1.5 and 2.0 disagree on NaN coordinates.
+            # The UDF implements the specified (DuckDB 2.0 core) semantics.
+            left, right = (_expression_sql(argument) for argument in expression.arguments)
+            return f"{_INTERSECTS_EXTENT_UDF}({left}, {right})"
         raise FilterV2Error(
             f"no evaluator for extension function {identity.namespace}/{identity.name}@{identity.version}"
         )
@@ -1223,9 +1226,37 @@ def _get_evaluation_connection(context: EvaluationContext) -> Any:
         # core, a waitress worker on a 48-core host carried ~290 threads, and
         # every evaluation paid to dispatch onto that pool.
         connection = connect(config={"threads": 1})
+        _register_intersects_extent(connection)
         _apply_context(connection, context)
         connections[key] = connection
     return connection
+
+
+_INTERSECTS_EXTENT_UDF = "__vgi_intersects_extent"
+
+
+def _intersects_extent_udf(left: Any, right: Any) -> Any:
+    from vgi._wkb_extent import intersects_extent
+
+    def as_list(values: Any) -> list[Any]:
+        return values.to_pylist()  # type: ignore[no-any-return]
+
+    return pa.array(
+        [None if a is None or b is None else intersects_extent(a, b) for a, b in zip(as_list(left), as_list(right), strict=True)],
+        type=pa.bool_(),
+    )
+
+
+def _register_intersects_extent(connection: Any) -> None:
+    """duckdb.spatial/intersects_extent@1 with the specified semantics (vgi/_wkb_extent.py)."""
+    connection.create_function(
+        _INTERSECTS_EXTENT_UDF,
+        _intersects_extent_udf,
+        ["GEOMETRY", "GEOMETRY"],
+        "BOOLEAN",
+        type="arrow",
+        null_handling="special",
+    )
 
 
 def _apply_context(connection: Any, context: EvaluationContext) -> None:
