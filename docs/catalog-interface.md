@@ -154,6 +154,7 @@ Information about a function in a schema:
 | `argument_monotonicity` | `list[ArgumentMonotonicity] \| None` | Scalar-only claims aligned exactly with `arguments`; a vararg declaration occupies one slot |
 | `comment` | `str \| None` | Optional description |
 | `tags` | `dict[str, str]` | Key-value metadata |
+| `visibility` | `str \| None` | Protocol 3.3: `"public"` (or `None`) for an ordinary function, `"table_only"` for one listed only so a table can resolve it (see [Table functions and visibility](#table-functions-and-visibility)) |
 
 ### SchemaObjectType
 
@@ -686,6 +687,40 @@ if __name__ == "__main__":
 | **Automatic scan handling** | Function-backed tables don't need `table_scan_function_get()` |
 | **Type safety** | Frozen dataclasses with runtime validation |
 
+### Table functions and visibility
+
+DuckDB takes a table's scan and write capabilities (projection, filter and sampling pushdown, row
+ids, `has_finalize`, required secrets, partitioning, ordering) only from the named function's entry
+in the schema's function listing. `ReadOnlyCatalogInterface` therefore lists every function a
+`Table` names (`function`, `insert_function`, `update_function`, `delete_function`) whether or not
+you repeat it in the schema's `functions`, and marks each with the protocol 3.3
+`FunctionInfo.visibility`:
+
+| Function | Visibility |
+|---|---|
+| insert, update, delete function | always `"table_only"` |
+| scan `function` | `"table_only"`, unless `Table(expose_scan=True)` or the class is also in a schema's `functions` |
+| anything else in a schema's `functions` | public |
+
+A `"table_only"` function backs its tables but is not a SQL function: it is absent from
+`duckdb_functions()` and `SELECT * FROM cat.main.items_scan()` fails. To let users call a scan
+directly as well, set `expose_scan`:
+
+```python test="skip"
+Schema(
+    path=["main"],
+    tables=[
+        Table(name="items", function=ItemsScan, update_function=ItemsUpdate),  # items_scan hidden
+        Table(name="labels", function=LabelsScan, expose_scan=True),           # labels_scan() callable
+    ],
+)
+```
+
+The Python `Client` can still call any function by name (`Client.table_function`), table-only or not.
+A hand-written `CatalogInterface` that builds its own `FunctionInfo` listing sets `visibility`
+itself (`FUNCTION_VISIBILITY_TABLE_ONLY` from `vgi.catalog`) and must list every function its tables
+return from `table_scan_function_get` / `table_*_function_get`.
+
 ### Writable tables
 
 A `Table` can declare `insert_function`, `update_function` and `delete_function` (table in-out
@@ -714,12 +749,12 @@ UPDATE and DELETE identify rows by the row-id column, which DuckDB reads as a *v
 table's scan `function` must therefore:
 
 1. emit a row-id column, built with `row_id_field()` (`rowid BIGINT`, metadata key `is_row_id`);
-2. declare `projection_pushdown = True` in its `Meta` and honour `params.output_schema`;
-3. be listed in the `functions` of the table's `Schema`, which is how DuckDB learns (2).
+2. declare `projection_pushdown = True` in its `Meta` and honour `params.output_schema`.
 
-`Table` checks (1) and (2), `Catalog` checks (3); otherwise UPDATE/DELETE would fail with DuckDB's
-"Virtual columns require projection pushdown". Write results never include the row id:
-`write_result_schema` and the batch helpers drop it (`user_columns()` does the same for a schema).
+`Table` checks both; otherwise UPDATE/DELETE would fail with DuckDB's "Virtual columns require
+projection pushdown". DuckDB learns (2) from the scan's function listing, which the catalog sends for
+you (see [Table functions and visibility](#table-functions-and-visibility)). Write results never
+include the row id: `write_result_schema` and the batch helpers drop it (`user_columns()` does the same for a schema).
 `write_count_batch`, `write_rows_batch` and `write_changes_batch` build one mode each.
 
 ### Tables with Explicit Columns

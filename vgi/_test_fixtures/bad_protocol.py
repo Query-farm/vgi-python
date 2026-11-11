@@ -15,11 +15,11 @@ own ``__dict__``, not an inherited attribute — so the redeclaration on this
 subclass's body is what takes effect.
 
 A normal client (Python ``Client`` or the C++ extension) declares
-``protocol_version = "3.2.0"`` and sends it on every request. Because this
+``protocol_version = "3.3.0"`` and sends it on every request. Because this
 worker defaults to ``"99.0.0"``, the major/minor versions differ and the
 dispatch boundary raises ``ProtocolVersionError`` with a directional upgrade
 message that round-trips back to the caller. Tests may override the worker to
-``"3.1.0"`` to exercise the real previous-minor rollout boundary.
+``"3.2.0"`` to exercise the real previous-minor rollout boundary.
 
 Otherwise this is a drop-in replacement for ``vgi-fixture-worker``: it
 inherits every function and the catalog from :class:`ExampleWorker`, so any
@@ -38,7 +38,7 @@ from vgi._test_fixtures.worker import ExampleWorker
 from vgi.protocol import VgiProtocol
 
 # A major-version bump guarantees a mismatch against any real client. Tests can
-# override this with a previous minor (for example 3.1.0 versus 3.2.0) to prove
+# override this with a previous minor (for example 3.2.0 versus 3.3.0) to prove
 # that the production rolling-upgrade boundary is enforced too. Declared on
 # this class body so ``vars(BadProtocol)["protocol_version"]`` resolves to it.
 BAD_PROTOCOL_VERSION = os.environ.get("VGI_BAD_PROTOCOL_VERSION", "99.0.0")

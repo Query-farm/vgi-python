@@ -65,13 +65,13 @@ def row_id_field(name: str = "rowid", type: pa.DataType | None = None) -> pa.Fie
 
     1. emits this field (include it in the table's columns / bind schema),
     2. declares ``projection_pushdown = True`` in its ``Meta`` and honours
-       ``params.output_schema`` (DuckDB asks only for the columns it needs), and
-    3. is listed in the ``functions`` of the table's [`Schema`][vgi.catalog.Schema],
-       which is how DuckDB learns (2).
+       ``params.output_schema`` (DuckDB asks only for the columns it needs).
 
-    Missing any of these, UPDATE/DELETE fail with "Virtual columns require
-    projection pushdown"; [`Table`][vgi.catalog.Table] and
-    [`Catalog`][vgi.catalog.Catalog] reject such declarations at construction.
+    DuckDB learns (2) from the scan's function listing, which the catalog sends
+    automatically (as ``"table_only"`` unless ``Table.expose_scan``). Missing
+    either, UPDATE/DELETE fail with "Virtual columns require projection
+    pushdown"; [`Table`][vgi.catalog.Table] rejects such declarations at
+    construction.
     Row ids must be unique and stable for the life of a statement.
 
     Args:

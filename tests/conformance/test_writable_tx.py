@@ -188,3 +188,31 @@ def test_transaction_hooks_see_the_function_plaintext(connect: Any, token: str) 
         # The hooks saw the plaintext the function saw, not the (sealed, on HTTP) wire bytes.
         assert events[0]["tx_id"] == events[1]["tx_id"] == current["tx_id"]
         assert len({events[0]["tx_id"], events[2]["tx_id"], events[4]["tx_id"]}) == 3
+
+
+def test_scan_function_listing(connect: Any) -> None:
+    """Mirror of ``writable_tx/scan_function_listing.test`` at the protocol level (3.3).
+
+    items_scan and items_update are listed (DuckDB needs their capabilities)
+    but table_only; labels_scan is exposed. Every one stays callable by name
+    through the Python client.
+    """
+    from vgi.catalog import FUNCTION_VISIBILITY_TABLE_ONLY, SchemaObjectType
+
+    with connect() as client:
+        result = client.catalog_attach(name="txfix", options={}, data_version_spec=None, implementation_version=None)
+    with connect(result.attach_opaque_data) as client:
+        infos = client.schema_contents(
+            attach_opaque_data=result.attach_opaque_data,
+            transaction_opaque_data=None,
+            path=["main"],
+            type=SchemaObjectType.TABLE_FUNCTION,
+        )
+        visibility = {info.name: info.visibility for info in infos}
+        assert visibility["items_scan"] == FUNCTION_VISIBILITY_TABLE_ONLY
+        assert visibility["items_update"] == FUNCTION_VISIBILITY_TABLE_ONLY
+        assert visibility["labels_scan"] in (None, "public")
+        items_scan = next(info for info in infos if info.name == "items_scan")
+        assert items_scan.projection_pushdown is True
+        assert isinstance(_table(client, "labels_scan"), list)
+        assert isinstance(_table(client, "items_scan"), list)

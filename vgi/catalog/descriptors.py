@@ -296,11 +296,10 @@ class Table:
             column (a field built with
             [`row_id_field`][vgi.write_results.row_id_field]), (2) declare
             ``projection_pushdown = True`` in its ``Meta`` and honour
-            ``params.output_schema``, and (3) be listed in the ``functions`` of
-            this table's [`Schema`][vgi.catalog.Schema], which is how DuckDB
-            learns (2). (1) and (2) are checked here, (3) by
-            [`Catalog`][vgi.catalog.Catalog]; without them UPDATE fails with
-            DuckDB's "Virtual columns require projection pushdown".
+            ``params.output_schema``. Both are checked here; without them
+            UPDATE fails with DuckDB's "Virtual columns require projection
+            pushdown". DuckDB learns (2) from the scan's function listing,
+            which the catalog sends automatically (see ``expose_scan``).
         delete_function: [`TableInOutGenerator`][] class backing DELETE. It
             receives the row-id column of each deleted row. Same scan
             requirements as ``update_function``. ``None`` means DELETE is
@@ -370,6 +369,14 @@ class Table:
             a ``function=`` table inlines a fixed scan redirect.
         comment: Optional table comment.
         tags: Optional metadata tags.
+        expose_scan: Protocol 3.3. Whether the scan ``function`` is also an
+            ordinary SQL-callable table function. Every function a table names
+            (scan, insert, update, delete) is listed automatically so DuckDB
+            has its capabilities; write functions are always listed
+            ``"table_only"`` (not in ``duckdb_functions()``, not callable), and
+            so is the scan unless this is ``True`` or the scan class is also
+            registered in a [`Schema`][vgi.catalog.Schema]'s ``functions``.
+            Default ``False``. Requires ``function=``.
 
     """
 
@@ -403,12 +410,18 @@ class Table:
     scan_planning: str = SCAN_PLANNING_BIND
     comment: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
+    expose_scan: bool = False
 
     def __post_init__(self) -> None:
         """Validate configuration and constraint column names."""
         # Validate mutually exclusive options
         if self.columns is None and self.function is None:
             raise ValueError(f"Table '{self.name}': must specify either 'columns' or 'function'")
+        if self.expose_scan and self.function is None:
+            raise ValueError(
+                f"Table '{self.name}': expose_scan=True requires function=; a columns= table's scan comes "
+                "from table_scan_function_get, so register that function in the schema's functions instead"
+            )
         if self.scan_planning not in SCAN_PLANNING_MODES:
             raise ValueError(
                 f"Table '{self.name}': scan_planning must be one of {sorted(SCAN_PLANNING_MODES)}, "
@@ -885,7 +898,12 @@ class Schema:
         tags: Optional metadata tags.
         tables: Sequence of Table definitions.
         views: Sequence of View definitions.
-        functions: Sequence of Function classes (scalar, table, or aggregate).
+        functions: Sequence of Function classes (scalar, table, or aggregate),
+            published as ordinary SQL-callable functions. The functions the
+            tables name need not be repeated here: they are listed
+            automatically (see [`Table`][vgi.catalog.Table] ``expose_scan``),
+            and a scan listed here is public. A write function is always
+            table-only, listed here or not.
         macros: Sequence of Macro definitions.
         indexes: Sequence of Index definitions.
 
@@ -927,7 +945,15 @@ class Schema:
             CatalogFunctionType.TABLE: 0,
             CatalogFunctionType.TABLE_BUFFERING: 0,
         }
-        for func in self.functions:
+        # Count the functions the tables name too: the catalog lists them
+        # (protocol 3.3, see Table.expose_scan), and a zero would make the
+        # client skip the listing that carries their capabilities.
+        listed: list[type] = list(self.functions)
+        for table in self.tables:
+            for func in (table.function, table.insert_function, table.update_function, table.delete_function):
+                if func is not None and func not in listed:
+                    listed.append(func)
+        for func in listed:
             function_counts[func.get_metadata().function_type] += 1
         return SchemaInfo(
             path=list(self.path),
@@ -1028,28 +1054,6 @@ class Catalog:
                 )
 
         self._validate_global_functions()
-        self._validate_row_id_scans_listed()
-
-    def _validate_row_id_scans_listed(self) -> None:
-        """Require the scan of every UPDATE/DELETE table to be listed in its schema's ``functions``.
-
-        DuckDB learns that a scan supports projection pushdown -- which it
-        needs to request the row-id virtual column -- from the function's
-        listing in the table's schema. An unlisted scan otherwise surfaces only
-        as DuckDB's "Virtual columns require projection pushdown" on UPDATE.
-        """
-        for schema in self.schemas:
-            for table in schema.tables:
-                if table.function is None or (table.update_function is None and table.delete_function is None):
-                    continue
-                if table.function not in schema.functions:
-                    raise ValueError(
-                        f"Catalog '{self.name}': table {schema_path_display(schema.path)}.{table.name} has an "
-                        f"update_function or delete_function, so its scan function "
-                        f"'{table.function.get_metadata().name}' must also be listed in the functions of schema "
-                        f"{schema_path_display(schema.path)} (that listing is how DuckDB learns the scan supports "
-                        f"the projection pushdown its row-id column needs)."
-                    )
 
     def _validate_global_functions(self) -> None:
         """Validate ``global_functions`` / ``global_function_prefix``.

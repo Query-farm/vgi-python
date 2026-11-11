@@ -525,8 +525,10 @@ CATALOG = Catalog(
     schemas=[
         Schema(
             path=["main"],
-            # items_scan is listed so DuckDB sees its projection pushdown (rowid needs it).
-            functions=[ItemsScan, Reset, WhoAmI, CurrentTx, Events, TagTx],
+            # Protocol 3.3 fixture contract: items_scan and items_update are listed
+            # automatically as table_only (DuckDB still sees items_scan's projection
+            # pushdown, which rowid needs); labels_scan is exposed as a SQL function.
+            functions=[Reset, WhoAmI, CurrentTx, Events, TagTx],
             tables=[
                 Table(
                     name="items",
@@ -535,7 +537,12 @@ CATALOG = Catalog(
                     write_result_modes={"update": "changes"},
                     constraints=_constraints("items", ["id", "name"], "id"),
                 ),
-                Table(name="labels", function=LabelsScan, constraints=_constraints("labels", ["id"], "id")),
+                Table(
+                    name="labels",
+                    function=LabelsScan,
+                    expose_scan=True,
+                    constraints=_constraints("labels", ["id"], "id"),
+                ),
             ],
         )
     ],

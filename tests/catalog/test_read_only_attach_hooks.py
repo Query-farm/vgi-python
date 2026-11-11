@@ -242,10 +242,9 @@ class TestRowIdScanValidation:
             Table(name="t", function=_scan(pushdown=False, rowid=True), delete_function=_Update)
 
     def test_scan_not_listed_in_schema(self) -> None:
-        """Scan not listed in schema."""
+        """A scan left out of the schema's functions is accepted: protocol 3.3 lists it as table_only."""
         table = Table(name="t", function=_scan(pushdown=True, rowid=True), update_function=_Update)
-        with pytest.raises(ValueError, match="must also be listed in the functions"):
-            Catalog(name="c", schemas=[Schema(path=["main"], tables=[table])])
+        Catalog(name="c", schemas=[Schema(path=["main"], tables=[table])])
 
     def test_read_only_and_insert_only_tables_unaffected(self) -> None:
         """Read only and insert only tables unaffected."""

@@ -8,6 +8,9 @@ catalog interfaces in VGI workers, enabling DuckDB ATTACH support.
 
 from vgi.catalog.attach_option import attach_options, pack_attach_options, unpack_attach_options
 from vgi.catalog.catalog_interface import (
+    FUNCTION_VISIBILITIES,
+    FUNCTION_VISIBILITY_PUBLIC,
+    FUNCTION_VISIBILITY_TABLE_ONLY,
     AttachCatalogInfo,
     AttachOpaqueData,
     CatalogAttachResult,
@@ -112,6 +115,9 @@ from vgi.write_results import (
 )
 
 __all__ = [
+    "FUNCTION_VISIBILITIES",
+    "FUNCTION_VISIBILITY_PUBLIC",
+    "FUNCTION_VISIBILITY_TABLE_ONLY",
     "ColumnMetadata",
     "column_metadata",
     "validate_column_metadata",

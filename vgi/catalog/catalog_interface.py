@@ -9,7 +9,7 @@ catalog interfaces in VGI workers, enabling DuckDB ATTACH support.
 import dataclasses
 import threading
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import InitVar, dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -477,6 +477,17 @@ SCAN_PLANNING_BIND = "bind"
 SCAN_PLANNING_FILTERED = "filtered"
 """Protocol 3.2 ``TableInfo.scan_planning``: resolve it per scan with the query's filters."""
 SCAN_PLANNING_MODES = frozenset({SCAN_PLANNING_BIND, SCAN_PLANNING_FILTERED})
+
+FUNCTION_VISIBILITY_PUBLIC = "public"
+"""Protocol 3.3 ``FunctionInfo.visibility``: an ordinary catalog function (also what null means)."""
+FUNCTION_VISIBILITY_TABLE_ONLY = "table_only"
+"""Protocol 3.3 ``FunctionInfo.visibility``: listed only so a table can resolve it.
+
+The client keeps the description (capabilities, ``has_finalize``, secrets, ...) for
+the tables that name the function, but does not expose it to SQL: it is absent
+from ``duckdb_functions()`` and cannot be called, not even fully qualified.
+"""
+FUNCTION_VISIBILITIES = frozenset({FUNCTION_VISIBILITY_PUBLIC, FUNCTION_VISIBILITY_TABLE_ONLY})
 
 
 @reject_removed_arguments(
@@ -949,6 +960,15 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
         required_settings: Settings required by the function.
         required_secrets: Secrets required by the function (each entry has
             secret_type, optional secret_name, optional scope).
+        visibility: Protocol 3.3. ``"public"`` (``None`` means the same) for an
+            ordinary catalog function, or ``"table_only"`` for a function that
+            is listed only so the tables naming it (as scan, insert, update or
+            delete function) get its capabilities; the client does not expose
+            a table-only function to SQL. A plain nullable utf8 column; the
+            DuckDB extension rejects any other value at ATTACH.
+            [`ReadOnlyCatalogInterface`][vgi.catalog.ReadOnlyCatalogInterface]
+            sets it automatically (see [`Table`][vgi.catalog.Table]
+            ``expose_scan``).
     """
 
     function_type: FunctionType
@@ -1022,8 +1042,15 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
 
     required_secrets: list[SecretLookupEntry] = field(default_factory=list)
 
+    # Protocol 3.3. Plain nullable utf8 (not a dictionary/enum type), so a peer
+    # that adds a value later does not break this one's decoder; null = public.
+    visibility: str | None = None
+
     def __post_init__(self) -> None:
         """Validate scalar-only argument monotonicity claims."""
+        # ``visibility`` is deliberately not validated here: the client is the
+        # authority (the DuckDB extension rejects an unknown value at ATTACH,
+        # naming the function), and test workers must be able to send one.
         if self.argument_monotonicity is None:
             return
         if self.function_type is not FunctionType.SCALAR:
@@ -3299,6 +3326,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
     _index_registry: "dict[tuple[SchemaKey, str], Index] | None" = None
     # Function listings by (schema, listing type), filled in by ``_function_infos``.
     _function_info_cache: "dict[tuple[SchemaKey, SchemaObjectType], tuple[FunctionInfo, ...]] | None" = None
+    # (schema, function class) pairs listed with visibility "table_only" (protocol 3.3).
+    _table_only_functions: "frozenset[tuple[SchemaKey, type]]" = frozenset()
     # Lazy registry build is one-time but the fixture HTTP server is
     # multi-threaded and shares one catalog instance, so concurrent
     # first-requests can race the build. Serialize it under a lock and flip
@@ -3388,6 +3417,7 @@ class ReadOnlyCatalogInterface(CatalogInterface):
                     _register_macro(schema_key, macro)
                 for index in schema.indexes:
                     _register_index(schema_key, index)
+            self._table_only_functions = self._list_table_functions(self.catalog, _register_function)
             # Ownership and FK targets need the schema and every table; the
             # extension rejects the table at ATTACH on either failure.
             records = {}
@@ -3417,6 +3447,56 @@ class ReadOnlyCatalogInterface(CatalogInterface):
         # iterate these registries (they are fully populated and no longer
         # mutated).
         self._registries_built = True
+
+    def _list_table_functions(
+        self, catalog: "Catalog", register: Callable[[SchemaKey, type], None]
+    ) -> "frozenset[tuple[SchemaKey, type]]":
+        """Add every function a table names to the listing; return the table-only ones.
+
+        Protocol 3.3 rule, applied for the author: the client takes a table's
+        scan and write capabilities (projection/filter pushdown, row ids,
+        ``has_finalize``, required secrets, ...) only from the function's entry
+        in ``catalog_schema_contents_functions``, so each one is listed:
+
+        * a function the author did not register in any schema's ``functions``
+          is added to the table's schema;
+        * write functions (insert/update/delete) are always ``"table_only"``;
+        * a scan the author did not register is ``"table_only"`` unless a
+          table naming it sets ``expose_scan=True``; a scan the author
+          registered as an ordinary function stays public.
+
+        Called with the function registry populated from every schema's
+        ``functions``, under ``_build_lock``.
+        """
+        auto_scans: dict[tuple[SchemaKey, type], bool] = {}  # -> exposed by some table
+        table_only: set[tuple[SchemaKey, type]] = set()
+
+        def locate(schema_key: SchemaKey, func_cls: type) -> tuple[SchemaKey, bool]:
+            """Where ``func_cls`` is listed, registering it in ``schema_key`` if nowhere; True if added."""
+            name = func_cls.get_metadata().name  # type: ignore[attr-defined]
+            if func_cls in (self._function_registry or {}).get((schema_key, name.lower()), ()):
+                return schema_key, (schema_key, func_cls) in auto_scans
+            found = self._schema_for_function(func_cls, name)
+            if found is not None:
+                found_key = schema_path_key(found)
+                return found_key, (found_key, func_cls) in auto_scans
+            register(schema_key, func_cls)
+            return schema_key, True
+
+        for schema in catalog.schemas:
+            schema_key = schema_path_key(schema.path)
+            for table in schema.tables:
+                if table.function is not None:
+                    key, added = locate(schema_key, table.function)
+                    if added:
+                        pair = (key, table.function)
+                        auto_scans[pair] = auto_scans.get(pair, False) or table.expose_scan
+                for write_func in (table.insert_function, table.update_function, table.delete_function):
+                    if write_func is not None:
+                        key, _ = locate(schema_key, write_func)
+                        table_only.add((key, write_func))
+        table_only.update(pair for pair, exposed in auto_scans.items() if not exposed)
+        return frozenset(table_only)
 
     def _schema_for_function(self, func_cls: type, name: str) -> SchemaPath | None:
         """Find which schema ``func_cls`` (registered as ``name``) actually lives in.
@@ -4078,6 +4158,8 @@ class ReadOnlyCatalogInterface(CatalogInterface):
             for func_cls in func_classes:
                 func_info = self._function_to_info(func_cls, schema_path)
                 if func_info.function_type in wanted:
+                    if (path_key, func_cls) in self._table_only_functions:
+                        func_info = dataclasses.replace(func_info, visibility=FUNCTION_VISIBILITY_TABLE_ONLY)
                     infos.append(func_info)
         # Concurrent first requests may both build it; keep whichever landed first.
         return self._function_info_cache.setdefault(key, tuple(infos))

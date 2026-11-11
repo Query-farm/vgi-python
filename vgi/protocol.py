@@ -3606,7 +3606,7 @@ class VgiProtocol(Protocol):
     # ``VgiProtocol``, Java and C# ``VgiService``, Go the framework default
     # ``Service``, TypeScript ``vgi`` -- so no client could address them all.
     protocol_name: ClassVar[str] = "vgi.v3"
-    protocol_version: ClassVar[str] = "3.2.0"
+    protocol_version: ClassVar[str] = "3.3.0"
 
     def bind(self, request: BindRequest) -> BindResponse:
         """Resolve output schema and validate arguments."""
