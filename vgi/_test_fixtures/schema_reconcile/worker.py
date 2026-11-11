@@ -31,7 +31,7 @@ import sqlite3
 import sys
 import threading
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import pyarrow as pa
 from vgi_rpc.rpc import OutputCollector
@@ -270,12 +270,43 @@ def _next_int_rowid(spec: TableSpec) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _all_nullable_type(t: pa.DataType) -> pa.DataType:
+    """``t`` with every nested child field nullable (map keys stay non-nullable)."""
+    if isinstance(t, pa.MapType):
+        return cast(pa.DataType, pa.map_(t.key_type, _all_nullable_type(t.item_type), t.keys_sorted))
+    if isinstance(t, pa.StructType):
+        return cast(pa.DataType, pa.struct([_all_nullable_field(t.field(i)) for i in range(t.num_fields)]))
+    if isinstance(t, pa.LargeListType):
+        return cast(pa.DataType, pa.large_list(_all_nullable_field(t.value_field)))
+    if isinstance(t, pa.FixedSizeListType):
+        return cast(pa.DataType, pa.list_(_all_nullable_field(t.value_field), t.list_size))
+    if isinstance(t, pa.ListType):
+        return cast(pa.DataType, pa.list_(_all_nullable_field(t.value_field)))
+    return t
+
+
+def _all_nullable_field(f: pa.Field[Any]) -> pa.Field[Any]:
+    return pa.field(f.name, _all_nullable_type(f.type), nullable=True, metadata=f.metadata)
+
+
+def _write_input_schema(declared: pa.Schema) -> pa.Schema:
+    """What the extension sends a write function: the declared types, every field nullable.
+
+    The extension marks every write-input field nullable at every level (vgi
+    src/storage/vgi_physical_write.cpp NullableWriteInputSchema): NOT NULL is the
+    worker's to enforce (TypedValueBatch below), and a NULL in a non-nullable
+    field would make an invalid Arrow batch.
+    """
+    return pa.schema([_all_nullable_field(f) for f in declared], metadata=cast(Any, declared.metadata))
+
+
 def _strict_assert_schema(label: str, actual: pa.Schema, expected: pa.Schema) -> None:
     """Hard-fail if ``actual`` doesn't bit-for-bit equal ``expected``.
 
     The vgi C++ ``ReconcileBatchToSchema`` helper is what makes these
-    schemas equal — DuckDB on its own emits batches with all-nullable
-    fields, ``timestamp[us, tz=session]`` for TZ timestamps, and so on.
+    schemas equal — DuckDB on its own emits ``timestamp[us, tz=session]``
+    for TZ timestamps, and so on. Write inputs are compared against
+    ``_write_input_schema`` (declared types, every field nullable).
     A mismatch here means reconciliation regressed.
     """
     if actual.equals(expected, check_metadata=False):
@@ -341,7 +372,7 @@ def _generate_rowid(spec: TableSpec, payload: dict[str, Any]) -> Any:
 
 
 class SchemaReconcileInsert(TableInOutGenerator[None, None]):
-    """INSERT handler — asserts the input batch matches USER_SCHEMA exactly."""
+    """INSERT handler — asserts the input batch is USER_SCHEMA with every field nullable."""
 
     class Meta:
         name = "schema_reconcile_insert"
@@ -361,7 +392,7 @@ class SchemaReconcileInsert(TableInOutGenerator[None, None]):
     ) -> None:
         assert params.init_call is not None
         spec = _spec_from_args(params.init_call.bind_call.arguments.positional)
-        _strict_assert_schema(f"INSERT[{spec.name}]", batch.schema, USER_SCHEMA)
+        _strict_assert_schema(f"INSERT[{spec.name}]", batch.schema, _write_input_schema(USER_SCHEMA))
         names = [f.name for f in USER_SCHEMA]
         for i in range(batch.num_rows):
             payload = _row_to_dict(batch, i, names)
@@ -400,7 +431,7 @@ class SchemaReconcileUpdate(TableInOutGenerator[None, None]):
             raise ValueError(f"[schema_reconcile] UPDATE[{spec.name}] missing rowid column; got: {cols}")
         full = spec.table_schema
         for f in batch.schema:
-            expected = full.field(full.get_field_index(f.name))
+            expected = _all_nullable_field(full.field(full.get_field_index(f.name)))
             if f.nullable != expected.nullable or not f.type.equals(expected.type):
                 raise ValueError(
                     f"[schema_reconcile] UPDATE[{spec.name}] field {f.name!r} mismatch "
@@ -440,7 +471,7 @@ class SchemaReconcileDelete(TableInOutGenerator[None, None]):
     ) -> None:
         assert params.init_call is not None
         spec = _spec_from_args(params.init_call.bind_call.arguments.positional)
-        _strict_assert_schema(f"DELETE[{spec.name}]", batch.schema, spec.delete_input_schema)
+        _strict_assert_schema(f"DELETE[{spec.name}]", batch.schema, _write_input_schema(spec.delete_input_schema))
         n = 0
         for i in range(batch.num_rows):
             rid = batch.column("rowid")[i].as_py()
