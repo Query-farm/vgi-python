@@ -28,6 +28,7 @@ Registered as the ``vgi-fixture-versioned-tables-worker`` entry point.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import re
 import uuid
 from dataclasses import dataclass
@@ -39,6 +40,7 @@ from vgi_rpc import ArrowSerializableDataclass
 from vgi_rpc.rpc import OutputCollector
 
 from vgi.catalog import (
+    FUNCTION_VISIBILITY_TABLE_ONLY,
     AttachOpaqueData,
     CatalogAttachResult,
     CatalogDataVersionRelease,
@@ -499,6 +501,13 @@ class VersionedTablesCatalog(ReadOnlyCatalogInterface):
             return []
         if type == SchemaObjectType.TABLE:
             return [self._make_table_info(n, t) for n, t in sorted(self._tables_for(attach_opaque_data).items())]
+        if type == SchemaObjectType.TABLE_FUNCTION:
+            # Protocol 3.3: every scan a table names must be listed; these back
+            # tables only, so they are table_only (absent from duckdb_functions()).
+            return [
+                dataclasses.replace(self._function_to_info(cls, ["main"]), visibility=FUNCTION_VISIBILITY_TABLE_ONLY)
+                for cls in self.functions
+            ]
         return []
 
     def table_get(

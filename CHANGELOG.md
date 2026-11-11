@@ -17,4 +17,7 @@
   functions disappear from `duckdb_functions()` and cannot be called from SQL.
 - The requirement to repeat an UPDATE/DELETE table's scan in the schema's `functions` is gone (it is listed for you;
   a scan repeated there stays public).
+- **Hand-written catalogs** (custom `schema_contents` / `table_scan_function_get`) must list every function their
+  tables name in the function listing, or the extension refuses the scan with a Binder Error naming the function. Set
+  `visibility=FUNCTION_VISIBILITY_TABLE_ONLY` on the ones that should not be SQL functions.
 - `Schema.to_schema_info` counts the tables' functions in `estimated_object_count`.
