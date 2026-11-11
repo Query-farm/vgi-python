@@ -41,11 +41,8 @@ _ROWID_FIELD = pa.field("rowid", pa.int64(), metadata={b"is_row_id": b""})
 
 def _parse_write_options(bind_call: BindRequest) -> dict[str, str | list[str]]:
     """Parse the write_options RecordBatch from the bind call's named arguments."""
-    defaults: dict[str, str | list[str]] = {
-        "result_mode": "count",
-        "on_conflict": "throw",
-        "on_conflict_columns": [],
-    }
+    # Protocol 3.3: the batch carries only result_mode.
+    defaults: dict[str, str | list[str]] = {"result_mode": "count"}
     if not (bind_call.arguments and bind_call.arguments.named):
         return defaults
     val = bind_call.arguments.named.get("write_options")
@@ -58,10 +55,6 @@ def _parse_write_options(bind_call: BindRequest) -> dict[str, str | list[str]]:
     result = dict(defaults)
     if "result_mode" in batch.schema.names:
         result["result_mode"] = coerce_write_result_mode(batch.column("result_mode")[0].as_py())
-    if "on_conflict" in batch.schema.names:
-        result["on_conflict"] = batch.column("on_conflict")[0].as_py()
-    if "on_conflict_columns" in batch.schema.names:
-        result["on_conflict_columns"] = batch.column("on_conflict_columns")[0].as_py()
     return result
 
 

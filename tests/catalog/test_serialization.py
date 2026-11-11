@@ -292,7 +292,7 @@ class TestTableInfoSerialization:
         """``scan_function`` IPC bytes round-trip through TableInfo serialize/deserialize.
 
         The C++ extension reads this field (when populated) and skips the
-        per-bind ``catalog_table_scan_function_get`` RPC.
+        per-bind ``catalog_table_scan_branches_get`` RPC.
         """
         columns_schema = schema(id=pa.int64())
         columns_bytes = SerializedSchema(columns_schema.serialize().to_pybytes())

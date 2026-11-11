@@ -16,6 +16,12 @@ Three pre-defined tables are exposed under the ``main`` schema:
   Used to exercise the ``count``-only RETURNING rejection path.
 * ``items_insert_only`` — supports INSERT only (no UPDATE/DELETE/RETURNING).
 
+``CREATE TABLE`` (and CTAS) in ``main`` adds tables of its own to the attach
+(columns of type INTEGER, BIGINT, VARCHAR, DOUBLE or BOOLEAN; scan and INSERT,
+no row id), and ``DROP TABLE`` removes them. ``catalog_table_create`` reports
+``created`` (protocol 3.3): false when ``IF NOT EXISTS`` found the table, which
+CTAS then leaves unchanged. The write functions are listed ``table_only``.
+
 State is held module-global, keyed by ``attach_opaque_data``. Per the
 "pooled workers don't share per-attach state" gotcha this means the fixture
 only behaves consistently when a single subprocess serves all queries for an
@@ -30,6 +36,7 @@ Registered as the ``vgi-fixture-simple-writable-worker`` entry point.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import os
 import sqlite3
 import tempfile
@@ -44,8 +51,10 @@ from vgi_rpc import ArrowSerializableDataclass, Transient
 from vgi_rpc.rpc import OutputCollector
 
 from vgi.catalog import (
+    FUNCTION_VISIBILITY_TABLE_ONLY,
     AttachOpaqueData,
     CatalogAttachResult,
+    OnConflict,
     ReadOnlyCatalogInterface,
     ScanFunctionResult,
     SchemaInfo,
@@ -55,6 +64,7 @@ from vgi.catalog import (
     TransactionOpaqueData,
 )
 from vgi.catalog.descriptors import Catalog, Schema
+from vgi.catalog.layout import TableLayout
 from vgi.invocation import BindResponse, GlobalInitResponse
 from vgi.protocol import ClientCapabilities
 from vgi.schema_utils import schema as build_schema
@@ -70,6 +80,7 @@ if TYPE_CHECKING:
         MacroInfo,
         ViewInfo,
     )
+    from vgi.typed_values import TypedValueBatch
 
 __all__ = [
     "SimpleWritableCatalog",
@@ -140,6 +151,12 @@ def _table_supports_update_delete(name: str) -> bool:
 
 
 _DB_DIR = os.path.join(tempfile.gettempdir(), "vgi-simple-writable")
+#: Per-attach registry of tables created by ``catalog_table_create``: lowercase
+#: name -> the user columns as a serialized Arrow schema. Their rows live in a
+#: SQLite table of the same name.
+_CREATED = "__vgi_created_tables"
+#: Per-attach catalog version, bumped by every CREATE/DROP TABLE.
+_VERSION = "__vgi_catalog_version"
 _INIT_LOCK = threading.Lock()
 _INITIALIZED: set[bytes] = set()
 
@@ -163,6 +180,9 @@ def _ensure_init(attach_opaque_data: bytes) -> None:
             for tname, tschema in _table_specs().items():
                 cols = ", ".join(f'"{f.name}" {_sql_type(f.type)}' for f in tschema)
                 conn.execute(f'CREATE TABLE IF NOT EXISTS "{tname}" ({cols})')
+            conn.execute(f'CREATE TABLE IF NOT EXISTS "{_CREATED}" (name TEXT PRIMARY KEY, columns BLOB NOT NULL)')
+            conn.execute(f'CREATE TABLE IF NOT EXISTS "{_VERSION}" (one INTEGER PRIMARY KEY, version INTEGER NOT NULL)')
+            conn.execute(f'INSERT OR IGNORE INTO "{_VERSION}" (one, version) VALUES (1, 1)')
         finally:
             conn.close()
         _INITIALIZED.add(attach_opaque_data)
@@ -188,11 +208,38 @@ def _bare_name(qualified: str) -> str:
     return qualified.split(".", 1)[1] if "." in qualified else qualified
 
 
-def _get_user_schema(qualified: str) -> pa.Schema:
-    bare = _bare_name(qualified)
-    if bare not in _table_specs():
-        raise ValueError(f"Unknown table {qualified!r}; available: {sorted(_table_specs())}")
-    return _table_specs()[bare]
+def _created_tables(attach_opaque_data: bytes) -> dict[str, pa.Schema]:
+    """The tables ``catalog_table_create`` added to this attach (lowercase name -> user columns)."""
+    with _connect(attach_opaque_data) as conn:
+        rows = conn.execute(f'SELECT name, columns FROM "{_CREATED}" ORDER BY name').fetchall()
+    return {name: pa.ipc.read_schema(pa.py_buffer(columns)) for name, columns in rows}
+
+
+def _catalog_version(attach_opaque_data: bytes) -> int:
+    with _connect(attach_opaque_data) as conn:
+        row = conn.execute(f'SELECT version FROM "{_VERSION}" WHERE one = 1').fetchone()
+    return int(row[0]) if row else 1
+
+
+def _get_user_schema(qualified: str, attach_opaque_data: bytes) -> pa.Schema:
+    bare = _bare_name(qualified).lower()
+    if bare in _table_specs():
+        return _table_specs()[bare]
+    created = _created_tables(attach_opaque_data)
+    if bare in created:
+        return created[bare]
+    raise ValueError(f"Unknown table {qualified!r}; available: {sorted([*_table_specs(), *created])}")
+
+
+def _is_created(qualified: str) -> bool:
+    return _bare_name(qualified).lower() not in _table_specs()
+
+
+def _to_arrow(values: list[Any], dtype: pa.DataType) -> pa.Array[Any]:
+    """SQLite stores BOOLEAN as 0/1; everything else maps directly."""
+    if pa.types.is_boolean(dtype):
+        values = [None if v is None else bool(v) for v in values]
+    return pa.array(values, type=dtype)
 
 
 # ============================================================================
@@ -232,7 +279,8 @@ def _attach_opaque_data_from_process(params: ProcessParams[None]) -> bytes:
 
 def _parse_write_options(params: BindParams[None] | ProcessParams[None]) -> dict[str, Any]:
     """Decode the write_options batch passed in named arguments."""
-    defaults: dict[str, Any] = {"result_mode": "count", "on_conflict": "throw", "on_conflict_columns": []}
+    # Protocol 3.3: the batch carries only result_mode.
+    defaults: dict[str, Any] = {"result_mode": "count"}
     if isinstance(params, BindParams):
         bind_call = params.bind_call
     else:
@@ -249,10 +297,6 @@ def _parse_write_options(params: BindParams[None] | ProcessParams[None]) -> dict
     out = dict(defaults)
     if "result_mode" in batch.schema.names:
         out["result_mode"] = coerce_write_result_mode(batch.column("result_mode")[0].as_py())
-    if "on_conflict" in batch.schema.names:
-        out["on_conflict"] = batch.column("on_conflict")[0].as_py()
-    if "on_conflict_columns" in batch.schema.names:
-        out["on_conflict_columns"] = batch.column("on_conflict_columns")[0].as_py()
     return out
 
 
@@ -278,7 +322,7 @@ def _emit_changes(
 
 def _user_schema_from_bind(params: BindParams[None]) -> pa.Schema:
     qualified = _qualified_from_bind(params)
-    return _get_user_schema(qualified)
+    return _get_user_schema(qualified, _attach_opaque_data_from_bind(params))
 
 
 # ============================================================================
@@ -297,9 +341,10 @@ class SimpleScan(TableFunctionGenerator[None, "_ScanState"]):
     @classmethod
     def on_bind(cls, params: BindParams[None]) -> BindResponse:
         qualified = _qualified_from_bind(params)
-        user_schema = _get_user_schema(qualified)
-        # Output schema is user_schema + rowid so UPDATE/DELETE can reference rows.
-        fields = list(user_schema) + [_ROWID_FIELD]
+        user_schema = _get_user_schema(qualified, _attach_opaque_data_from_bind(params))
+        # Output schema is user_schema + rowid so UPDATE/DELETE can reference rows;
+        # created tables have no row id (insert only).
+        fields = list(user_schema) + ([] if _is_created(qualified) else [_ROWID_FIELD])
         return BindResponse(output_schema=pa.schema(fields))
 
     @classmethod
@@ -335,7 +380,7 @@ class SimpleScan(TableFunctionGenerator[None, "_ScanState"]):
             for i in range(n_cols):
                 col_arrays[i].append(row[i])
         state.cursor = len(state.rows)
-        arrow_arrays = [pa.array(col, type=state.schema.field(i).type) for i, col in enumerate(col_arrays)]
+        arrow_arrays = [_to_arrow(col, state.schema.field(i).type) for i, col in enumerate(col_arrays)]
         out.emit(pa.RecordBatch.from_arrays(arrow_arrays, schema=state.schema))
         out.finish()
 
@@ -375,7 +420,7 @@ class SimpleInsert(TableInOutGenerator[None, None]):
         qualified = _qualified_from_process(params)
         attach_opaque_data = _attach_opaque_data_from_process(params)
         bare = _bare_name(qualified)
-        user_schema = _get_user_schema(qualified)
+        user_schema = _get_user_schema(qualified, attach_opaque_data)
         result_mode: WriteResultMode = _parse_write_options(params)["result_mode"]
 
         col_names = [f.name for f in user_schema]
@@ -428,7 +473,7 @@ class SimpleUpdate(TableInOutGenerator[None, None]):
         qualified = _qualified_from_process(params)
         attach_opaque_data = _attach_opaque_data_from_process(params)
         bare = _bare_name(qualified)
-        user_schema = _get_user_schema(qualified)
+        user_schema = _get_user_schema(qualified, attach_opaque_data)
         result_mode: WriteResultMode = _parse_write_options(params)["result_mode"]
 
         update_cols = [n for n in batch.schema.names if n != "rowid"]
@@ -489,7 +534,7 @@ class SimpleDelete(TableInOutGenerator[None, None]):
         qualified = _qualified_from_process(params)
         attach_opaque_data = _attach_opaque_data_from_process(params)
         bare = _bare_name(qualified)
-        user_schema = _get_user_schema(qualified)
+        user_schema = _get_user_schema(qualified, attach_opaque_data)
         result_mode: WriteResultMode = _parse_write_options(params)["result_mode"]
 
         user_col_names = [f.name for f in user_schema]
@@ -549,7 +594,7 @@ class BrokenReturningInsert(TableInOutGenerator[None, None]):
         qualified = _qualified_from_process(params)
         attach_opaque_data = _attach_opaque_data_from_process(params)
         bare = _bare_name(qualified)
-        user_schema = _get_user_schema(qualified)
+        user_schema = _get_user_schema(qualified, attach_opaque_data)
 
         col_names = [f.name for f in user_schema]
         cols_sql = ", ".join(f'"{c}"' for c in col_names)
@@ -587,12 +632,17 @@ _CATALOG = Catalog(
 )
 
 
+#: Write functions: listed so DuckDB has their capabilities, never SQL-callable (protocol 3.3).
+_WRITE_FUNCTIONS = frozenset(cls.Meta.name for cls in (SimpleInsert, SimpleUpdate, SimpleDelete, BrokenReturningInsert))
+
+
 class SimpleWritableCatalog(ReadOnlyCatalogInterface):
-    """Function-only catalog whose pre-defined tables live in process memory."""
+    """Function-only catalog whose pre-defined (and created) tables live in a per-attach SQLite file."""
 
     catalog = _CATALOG
     supports_transactions = False
-    catalog_version_frozen = True
+    # CREATE/DROP TABLE change the catalog, so the version is live (see catalog_version).
+    catalog_version_frozen = False
 
     def catalog_attach(
         self,
@@ -615,8 +665,8 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
             attach_opaque_data=attach_opaque_data,
             supports_transactions=False,
             supports_time_travel=False,
-            catalog_version_frozen=True,
-            catalog_version=1,
+            catalog_version_frozen=False,
+            catalog_version=_catalog_version(bytes(attach_opaque_data)),
             attach_opaque_data_required=True,
             default_schema="main",
             settings=[],
@@ -644,6 +694,112 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
         if [component.lower() for component in path] != ["main"]:
             return None
         return SchemaInfo(attach_opaque_data=attach_opaque_data, path=["main"], comment=None, tags={})
+
+    def catalog_version(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        ctx: Any | None = None,
+    ) -> int:
+        del transaction_opaque_data, ctx
+        return _catalog_version(bytes(attach_opaque_data))
+
+    def _build_created_table_info(self, *, name: str, columns: pa.Schema, schema_path: list[str]) -> TableInfo:
+        # No row id: a created table is scan + INSERT only.
+        return TableInfo(
+            comment=None,
+            tags={},
+            name=name,
+            schema_path=schema_path,
+            columns=SerializedSchema(columns.serialize().to_pybytes()),
+            constraints=[],
+            write_result_modes={"insert": "rows"},
+        )
+
+    def _all_table_infos(self, attach_opaque_data: bytes) -> dict[str, TableInfo]:
+        infos = {tn: self._build_table_info(name=tn, schema_path=["main"]) for tn in _table_specs()}
+        for tn, columns in _created_tables(attach_opaque_data).items():
+            infos[tn] = self._build_created_table_info(name=tn, columns=columns, schema_path=["main"])
+        return infos
+
+    # --------- DDL: created tables (CTAS) ---------
+
+    def table_create(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        schema_path: list[str],
+        name: str,
+        columns: SerializedSchema,
+        on_conflict: OnConflict,
+        constraint_definitions: list[bytes],
+        comment: str | None = None,
+        tags: dict[str, str] | None = None,
+        options: TypedValueBatch | None = None,
+        layout: TableLayout | None = None,
+    ) -> bool:
+        """Create a table of the attach; ``False`` when IF NOT EXISTS found one (protocol 3.3)."""
+        del transaction_opaque_data
+        if [component.lower() for component in schema_path] != ["main"]:
+            raise ValueError(f"simple_writable: tables can only be created in schema main, not {schema_path!r}")
+        if constraint_definitions or any(v is not None for v in (comment, tags, options, layout)):
+            raise NotImplementedError("simple_writable: CREATE TABLE supports plain columns only")
+        user_schema = pa.ipc.read_schema(pa.py_buffer(bytes(columns)))
+        if not len(user_schema):
+            raise ValueError("simple_writable: a table needs at least one column")
+        for f in user_schema:
+            _sql_type(f.type)  # rejects an unsupported type before anything changes
+        key = name.lower()
+        attach = bytes(attach_opaque_data)
+        exists = key in _table_specs() or key in _created_tables(attach)
+        if exists:
+            if on_conflict == OnConflict.IGNORE:
+                return False
+            if on_conflict == OnConflict.ERROR or key in _table_specs():
+                raise ValueError(f'simple_writable: Table "{name}" already exists')
+        plain = pa.schema([pa.field(f.name, f.type) for f in user_schema])
+        cols_sql = ", ".join(f'"{f.name}" {_sql_type(f.type)}' for f in plain)
+        with _connect(attach) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if exists:  # REPLACE: the old table and its rows go first
+                conn.execute(f'DROP TABLE IF EXISTS "{key}"')
+            conn.execute(f'CREATE TABLE "{key}" ({cols_sql})')
+            conn.execute(
+                f'INSERT OR REPLACE INTO "{_CREATED}" (name, columns) VALUES (?, ?)',
+                (key, plain.serialize().to_pybytes()),
+            )
+            conn.execute(f'UPDATE "{_VERSION}" SET version = version + 1 WHERE one = 1')
+            conn.execute("COMMIT")
+        return True
+
+    def table_drop(
+        self,
+        *,
+        attach_opaque_data: AttachOpaqueData,
+        transaction_opaque_data: TransactionOpaqueData | None,
+        schema_path: list[str],
+        name: str,
+        ignore_not_found: bool,
+        cascade: bool = False,
+    ) -> None:
+        """Drop a created table (the pre-defined ones cannot be dropped)."""
+        del transaction_opaque_data, cascade
+        key = name.lower()
+        attach = bytes(attach_opaque_data)
+        if [component.lower() for component in schema_path] == ["main"] and key in _table_specs():
+            raise ValueError(f"simple_writable: the pre-defined table {name!r} cannot be dropped")
+        if [component.lower() for component in schema_path] != ["main"] or key not in _created_tables(attach):
+            if ignore_not_found:
+                return
+            raise ValueError(f'simple_writable: Table "{name}" does not exist')
+        with _connect(attach) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(f'DROP TABLE IF EXISTS "{key}"')
+            conn.execute(f'DELETE FROM "{_CREATED}" WHERE name = ?', (key,))
+            conn.execute(f'UPDATE "{_VERSION}" SET version = version + 1 WHERE one = 1')
+            conn.execute("COMMIT")
 
     def _build_table_info(self, *, name: str, schema_path: list[str]) -> TableInfo:
         user_schema = _table_specs()[name]
@@ -674,12 +830,10 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
         at_unit: str | None = None,
         at_value: str | None = None,
     ) -> TableInfo | None:
-        del attach_opaque_data, transaction_opaque_data, at_unit, at_value
+        del transaction_opaque_data, at_unit, at_value
         if [component.lower() for component in schema_path] != ["main"]:
             return None
-        if name.lower() not in _table_specs():
-            return None
-        return self._build_table_info(name=name.lower(), schema_path=["main"])
+        return self._all_table_infos(bytes(attach_opaque_data)).get(name.lower())
 
     def view_get(self, **kwargs: Any) -> None:
         return None
@@ -746,11 +900,22 @@ class SimpleWritableCatalog(ReadOnlyCatalogInterface):
         if [component.lower() for component in path] != ["main"]:
             return []
         if type_enum == SchemaObjectType.TABLE:
-            return [self._build_table_info(name=tn, schema_path=["main"]) for tn in sorted(_table_specs())]
+            infos = self._all_table_infos(bytes(attach_opaque_data))
+            return [infos[tn] for tn in sorted(infos)]
         # Functions, views, etc. — fall through to base which uses the static catalog.
-        return super().schema_contents(  # type: ignore[call-overload, no-any-return]
+        result = super().schema_contents(  # type: ignore[call-overload]
             attach_opaque_data=attach_opaque_data, transaction_opaque_data=transaction_opaque_data, path=path, type=type
         )
+        if type_enum == SchemaObjectType.TABLE_FUNCTION:
+            # Protocol 3.3: write functions are listed (DuckDB needs has_finalize and
+            # their schemas) but table_only: not in duckdb_functions(), not callable.
+            result = [
+                dataclasses.replace(info, visibility=FUNCTION_VISIBILITY_TABLE_ONLY)
+                if info.name in _WRITE_FUNCTIONS
+                else info
+                for info in result
+            ]
+        return result  # type: ignore[no-any-return]
 
     # --------- function dispatch ---------
 

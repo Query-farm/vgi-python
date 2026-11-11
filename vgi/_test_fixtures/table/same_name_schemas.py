@@ -6,8 +6,8 @@ The table-dispatch member of the schema-disambiguation family (see
 ``scalar/same_name.py``, ``table_in_out_same_name.py``, ``aggregate/same_name.py``,
 and ``table/same_name_cached.py`` for the result-cache member). Those probe a
 function called directly (or the result cache); this one probes
-``catalog_table_scan_function_get``/``catalog_table_scan_branches_get`` — the RPC
-pair that tells a client which function backs a *declarative catalog table*.
+``catalog_table_scan_branches_get`` — the RPC (protocol 3.3 removed its
+single-function predecessor) that tells a client which function backs a *declarative catalog table*.
 
 ``test_same_name_table_scan`` is a one-row producer registered under the SAME
 NAME in BOTH the ``main`` and ``data`` schemas of the ``example`` catalog, each

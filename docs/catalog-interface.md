@@ -169,7 +169,7 @@ Enum for filtering objects in `schema_contents()`:
 
 ### ScanFunctionResult
 
-Result from `table_scan_function_get()` that tells the VGI DuckDB extension which DuckDB function to call to obtain table data. This enables catalogs to delegate scanning to any DuckDB function (e.g., `read_parquet`, `iceberg_scan`, or a custom VGI table function) with appropriate arguments.
+Result from `table_scan_function_get()` that tells the VGI DuckDB extension which DuckDB function to call to obtain table data. (On the wire it travels as the one branch of `catalog_table_scan_branches_get`, which the default `table_scan_branches_get` builds from it; protocol 3.3 removed the single-function RPC.) This enables catalogs to delegate scanning to any DuckDB function (e.g., `read_parquet`, `iceberg_scan`, or a custom VGI table function) with appropriate arguments.
 
 | Field | Type | Description |
 |-------|------|-------------|

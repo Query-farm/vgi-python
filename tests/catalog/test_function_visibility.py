@@ -280,11 +280,13 @@ def test_expose_scan_requires_a_function() -> None:
 
 
 def test_txfix_fixture_contract() -> None:
-    """The txfix fixture: items_scan and items_update hidden, labels_scan exposed."""
+    """The txfix fixture: items_scan and its three write functions hidden, labels_scan exposed."""
     from vgi._test_fixtures.writable_tx import TxfixCatalog
 
+    hidden = {"items_scan", "items_insert", "items_update", "items_delete"}
     listing = _listing(TxfixCatalog(), ["main"])
-    assert listing["items_scan"] == FUNCTION_VISIBILITY_TABLE_ONLY
-    assert listing["items_update"] == FUNCTION_VISIBILITY_TABLE_ONLY
+    for name in hidden:
+        assert listing[name] == FUNCTION_VISIBILITY_TABLE_ONLY
     assert listing["labels_scan"] is None
-    assert {name for name, vis in listing.items() if vis is not None} == {"items_scan", "items_update"}
+    assert listing["writes"] is None
+    assert {name for name, vis in listing.items() if vis is not None} == hidden

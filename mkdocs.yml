@@ -146,6 +146,7 @@ nav:
     - "Partition distribution (normative)": protocol/partition-distribution.md
     - "Filtered scan planning (normative)": protocol/scan-planning.md
     - "Function visibility (normative)": protocol/function-visibility.md
+    - "Write path changes in 3.3 (normative)": protocol/write-path-3-3.md
     - "Filter Encoding v2 (normative, proposed)": protocol/vgi-filter-encoding-v2-spec.md
     - "Runtime-filter artifacts (optional extension)": protocol/vgi-runtime-filter-artifacts.md
     - "Opaque values: sealing (normative)": protocol/vgi-opaque-data-sealing.md

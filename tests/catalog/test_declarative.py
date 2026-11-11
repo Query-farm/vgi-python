@@ -240,7 +240,7 @@ class TestTableWithFunction:
         """Inline a serialized ScanFunctionResult on function-backed tables.
 
         The C++ extension reads ``TableInfo.scan_function`` and skips the
-        per-bind ``catalog_table_scan_function_get`` RPC.
+        per-bind ``catalog_table_scan_branches_get`` RPC.
         """
         from vgi_rpc.utils import deserialize_record_batch
 
@@ -381,7 +381,7 @@ class TestTableWithFunction:
         """Leave scan_function null for explicit-columns tables.
 
         These tables have no declarative ``function=...`` so the C++ extension
-        falls back to ``catalog_table_scan_function_get`` — which the worker
+        asks ``catalog_table_scan_branches_get`` — which the worker
         may resolve via custom logic (e.g. ``read_parquet`` against S3).
         """
         cols = pa.schema([pa.field("id", pa.int64())])

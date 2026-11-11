@@ -27,8 +27,10 @@ SQL functions, cluttering `duckdb_functions()` and letting users call write func
   It is absent from `duckdb_functions()` and autocomplete and cannot be called, not even fully
   qualified. The client uses it only to resolve the functions tables name.
 
-A client MUST reject any other value at ATTACH with an error that names the function. A worker MUST
-NOT send another value.
+A client MUST reject any other value before any function from that listing is used, with an error
+that names the function. (The DuckDB extension decodes function listings lazily, so the rejection
+happens when the listing is first read, not necessarily at ATTACH.) A worker MUST NOT send another
+value.
 
 ## Listing rule
 

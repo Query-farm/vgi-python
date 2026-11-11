@@ -947,7 +947,7 @@ _EXAMPLE_CATALOG = Catalog(
                 # Function-backed table with a no-arg function. Used by the
                 # ``inlined_scan_function.test`` integration test to verify
                 # the C++ extension reads the inlined ``scan_function`` from
-                # ``TableInfo`` and skips ``catalog_table_scan_function_get``.
+                # ``TableInfo`` and skips ``catalog_table_scan_branches_get``.
                 Table(
                     name="ten_thousand_table",
                     function=TenThousandFunction,

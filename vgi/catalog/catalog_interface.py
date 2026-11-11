@@ -520,7 +520,7 @@ class TableInfo(CatalogSchemaObject, ArrowSerializableDataclass):
             table can provide column statistics.
         scan_function: Optional inlined function-discovery result. When
             populated, the C++ extension uses the cached value and skips the
-            corresponding ``catalog_table_scan_function_get`` RPC. Bytes are the
+            corresponding ``catalog_table_scan_branches_get`` RPC. Bytes are the
             IPC payload from ``ScanFunctionResult.serialize()``. Populating this
             freezes the function args for the lifetime of the catalog cache
             (until ``catalog_version`` bumps); workers whose function args change
@@ -965,7 +965,8 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
             is listed only so the tables naming it (as scan, insert, update or
             delete function) get its capabilities; the client does not expose
             a table-only function to SQL. A plain nullable utf8 column; the
-            DuckDB extension rejects any other value at ATTACH.
+            client MUST reject any other value before any function from that
+            listing is used (the DuckDB extension decodes listings lazily).
             [`ReadOnlyCatalogInterface`][vgi.catalog.ReadOnlyCatalogInterface]
             sets it automatically (see [`Table`][vgi.catalog.Table]
             ``expose_scan``).
@@ -1049,8 +1050,9 @@ class FunctionInfo(CatalogSchemaObject, ArrowSerializableDataclass):
     def __post_init__(self) -> None:
         """Validate scalar-only argument monotonicity claims."""
         # ``visibility`` is deliberately not validated here: the client is the
-        # authority (the DuckDB extension rejects an unknown value at ATTACH,
-        # naming the function), and test workers must be able to send one.
+        # authority (it rejects an unknown value, naming the function, before
+        # any function from the listing is used), and test workers must be able
+        # to send one.
         if self.argument_monotonicity is None:
             return
         if self.function_type is not FunctionType.SCALAR:
@@ -1332,10 +1334,11 @@ def scan_arguments_from(
 # binding its own ``TableFunction`` (a VGI function, or a native reader
 # like ``iceberg_scan`` / ``read_parquet``).
 #
-# This is **wire-compat with single-branch workers**: the new RPC
-# ``catalog_table_scan_branches_get`` is additive; old workers that don't
-# implement it cause the C++ side to fall back to
-# ``catalog_table_scan_function_get`` and synthesise a one-branch result.
+# Since protocol 3.3 ``catalog_table_scan_branches_get`` is the only
+# scan-discovery RPC (``catalog_table_scan_function_get`` was removed, with the
+# client-side fallback to it). Single-source catalogs keep implementing
+# ``table_scan_function_get``; the default ``table_scan_branches_get`` wraps it
+# as one branch.
 #
 # The rewriter semantics, ``branch_filter`` model, and current scope
 # decisions (INSERT-only on writable arm, UPDATE/DELETE/MERGE refused,
@@ -2705,18 +2708,14 @@ class CatalogInterface(ABC):
         into ``LogicalSetOperation(UNION_ALL, ...)``, one arm per branch.
 
         Default implementation: delegate to :meth:`table_scan_function_get`
-        and wrap the single ``ScanFunctionResult`` as a one-branch list.
-        This makes every existing single-source worker automatically
-        compatible with the new branches-aware C++ side, while letting
-        workers that genuinely need multi-source override this method.
+        and wrap the single ``ScanFunctionResult`` as a one-branch list, so a
+        single-source catalog implements only :meth:`table_scan_function_get`.
+        Workers that genuinely need multi-source override this method.
 
-        Workers that override should NOT also raise from
-        :meth:`table_scan_function_get` — the legacy method must keep
-        working for old C++ extensions that don't yet probe for the new
-        branches RPC. Common pattern: a worker implements both, where
-        :meth:`table_scan_function_get` returns ``branches[0]`` (the
-        primary branch) and :meth:`table_scan_branches_get` returns the
-        full list.
+        Protocol 3.3: this backs ``catalog_table_scan_branches_get``, the only
+        scan-discovery RPC (``catalog_table_scan_function_get`` was removed), so
+        a worker that overrides this method need not implement
+        :meth:`table_scan_function_get` at all.
 
         Args:
             attach_opaque_data: Per-attach session token.

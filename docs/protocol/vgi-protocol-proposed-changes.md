@@ -488,7 +488,8 @@ ordered lattice `count < rows < changes`, and therefore promises every lower
 mode. Duplicate keys and unknown operations or modes are protocol errors.
 
 The serialized `write_options` batch replaces `return_chunks: bool` with the
-required `result_mode: utf8`. `count` returns `(count int64 not null)`. `rows`
+required `result_mode: utf8` (since protocol 3.3 the batch holds only that column; see
+[write path changes in 3.3](write-path-3-3.md)). `count` returns `(count int64 not null)`. `rows`
 returns NEW rows for INSERT/UPDATE and OLD rows for DELETE. `changes` returns
 two nullable structs, `old` and `new`, each shaped exactly like the table:
 INSERT populates only `new`, DELETE only `old`, and UPDATE both. The operation
