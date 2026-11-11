@@ -591,6 +591,48 @@ settings defined in section 11.3 is eligible when its semantic contract declares
 is encoded, and the worker advertised the matching context profile. Functions that depend on any unencoded or
 unsupported session state, collation, calendar, or time zone remain ineligible.
 
+#### 5.11.1 `duckdb.spatial/intersects_extent@1`
+
+The bounding-box intersection test that DuckDB spells `a && b` (also `st_intersects_extent(a, b)`). It takes exactly
+two arguments, both GEOMETRY values (Arrow `geoarrow.wkb` binary), and no options. It is context-free.
+
+The result is NULL when either argument is NULL. Otherwise it is TRUE exactly when both geometries have at least one
+vertex and their closed XY boxes intersect, where a geometry's box is built from its vertices as follows:
+
+- A POINT whose coordinates are all NaN, including Z and M, contributes no vertex. This applies to a standalone point,
+  a MULTIPOINT member, and a point inside a GEOMETRYCOLLECTION. `POINT EMPTY` is such a point in WKB.
+- Every other vertex counts, including a LINESTRING or POLYGON vertex whose coordinates are all NaN and a point such
+  as `POINT Z (NaN NaN 5)`.
+- A NaN X (or Y) coordinate makes the box unbounded on that axis: the axis then spans −∞..+∞.
+- ±∞ are ordinary coordinate values.
+- An empty geometry of any type, including a collection with only empty parts, has no vertices and intersects
+  nothing, not even itself.
+- Boxes are closed: boxes that share only an edge or a corner intersect. Comparisons use exact IEEE doubles.
+- Z and M are ignored.
+
+Consumers MUST accept ISO WKB and EWKB (the `0x80000000` Z, `0x40000000` M and `0x20000000` SRID type flags), in
+either byte order, chosen independently for each nested geometry. Input that is not well-formed WKB is an evaluation
+error (section 11.5).
+
+The reference results are DuckDB 2.0 core `&&`, recorded in `conformance/intersects_extent_v1.json` with the script
+that regenerates them. Every consumer evaluator MUST return the recorded result for every case, for both the
+little-endian and big-endian encoding of each side. DuckDB 1.5 skipped NaN vertices in linestrings and polygons
+instead of treating them as unbounded, so a consumer MUST NOT evaluate this function with a DuckDB 1.5 engine's `&&`.
+
+The VGI DuckDB extension sends this function in two ways:
+
+- **Required:** a query's own `geom && <constant>`, which DuckDB then removes from its plan.
+- **Advisory, derived:** for `ST_Intersects`, `ST_Contains`, `ST_ContainsProperly`, `ST_Within`, `ST_Covers`,
+  `ST_CoveredBy`, `ST_Touches`, `ST_Overlaps`, `ST_Crosses` or `ST_Equals` between a GEOMETRY column and a constant,
+  it sends `column && <constant>` as an advisory predicate and keeps the exact predicate. Each of these predicates
+  implies that the two boxes intersect, so the advisory predicate is a weakening of it (section 8.2). It is derived
+  only from a constant with at least one vertex and finite X and Y bounds. No box is derived for an empty or NaN
+  constant: spatial's `ST_Equals(POINT EMPTY, POINT EMPTY)` is TRUE, while `&&` is FALSE for any empty side.
+
+A worker that prunes with precomputed boxes instead of evaluating each row's WKB, such as a spatial index, a stored
+bounding-box column, or file statistics, MUST round those boxes outward. A box stored as float32, for example, must
+contain the float64 box. It MUST also treat a box with any NaN bound as unbounded on that axis.
+
 ### 5.12 Runtime-filter artifact
 
 Runtime filters produced during execution use a distinct capability-gated node:

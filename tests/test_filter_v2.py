@@ -750,6 +750,9 @@ def test_standard_v1_evaluator_requires_oracle_engine(
         def execute(self, *_args: object) -> None:
             return None
 
+        def create_function(self, *_args: object, **_kw: object) -> None:
+            return None
+
     fake = types.ModuleType(engine)
     fake.__version__ = version  # type: ignore[attr-defined]
     monkeypatch.setattr(vgi._duckdb, "engine_module", lambda: fake)
