@@ -2445,10 +2445,16 @@ class CatalogInterface(ABC):
         tags: dict[str, str] | None = None,
         options: TypedValueBatch | None = None,
         layout: TableLayout | None = None,
-    ) -> None:
+    ) -> bool | None:
         """Create a new table with the given name and schema.
 
         New metadata, typed options and layout require their selected profiles.
+
+        Return ``False`` when ``on_conflict`` is ``IGNORE`` and the table already
+        existed (it must be left unchanged); ``True`` or ``None`` means this call
+        created it. The worker reports this as ``TableCreateResponse.created``
+        (protocol 3.3), which keeps ``CREATE TABLE IF NOT EXISTS ... AS SELECT``
+        from appending into an existing table.
         """
         raise UnsupportedOperationError("Table create not implemented.")
 

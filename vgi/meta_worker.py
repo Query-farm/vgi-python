@@ -124,7 +124,6 @@ _ATTACH_ID_METHODS = [
     "catalog_table_alter_options",
     "catalog_table_alter_layout",
     "catalog_table_drop",
-    "catalog_table_scan_function_get",
     "catalog_table_scan_branches_get",
     "catalog_table_column_statistics_get",
     "catalog_table_insert_function_get",

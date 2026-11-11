@@ -133,6 +133,7 @@ __all__ = [
     "TableBufferingProcessRequest",
     "TableBufferingProcessResponse",
     "TablesResponse",
+    "TableCreateResponse",
     "TransactionBeginResponse",
     "VgiProtocol",
     "ViewsResponse",
@@ -1084,6 +1085,19 @@ class CatalogVersionResponse(ArrowSerializableDataclass):
     """
 
     version: int
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TableCreateResponse(ArrowSerializableDataclass):
+    """Response of ``catalog_table_create()`` (protocol 3.3).
+
+    Attributes:
+        created: ``True`` when this call created the table; ``False`` when
+            ``on_conflict = IGNORE`` (``IF NOT EXISTS``) found an existing table
+            and left it unchanged.
+    """
+
+    created: bool
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -3934,8 +3948,13 @@ class VgiProtocol(Protocol):
         """Get information about a table. Returns 0 or 1 items."""
         ...
 
-    def catalog_table_create(self, request: TableCreateRequest) -> None:
-        """Create a new table."""
+    def catalog_table_create(self, request: TableCreateRequest) -> TableCreateResponse:
+        """Create a new table.
+
+        Protocol 3.3: the reply says whether this call created the table
+        (``created = false`` when ``IF NOT EXISTS`` found an existing one), so
+        ``CREATE TABLE IF NOT EXISTS ... AS SELECT`` does not append into it.
+        """
         ...
 
     def catalog_table_constraints_apply(self, request: ConstraintsApplyRequest) -> ConstraintSnapshot:
@@ -3986,18 +4005,6 @@ class VgiProtocol(Protocol):
         """Drop a table."""
         ...
 
-    def catalog_table_scan_function_get(
-        self,
-        attach_opaque_data: bytes,
-        schema_path: SchemaPath,
-        name: str,
-        at_unit: str | None = None,
-        at_value: str | None = None,
-        transaction_opaque_data: bytes | None = None,
-    ) -> bytes:
-        """Get the scan function for a table. Returns `ScanFunctionResult` as IPC bytes."""
-        ...
-
     def catalog_table_scan_branches_get(
         self,
         attach_opaque_data: bytes,
@@ -4016,12 +4023,10 @@ class VgiProtocol(Protocol):
         declares ``scan_planning = "filtered"``. Every predicate is advisory.
         ``None`` means none were collected. See ``docs/protocol/scan-planning.md``.
 
-        Additive successor to ``catalog_table_scan_function_get``. Workers that
-        only implement the legacy method continue to work — the VGI extension's
-        C++ side catches ``MethodNotImplementedError`` and falls back to the
-        legacy RPC, wrapping the single-function result as a one-branch list.
-        Workers that implement BOTH the legacy and the branches method
-        guarantee single-process compatibility with both old and new extensions.
+        Protocol 3.3: this is the only scan-discovery method; the single-function
+        ``catalog_table_scan_function_get`` was removed. Every worker must answer
+        it (a single-source table returns one branch). A worker answering
+        ``MethodNotImplemented`` is a protocol error, not a fallback.
 
         Multi-branch tables compose a logical scan from N physical sources
         (canonical case: Kafka hot tier + Iceberg cold tier). The extension's

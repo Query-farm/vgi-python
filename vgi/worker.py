@@ -206,6 +206,7 @@ from vgi.protocol import (
     SchemasResponse,
     TableBufferingFinalizeState,
     TableCreateRequest,
+    TableCreateResponse,
     TableFunctionCardinalityRequest,
     TableFunctionDynamicToStringRequest,
     TableFunctionDynamicToStringResponse,
@@ -5864,8 +5865,13 @@ class Worker:
             else None
         )
 
-    def catalog_table_create(self, request: TableCreateRequest) -> None:
-        """Create a new table."""
+    def catalog_table_create(self, request: TableCreateRequest) -> TableCreateResponse:
+        """Create a new table; report whether this call created it (protocol 3.3).
+
+        The author's ``table_create`` returns ``False`` when ``on_conflict`` is
+        ``IGNORE`` and the table already existed. ``None`` (the historical
+        return) means it was created.
+        """
         request.__post_init__()
         self._require_dependency_transaction(
             request.attach_opaque_data, request.transaction_opaque_data, "create table"
@@ -5927,7 +5933,7 @@ class Worker:
                 self._require_catalog_capability(request.attach_opaque_data, expression.profile, "catalog_table_create")
             if request.layout.coverage != LayoutCoverage.ALL_ROWS:
                 raise ValueError("new table layout must cover all rows")
-        call_catalog(
+        created = call_catalog(
             cat,
             "table_create",
             attach_opaque_data=self._unwrap_attach(request.attach_opaque_data),
@@ -5943,6 +5949,9 @@ class Worker:
             constraint_definitions=list(request.constraint_definitions),
             **extra,
         )
+        if created is not None and not isinstance(created, bool):
+            raise TypeError(f"table_create must return bool or None, got {type(created).__name__}")
+        return TableCreateResponse(created=created is not False)
 
     def catalog_table_constraints_apply(self, request: ConstraintsApplyRequest) -> ConstraintSnapshot:
         """Validate the complete atomic request before invoking the provider once."""
@@ -6066,29 +6075,6 @@ class Worker:
             cascade=cascade,
         )
 
-    def catalog_table_scan_function_get(
-        self,
-        attach_opaque_data: bytes,
-        schema_path: list[str],
-        name: str,
-        at_unit: str | None = None,
-        at_value: str | None = None,
-        transaction_opaque_data: bytes | None = None,
-    ) -> bytes:
-        """Get the scan function for a table. Returns `ScanFunctionResult` as IPC bytes."""
-        _validate_at_params(at_unit, at_value)
-        self._enrich_catalog_span(vgi_schema_path=schema_path, vgi_table_name=name)
-        cat = self._get_catalog()
-        result = cat.table_scan_function_get(
-            attach_opaque_data=self._unwrap_attach(attach_opaque_data),
-            transaction_opaque_data=self._unwrap_tx_opt(transaction_opaque_data, attach_opaque_data),
-            schema_path=schema_path,
-            name=name,
-            at_unit=at_unit,
-            at_value=at_value,
-        )
-        return result.serialize()
-
     def catalog_table_scan_branches_get(
         self,
         attach_opaque_data: bytes,
@@ -6101,11 +6087,11 @@ class Worker:
     ) -> bytes:
         """Get the list of scan branches for a multi-branch table.
 
-        Returns `ScanBranchesResult` as IPC bytes. The [`CatalogInterface`][] base
-        provides a default-impl shim that wraps the legacy
-        ``table_scan_function_get`` as a one-branch result, so every existing
-        single-source worker automatically responds correctly here without
-        further code changes.
+        Returns `ScanBranchesResult` as IPC bytes. Protocol 3.3 removed the
+        single-function ``catalog_table_scan_function_get`` RPC; this is the only
+        scan-discovery method. The [`CatalogInterface`][] base wraps the author's
+        ``table_scan_function_get`` as a one-branch result, so a single-source
+        catalog needs no further code.
 
         Protocol 3.2: dispatches to ``table_scan_branches_plan`` with the
         ``pushdown_filters`` decoded lazily as a ``ScanPlanningFilters``; its

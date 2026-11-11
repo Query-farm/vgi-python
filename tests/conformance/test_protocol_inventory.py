@@ -154,15 +154,9 @@ _RPC_ALLOWLIST: dict[str, tuple[str, ...] | NotExposed] = {
     "catalog_table_create": ("table_create",),
     "catalog_table_constraints_apply": ("table_constraints_apply",),
     "catalog_table_drop": ("table_drop",),
-    "catalog_table_scan_function_get": ("table_scan_function_get",),
-    "catalog_table_scan_branches_get": NotExposed(
-        reason=(
-            "DuckDB-only multi-branch scan planning. The C++ extension fetches "
-            "scan branches to route reads/writes across heterogeneous sources; "
-            "non-DuckDB clients scan via catalog_table_scan_function_get. Covered "
-            "by C++ integration/catalog/multi_branch_*.test."
-        )
-    ),
+    # Protocol 3.3: the only scan-discovery RPC (catalog_table_scan_function_get was
+    # removed); the client's table_scan_function_get reads its single branch.
+    "catalog_table_scan_branches_get": ("table_scan_branches_get", "table_scan_function_get"),
     "catalog_table_column_statistics_get": NotExposed(
         reason=(
             "DuckDB-only planner hint. Column stats feed the query optimizer. "

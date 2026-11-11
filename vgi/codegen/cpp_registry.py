@@ -354,7 +354,7 @@ class CppRegistry(RegistryBackend):
     root_env = "VGI_CPP_ROOT"
     banner_head = banner_tail = "// " + "=" * 76 + "\n"
     tamper = Tamper(
-        start='    {.name = "catalog_table_scan_function_get",',
+        start='    {.name = "catalog_table_scan_branches_get",',
         end="    {.name = ",
         old=".result = ResultEnvelopeSchema",
         new=".result = OptionalResultEnvelopeSchema",

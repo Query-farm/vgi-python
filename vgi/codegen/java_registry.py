@@ -108,6 +108,7 @@ JAVA_TYPES: dict[str, str] = {
     "CatalogContentsResponse": "CatalogContentsResponse",
     "CatalogVersionResponse": "CatalogVersionResponse",
     "TransactionBeginResponse": "TransactionBeginResponse",
+    "TableCreateResponse": "TableCreateResponse",
     # The eight catalog item listings share one schema, and one Java record.
     "CatalogsResponse": "ItemsResponse",
     "SchemasResponse": "ItemsResponse",
@@ -123,9 +124,7 @@ JAVA_TYPES: dict[str, str] = {
 
 #: Methods whose Python result is raw IPC ``bytes`` that vgi-java returns as a
 #: typed record instead (the same ``binary`` column, encoded by the framework).
-JAVA_RAW_RESULTS: dict[str, str] = {
-    "catalog_table_scan_function_get": "TableScanFunctionGetResponse",
-}
+JAVA_RAW_RESULTS: dict[str, str] = {}
 
 #: The Java type of a stream method's return value.
 JAVA_STREAM_TYPE = "RpcStream<? extends StreamState>"

@@ -147,11 +147,15 @@ def test_write_options_decodes_every_field() -> None:
     """Write options decodes every field."""
     raw = _options_bytes(result_mode="rows", on_conflict="update", on_conflict_columns=["id"])
     call = _bind_call({"write_options": pa.scalar(raw)})
-    expected = WriteOptions(result_mode="rows", on_conflict="update", on_conflict_columns=["id"])
+    # Protocol 3.3 removed on_conflict/on_conflict_columns; a stray column is ignored
+    # and the deprecated accessors keep their constant values.
+    expected = WriteOptions(result_mode="rows")
     # A BindRequest-like object, BindParams-like (bind_call) and ProcessParams-like (init_call.bind_call).
     assert write_options(call) == expected
     assert write_options(SimpleNamespace(bind_call=call)) == expected
     assert write_options(SimpleNamespace(bind_call=None, init_call=SimpleNamespace(bind_call=call))) == expected
+    assert expected.on_conflict == "throw"
+    assert expected.on_conflict_columns == []
 
 
 def test_write_options_partial_and_invalid() -> None:

@@ -310,7 +310,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         tags: dict[str, str] | None = None,
         options: TypedValueBatch | None = None,
         layout: TableLayout | None = None,
-    ) -> None:
+    ) -> bool:
         """Create a new table in the transactor's DuckDB database.
 
         Builds CREATE TABLE DDL from column definitions and constraints.
@@ -325,6 +325,17 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         # Deserialize columns schema
         col_schema = pa.ipc.read_schema(pa.BufferReader(columns))  # type: ignore[arg-type]
 
+        if on_conflict == OnConflict.IGNORE and (
+            self.table_get(
+                attach_opaque_data=attach_opaque_data,
+                transaction_opaque_data=transaction_opaque_data,
+                schema_path=schema_path,
+                name=name,
+            )
+            is not None
+        ):
+            # Protocol 3.3: report "not created" so CTAS IF NOT EXISTS inserts nothing.
+            return False
         if_not_exists = " IF NOT EXISTS" if on_conflict == OnConflict.IGNORE else ""
 
         # Build column definitions (including defaults from Arrow field metadata)
@@ -340,6 +351,7 @@ class WritableCatalog(ReadOnlyCatalogInterface):
         ddl = f"CREATE TABLE{if_not_exists} {_qn(schema_path, name)} (\n  {columns_sql}\n);"
         self._execute_ddl(attach_opaque_data, transaction_opaque_data, ddl)
         logger.info("table_create: %s (on_conflict=%s)", name, on_conflict.value)
+        return True
 
     def table_drop(
         self,

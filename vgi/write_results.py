@@ -32,7 +32,7 @@ it; write results never include it (see
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 import pyarrow as pa
@@ -231,17 +231,28 @@ def coerce_write_result_mode(value: str) -> WriteResultMode:
 class WriteOptions:
     """What DuckDB asked a write function for, decoded from ``write_options``.
 
+    Protocol 3.3 removed ``on_conflict`` and ``on_conflict_columns`` from the
+    batch: DuckDB rewrites every ``INSERT ... ON CONFLICT`` / ``INSERT OR
+    REPLACE`` into a MERGE before the catalog sees it, so a write function only
+    ever received ``"throw"`` and ``[]``. The two properties remain, deprecated,
+    with those constant values.
+
     Attributes:
         result_mode: The result mode to produce (``count`` for plain DML).
-        on_conflict: ``throw`` (default), or the ``INSERT ... ON CONFLICT``
-            action DuckDB requested.
-        on_conflict_columns: The conflict-target columns, if any.
 
     """
 
     result_mode: WriteResultMode = "count"
-    on_conflict: str = "throw"
-    on_conflict_columns: list[str] = field(default_factory=list)
+
+    @property
+    def on_conflict(self) -> str:
+        """Deprecated (protocol 3.3 removed it from the wire); always ``"throw"``."""
+        return "throw"
+
+    @property
+    def on_conflict_columns(self) -> list[str]:
+        """Deprecated (protocol 3.3 removed it from the wire); always empty."""
+        return []
 
 
 def write_options(source: Any) -> WriteOptions:
@@ -284,10 +295,6 @@ def write_options(source: Any) -> WriteOptions:
     row = batch.slice(0, 1).to_pylist()[0]
     return WriteOptions(
         result_mode=coerce_write_result_mode(row["result_mode"]) if row.get("result_mode") is not None else "count",
-        on_conflict=str(row["on_conflict"]) if row.get("on_conflict") is not None else "throw",
-        on_conflict_columns=[str(c) for c in row["on_conflict_columns"]]
-        if row.get("on_conflict_columns") is not None
-        else [],
     )
 
 

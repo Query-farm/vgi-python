@@ -101,7 +101,6 @@ GO_RAW_RESULTS: dict[str, str] = {
     "catalog_table_delete_function_get": "TableScanFunctionGetResponseWire",
     "catalog_table_insert_function_get": "TableScanFunctionGetResponseWire",
     "catalog_table_scan_branches_get": "TableScanBranchesGetResponseWire",
-    "catalog_table_scan_function_get": "TableScanFunctionGetResponseWire",
     "catalog_table_update_function_get": "TableScanFunctionGetResponseWire",
 }
 

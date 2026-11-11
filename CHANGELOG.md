@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Protocol 3.3: write-path wire changes
+
+Part of `vgi.v3` / `3.3.0` (the version string does not change again).
+
+- **Removed `catalog_table_scan_function_get`.** `catalog_table_scan_branches_get` is the only scan-discovery RPC
+  and every worker must answer it; the extension no longer falls back. Author code is unaffected:
+  `CatalogInterface.table_scan_function_get` still works, wrapped as a one-branch result by the default
+  `table_scan_branches_get`. `Client.table_scan_function_get` now reads the single branch of
+  `catalog_table_scan_branches_get` (and raises `CatalogClientError` for a multi-branch table); the client's
+  `MethodNotImplemented` fallback is gone.
+- **`catalog_table_create` returns `TableCreateResponse(created: bool not null)`** (new in `vgi.protocol`).
+  `CatalogInterface.table_create` may return `False` when `on_conflict` is `IGNORE` and the table already
+  existed; `True` or `None` (the old return) means it was created. The extension uses it so
+  `CREATE TABLE IF NOT EXISTS ... AS SELECT` no longer appends into an existing table.
+  `Client.table_create` returns the flag.
+- **The write-options batch carries only `result_mode`.** DuckDB rewrites every `INSERT ... ON CONFLICT` /
+  `INSERT OR REPLACE` into a MERGE before the catalog sees it, so `on_conflict` / `on_conflict_columns` were only
+  ever `"throw"` / `[]`. `WriteOptions.on_conflict` and `WriteOptions.on_conflict_columns` remain as deprecated
+  read-only properties with those values; they are no longer constructor arguments.
+- Codegen: every SDK's generated registry and schemas drop the removed method and gain the
+  `catalog_table_create` result; vgi-java gains the generated `TableCreateResponse` record.
+
 ### Protocol 3.3: table scans and write functions are table-only
 
 - **Requires the matching DuckDB extension.** The protocol version is now `vgi.v3` / `3.3.0`; peers match on

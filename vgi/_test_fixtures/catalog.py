@@ -525,8 +525,8 @@ class InMemoryCatalog(CatalogInterface):
         tags: dict[str, str] | None = None,
         options: TypedValueBatch | None = None,
         layout: TableLayout | None = None,
-    ) -> None:
-        """Create a new table."""
+    ) -> bool:
+        """Create a new table; ``False`` when IF NOT EXISTS found one (protocol 3.3)."""
         if constraint_definitions:
             raise NotImplementedError(
                 "CREATE TABLE with NOT NULL/PRIMARY KEY/UNIQUE/CHECK/FOREIGN KEY constraints is unsupported: "
@@ -541,7 +541,7 @@ class InMemoryCatalog(CatalogInterface):
                 msg = f"Table {name!r} already exists in schema {schema_path!r}"
                 raise ValueError(msg)
             if on_conflict == OnConflict.IGNORE:
-                return
+                return False
             # REPLACE: fall through to create
 
         schema_data.tables[name] = TableData(
@@ -555,6 +555,7 @@ class InMemoryCatalog(CatalogInterface):
             )
         )
         self._increment_version(attach_opaque_data)
+        return True
 
     def table_drop(
         self,

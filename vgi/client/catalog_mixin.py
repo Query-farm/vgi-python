@@ -62,7 +62,6 @@ from vgi.catalog import (
     MacroOverload,
     MacroType,
     OnConflict,
-    ScanBranch,
     ScanBranchesResult,
     ScanFunctionResult,
     SchemaContentsInfo,
@@ -1109,8 +1108,11 @@ class CatalogClientMixin:
         tags: dict[str, str] | None = None,
         options: TypedValueBatch | None = None,
         layout: TableLayout | None = None,
-    ) -> None:
+    ) -> bool:
         """Create a new table.
+
+        Returns ``True`` when this call created it, ``False`` when ``on_conflict``
+        is ``IGNORE`` and the table already existed (protocol 3.3).
 
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
@@ -1126,10 +1128,12 @@ class CatalogClientMixin:
             options: Typed option overrides under the table-option creation profile.
             layout: Partition/sort policy under the layout creation profile.
 
+        Returns:
+            Whether this call created the table.
 
         """
         with self._catalog_connect() as proxy:
-            proxy.catalog_table_create(
+            response = proxy.catalog_table_create(
                 request=TableCreateRequest(
                     attach_opaque_data=attach_opaque_data,
                     schema_path=schema_path,
@@ -1144,6 +1148,7 @@ class CatalogClientMixin:
                     layout=layout,
                 )
             )
+        return bool(response.created)
 
     def table_constraints_apply(self, request: ConstraintsApplyRequest) -> ConstraintSnapshot:
         """Apply one atomic constraint change set without retrying ambiguous replies."""
@@ -1335,7 +1340,9 @@ class CatalogClientMixin:
         """Get the scan function for a table.
 
         Returns a `ScanFunctionResult` that tells the VGI DuckDB extension which
-        DuckDB function to call to obtain the table data.
+        DuckDB function to call to obtain the table data. Protocol 3.3 removed
+        the single-function RPC: this asks ``catalog_table_scan_branches_get``
+        and requires exactly one function branch.
 
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
@@ -1349,20 +1356,30 @@ class CatalogClientMixin:
             `ScanFunctionResult` with function_name, arguments, and extensions.
 
         Raises:
-            [`CatalogClientError`][]: If `table_scan_function_get` returned no result.
+            [`CatalogClientError`][]: If the table does not have exactly one function branch.
 
         """
-        with self._catalog_connect() as proxy:
-            result_bytes = proxy.catalog_table_scan_function_get(
-                attach_opaque_data=attach_opaque_data,
-                schema_path=schema_path,
-                name=name,
-                at_unit=at_unit,
-                at_value=at_value,
-                transaction_opaque_data=transaction_opaque_data,
+        result = self.table_scan_branches_get(
+            attach_opaque_data=attach_opaque_data,
+            transaction_opaque_data=transaction_opaque_data,
+            schema_path=schema_path,
+            name=name,
+            at_unit=at_unit,
+            at_value=at_value,
+        )
+        if len(result.branches) != 1 or result.branches[0].function_name is None:
+            raise CatalogClientError(
+                f"table {name!r} has {len(result.branches)} scan branch(es); "
+                "table_scan_function_get needs exactly one function branch (use table_scan_branches_get)"
             )
-            batch, _ = deserialize_record_batch(result_bytes)
-            return ScanFunctionResult.deserialize(batch)
+        branch = result.branches[0]
+        return ScanFunctionResult(
+            function_name=branch.function_name,
+            positional_arguments=list(branch.positional_arguments),
+            named_arguments=dict(branch.named_arguments),
+            required_extensions=list(result.required_extensions),
+            schema_path=branch.schema_path,
+        )
 
     def table_scan_branches_get(
         self,
@@ -1384,13 +1401,6 @@ class CatalogClientMixin:
         caller of this method is expected to do the equivalent (e.g.
         `pl.concat` over one scan per branch in vgi-polars).
 
-        Falls back to :meth:`table_scan_function_get`, wrapped as a
-        single-branch `ScanBranchesResult`, when the worker raises
-        `MethodNotImplementedError` for the additive `catalog_table_scan_
-        branches_get` RPC — mirroring exactly how the C++ extension reads
-        that same fallback, so a worker written before this RPC existed
-        still works, just as a one-branch table.
-
         Args:
             attach_opaque_data: The attachment ID from catalog_attach.
             transaction_opaque_data: Optional transaction ID for transactional reads.
@@ -1411,37 +1421,15 @@ class CatalogClientMixin:
 
         """
         with self._catalog_connect() as proxy:
-            try:
-                result_bytes = proxy.catalog_table_scan_branches_get(
-                    attach_opaque_data=attach_opaque_data,
-                    schema_path=schema_path,
-                    name=name,
-                    at_unit=at_unit,
-                    at_value=at_value,
-                    transaction_opaque_data=transaction_opaque_data,
-                    pushdown_filters=pushdown_filters,
-                )
-            except RpcError as e:
-                if "MethodNotImplemented" not in type(e).__name__ and "not implemented" not in str(e).lower():
-                    raise
-                scan_fn = self.table_scan_function_get(
-                    attach_opaque_data=attach_opaque_data,
-                    transaction_opaque_data=transaction_opaque_data,
-                    schema_path=schema_path,
-                    name=name,
-                    at_unit=at_unit,
-                    at_value=at_value,
-                )
-                return ScanBranchesResult(
-                    branches=[
-                        ScanBranch(
-                            function_name=scan_fn.function_name,
-                            positional_arguments=list(scan_fn.positional_arguments),
-                            named_arguments=dict(scan_fn.named_arguments),
-                        )
-                    ],
-                    required_extensions=list(scan_fn.required_extensions),
-                )
+            result_bytes = proxy.catalog_table_scan_branches_get(
+                attach_opaque_data=attach_opaque_data,
+                schema_path=schema_path,
+                name=name,
+                at_unit=at_unit,
+                at_value=at_value,
+                transaction_opaque_data=transaction_opaque_data,
+                pushdown_filters=pushdown_filters,
+            )
             batch, _ = deserialize_record_batch(result_bytes)
             return ScanBranchesResult.deserialize(batch)
 
