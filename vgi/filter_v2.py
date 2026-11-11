@@ -1242,7 +1242,10 @@ def _intersects_extent_udf(left: Any, right: Any) -> Any:
         return values.to_pylist()  # type: ignore[no-any-return]
 
     return pa.array(
-        [None if a is None or b is None else intersects_extent(a, b) for a, b in zip(as_list(left), as_list(right), strict=True)],
+        [
+            None if a is None or b is None else intersects_extent(a, b)
+            for a, b in zip(as_list(left), as_list(right), strict=True)
+        ],
         type=pa.bool_(),
     )
 
