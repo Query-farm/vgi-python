@@ -224,7 +224,12 @@ def test_scan_function_listing(connect: Any) -> None:
         assert isinstance(_table(client, "items_scan"), list)
 
 
-_ITEMS_IN = pa.schema([("id", pa.int32()), ("name", pa.string()), ("qty", pa.int64())])
+_ITEMS_IN_FIELDS: list[pa.Field[Any]] = [
+    pa.field("id", pa.int32()),
+    pa.field("name", pa.string()),
+    pa.field("qty", pa.int64()),
+]
+_ITEMS_IN = pa.schema(_ITEMS_IN_FIELDS)
 _ROWID_IN = pa.schema([("rowid", pa.int64())])
 
 
@@ -266,13 +271,14 @@ def test_insert_validates_each_batch_before_applying(connect: Any, token: str) -
         assert _write(client, "items_insert", [[{"id": 6, "name": "f", "qty": 6}]], _ITEMS_IN, "changes") == [
             {"old": None, "new": {"id": 6, "name": "f", "qty": 6}}
         ]
-        for rows, message in [
+        refused: list[tuple[list[dict[str, Any]], str]] = [
             ([{"id": 7, "name": "g", "qty": 1}, {"id": 1, "name": "dup", "qty": 1}], "txfix: duplicate id 1"),
             ([{"id": 7, "name": "g", "qty": 1}, {"id": 7, "name": "g2", "qty": 1}], "txfix: duplicate id 7"),
             ([{"id": 7, "name": None, "qty": 1}], "txfix: name required"),
             ([{"id": None, "name": "g", "qty": 1}], "txfix: id required"),
             ([{"id": 7, "name": "g", "qty": -1}], "txfix: qty must be >= 0"),
-        ]:
+        ]
+        for rows, message in refused:
             with pytest.raises(Exception, match=message):
                 _write(client, "items_insert", [rows], _ITEMS_IN, "count")
         # A failing batch applied nothing (id 7 is not there).

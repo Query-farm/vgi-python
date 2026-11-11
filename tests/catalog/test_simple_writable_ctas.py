@@ -24,15 +24,14 @@ from vgi.catalog import FUNCTION_VISIBILITY_TABLE_ONLY, OnConflict, SchemaObject
 from vgi.client.client import Client
 
 _WORKER = f"{sys.executable} -m vgi._test_fixtures.simple_writable"
-_COLUMNS = pa.schema(
-    [
-        ("i", pa.int32()),
-        ("b", pa.int64()),
-        ("v", pa.string()),
-        ("d", pa.float64()),
-        ("f", pa.bool_()),
-    ]
-)
+_COLUMN_FIELDS: list[pa.Field[Any]] = [
+    pa.field("i", pa.int32()),
+    pa.field("b", pa.int64()),
+    pa.field("v", pa.string()),
+    pa.field("d", pa.float64()),
+    pa.field("f", pa.bool_()),
+]
+_COLUMNS = pa.schema(_COLUMN_FIELDS)
 
 
 @pytest.fixture
@@ -61,14 +60,14 @@ def _insert(client: Client, name: str, rows: list[dict[str, Any]], schema: pa.Sc
         function_name="simple_writable_insert",
         schema_path=["main"],
         input=iter([pa.RecordBatch.from_pylist(rows, schema=schema)]),
-        arguments=Arguments(positional=[pa.scalar(name)], named={"write_options": pa.scalar(options)}),
+        arguments=Arguments(positional=(pa.scalar(name),), named={"write_options": pa.scalar(options)}),
     )
     return [row for b in out for row in b.to_pylist()]
 
 
 def _scan(client: Client, name: str) -> list[dict[str, Any]]:
     out = client.table_function(
-        function_name="simple_writable_scan", schema_path=["main"], arguments=Arguments(positional=[pa.scalar(name)])
+        function_name="simple_writable_scan", schema_path=["main"], arguments=Arguments(positional=(pa.scalar(name),))
     )
     return [row for b in out for row in b.to_pylist()]
 

@@ -16,7 +16,8 @@ Part of `vgi.v3` / `3.3.0` (the version string does not change again).
   `CatalogInterface.table_create` may return `False` when `on_conflict` is `IGNORE` and the table already
   existed; `True` or `None` (the old return) means it was created. The extension uses it so
   `CREATE TABLE IF NOT EXISTS ... AS SELECT` no longer appends into an existing table.
-  `Client.table_create` returns the flag.
+  `Client.table_create` returns the flag. `MetaWorker` (several catalogs in one process) relays the routed
+  worker's reply instead of dropping it.
 - **The write-options batch carries only `result_mode`.** DuckDB rewrites every `INSERT ... ON CONFLICT` /
   `INSERT OR REPLACE` into a MERGE before the catalog sees it, so `on_conflict` / `on_conflict_columns` were only
   ever `"throw"` / `[]`. `WriteOptions.on_conflict` and `WriteOptions.on_conflict_columns` remain as deprecated

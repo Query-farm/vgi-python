@@ -116,6 +116,15 @@ def test_worker_rejects_non_bool_create_result(monkeypatch: pytest.MonkeyPatch) 
         instance.catalog_table_create(_create_request())
 
 
+@pytest.mark.parametrize("created", [True, False])
+def test_meta_worker_relays_created(monkeypatch: pytest.MonkeyPatch, created: bool) -> None:
+    """The multi-catalog host returns the routed child's reply (it used to drop it)."""
+    child = SimpleNamespace(catalog_table_create=lambda request: TableCreateResponse(created=created))
+    meta = object.__new__(MetaWorker)
+    monkeypatch.setattr(meta, "_worker_for_attach", lambda envelope, method_name="?": child)
+    assert meta.catalog_table_create(_create_request()) == TableCreateResponse(created=created)
+
+
 def test_table_create_response_round_trips() -> None:
     for value in (True, False):
         response = TableCreateResponse(created=value)

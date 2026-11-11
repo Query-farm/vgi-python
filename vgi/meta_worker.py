@@ -48,6 +48,8 @@ from vgi.protocol import (
     CatalogsResponse,
     InitRequest,
     ProcessState,
+    TableCreateRequest,
+    TableCreateResponse,
 )
 from vgi.schema_path import schema_path_display, schema_path_key
 from vgi.worker import Worker
@@ -453,11 +455,11 @@ class MetaWorker:
 
     # ========== Request-object methods (attach_opaque_data inside request) ==========
 
-    def catalog_table_create(self, request: Any) -> None:
-        """Create a table — dispatch via attach_opaque_data in request."""
-        self._worker_for_attach(request.attach_opaque_data, method_name="catalog_table_create").catalog_table_create(
-            request
-        )
+    def catalog_table_create(self, request: TableCreateRequest) -> TableCreateResponse:
+        """Create a table — dispatch via attach_opaque_data in request; relay created."""
+        return self._worker_for_attach(
+            request.attach_opaque_data, method_name="catalog_table_create"
+        ).catalog_table_create(request)
 
     def catalog_table_constraints_apply(self, request: ConstraintsApplyRequest) -> ConstraintSnapshot:
         """Route by the sealed attachment; the selected child owns unwrapping."""
