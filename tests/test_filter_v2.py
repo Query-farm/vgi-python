@@ -720,7 +720,9 @@ def test_engine_pins_match_standard_v1_oracle() -> None:
         assert match, f"{engine} extra must pin an exact version, got {specs[0]!r}"
         assert match.group(1) in STANDARD_V1_ENGINE_VERSIONS[engine]
     dev_duckdb = [spec for spec in extras["dev"] if re.match(r"duckdb\b", spec)]
-    assert [spec.replace(" ", "") for spec in dev_duckdb] == list(extras["duckdb"])
+    assert [spec.replace(" ", "") for spec in dev_duckdb] == [
+        spec for spec in extras["duckdb"] if re.match(r"duckdb\b", spec)
+    ]
 
 
 @pytest.mark.parametrize(
@@ -771,6 +773,57 @@ def test_standard_v1_evaluator_requires_oracle_engine(
         with pytest.raises(filter_v2.FilterV2Error, match=f"found {engine} {re.escape(version)}"):
             filter_v2._get_evaluation_connection(context)
         assert opened == []
+
+
+def test_intersects_extent_udf_is_registered_only_when_used(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ordinary filters never call ``create_function`` (it needs numpy); intersects_extent registers once.
+
+    0.51.0 registered the UDF on every evaluator connection, so a worker
+    installed with only the ``haybarn`` extra (no numpy) failed to bind any
+    pushed-down filter.
+    """
+    import threading
+
+    from vgi import filter_v2
+
+    registered: list[object] = []
+    real_register = filter_v2._register_intersects_extent
+
+    def counting_register(connection: object) -> None:
+        registered.append(connection)
+        real_register(connection)
+
+    monkeypatch.setattr(filter_v2, "_register_intersects_extent", counting_register)
+    monkeypatch.setattr(filter_v2, "_evaluation_local", threading.local())
+    context = filter_v2.EvaluationContext(profile=filter_v2.NO_EVALUATION_CONTEXT)
+    amount = pa.RecordBatch.from_pydict({"amount": pa.array([100, 950], pa.int64())})
+    plain = filter_v2.Comparison(
+        filter_v2.ComparisonOperator.GT,
+        filter_v2.ColumnRef(0, "amount", pa.int64()),
+        filter_v2.Literal(0, pa.field("value_0", pa.int64()), pa.scalar(900, pa.int64())),
+    )
+    assert filter_v2.evaluate_expression(plain, amount, context).to_pylist() == [False, True]
+    assert registered == []
+
+    wkb = {b"ARROW:extension:name": b"geoarrow.wkb", b"ARROW:extension:metadata": b"{}"}
+    point = bytes.fromhex("0101000000000000000000f03f000000000000f03f")  # POINT(1 1)
+    geom = pa.RecordBatch.from_arrays(
+        [pa.array([point], pa.binary())], schema=pa.schema([pa.field("geom", pa.binary(), metadata=wkb)])
+    )
+    call = filter_v2.Call(
+        filter_v2.FunctionIdentity("duckdb.spatial", "intersects_extent", 1),
+        (
+            filter_v2.ColumnRef(0, "geom", pa.binary()),
+            filter_v2.Literal(0, pa.field("value_0", pa.binary(), metadata=wkb), pa.scalar(point, pa.binary())),
+        ),
+    )
+    # Nested under NOT / OR: the walk must still find the call.
+    nested = filter_v2.Not(filter_v2.BooleanExpression("or", (filter_v2.Not(call), filter_v2.Not(call))))
+    assert filter_v2.evaluate_expression(nested, geom, context).to_pylist() == [True]
+    assert len(registered) == 1
+    assert filter_v2.evaluate_expression(call, geom, context).to_pylist() == [True]
+    assert filter_v2.evaluate_expression(plain, amount, context).to_pylist() == [False, True]
+    assert len(registered) == 1
 
 
 class _NoNbytes:

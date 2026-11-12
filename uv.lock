@@ -2829,6 +2829,7 @@ dev = [
 ]
 duckdb = [
     { name = "duckdb" },
+    { name = "numpy" },
 ]
 external = [
     { name = "vgi-rpc", extra = ["external"] },
@@ -2842,6 +2843,7 @@ granian = [
 ]
 haybarn = [
     { name = "haybarn" },
+    { name = "numpy" },
 ]
 http = [
     { name = "vgi-rpc", extra = ["http"] },
@@ -2900,6 +2902,8 @@ requires-dist = [
     { name = "httpx2", specifier = ">=2.12.0" },
     { name = "jsonschema", marker = "extra == 'dev'" },
     { name = "mypy", marker = "extra == 'dev'" },
+    { name = "numpy", marker = "extra == 'duckdb'", specifier = ">=2.4.1" },
+    { name = "numpy", marker = "extra == 'haybarn'", specifier = ">=2.4.1" },
     { name = "numpy", marker = "extra == 'test-fixtures'", specifier = ">=2.4.1" },
     { name = "platformdirs" },
     { name = "pyarrow" },

@@ -59,8 +59,12 @@ dependencies = [
 # (STANDARD_V1_ENGINE_VERSIONS). A looser range lets a resolver pick e.g.
 # duckdb 1.5.6, and every pushed-down filter then fails to bind. Change these
 # only together with STANDARD_V1_ENGINE_VERSIONS (a test keeps them in step).
-haybarn = ["haybarn==1.5.5rc1"]
-duckdb = ["duckdb==1.5.5"]
+# numpy: the engine's create_function needs it, and the evaluator registers the
+# duckdb.spatial/intersects_extent@1 UDF with it (only for predicates that call
+# that function). Filter evaluation never runs without one of these extras, so
+# numpy belongs here rather than in the core dependencies.
+haybarn = ["haybarn==1.5.5rc1", "numpy>=2.4.1"]
+duckdb = ["duckdb==1.5.5", "numpy>=2.4.1"]
 http = ["vgi-rpc[http]"]
 # Publishing and resolving immutable external catalog results needs the RPC
 # download/compression dependencies on every transport, including subprocess.

@@ -1193,7 +1193,13 @@ def _quote_string(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def _get_evaluation_connection(context: EvaluationContext) -> Any:
+def _get_evaluation_connection(context: EvaluationContext, *, intersects_extent: bool = False) -> Any:
+    """Return this thread's evaluator connection for ``context``.
+
+    ``intersects_extent`` first registers the duckdb.spatial/intersects_extent@1
+    UDF on the connection (once per connection). It is opt-in because DuckDB and
+    Haybarn need numpy for ``create_function``, and ordinary filters must not.
+    """
     connections = getattr(_evaluation_local, "connections", None)
     if connections is None:
         connections = {}
@@ -1226,9 +1232,16 @@ def _get_evaluation_connection(context: EvaluationContext) -> Any:
         # core, a waitress worker on a 48-core host carried ~290 threads, and
         # every evaluation paid to dispatch onto that pool.
         connection = connect(config={"threads": 1})
-        _register_intersects_extent(connection)
         _apply_context(connection, context)
         connections[key] = connection
+    if intersects_extent:
+        registered = getattr(_evaluation_local, "intersects_extent_registered", None)
+        if registered is None:
+            registered = set()
+            _evaluation_local.intersects_extent_registered = registered
+        if key not in registered:
+            _register_intersects_extent(connection)
+            registered.add(key)
     return connection
 
 
@@ -1250,8 +1263,34 @@ def _intersects_extent_udf(left: Any, right: Any) -> Any:
     )
 
 
+def _uses_intersects_extent(expression: FilterExpression) -> bool:
+    """Whether ``expression`` calls duckdb.spatial/intersects_extent@1 anywhere."""
+    if isinstance(expression, Call):
+        identity = expression.function
+        if isinstance(identity, FunctionIdentity) and (identity.namespace, identity.name, identity.version) == (
+            "duckdb.spatial",
+            "intersects_extent",
+            1,
+        ):
+            return True
+        return any(_uses_intersects_extent(argument) for argument in expression.arguments)
+    if isinstance(expression, (Comparison, Arithmetic)):
+        return _uses_intersects_extent(expression.left) or _uses_intersects_extent(expression.right)
+    if isinstance(expression, BooleanExpression):
+        return any(_uses_intersects_extent(child) for child in expression.children)
+    if isinstance(expression, (FieldRef, Not, IsNull, Cast, Negate, In)):
+        return _uses_intersects_extent(expression.expression)
+    if isinstance(expression, RuntimeFilter):
+        return _uses_intersects_extent(expression.input)
+    return False
+
+
 def _register_intersects_extent(connection: Any) -> None:
-    """duckdb.spatial/intersects_extent@1 with the specified semantics (vgi/_wkb_extent.py)."""
+    """duckdb.spatial/intersects_extent@1 with the specified semantics (vgi/_wkb_extent.py).
+
+    ``create_function`` needs numpy, which the ``haybarn`` and ``duckdb`` extras
+    declare for this one function.
+    """
     connection.create_function(
         _INTERSECTS_EXTENT_UDF,
         _intersects_extent_udf,
@@ -1294,7 +1333,7 @@ def _evaluate_expression(
     batch: pa.RecordBatch,
     context: EvaluationContext,
 ) -> pa.BooleanArray:
-    connection = _get_evaluation_connection(context)
+    connection = _get_evaluation_connection(context, intersects_extent=_uses_intersects_extent(expression))
     referenced = expression_columns(expression)
     input_fields: list[pa.Field[Any]] = []
     input_arrays: list[pa.Array[Any]] = []

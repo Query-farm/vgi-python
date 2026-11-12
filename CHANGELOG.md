@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- **Pushed-down filters no longer need numpy.** In 0.51.0 every expression-filter evaluator connection registered
+  the `duckdb.spatial/intersects_extent@1` UDF up front, and the engine's `create_function` needs numpy, which no
+  user-facing extra declared. A worker installed as `vgi-python[haybarn]` (or `[duckdb]`) therefore failed every
+  pushed-down filter with `FilterDeserializationError: ... predicate does not bind under vgi.duckdb.standard.v1:
+  Invalid Input Error: 'numpy' is required for this operation`. The UDF is now registered only on the first
+  predicate that calls `intersects_extent`, so ordinary filters never call `create_function`. The `haybarn` and
+  `duckdb` extras now also declare `numpy>=2.4.1`, which that function does need; filter evaluation cannot run
+  without one of those extras, so numpy stays out of the core dependencies. A new CI job installs the built wheel
+  with only one engine extra and evaluates pushed-down filters, with and without numpy.
+
 ## 0.51.0 (2026-11-11)
 
 ### Fixes

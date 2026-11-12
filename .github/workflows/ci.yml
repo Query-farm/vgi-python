@@ -46,6 +46,40 @@ jobs:
       - name: Run tests
         run: uv run --python ${{ matrix.python-version }} pytest
 
+  # The test job syncs --all-extras, whose dev extra pulls numpy in. That hid
+  # the 0.51.0 bug where every filter evaluation needed numpy but neither engine
+  # extra declared it. Here the built wheel gets only one user-facing extra.
+  packaging:
+    name: Wheel with only [${{ matrix.extra }}]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        extra: [haybarn, duckdb]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+
+      - name: Build wheel
+        run: uv build --wheel --out-dir dist .
+
+      - name: Install the wheel with only [${{ matrix.extra }}]
+        run: |
+          uv venv --python 3.13 "$RUNNER_TEMP/venv"
+          VIRTUAL_ENV="$RUNNER_TEMP/venv" uv pip install "$(ls dist/vgi_python-*.whl)[${{ matrix.extra }}]"
+
+      - name: Evaluate pushed-down filters (plain and intersects_extent)
+        working-directory: ${{ runner.temp }}
+        run: '"$RUNNER_TEMP/venv/bin/python" -I "$GITHUB_WORKSPACE/tests/packaging/check_filter_evaluation.py"'
+
+      - name: Evaluate an ordinary filter without numpy
+        working-directory: ${{ runner.temp }}
+        run: |
+          VIRTUAL_ENV="$RUNNER_TEMP/venv" uv pip uninstall numpy
+          "$RUNNER_TEMP/venv/bin/python" -I "$GITHUB_WORKSPACE/tests/packaging/check_filter_evaluation.py" --plain-only
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
