@@ -10,7 +10,8 @@ emitted batch via ``out.emit(batch, cache_control=CacheControl(...))``:
 * ``cacheable_numbers(n, ttl := 300)`` — ``n`` rows ``[0..n)``; advertises a
   ``ttl`` freshness lifetime. The baseline cacheable generator.
 * ``cache_nonce()`` — ONE row whose value changes on every *real* invocation
-  (a process-global counter). A cache HIT is provable by the value NOT
+  (the worker pid folded over a per-process counter, so values never
+  collide across pooled worker processes). A cache HIT is provable by the value NOT
   changing across calls; a MISS by it changing. Row count is fixed (1) and
   never depends on wall clock.
 * ``cache_no_store(n)`` — emits ``n`` rows but advertises
@@ -25,6 +26,7 @@ emitted batch via ``out.emit(batch, cache_control=CacheControl(...))``:
 from __future__ import annotations
 
 import itertools
+import os
 import struct
 from dataclasses import dataclass
 from typing import Annotated, Any, ClassVar, cast
@@ -59,6 +61,22 @@ _DEFAULT_TTL_SECONDS = 300
 # cache MISS). A pooled worker persists it across calls, so a served-from-cache
 # hit never advances it — that's exactly the HIT/MISS signal tests assert on.
 _NONCE_COUNTER = itertools.count()
+
+
+def _next_nonce() -> int:
+    """Mint a nonce unique across every live worker process, not just this one.
+
+    The client's subprocess pool holds several worker processes and hands a scan
+    whichever it pops, so two cache MISSes can land in two different processes.
+    With a bare per-process counter both could mint the same value and a MISS
+    would read as a HIT (``cache/transaction_scope.test``: "t2 nonce <> t1a
+    nonce"). Folding the pid into the high 32 bits keeps the nonces of all live
+    processes disjoint, while the low 32 bits stay a per-process count
+    (``pid = nonce >> 32``). The pid is read at mint time, not import time, so a
+    worker forked after import still gets its own range. Fits ``int64``: Linux
+    and macOS pids are below 2**31.
+    """
+    return (os.getpid() << 32) + next(_NONCE_COUNTER)
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +205,7 @@ class CacheNonceFunction(TableFunctionGenerator[CacheNonceArgs, _CacheNonceState
     @classmethod
     def initial_state(cls, params: ProcessParams[CacheNonceArgs]) -> _CacheNonceState:
         """Mint a fresh nonce for this (real) invocation."""
-        return _CacheNonceState(nonce=next(_NONCE_COUNTER))
+        return _CacheNonceState(nonce=_next_nonce())
 
     @classmethod
     def process(
@@ -325,7 +343,7 @@ class CacheScopedTxnFunction(TableFunctionGenerator[CacheScopedTxnArgs, _CacheSc
     @classmethod
     def initial_state(cls, params: ProcessParams[CacheScopedTxnArgs]) -> _CacheScopedTxnState:
         """Create initial state; bump the nonce once per REAL invocation (MISS)."""
-        return _CacheScopedTxnState(remaining=params.args.n, nonce=next(_NONCE_COUNTER))
+        return _CacheScopedTxnState(remaining=params.args.n, nonce=_next_nonce())
 
     @classmethod
     def process(
@@ -462,7 +480,7 @@ class CacheRevalidatableFunction(TableFunctionGenerator[CacheRevalidatableArgs, 
     @classmethod
     def initial_state(cls, params: ProcessParams[CacheRevalidatableArgs]) -> _CacheNonceState:
         """Mint a fresh nonce for this (real) invocation."""
-        return _CacheNonceState(nonce=next(_NONCE_COUNTER))
+        return _CacheNonceState(nonce=_next_nonce())
 
     @classmethod
     def process(
