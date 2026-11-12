@@ -18,6 +18,7 @@ import sqlite3
 import uuid
 from typing import Any, Protocol
 
+from vgi._sqlite_wal import connect_wal
 from vgi.catalog.catalog_interface import AttachOpaqueData, TransactionOpaqueData
 
 __all__ = [
@@ -158,14 +159,16 @@ class CatalogStorageSqlite:
 
     def _connect(self) -> sqlite3.Connection:
         """Create a new database connection."""
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
-        conn.execute("PRAGMA journal_mode=WAL")
-        return conn
+        return connect_wal(self.db_path)
 
     def _ensure_tables(self) -> None:
         """Create all storage tables if they don't exist."""
         conn = self._connect()
         try:
+            # BEGIN IMMEDIATE takes the write lock up front (honouring busy_timeout),
+            # so several processes setting up one fresh file serialize instead of
+            # racing. If anything below raises, close() discards the transaction.
+            conn.execute("BEGIN IMMEDIATE")
             # Attachment table
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS catalog_attachments (

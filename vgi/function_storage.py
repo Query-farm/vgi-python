@@ -31,6 +31,7 @@ from typing import Any, Protocol, TypeVar
 
 import pyarrow as pa
 
+from vgi._sqlite_wal import connect_wal
 from vgi._storage_profile import _PROFILE_ON, _profiler, io_call_bytes
 
 # When the parent vgi.* logger is configured at DEBUG, this emits one line
@@ -962,9 +963,7 @@ class FunctionStorageSqlite:
             # Memory DBs use MEMORY journal mode implicitly; no WAL,
             # no fsync — the whole point of using :memory: here.
             return sqlite3.connect(self._memory_uri, uri=True, timeout=30.0)
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
-        conn.execute("PRAGMA journal_mode=WAL")
-        return conn
+        return connect_wal(self.db_path)
 
     def _conn(self) -> sqlite3.Connection:
         """Return the calling thread's persistent connection, creating it lazily.
@@ -982,10 +981,9 @@ class FunctionStorageSqlite:
         if self._memory_uri is not None:
             conn = sqlite3.connect(self._memory_uri, uri=True, timeout=30.0)
         else:
-            conn = sqlite3.connect(self.db_path, timeout=30.0)
-            conn.execute("PRAGMA journal_mode=WAL")
+            # busy_timeout first, then WAL with a retry on SQLITE_BUSY (vgi._sqlite_wal).
+            conn = connect_wal(self.db_path)
             conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA busy_timeout=30000")
             conn.execute("PRAGMA temp_store=MEMORY")
             conn.execute("PRAGMA cache_size=-65536")
         self._tls.conn = conn
@@ -1051,6 +1049,10 @@ class FunctionStorageSqlite:
         """
         conn = self._connect()
         try:
+            # BEGIN IMMEDIATE takes the write lock up front (honouring busy_timeout),
+            # so several processes setting up one fresh file serialize instead of
+            # racing. If anything below raises, close() discards the transaction.
+            conn.execute("BEGIN IMMEDIATE")
             # Self-heal an older on-disk DB to the unified minimal schema. The
             # local SQLite tier is single-connection-per-process with no network
             # retries, so it carries none of the DO's HTTP idempotency machinery

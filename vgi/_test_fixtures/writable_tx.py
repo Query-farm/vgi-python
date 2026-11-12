@@ -49,6 +49,7 @@ import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
 from vgi_rpc.rpc import OutputCollector
 
+from vgi._sqlite_wal import enable_wal
 from vgi.arguments import Arg, TableInput
 from vgi.catalog import (
     AttachOpaqueData,
@@ -144,11 +145,14 @@ def _state() -> Iterator[sqlite3.Connection]:
     os.makedirs(directory, exist_ok=True)
     conn = sqlite3.connect(os.path.join(directory, _STATE_FILE), timeout=30, isolation_level=None)
     try:
-        conn.execute("PRAGMA busy_timeout = 30000")
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.executescript(_DDL)
+        enable_wal(conn)
         conn.execute("BEGIN IMMEDIATE")
         try:
+            # Inside the transaction (executescript would COMMIT first), so a
+            # fresh file's schema is created by exactly one process.
+            for statement in _DDL.split(";"):
+                if statement.strip():
+                    conn.execute(statement)
             yield conn
         except BaseException:
             conn.execute("ROLLBACK")

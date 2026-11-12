@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Fixes
+
+- **Concurrent opens of a fresh SQLite storage file no longer fail with "database is locked".** When several worker
+  processes opened the same new `FunctionStorageSqlite` or `CatalogStorageSqlite` file at once, the switch to WAL
+  could fail at once with `SQLITE_BUSY`: SQLite does not call the busy handler there, so the 30 s connect timeout did
+  not apply, and `FunctionStorageSqlite` set `busy_timeout` only after the switch. Both now set `busy_timeout` first,
+  retry the WAL switch on `SQLITE_BUSY` with a bounded backoff (up to the same 30 s), and create their schema inside
+  `BEGIN IMMEDIATE` so concurrent first-time setup serializes. The `simple_writable`, `schema_reconcile` and `txfix`
+  fixture workers do the same. No API change.
+
 ### Protocol 3.3: write-path wire changes
 
 Part of `vgi.v3` / `3.3.0` (the version string does not change again).

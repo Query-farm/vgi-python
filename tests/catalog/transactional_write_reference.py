@@ -40,6 +40,7 @@ import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
 from vgi_rpc.rpc import OutputCollector
 
+from vgi._sqlite_wal import enable_wal, immediate_transaction
 from vgi._test_fixtures.simple_writable import _parse_write_options
 from vgi.catalog import (
     AttachOpaqueData,
@@ -148,12 +149,13 @@ class _Authority:
                 return
             cls.root = root
             with closing(cls.connect()) as db:
-                db.execute("PRAGMA journal_mode=WAL")
-                if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='items'").fetchone() is None:
-                    db.execute("BEGIN")
-                    db.execute('CREATE TABLE "items" (id BIGINT, label VARCHAR)')
-                    db.execute('INSERT INTO "items" VALUES (?, ?)', (-1, "baseline"))
-                    db.execute("COMMIT")
+                enable_wal(db, timeout=10)
+                # Check-and-create under the write lock, so concurrent first
+                # openers cannot both see no table and both create it.
+                with immediate_transaction(db):
+                    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='items'").fetchone() is None:
+                        db.execute('CREATE TABLE "items" (id BIGINT, label VARCHAR)')
+                        db.execute('INSERT INTO "items" VALUES (?, ?)', (-1, "baseline"))
 
     @classmethod
     def connect(cls) -> sqlite3.Connection:

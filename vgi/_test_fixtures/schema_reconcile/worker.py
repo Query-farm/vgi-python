@@ -37,6 +37,7 @@ import pyarrow as pa
 from vgi_rpc.rpc import OutputCollector
 
 from vgi import Worker
+from vgi._sqlite_wal import connect_wal, immediate_transaction
 from vgi._test_fixtures.constraint_facts import fixed_not_null
 from vgi.catalog import Catalog, Schema
 from vgi.catalog.capabilities import CONSTRAINT_ENFORCE, CONSTRAINT_RECORDS_READ, CatalogCapabilities
@@ -198,12 +199,17 @@ def _db_path() -> str:
 
 
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(_db_path(), timeout=30.0)
-    conn.execute("PRAGMA journal_mode=WAL")
-    for spec in TABLES.values():
-        conn.execute(
-            f"CREATE TABLE IF NOT EXISTS {spec.storage_table} (  rid_blob BLOB PRIMARY KEY,  payload BLOB NOT NULL)"
-        )
+    conn = connect_wal(_db_path())
+    try:
+        with immediate_transaction(conn):
+            for spec in TABLES.values():
+                conn.execute(
+                    f"CREATE TABLE IF NOT EXISTS {spec.storage_table} ("
+                    "  rid_blob BLOB PRIMARY KEY,  payload BLOB NOT NULL)"
+                )
+    except BaseException:
+        conn.close()
+        raise
     return conn
 
 

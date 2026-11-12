@@ -50,6 +50,7 @@ import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass, Transient
 from vgi_rpc.rpc import OutputCollector
 
+from vgi._sqlite_wal import connect_wal, immediate_transaction
 from vgi.catalog import (
     FUNCTION_VISIBILITY_TABLE_ONLY,
     AttachOpaqueData,
@@ -174,15 +175,17 @@ def _ensure_init(attach_opaque_data: bytes) -> None:
         if attach_opaque_data in _INITIALIZED:
             return
         os.makedirs(_DB_DIR, exist_ok=True)
-        conn = sqlite3.connect(_db_path(attach_opaque_data), isolation_level=None)
+        conn = connect_wal(_db_path(attach_opaque_data), isolation_level=None)
         try:
-            conn.execute("PRAGMA journal_mode=WAL;")
-            for tname, tschema in _table_specs().items():
-                cols = ", ".join(f'"{f.name}" {_sql_type(f.type)}' for f in tschema)
-                conn.execute(f'CREATE TABLE IF NOT EXISTS "{tname}" ({cols})')
-            conn.execute(f'CREATE TABLE IF NOT EXISTS "{_CREATED}" (name TEXT PRIMARY KEY, columns BLOB NOT NULL)')
-            conn.execute(f'CREATE TABLE IF NOT EXISTS "{_VERSION}" (one INTEGER PRIMARY KEY, version INTEGER NOT NULL)')
-            conn.execute(f'INSERT OR IGNORE INTO "{_VERSION}" (one, version) VALUES (1, 1)')
+            with immediate_transaction(conn):
+                for tname, tschema in _table_specs().items():
+                    cols = ", ".join(f'"{f.name}" {_sql_type(f.type)}' for f in tschema)
+                    conn.execute(f'CREATE TABLE IF NOT EXISTS "{tname}" ({cols})')
+                conn.execute(f'CREATE TABLE IF NOT EXISTS "{_CREATED}" (name TEXT PRIMARY KEY, columns BLOB NOT NULL)')
+                conn.execute(
+                    f'CREATE TABLE IF NOT EXISTS "{_VERSION}" (one INTEGER PRIMARY KEY, version INTEGER NOT NULL)'
+                )
+                conn.execute(f'INSERT OR IGNORE INTO "{_VERSION}" (one, version) VALUES (1, 1)')
         finally:
             conn.close()
         _INITIALIZED.add(attach_opaque_data)
@@ -191,9 +194,8 @@ def _ensure_init(attach_opaque_data: bytes) -> None:
 @contextlib.contextmanager
 def _connect(attach_opaque_data: bytes) -> Iterator[sqlite3.Connection]:
     _ensure_init(attach_opaque_data)
-    conn = sqlite3.connect(_db_path(attach_opaque_data), isolation_level=None)
+    conn = connect_wal(_db_path(attach_opaque_data), isolation_level=None)
     try:
-        conn.execute("PRAGMA journal_mode=WAL;")
         yield conn
     finally:
         conn.close()
