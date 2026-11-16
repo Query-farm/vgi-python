@@ -206,6 +206,7 @@ __all__ = [
     "TaggedUnion",
     "TypeBoundPredicate",
     "OutputLength",
+    "Attach",
     "Setting",
     "Secret",
     "SecretLookupEntry",
@@ -1906,6 +1907,28 @@ class Auth:
     Use with Annotated to declare a parameter that receives the `AuthContext`
     for the current request. Returns `AuthContext.anonymous()` when no
     authentication is configured (including stdio transport).
+
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class Attach:
+    """Metadata for an ATTACH-options parameter in `compute()`.
+
+    Use with Annotated to declare a parameter that receives the options of the
+    ``ATTACH`` the scalar was called through, as returned by
+    [`attach_options`][vgi.catalog.attach_option.attach_options]: lower-cased
+    option names to values, secret options included, defaults not filled in.
+    A call outside an attached catalog receives ``{}``.
+
+    ```python
+    @classmethod
+    def compute(
+        cls,
+        vin: Annotated[pa.StringArray, Param(doc="VIN")],
+        options: Annotated[dict[str, Any], Attach()],
+    ) -> pa.StringArray: ...
+    ```
 
     """
 

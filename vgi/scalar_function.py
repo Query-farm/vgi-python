@@ -53,6 +53,7 @@ from vgi.arguments import (
     Arg,
     Arguments,
     ArgumentValidationError,
+    Attach,
     Auth,
     ConstParam,
     OutputLength,
@@ -97,8 +98,10 @@ class BindResult(ArrowSerializableDataclass):
 
     Attributes:
         output_type: Arrow data type for the output value.
-        opaque_data: Optional serialized data, opaque to the caller,
-            that will be passed to `global_init()` and `process()`.
+        opaque_data: Optional serialized data, opaque to the caller. It is
+            passed to `global_init()`; a `process()` override can read it as
+            ``init_call.bind_opaque_data``. `compute()` does not receive it: use
+            an [`Attach`][vgi.arguments.Attach] parameter for ATTACH options.
 
     """
 
@@ -894,6 +897,7 @@ class ScalarFunction(ScalarFunctionGenerator):
     _secret_params: dict[str, Secret]  # Secret params: param_name -> Secret instance
     _output_length_param: str | None  # OutputLength param name (batch row count)
     _auth_param: str | None  # Auth param name (receives AuthContext)
+    _attach_param: str | None  # Attach param name (receives the ATTACH options)
     _returns_output_type: pa.DataType | None  # Output type from Returns()
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
@@ -951,6 +955,7 @@ class ScalarFunction(ScalarFunctionGenerator):
                 "Setting": vgi_args.Setting,
                 "Secret": vgi_args.Secret,
                 "Auth": vgi_args.Auth,
+                "Attach": vgi_args.Attach,
                 "OutputLength": vgi_args.OutputLength,
                 "Returns": vgi_args.Returns,
                 "AnyArrow": vgi_args.AnyArrow,
@@ -968,6 +973,7 @@ class ScalarFunction(ScalarFunctionGenerator):
         const_scalar_params: set[str] = set()  # ConstParams annotated as pa.Scalar
         output_length_param: str | None = None  # param that receives batch row count
         auth_param: str | None = None  # param that receives AuthContext
+        attach_param: str | None = None  # param that receives the ATTACH options
         returns_output_type: pa.DataType | None = None
 
         # Check return type for Returns() annotation
@@ -1069,6 +1075,17 @@ class ScalarFunction(ScalarFunctionGenerator):
                         # Don't increment overall_position - not a call argument
                         break
 
+                    # Attach: receives the ATTACH options as a dict
+                    if isinstance(meta, Attach):
+                        if attach_param is not None:
+                            raise TypeError(
+                                f"{cls.__name__}.compute() has multiple Attach parameters: "
+                                f"{attach_param!r} and {name!r}"
+                            )
+                        attach_param = name
+                        # Don't increment overall_position - not a call argument
+                        break
+
         # Extract Setting/Secret params using shared helper
         setting_params, secret_params = _extract_setting_secret_params(compute_method)
 
@@ -1079,6 +1096,7 @@ class ScalarFunction(ScalarFunctionGenerator):
         cls._secret_params = secret_params
         cls._output_length_param = output_length_param
         cls._auth_param = auth_param
+        cls._attach_param = attach_param
         cls._returns_output_type = returns_output_type
 
     @final
@@ -1132,6 +1150,7 @@ class ScalarFunction(ScalarFunctionGenerator):
         batch: pa.RecordBatch,
         bind_call: BindRequest,
         auth_context: AuthContext,
+        attach_plaintext: bytes | None = None,
     ) -> dict[str, Any]:
         """Extract columns/values for `compute()` parameters.
 
@@ -1142,6 +1161,8 @@ class ScalarFunction(ScalarFunctionGenerator):
             batch: Input RecordBatch.
             bind_call: The BindCall with arguments, settings, and secrets.
             auth_context: Authentication context for the current request.
+            attach_plaintext: The worker-unwrapped attach (``uuid || options ||
+                catalog bytes``), for an ``Attach()`` parameter; None outside a catalog.
 
         Returns:
             Dict mapping parameter names to their resolved values.
@@ -1199,6 +1220,14 @@ class ScalarFunction(ScalarFunctionGenerator):
         # Auth param: pass the AuthContext
         if cls._auth_param is not None:
             kwargs[cls._auth_param] = auth_context
+
+        # Attach param: the ATTACH options, read from the unwrapped attach exactly
+        # as BindParameters.attach_options reads them at bind.
+        if cls._attach_param is not None:
+            from vgi.catalog.attach_option import attach_options
+            from vgi.function_storage import attach_catalog_bytes
+
+            kwargs[cls._attach_param] = attach_options(attach_catalog_bytes(attach_plaintext))
 
         return kwargs
 
@@ -1333,7 +1362,12 @@ class ScalarFunction(ScalarFunctionGenerator):
         output_schema = init_call.output_schema
 
         # Extract columns for keyword-only parameters
-        kwargs = cls._extract_compute_kwargs(batch, init_call.bind_call, auth_context)
+        kwargs = cls._extract_compute_kwargs(
+            batch,
+            init_call.bind_call,
+            auth_context,
+            getattr(storage, "_attach_plaintext", None),
+        )
 
         # Validate input types match declared Param types
         cls._validate_param_types(kwargs)

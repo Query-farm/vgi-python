@@ -683,6 +683,9 @@ class BoundStorage:
         # derivation origin for debug logs.
         origin = f"BoundStorage({type(request).__name__})" if request is not None else "BoundStorage"
         self._shard_key = _resolve_shard_key(storage, attach_plaintext, origin)
+        # Kept for ScalarFunction.process, which reads the ATTACH options for an
+        # ``Attach()`` compute() parameter from here (process()'s signature is fixed).
+        self._attach_plaintext = attach_plaintext
 
     def transaction(self, transaction_opaque_data: bytes) -> TransactionBoundStorage:
         """Return a transaction-scoped storage view.

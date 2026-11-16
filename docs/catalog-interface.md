@@ -407,6 +407,23 @@ class Lookup(TableFunctionGenerator[None, None]):
         ...
 ```
 
+A `ScalarFunction`'s `compute()` has no `params`; declare a parameter annotated with `Attach()`
+instead. It receives the same dict (`{}` when the call is not through an attached catalog):
+
+```python test="skip"
+from vgi import Attach, Param, Returns, ScalarFunction
+
+class Lookup(ScalarFunction):
+    @classmethod
+    def compute(
+        cls,
+        key: Annotated[pa.StringArray, Param(doc="Key")],
+        options: Annotated[dict[str, Any], Attach()],
+    ) -> Annotated[pa.StringArray, Returns()]:
+        base_url = options.get("base_url", "https://api.example.com")
+        ...
+```
+
 On a host whose temp directory is shared or unsuitable, point `VGI_ATTACH_SECRET_KEY_FILE` at a
 private file (all worker processes of the deployment must use the same one), or call
 `vgi.attach_secret_options.set_attach_secret_options_key(key)` at startup.
