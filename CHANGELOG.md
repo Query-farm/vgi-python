@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.52.2 (2026-11-16)
+
+### Fixes
+
+- **A `Secret()` or `Setting()` on a shared base class's `on_bind()` now reaches its subclasses.** An abstract or
+  generic base skips the annotation scan, and a subclass that did not redefine `on_bind()` copied the base's empty
+  result, so the secret was never requested and arrived as `None` with no warning. Table and aggregate functions now
+  read the `on_bind()` they actually resolve to. Workers that declared `Meta.required_secrets` on every subclass to
+  get around this can declare the secret once on the base.
+- **Scalar overloads that differ only in their number of column arguments are no longer ambiguous.**
+  `f(a)` and `f(a, b)` both matched a one-column call because a missing column scored as a wildcard. The call's
+  column count must now fit the overload's column `Param`s (column varargs still take N or more).
+
+### New
+
+- **`Attach()` gives a scalar's `compute()` its ATTACH options.** Annotate a parameter
+  `Annotated[dict[str, Any], Attach()]` to receive `attach_options()` of the call's attach (secret options
+  included, `{}` outside an attached catalog), as `Auth()` receives the `AuthContext`. Until now only `bind()` could
+  read them; overriding the final `process()` to reach `init_call.bind_call.attach_opaque_data` also read the
+  wire value, which can still be sealed (HTTP with a signing key). No wire or protocol change.
+
 ## 0.52.1 (2026-11-16)
 
 ### Fixtures
