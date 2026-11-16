@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.52.0 (2026-11-16)
+
+### Engine: DuckDB 2.0
+
+- **The embedded engine moves to DuckDB 2.0.0 / Haybarn 2.0.0rc11**, the engine line the DuckDB `vgi` extension is
+  built on. The `[haybarn]` extra now pins `haybarn==2.0.0rc11` and `[duckdb]` pins `duckdb==2.0.0`. Until now both
+  pinned 1.5.5, and an environment that also held haybarn 2.0 (to drive the extension in tests) refused every
+  pushed-down filter with `vgi.duckdb.standard.v1 requires DuckDB 1.5.5 or Haybarn 1.5.5-rc1; found haybarn
+  2.0.0rc11`.
+- **The `vgi.duckdb.standard.v1` filter oracle is now upstream DuckDB v2.0.0** (`d54cbbe3df`), with Haybarn
+  v2.0.0-rc11 as reference distribution (filter encoding spec section 6). The full filter conformance corpus passes
+  unchanged on both 2.0 builds. Engine builds other than these two are refused, as before.
+- **CHECK-constraint and generated-column validation read DuckDB 2.0's parsed-expression JSON**, which no longer types
+  constants (`literal` {kind, text}), passes function `arguments` instead of `children`, and names cast targets with
+  `type_expr`. Literal and cast types are resolved through the engine, as the extension's `ToValue()` /
+  `TryDefaultBind` do; named function arguments are rejected, as the extension does. Under 0.51.x with a 2.0 engine
+  every table declaring a CHECK or generated column failed at construction with `KeyError: 'value'`.
+- `vgi._duckdb.arrow_table()` / `arrow_reader()` wrap `to_arrow_table()` / `to_arrow_reader()`, which DuckDB 2.0 types
+  as optional.
+
+### Migrating a worker
+
+Workers that call the engine directly may need the same changes: DuckDB 2.0 relations have no `fetchone()` (use
+`connection.execute(...).fetchone()`), and `json_serialize_sql` output changed shape as above. A worker that pins a
+1.5 engine (`haybarn==1.5.5rc1`, `duckdb==1.5.5`) cannot install 0.52.0; drop that pin.
+
+### CI
+
+- A new `Engine drift` workflow fails when the `[haybarn]`/`[duckdb]` pins are on a different DuckDB major.minor line
+  from the Haybarn tag in the extension's distribution workflow. It runs on every push and weekly.
+
 ## 0.51.1 (2026-11-12)
 
 ### Fixes
