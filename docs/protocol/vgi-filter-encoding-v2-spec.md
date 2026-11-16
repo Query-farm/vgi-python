@@ -5,7 +5,7 @@
 **Encoding identifier:** `vgi.filters.v2`
 **Filter version marker:** `2`
 **Expression semantics:** `vgi.duckdb.standard.v1`
-**Normative engine oracle:** DuckDB `v1.5.5` (`d8cdaa33fda8df955cc76ef58a280f68f4cd43fa`)
+**Normative engine oracle:** DuckDB `v2.0.0` (`d54cbbe3df17e8e5ce68312f483b4155836112aa`)
 
 ## 1. Purpose
 
@@ -664,24 +664,28 @@ Artifact formats, capability rules, algorithm registration, DuckDB Bloom and pre
 ## 6. Standard semantics and function set
 
 `vgi.duckdb.standard.v1` defines the semantics of both core expression nodes and the deliberately small standard
-function set below. Its normative oracle is the observable SQL behavior of upstream DuckDB `v1.5.5`, tag commit
-`d8cdaa33fda8df955cc76ef58a280f68f4cd43fa`, after applying the evaluation-context settings required by section 11.3.
-It is not a reference to the moving `1.5.x` release family.
+function set below. Its normative oracle is the observable SQL behavior of upstream DuckDB `v2.0.0`, tag commit
+`d54cbbe3df17e8e5ce68312f483b4155836112aa`, after applying the evaluation-context settings required by section 11.3.
+It is not a reference to the moving `2.0.x` release family.
 
-Haybarn `v1.5.5-rc1`, tag commit `105edd31b57fe7e6d32ee648efad562e45a9f908`, is a reference distribution built
-on that upstream release and is expected to conform to `vgi.duckdb.standard.v1`. If an unlisted Haybarn modification
-and upstream DuckDB v1.5.5 produce different observable expression behavior, upstream DuckDB v1.5.5 is the tie-breaking
+Haybarn `v2.0.0-rc11`, tag commit `9b1a0c5829c056edaecd8ee8e7249a70fb8f50c8`, is a reference distribution built
+on DuckDB 2.0 and is expected to conform to `vgi.duckdb.standard.v1`. If an unlisted Haybarn modification
+and upstream DuckDB v2.0.0 produce different observable expression behavior, upstream DuckDB v2.0.0 is the tie-breaking
 oracle unless this specification explicitly states otherwise.
+
+The profile's oracle was originally upstream DuckDB v1.5.5 (Haybarn v1.5.5-rc1). It moved to DuckDB v2.0.0 when the
+DuckDB `vgi` extension moved to DuckDB 2.0, so that the producer and the reference evaluator run the same engine; the
+complete conformance corpus passes unchanged on both 2.0 builds.
 
 The profile covers values, logical result types, NULL behavior, errors by category, overload selection, coercion, and
 the effects of encoded session settings. Exact diagnostic wording, private expression classes, optimizer choices, and
 physical execution algorithms are not semantic results. The normative sources have this precedence: explicit rules in
-this specification; observable upstream DuckDB v1.5.5 behavior for cases those rules do not fix; and conformance-corpus
+this specification; observable upstream DuckDB v2.0.0 behavior for cases those rules do not fix; and conformance-corpus
 vectors as executable examples. A corpus vector that conflicts with either higher-precedence source is a corpus defect
 and MUST NOT redefine the profile.
 
-This behavior does not change merely because an installed DuckDB version changes. When stable DuckDB 2.0 semantics are
-adopted, they will be published as `vgi.duckdb.standard.v2`; they will not silently redefine v1. A producer or consumer
+This behavior does not change merely because an installed DuckDB version changes. A later change of oracle is made
+only by editing this section, never by accepting whatever engine a consumer happens to have installed. A producer or consumer
 may support both profiles, and the document-level `semantics` value selects one unambiguously.
 
 ### 6.1 `starts_with`
@@ -1074,7 +1078,7 @@ The deprecated DuckDB setting `null_on_division_by_zero` is not encoded. The pro
 producer with that setting enabled MUST decline every division, modulo, or function expression whose behavior it can
 affect, rather than silently translating it under the profile. An embedded-DuckDB consumer MUST verify that the setting
 is `false` before binding affected expressions and MUST NOT inherit a connection-local `true` value. The setting does
-not exist in the v1.5.5 oracle; absence there is the fixed-false reference behavior rather than an error.
+not exist in the v2.0.0 oracle; absence there is the fixed-false reference behavior rather than an error.
 
 The producer sends a context-dependent predicate only after matching the profile against
 `filter_evaluation_contexts`. If the profile is unsupported, a required predicate is not delegated and an advisory
@@ -1341,8 +1345,8 @@ Required positive cases include:
     fingerprint;
 26. successful strict matching when producer, advertised capability, and filter batch carry the identical provider
     fingerprint; and
-27. core-node values, result types, NULLs, and error categories matching upstream DuckDB v1.5.5 under
-    `vgi.duckdb.standard.v1`, with Haybarn v1.5.5-rc1 passing the same corpus.
+27. core-node values, result types, NULLs, and error categories matching upstream DuckDB v2.0.0 under
+    `vgi.duckdb.standard.v1`, with Haybarn v2.0.0-rc11 passing the same corpus.
 
 Exact-evaluation parity cases include arithmetic overflow, integer and floating-point division by zero, and failing
 casts. Each case verifies whether evaluation returns a value or raises an error, along with the error category required
@@ -1409,7 +1413,7 @@ VGI 2.0 performs a direct replacement:
 13. Mark context-independent batches with `vgi.none.v1`; for negotiated DuckDB-session batches, carry the bound time
     zone, calendar, default collation, IEEE floating-point policy, and integer-division policy plus an optional strict
     provider fingerprint as immutable schema metadata.
-14. Select `vgi.duckdb.standard.v1` in every initial filter document and pin it to upstream DuckDB v1.5.5 semantics.
+14. Select `vgi.duckdb.standard.v1` in every initial filter document and pin it to upstream DuckDB v2.0.0 semantics.
 15. Reject every VGI 1.x peer before bind or execution.
 
 The Python SDK should implement the schema, generated model, validation, reference evaluator, and corpus first. Other language SDKs consume the generated schema and implement decoding/evaluation without designing independent wire shapes. DuckDB-specific work follows [VGI DuckDB Filter Adapter](vgi-duckdb-filter-adapter.md).
@@ -1420,9 +1424,8 @@ This proposal makes the following choices:
 
 - VGI 2.0 has one filter encoding and no v1 compatibility mode.
 - The wire is a unified expression AST inside the existing Arrow IPC container.
-- `vgi.duckdb.standard.v1` pins core and standard-function behavior to upstream DuckDB v1.5.5; Haybarn
-  v1.5.5-rc1 is a conforming reference distribution.
-- Stable DuckDB 2.0 behavior will be introduced as `vgi.duckdb.standard.v2`, without changing v1.
+- `vgi.duckdb.standard.v1` pins core and standard-function behavior to upstream DuckDB v2.0.0; Haybarn
+  v2.0.0-rc11 is a conforming reference distribution.
 - Embedded DuckDB is the recommended portable evaluator.
 - DataFusion native pushdown is an optional deeper optimization with a residual correctness backstop.
 - Polars is treated primarily as a client and retains its native residual.

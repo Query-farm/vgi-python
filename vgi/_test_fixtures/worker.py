@@ -42,6 +42,7 @@ from typing import Annotated, Any
 
 import pyarrow as pa
 
+from vgi._duckdb import arrow_table
 from vgi._test_fixtures.aggregate import (
     AvgFunction,
     CountFunction,
@@ -423,7 +424,7 @@ def _build_fixture_stats() -> tuple[
         "ST_Point(x::DOUBLE, y::DOUBLE)::GEOMETRY AS geom "
         "FROM range(5) t1(x), range(5) t2(y)"
     )
-    geo_schema = conn.execute("SELECT * FROM geo_points LIMIT 0").to_arrow_table(1024).schema
+    geo_schema = arrow_table(conn.execute("SELECT * FROM geo_points LIMIT 0"), 1024).schema
     geo_stats = statistics_from_duckdb(conn, "geo_points")
 
     conn.execute("CREATE TYPE color AS ENUM ('red', 'green', 'blue')")

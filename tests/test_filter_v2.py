@@ -728,11 +728,12 @@ def test_engine_pins_match_standard_v1_oracle() -> None:
 @pytest.mark.parametrize(
     ("engine", "version", "accepted"),
     [
-        ("duckdb", "1.5.5", True),
-        ("haybarn", "1.5.5rc1", True),
-        ("duckdb", "1.5.6", False),
-        ("duckdb", "1.5.4", False),
-        ("haybarn", "1.5.6rc1", False),
+        ("duckdb", "2.0.0", True),
+        ("haybarn", "2.0.0rc11", True),
+        ("duckdb", "2.0.1", False),
+        ("duckdb", "1.5.5", False),
+        ("haybarn", "1.5.5rc1", False),
+        ("haybarn", "2.0.0rc10", False),
     ],
 )
 def test_standard_v1_evaluator_requires_oracle_engine(

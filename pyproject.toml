@@ -54,17 +54,17 @@ dependencies = [
 # lazily in vgi/_duckdb.py: haybarn is preferred, stock duckdb is the
 # fallback. Neither is a hard dependency — install one via these extras.
 # Both are pinned EXACTLY: expression-filter evaluation implements
-# vgi.duckdb.standard.v1, whose oracle is upstream DuckDB 1.5.5 (Haybarn
-# 1.5.5-rc1), and vgi/filter_v2.py refuses any other engine build
+# vgi.duckdb.standard.v1, whose oracle is upstream DuckDB 2.0.0 (Haybarn
+# 2.0.0-rc11), and vgi/filter_v2.py refuses any other engine build
 # (STANDARD_V1_ENGINE_VERSIONS). A looser range lets a resolver pick e.g.
-# duckdb 1.5.6, and every pushed-down filter then fails to bind. Change these
+# duckdb 2.0.1, and every pushed-down filter then fails to bind. Change these
 # only together with STANDARD_V1_ENGINE_VERSIONS (a test keeps them in step).
 # numpy: the engine's create_function needs it, and the evaluator registers the
 # duckdb.spatial/intersects_extent@1 UDF with it (only for predicates that call
 # that function). Filter evaluation never runs without one of these extras, so
 # numpy belongs here rather than in the core dependencies.
-haybarn = ["haybarn==1.5.5rc1", "numpy>=2.4.1"]
-duckdb = ["duckdb==1.5.5", "numpy>=2.4.1"]
+haybarn = ["haybarn==2.0.0rc11", "numpy>=2.4.1"]
+duckdb = ["duckdb==2.0.0", "numpy>=2.4.1"]
 http = ["vgi-rpc[http]"]
 # Publishing and resolving immutable external catalog results needs the RPC
 # download/compression dependencies on every transport, including subprocess.
@@ -101,7 +101,7 @@ test-fixtures-writable = [
     "vgi-python[transactor]",
 ]
 dev = [
-    "duckdb==1.5.5",  # pinned with the `duckdb` extra above
+    "duckdb==2.0.0",  # pinned with the `duckdb` extra above
     "mypy",
     "pyarrow-stubs",
     # pydoclint is intentionally NOT a project dependency: it pulls

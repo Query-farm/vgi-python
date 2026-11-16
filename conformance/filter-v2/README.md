@@ -18,7 +18,7 @@ The corpus has two layers:
   manifest.
 - `runtime-manifest.json` indexes the executable Arrow vectors under `runtime/` and records a SHA-256 digest for every
   file.
-- `generate_runtime.py` deterministically regenerates the runtime corpus with DuckDB 1.5.5 reference semantics.
+- `generate_runtime.py` deterministically regenerates the runtime corpus with DuckDB 2.0.0 reference semantics.
 - `run_worker.py` sends the portable subset through the public VGI client to any compatible worker executable. For
   example:
 

@@ -26,17 +26,17 @@ DUCKDB_SESSION_CONTEXT = "vgi.duckdb.session.v1"
 
 #: Engine builds whose observable SQL behavior *is* the ``vgi.duckdb.standard.v1``
 #: oracle, by distribution name -> exact ``__version__`` strings. The profile is
-#: pinned to upstream DuckDB v1.5.5 (Haybarn v1.5.5-rc1 is its reference
-#: distribution) and is "not a reference to the moving 1.5.x release family"
-#: (vgi-filter-encoding-v2-spec.md section 6). A later patch release is not
-#: added here merely because the conformance corpus passes: DuckDB 1.5.6, for
-#: one, ships newer time-zone data (2026c/2026d) and changes integer-literal and
-#: printf behavior, so it is not the oracle. The ``duckdb``/``haybarn`` extras in
+#: pinned to upstream DuckDB v2.0.0 (Haybarn v2.0.0-rc11 is its reference
+#: distribution), the engine the DuckDB ``vgi`` extension now runs on, and is
+#: not a reference to the moving 2.0.x release family
+#: (vgi-filter-encoding-v2-spec.md section 6). A later release is not added
+#: here merely because the conformance corpus passes: patch releases have
+#: changed time-zone data, integer-literal and printf behavior before. The ``duckdb``/``haybarn`` extras in
 #: pyproject.toml pin exactly these versions; tests/test_filter_v2.py keeps the
 #: two in step.
 STANDARD_V1_ENGINE_VERSIONS: dict[str, frozenset[str]] = {
-    "duckdb": frozenset({"1.5.5"}),
-    "haybarn": frozenset({"1.5.5rc1", "1.5.5-rc1"}),
+    "duckdb": frozenset({"2.0.0"}),
+    "haybarn": frozenset({"2.0.0rc11", "2.0.0-rc11"}),
 }
 
 MAX_JSON_BYTES = 1 << 20
@@ -1222,7 +1222,7 @@ def _get_evaluation_connection(context: EvaluationContext, *, intersects_extent:
         engine_version = str(getattr(engine, "__version__", ""))
         if engine_version not in STANDARD_V1_ENGINE_VERSIONS.get(engine_name, frozenset()):
             raise FilterV2Error(
-                f"{DUCKDB_STANDARD_V1} requires DuckDB 1.5.5 or Haybarn 1.5.5-rc1; "
+                f"{DUCKDB_STANDARD_V1} requires DuckDB 2.0.0 or Haybarn 2.0.0-rc11; "
                 f"found {engine_name} {engine_version or '<unknown>'}"
             )
 
@@ -1321,7 +1321,8 @@ def _apply_context(connection: Any, context: EvaluationContext) -> None:
     for name, value in settings.items():
         connection.execute(f"SET {_quote_identifier(name)} = ?", [value])
     try:
-        value = connection.sql("SELECT current_setting('null_on_division_by_zero')").fetchone()[0]
+        row = connection.execute("SELECT current_setting('null_on_division_by_zero')").fetchone()
+        value = row[0] if row is not None else False
     except Exception:
         value = False
     if value not in {False, "false", "False"}:

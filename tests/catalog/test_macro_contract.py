@@ -352,7 +352,7 @@ def test_create_discovery_copy_resolves_default_once_with_duckdb_15() -> None:
         assert copied[0].serialize_to_bytes() == stored[0]
         connection.execute("CREATE MACRO original_macro(x := 40 + 2) AS x + 1")
         connection.execute("CREATE MACRO copied_macro(x := 42) AS x + 1")
-        assert connection.sql("SELECT original_macro(), copied_macro()").fetchone() == (43, 43)
+        assert connection.execute("SELECT original_macro(), copied_macro()").fetchone() == (43, 43)
 
 
 def test_default_resolution_failure_does_not_publish_partial_replacement() -> None:
@@ -370,6 +370,6 @@ def test_default_resolution_failure_does_not_publish_partial_replacement() -> No
 def test_duckdb_15_owns_typed_overload_resolution_and_duplicate_signature_errors() -> None:
     with duckdb.connect() as connection:
         connection.execute("CREATE MACRO typed_macro(x INTEGER) AS x + 1, (x VARCHAR) AS x || '!' ")
-        assert connection.sql("SELECT typed_macro(2::INTEGER), typed_macro('v'::VARCHAR)").fetchone() == (3, "v!")
+        assert connection.execute("SELECT typed_macro(2::INTEGER), typed_macro('v'::VARCHAR)").fetchone() == (3, "v!")
         with pytest.raises(duckdb.Error, match="Ambiguity|same parameters"):
             connection.execute("CREATE MACRO ambiguous_macro(x INTEGER) AS x, (y INTEGER) AS y + 1")

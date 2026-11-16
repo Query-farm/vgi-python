@@ -7,7 +7,11 @@ small deterministic subset (``ParseNumericCheck`` in
 ``vgi_constraint_contract.cpp`` and ``Scalar`` in
 ``vgi_column_expression.cpp``). This module mirrors both walks over the same
 parser's AST, obtained from ``json_serialize_sql`` on the locally installed
-engine (haybarn or duckdb).
+engine (haybarn or duckdb). Both serialized shapes are read: DuckDB 1.5's
+(typed constant ``value``, function ``children``, ``cast_type``) and DuckDB
+2.0's (untyped constant ``literal``, function ``arguments``, ``type_expr``).
+For 2.0 the types the extension takes from ``ToValue()`` and
+``TryDefaultBind`` are resolved by asking the same engine.
 
 vgi does not hard-depend on an engine. Without one these checks are skipped
 (the extension still rejects at ATTACH); with one, an author's own tests see
@@ -17,6 +21,7 @@ the extension's verdict before deployment.
 from __future__ import annotations
 
 import json
+import re
 import threading
 from typing import Any
 
@@ -88,6 +93,71 @@ def _parse(sql: str) -> dict[str, Any] | None:
     return result
 
 
+def _scalar(sql: str) -> Any:
+    """Return the single value of ``sql`` on the grammar connection."""
+    global _connection
+    with _lock:
+        if _connection is None:
+            from vgi._duckdb import connect
+
+            _connection = connect()
+        row = _connection.execute(sql).fetchone()
+    assert row is not None
+    return row[0]
+
+
+def _base_type_id(type_name: str) -> str:
+    """``DECIMAL(2,1)`` -> ``DECIMAL``; ``NULL`` -> ``NULL``."""
+    return type_name.split("(", 1)[0].strip().upper()
+
+
+_NUMERIC_LITERAL = re.compile(r"-?[0-9_]*\.?[0-9_]*(?:[eE][+-]?[0-9_]+)?")
+_LITERAL_KIND_TYPES = {"STRING": "VARCHAR", "BOOLEAN": "BOOLEAN", "NULL_LITERAL": "NULL"}
+
+
+def _constant_type_id(node: dict[str, Any]) -> tuple[str, bool]:
+    """Return ``(type id, is_null)`` of a CONSTANT node, as ``ToValue()`` types it."""
+    if "value" in node:  # DuckDB 1.5: the constant carries its typed Value.
+        value = node["value"]
+        return str(value["type"]["id"]), bool(value.get("is_null"))
+    literal = node["literal"]
+    kind, text = literal["kind"], literal["text"]
+    if kind in _LITERAL_KIND_TYPES:
+        type_id = _LITERAL_KIND_TYPES[kind]
+        return type_id, type_id == "NULL"
+    if kind in {"INTEGER", "NUMERIC"} and text and _NUMERIC_LITERAL.fullmatch(text):
+        # The literal's type depends on its magnitude and spelling (INTEGER,
+        # BIGINT, HUGEINT, DECIMAL(w,s), DOUBLE); the engine decides.
+        return _base_type_id(str(_scalar(f"SELECT typeof({text})"))), False
+    return kind, False
+
+
+def _cast_type_id(node: dict[str, Any]) -> str | None:
+    """Return the CAST target's type id, or ``None`` when it is qualified or unknown."""
+    if "cast_type" in node:  # DuckDB 1.5
+        return str(node["cast_type"]["id"])
+    target = node["type_expr"]
+    path = (target.get("qualified_name") or {}).get("path") or [target["type_name"]]
+    if len(path) != 1:
+        return None
+    name = str(path[0])
+    try:
+        return _base_type_id(str(_scalar(f'SELECT typeof(CAST(NULL AS "{name.replace(chr(34), chr(34) * 2)}"))')))
+    except Exception:  # noqa: BLE001 - an unknown type name is just an unsupported cast
+        return None
+
+
+def _function_arguments(expression: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return a FUNCTION node's argument expressions (1.5 ``children`` / 2.0 ``arguments``)."""
+    if "arguments" in expression:
+        return [argument["expression"] for argument in expression["arguments"]]
+    return list(expression.get("children", []))
+
+
+def _has_named_argument(expression: dict[str, Any]) -> bool:
+    return any(argument.get("name") for argument in expression.get("arguments", []))
+
+
 def _single_expression(sql: str, wrapped: str, error: str) -> dict[str, Any] | None:
     """Parse ``wrapped`` and return its only select-list expression (extension ``Parse``)."""
     if not sql or "\0" in sql or len(sql.encode()) > 1024 * 1024:
@@ -125,7 +195,9 @@ def _children(expression: dict[str, Any]) -> list[dict[str, Any]]:
         return [expression["child"]]
     if kind == "COMPARISON":
         return [expression["left"], expression["right"]]
-    if kind in {"CONJUNCTION", "OPERATOR", "FUNCTION"}:
+    if kind == "FUNCTION":
+        return _function_arguments(expression)
+    if kind in {"CONJUNCTION", "OPERATOR"}:
         return list(expression.get("children", []))
     return []
 
@@ -155,8 +227,8 @@ def validate_check_sql(sql: str, schema: pa.Schema, row_id_column: int | None = 
         if operand.get("alias"):
             raise ValueError("CHECK expressions cannot have aliases")
         if operand["class"] == "CONSTANT":
-            value = operand["value"]
-            if value.get("is_null") or value["type"]["id"] not in _NUMERIC_TYPES:
+            type_id, is_null = _constant_type_id(operand)
+            if is_null or type_id not in _NUMERIC_TYPES:
                 raise ValueError("CHECK requires numeric operands")
             continue
         if operand["class"] != "COLUMN_REF":
@@ -201,16 +273,17 @@ def validate_generated_sql(sql: str) -> None:
             raise ValueError("generated expression aliases are unsupported")
         kind, kind_type = node["class"], node["type"]
         if kind == "CONSTANT":
-            if node["value"]["type"]["id"] not in _GENERATED_PRIMITIVE:
+            type_id, _ = _constant_type_id(node)
+            if type_id not in _GENERATED_PRIMITIVE:
                 raise ValueError(
-                    f"unsupported generated literal type {node['value']['type']['id']}; "
+                    f"unsupported generated literal type {type_id}; "
                     "use Boolean, signed integer, VARCHAR or NULL literals"
                 )
         elif kind == "COLUMN_REF":
             if len(node["column_names"]) != 1:
                 raise ValueError("generated expressions require unqualified column references")
         elif kind == "CAST":
-            if node.get("try_cast") or node["cast_type"]["id"] not in _GENERATED_PRIMITIVE:
+            if node.get("try_cast") or _cast_type_id(node) not in _GENERATED_PRIMITIVE:
                 raise ValueError("generated expressions support only CAST to Boolean, signed integer or VARCHAR")
         elif kind == "COMPARISON":
             if kind_type not in _COMPARISONS:
@@ -229,6 +302,7 @@ def validate_generated_sql(sql: str) -> None:
                 or node.get("distinct")
                 or node.get("filter") is not None
                 or node.get("export_state")
+                or _has_named_argument(node)
                 or (node.get("order_bys") or {}).get("orders")
                 or not (name.lower() in _FUNCTIONS or name == "||")
             ):

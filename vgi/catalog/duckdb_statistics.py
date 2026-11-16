@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
+from vgi._duckdb import arrow_table
 from vgi.catalog.catalog_interface import ColumnStatistics
 from vgi.catalog.descriptors import ColumnStatisticsInput
 from vgi.schema_path import sql_qualified_name
@@ -140,14 +141,17 @@ def _geometry_stats(
         min_wkt = f"POINT{dim_suffix}({min_coords})"
         max_wkt = f"POINT{dim_suffix}({max_coords})"
 
-        arrow_table = conn.execute(
-            f"SELECT"
-            f"  ST_GeomFromText('{min_wkt}')::GEOMETRY AS min_pt,"
-            f"  ST_GeomFromText('{max_wkt}')::GEOMETRY AS max_pt"
-        ).to_arrow_table(_RESULT_BATCH_SIZE)
+        minmax_table = arrow_table(
+            conn.execute(
+                f"SELECT"
+                f"  ST_GeomFromText('{min_wkt}')::GEOMETRY AS min_pt,"
+                f"  ST_GeomFromText('{max_wkt}')::GEOMETRY AS max_pt"
+            ),
+            _RESULT_BATCH_SIZE,
+        )
 
-        min_scalar = arrow_table.column("min_pt")[0]
-        max_scalar = arrow_table.column("max_pt")[0]
+        min_scalar = minmax_table.column("min_pt")[0]
+        max_scalar = minmax_table.column("max_pt")[0]
         return (
             min_scalar if min_scalar.is_valid else None,
             max_scalar if max_scalar.is_valid else None,
@@ -175,15 +179,18 @@ def _list_stats(
     are no non-null child elements.
     """
     try:
-        arrow_table = conn.execute(
-            f"SELECT"
-            f"  [min(list_min({col}))] AS min_val,"
-            f"  [max(list_max({col}))] AS max_val"
-            f" FROM {qualified}"
-            f" WHERE {col} IS NOT NULL"
-        ).to_arrow_table(_RESULT_BATCH_SIZE)
-        min_scalar = arrow_table.column("min_val")[0]
-        max_scalar = arrow_table.column("max_val")[0]
+        minmax_table = arrow_table(
+            conn.execute(
+                f"SELECT"
+                f"  [min(list_min({col}))] AS min_val,"
+                f"  [max(list_max({col}))] AS max_val"
+                f" FROM {qualified}"
+                f" WHERE {col} IS NOT NULL"
+            ),
+            _RESULT_BATCH_SIZE,
+        )
+        min_scalar = minmax_table.column("min_val")[0]
+        max_scalar = minmax_table.column("max_val")[0]
         # Check if the inner element is null (all lists were empty)
         min_inner = min_scalar.as_py()
         max_inner = max_scalar.as_py()
@@ -241,7 +248,7 @@ def statistics_from_duckdb(
     qualified = sql_qualified_name(schema_path or [], table_name)
 
     # Get the table schema via a zero-row Arrow query
-    schema: pa.Schema = conn.execute(f"SELECT * FROM {qualified} LIMIT 0").to_arrow_table(_RESULT_BATCH_SIZE).schema
+    schema: pa.Schema = arrow_table(conn.execute(f"SELECT * FROM {qualified} LIMIT 0"), _RESULT_BATCH_SIZE).schema
 
     # Geometry detection from declared column types (metadata only, no scan).
     duck_types = _duckdb_column_types(conn, qualified)
@@ -309,7 +316,7 @@ def statistics_from_duckdb(
             }
         )
 
-    agg_table = conn.execute(f"SELECT {', '.join(agg_exprs)} FROM {qualified}").to_arrow_table(_RESULT_BATCH_SIZE)
+    agg_table = arrow_table(conn.execute(f"SELECT {', '.join(agg_exprs)} FROM {qualified}"), _RESULT_BATCH_SIZE)
     row_count: int = agg_table.column("row_count")[0].as_py()
 
     result: dict[str, ColumnStatisticsInput] = {}
@@ -399,6 +406,6 @@ def column_statistics_from_duckdb(
 
     """
     qualified = sql_qualified_name(schema_path or [], table_name)
-    schema: pa.Schema = conn.execute(f"SELECT * FROM {qualified} LIMIT 0").to_arrow_table(_RESULT_BATCH_SIZE).schema
+    schema: pa.Schema = arrow_table(conn.execute(f"SELECT * FROM {qualified} LIMIT 0"), _RESULT_BATCH_SIZE).schema
     stats_dict = statistics_from_duckdb(conn, table_name, schema_path=schema_path)
     return [stats_dict[field.name].resolve(field.name, field.type) for field in schema if field.name in stats_dict]

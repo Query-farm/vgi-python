@@ -15,6 +15,7 @@ from typing import Any
 import duckdb
 import pyarrow as pa
 
+from vgi.catalog._expression_grammar import _cast_type_id, _constant_type_id, _function_arguments, _has_named_argument
 from vgi.catalog.capabilities import ROW_SCALAR_EXPRESSION
 from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.sql import SqlExpression
@@ -69,9 +70,9 @@ def validate_expression(
             dependencies.add(names[0])
             return
         constant_types = _TYPES | ({"DECIMAL", "DOUBLE", "FLOAT"} if role == "using" else set())
-        if kind == "CONSTANT" and expression.get("value", {}).get("type", {}).get("id") in constant_types:
+        if kind == "CONSTANT" and _constant_type_id(expression)[0] in constant_types:
             return
-        if kind == "CAST" and expression.get("cast_type", {}).get("id") in _TYPES and not expression.get("try_cast"):
+        if kind == "CAST" and _cast_type_id(expression) in _TYPES and not expression.get("try_cast"):
             check(expression["child"])
             return
         if kind == "COMPARISON" and expression.get("type") in {
@@ -101,9 +102,10 @@ def validate_expression(
                 or expression.get("distinct")
                 or expression.get("filter")
                 or expression.get("order_bys", {}).get("orders")
+                or _has_named_argument(expression)
             ):
                 raise ValueError("unsupported scalar function modifiers")
-            for child in expression["children"]:
+            for child in _function_arguments(expression):
                 check(child)
             return
         if kind == "OPERATOR" and expression.get("type") in {

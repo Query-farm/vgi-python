@@ -26,6 +26,7 @@ import pyarrow as pa
 from vgi_rpc import AnnotatedBatch, OutputCollector, RpcServer
 from vgi_rpc.rpc import CallContext, ExchangeState, ProducerState, Stream, StreamState, serve_unix
 
+from vgi._duckdb import arrow_reader, arrow_table
 from vgi._duckdb import connect as engine_connect
 from vgi._redact import short_hash
 from vgi.schema_path import SchemaPath, schema_path_key, sql_qualified_name
@@ -111,7 +112,7 @@ class TransactorImpl:
             sub = subcursor(conn)
             sql = f"SELECT * FROM {qualified_name} LIMIT 0"  # noqa: S608
             result = sub.execute(sql)
-            schema: pa.Schema = result.to_arrow_table().schema
+            schema: pa.Schema = arrow_table(result).schema
             sub.close()
             return schema
 
@@ -294,12 +295,12 @@ class TransactorImpl:
         with tx_lock:
             schema_sub = subcursor(conn)
             schema_sql = f"SELECT {col_list} FROM {qualified} LIMIT 0"  # noqa: S608
-            output_schema = schema_sub.execute(schema_sql).to_arrow_table().schema
+            output_schema = arrow_table(schema_sub.execute(schema_sql)).schema
             schema_sub.close()
 
             scan_cursor = subcursor(conn)
             result = scan_cursor.execute(sql, bind_params) if bind_params else scan_cursor.execute(sql)
-            reader = result.to_arrow_reader(batch_size=50_000)
+            reader = arrow_reader(result, batch_size=50_000)
 
         state = _ScanState(reader=reader, tx_lock=tx_lock)
         return Stream(output_schema=output_schema, state=state)
@@ -410,7 +411,7 @@ class TransactorImpl:
             if not is_table:
                 sub.close()
                 raise ValueError(f"'{table_name}' is not a table")
-            schema = sub.execute(f"SELECT * FROM {table_name} LIMIT 0").to_arrow_table().schema  # noqa: S608
+            schema = arrow_table(sub.execute(f"SELECT * FROM {table_name} LIMIT 0")).schema  # noqa: S608
 
             col_meta_result = sub.execute(
                 "SELECT column_name, comment, column_default FROM duckdb_columns() WHERE table_name = ?",
@@ -553,7 +554,7 @@ class TransactorImpl:
 
 def _read_result_batch(result: duckdb.DuckDBPyConnection) -> pa.RecordBatch:
     """Read DML result as a single Arrow batch."""
-    table = result.to_arrow_table()
+    table = arrow_table(result)
     batches = table.to_batches()
     if not batches:
         return pa.record_batch({f.name: [] for f in table.schema}, schema=table.schema)

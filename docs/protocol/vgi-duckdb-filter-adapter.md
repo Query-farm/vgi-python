@@ -3,7 +3,7 @@
 **Status:** Proposed implementation guide
 **Target protocol:** VGI 2.0.0
 **DuckDB adapters:** 1.5.x and 2.0
-**Initial expression semantics:** `vgi.duckdb.standard.v1` (upstream DuckDB v1.5.5)
+**Initial expression semantics:** `vgi.duckdb.standard.v1` (upstream DuckDB v2.0.0)
 **Normative wire specification:** [VGI Filter Encoding v2](vgi-filter-encoding-v2-spec.md)
 
 ## 1. Scope
@@ -18,7 +18,7 @@ Both DuckDB adapters:
 
 - emit only `vgi.filters.v2`;
 - set each filter document's `semantics` to `vgi.duckdb.standard.v1` only after the worker advertises that profile and
-  the adapter proves that the bound expression matches upstream DuckDB v1.5.5 behavior;
+  the adapter proves that the bound expression matches upstream DuckDB v2.0.0 behavior;
 - use `vgi.none.v1` for a scan whose filters are all independent of DuckDB session context;
 - use `vgi.duckdb.session.v1` only after verifying that DuckDB's `icu` extension supplied the bound `TimeZone` and
   `Calendar` settings, capturing `default_collation`, `ieee_floating_point_ops`, and `integer_division`, and confirming
@@ -51,10 +51,11 @@ DuckDB 1.5 exposes concrete `TableFilter` subclasses and single-column table-fun
 
 The DuckDB 1.5 API offers one root scan column, so this adapter emits only single-column expressions even though the VGI wire permits multiple references. This is an engine-adapter limitation, not a protocol restriction.
 
-The v1 semantic oracle is upstream DuckDB v1.5.5 commit
-`d8cdaa33fda8df955cc76ef58a280f68f4cd43fa`. Haybarn v1.5.5-rc1 commit
-`105edd31b57fe7e6d32ee648efad562e45a9f908` is a reference distribution expected to pass the same corpus; upstream
-behavior wins if an unlisted Haybarn patch differs.
+The v1 semantic oracle is upstream DuckDB v2.0.0 commit
+`d54cbbe3df17e8e5ce68312f483b4155836112aa`. Haybarn v2.0.0-rc11 commit
+`9b1a0c5829c056edaecd8ee8e7249a70fb8f50c8` is a reference distribution expected to pass the same corpus; upstream
+behavior wins if an unlisted Haybarn patch differs. (It was DuckDB v1.5.5 while the extension ran on 1.5; see the
+specification, section 6.)
 
 ## 4. DuckDB 2.0 filter model
 
@@ -78,9 +79,7 @@ It validates the resulting field name before serialization. Projected output pos
 
 Multi-column predicates offered through DuckDB's partial table-function pushdown contract are advisory because DuckDB retains their exact residual. A single-column predicate may be required only when DuckDB's table-function contract removes the local filter and the complete VGI expression is supported exactly.
 
-Until stable DuckDB 2.0 semantics are published, the 2.0 adapter emits `vgi.duckdb.standard.v1` only for expressions it
-can map exactly to the v1.5.5 oracle. After DuckDB 2.0 is released, its distinct behavior will be advertised as
-`vgi.duckdb.standard.v2`; it does not revise v1. Workers may advertise both, and the filter document selects one.
+The 2.0 adapter emits `vgi.duckdb.standard.v1` only for expressions it can map exactly to the v2.0.0 oracle.
 
 ## 5. Bound-expression mapping
 
@@ -266,7 +265,7 @@ Generated VGI models should be used for request, response, and AST construction.
 
 The DuckDB 1.5 integration suite covers:
 
-- differential behavior against upstream DuckDB v1.5.5 and Haybarn v1.5.5-rc1 for the complete v1 conformance corpus;
+- differential behavior against upstream DuckDB v2.0.0 and Haybarn v2.0.0-rc11 for the complete v1 conformance corpus;
 - every concrete supported filter class;
 - required versus optional behavior;
 - nested struct fields;

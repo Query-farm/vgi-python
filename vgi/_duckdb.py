@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     import duckdb
+    import pyarrow as pa
 
 #: Engine modules in preference order. Both expose the duckdb-python API
 #: (``connect()``, ``DuckDBPyConnection``, ...).
@@ -63,3 +64,41 @@ def connect(*args: Any, **kwargs: Any) -> duckdb.DuckDBPyConnection:
     connection class implements the same API).
     """
     return cast("duckdb.DuckDBPyConnection", engine_module().connect(*args, **kwargs))
+
+
+def arrow_table(result: Any, *args: Any) -> pa.Table:
+    """Return ``result.to_arrow_table(*args)``, which DuckDB 2.0 types as optional.
+
+    Args:
+        result: An executed DuckDB connection or relation.
+        *args: Passed to ``to_arrow_table`` (the batch size).
+
+    Returns:
+        The result set as an Arrow table.
+
+    Raises:
+        RuntimeError: the statement produced no result set.
+    """
+    table = result.to_arrow_table(*args)
+    if table is None:
+        raise RuntimeError("the statement produced no result set")
+    return cast("pa.Table", table)
+
+
+def arrow_reader(result: Any, **kwargs: Any) -> pa.RecordBatchReader:
+    """Return ``result.to_arrow_reader(**kwargs)``, which DuckDB 2.0 types as optional.
+
+    Args:
+        result: An executed DuckDB connection or relation.
+        **kwargs: Passed to ``to_arrow_reader`` (``batch_size``).
+
+    Returns:
+        A reader over the result set.
+
+    Raises:
+        RuntimeError: the statement produced no result set.
+    """
+    reader = result.to_arrow_reader(**kwargs)
+    if reader is None:
+        raise RuntimeError("the statement produced no result set")
+    return cast("pa.RecordBatchReader", reader)
