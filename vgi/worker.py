@@ -2485,6 +2485,17 @@ class Worker:
                 delta, matched = Worker._score_types(const_specs, const_types)
                 score += delta
 
+                # The call's column count must fit the overload's column Params. A
+                # missing column used to score as a wildcard (type None), so
+                # f(a) and f(a, b) both matched a one-column call and the call was
+                # reported as ambiguous. Legacy scalars (no column Params) are exempt.
+                if matched and input_schema is not None and col_specs:
+                    fixed_cols = sum(1 for s in col_specs if not s.is_varargs)
+                    col_varargs = any(s.is_varargs for s in col_specs)
+                    n_cols = len(input_schema)
+                    if n_cols < fixed_cols or (n_cols > fixed_cols and not col_varargs):
+                        matched = False
+
                 # Score column Param types against input_schema
                 if matched and input_schema is not None:
                     col_types: list[pa.DataType | None] = []

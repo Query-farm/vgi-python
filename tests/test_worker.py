@@ -1645,3 +1645,123 @@ class TestBindOpaqueDataRoundTrip:
         # And reconstruction off the InitRequest works the same way.
         payload = _OpaquePayload.deserialize_from_bytes(init_request.bind_opaque_data)
         assert payload == _OpaquePayload(schema_id=42, label="hi")
+
+
+class TestScalarColumnCountOverloading:
+    """Scalar overloads that differ only in their number of column arguments."""
+
+    def _candidates(self) -> list[type]:
+        class OneCol(ScalarFunction):
+            class Meta:
+                name = "decode"
+
+            @classmethod
+            def compute(
+                cls,
+                code: Annotated[pa.StringArray, Param(doc="Code")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return code
+
+        class TwoCol(ScalarFunction):
+            class Meta:
+                name = "decode"
+
+            @classmethod
+            def compute(
+                cls,
+                code: Annotated[pa.StringArray, Param(doc="Code")],
+                year: Annotated[pa.Int64Array, Param(doc="Year")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return code
+
+        return [OneCol, TwoCol]
+
+    def test_one_column_picks_one_column_overload(self) -> None:
+        """f(a) with f(a) and f(a, b) declared is not ambiguous."""
+        one, two = self._candidates()
+        result = Worker._match_function_arguments(
+            function_name="decode",
+            arguments=Arguments(positional=()),
+            input_schema=pa.schema([("code", pa.string())]),
+            candidates=[one, two],
+        )
+        assert result is one
+
+    def test_two_columns_pick_two_column_overload(self) -> None:
+        """f(a, b) picks the two-column overload."""
+        one, two = self._candidates()
+        result = Worker._match_function_arguments(
+            function_name="decode",
+            arguments=Arguments(positional=()),
+            input_schema=pa.schema([("code", pa.string()), ("year", pa.int64())]),
+            candidates=[one, two],
+        )
+        assert result is two
+
+    def test_three_columns_match_neither(self) -> None:
+        """Extra columns rule out overloads without column varargs."""
+        one, two = self._candidates()
+        with pytest.raises(ValueError, match="No matching function"):
+            Worker._match_function_arguments(
+                function_name="decode",
+                arguments=Arguments(positional=()),
+                input_schema=pa.schema([("a", pa.string()), ("b", pa.int64()), ("c", pa.int64())]),
+                candidates=[one, two],
+            )
+
+    def test_same_shape_is_still_ambiguous(self) -> None:
+        """Two overloads with identical column shapes still tie."""
+        one, _ = self._candidates()
+
+        class OneColAgain(ScalarFunction):
+            class Meta:
+                name = "decode"
+
+            @classmethod
+            def compute(
+                cls,
+                code: Annotated[pa.StringArray, Param(doc="Code")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return code
+
+        with pytest.raises(ValueError, match="Ambiguous function call"):
+            Worker._match_function_arguments(
+                function_name="decode",
+                arguments=Arguments(positional=()),
+                input_schema=pa.schema([("code", pa.string())]),
+                candidates=[one, OneColAgain],
+            )
+
+    def test_column_varargs_accepts_more_columns(self) -> None:
+        """A column-varargs overload still takes N or more columns next to a fixed one."""
+
+        class Fixed(ScalarFunction):
+            class Meta:
+                name = "cat"
+
+            @classmethod
+            def compute(
+                cls,
+                a: Annotated[pa.StringArray, Param(doc="a")],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return a
+
+        class Var(ScalarFunction):
+            class Meta:
+                name = "cat"
+
+            @classmethod
+            def compute(
+                cls,
+                a: Annotated[pa.StringArray, Param(doc="a")],
+                rest: Annotated[list[pa.StringArray], Param(doc="rest", varargs=True)],
+            ) -> Annotated[pa.StringArray, Returns()]:
+                return a
+
+        three = pa.schema([("a", pa.string()), ("b", pa.string()), ("c", pa.string())])
+        assert (
+            Worker._match_function_arguments(
+                function_name="cat", arguments=Arguments(positional=()), input_schema=three, candidates=[Fixed, Var]
+            )
+            is Var
+        )
