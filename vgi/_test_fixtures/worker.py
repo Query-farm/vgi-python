@@ -69,6 +69,7 @@ from vgi._test_fixtures.cancellable import (
     SlowCancellableInOutFunction,
 )
 from vgi._test_fixtures.constraint_facts import fixed_fact
+from vgi._test_fixtures.contract import CONTRACT_SCHEMA
 from vgi._test_fixtures.copy_from import ExampleLinesCopyFromFunction, SecretLinesCopyFromFunction
 from vgi._test_fixtures.copy_to import (
     ExampleLinesCopyToFunction,
@@ -1649,6 +1650,9 @@ _EXAMPLE_CATALOG = Catalog(
                 for name in ("idx_numbers_value", "idx_numbers_value_unique")
             ],
         ),
+        # Cross-SDK table_only / write-contract fixtures (no comment: only
+        # `main` and `data` carry one). See vgi/_test_fixtures/contract.py.
+        CONTRACT_SCHEMA,
     ],
 )
 
