@@ -1,0 +1,34 @@
+name: Engine drift
+
+# vgi-python's exact engine pins (the haybarn/duckdb extras, which are also the
+# vgi.duckdb.standard.v1 filter oracle) must stay on the same DuckDB line as the
+# engine the DuckDB vgi extension is built against. Runs on every change here
+# and weekly, so an engine bump in the extension is caught even while this repo
+# is quiet. See scripts/check_engine_drift.py.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  engine-drift:
+    name: Engine pins match the vgi extension's engine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+
+      - name: Compare engine lines
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: uv run --no-project --python 3.13 scripts/check_engine_drift.py
