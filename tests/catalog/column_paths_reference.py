@@ -24,6 +24,7 @@ import duckdb
 import pyarrow as pa
 import pyarrow.compute as pc
 
+from vgi._duckdb import arrow_table
 from vgi.catalog import TableInfo
 from vgi.catalog.capabilities import (
     COLUMN_NESTED_ADD,
@@ -106,7 +107,7 @@ def _eval(
             role="using" if schema is not None else "default",
         )
         query = f"SELECT ({expression.sql}) AS v" + (" FROM input_data" if schema is not None else "")
-        return connection.execute(query).to_arrow_table().column(0).combine_chunks()
+        return arrow_table(connection.execute(query)).column(0).combine_chunks()
 
 
 def _fields(fields: Any, path: list[str]) -> None:

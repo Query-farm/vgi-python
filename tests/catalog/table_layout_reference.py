@@ -21,6 +21,7 @@ from typing import Any, Literal, Never, overload
 import duckdb
 import pyarrow as pa
 
+from vgi._duckdb import arrow_table
 from vgi.catalog import SchemaInfo, TableInfo
 from vgi.catalog.capabilities import (
     ROW_SCALAR_EXPRESSION,
@@ -83,9 +84,9 @@ def arrange_rows(rows: list[dict[str, Any]], info: TableInfo) -> list[dict[str, 
             _validate_expression(connection, expr, info.schema_path)
         select = "*" + "".join(f", ({expr.sql}) AS __vgi_partition_{i}" for i, expr in enumerate(partitions))
         order = ", ".join(f"({key.expression.sql}) {key.direction.value} NULLS {key.null_order.value}" for key in sorts)
-        result = connection.execute(
-            f"SELECT {select} FROM input_data" + (f" ORDER BY {order}" if order else "")
-        ).to_arrow_table()
+        result = arrow_table(
+            connection.execute(f"SELECT {select} FROM input_data" + (f" ORDER BY {order}" if order else ""))
+        )
     groups: dict[str, dict[str, Any]] = {}
     for row in range(len(result)):
         key = [result.column(len(columns) + i)[row].as_py() for i in range(len(partitions))]

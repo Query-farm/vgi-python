@@ -9,6 +9,7 @@ import pyarrow as pa
 import pytest
 from vgi_rpc.utils import deserialize_record_batch
 
+from vgi._duckdb import arrow_table
 from vgi.catalog.catalog_interface import (
     ColumnStatistics,
     TableColumnStatisticsResult,
@@ -736,7 +737,7 @@ class TestStatisticsFromDuckDB:
         conn.execute("CREATE TABLE t AS SELECT unnest(range(10)) AS val")
 
         stats = statistics_from_duckdb(conn, "t")
-        schema: pa.Schema = conn.execute("SELECT * FROM t LIMIT 0").to_arrow_table().schema
+        schema: pa.Schema = arrow_table(conn.execute("SELECT * FROM t LIMIT 0")).schema
 
         table = Table(name="t", columns=schema, statistics=stats)
         result = table.resolve_column_statistics()

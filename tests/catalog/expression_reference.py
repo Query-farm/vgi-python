@@ -15,6 +15,7 @@ from typing import Any
 import duckdb
 import pyarrow as pa
 
+from vgi._duckdb import arrow_table
 from vgi.catalog._expression_grammar import _cast_type_id, _constant_type_id, _function_arguments, _has_named_argument
 from vgi.catalog.capabilities import ROW_SCALAR_EXPRESSION
 from vgi.catalog.evaluation_context import QueryEvaluationContext
@@ -150,7 +151,7 @@ def evaluate_expression(
         connection.execute("SET preserve_insertion_order=true")
         connection.register("input_data", table)
         validate_expression(connection, expr, owner_path, role=role)
-        result = connection.execute(f"SELECT ({expr.sql}) AS v FROM input_data").to_arrow_table().column(0)
+        result = arrow_table(connection.execute(f"SELECT ({expr.sql}) AS v FROM input_data")).column(0)
     if not _primitive(result.type) or (role == "check" and not pa.types.is_boolean(result.type)):
         raise ValueError("expression result has an unsupported type for its role")
     return result
