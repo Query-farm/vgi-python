@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.52.1 (2026-11-16)
+
+### Fixtures
+
+- **The example worker serves a `contract` schema** for the cross-SDK conformance files the vgi extension added
+  (`visibility/example_table_only.test`, `write_contract/example_insert_finalize.test`,
+  `write_contract/example_decimal_width.test`): a `table_only` scan with a row id, a `table_only` scan named
+  `range`, an INSERT whose count comes only from `finalize` (with an enforced NOT NULL), and decimal32/64/128
+  columns. The conformance checklists list the new files.
+
 ## 0.52.0 (2026-11-16)
 
 ### Engine: DuckDB 2.0
