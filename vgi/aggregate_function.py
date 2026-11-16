@@ -297,12 +297,15 @@ class AggregateFunction[TState: StreamStateCodec](vgi.function.Function):
         # Parse on_bind() signature for Setting/Secret annotations
         from vgi.table_function import _extract_setting_secret_params
 
+        # Read the on_bind() this class actually uses, inherited or not: an abstract or
+        # generic base skips this scan and records no parameters, so copying the base's
+        # (empty) result dropped every Setting/Secret declared on a shared base on_bind().
         on_bind_method = getattr(cls, "on_bind", None)
-        if on_bind_method is not None and "on_bind" in cls.__dict__:
+        if on_bind_method is not None:
             cls._setting_params, cls._secret_params = _extract_setting_secret_params(on_bind_method)
         else:
-            cls._setting_params = getattr(cls, "_setting_params", {})
-            cls._secret_params = getattr(cls, "_secret_params", {})
+            cls._setting_params = {}
+            cls._secret_params = {}
 
     @classmethod
     def on_bind(cls, params: AggregateBindParams, **kwargs: Any) -> BindResponse:

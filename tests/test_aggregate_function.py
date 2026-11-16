@@ -1125,3 +1125,32 @@ class TestStateCodecThroughWorker:
         storage = BoundStorage(PackedSumAgg.storage, execution_id)
         stored = storage.state_get(FrameworkNS.AGGREGATE_STATE, BoundStorage.pack_int_key(0))
         assert stored == struct.pack("<q", 42)
+
+
+class TestInheritedOnBindSecrets:
+    """A Secret() on an aggregate base class's on_bind() reaches its subclasses."""
+
+    def test_subclass_inherits_on_bind_secret(self) -> None:
+        """The child does not redefine on_bind, and still requests the base's secret."""
+        from vgi.arguments import Secret
+        from vgi.invocation import BindResponse
+
+        class _SecretSum(PackedSumAgg):
+            class Meta:
+                name = "secret_sum"
+
+            @classmethod
+            def on_bind(
+                cls,
+                params: Any,
+                *,
+                key: Annotated[dict[str, Any] | None, Secret("s3")] = None,
+            ) -> BindResponse:
+                return super().on_bind(params)
+
+        class _Child(_SecretSum):
+            class Meta:
+                name = "secret_sum_child"
+
+        assert set(_SecretSum._secret_params) == {"key"}
+        assert set(_Child._secret_params) == {"key"}

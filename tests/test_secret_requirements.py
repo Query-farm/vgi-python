@@ -213,3 +213,60 @@ class TestLookupByType:
         retry = SecretsAccessor(batch, is_retry=True)
         with pytest.raises(ValueError, match="Required secret 'brave' not found"):
             retry.get("brave", required=True)
+
+
+class TestInheritedOnBindAnnotations:
+    """Setting/Secret annotations on a shared base class's on_bind() reach its subclasses."""
+
+    def test_generic_base_secret_reaches_subclass(self) -> None:
+        """A generic base declaring Secret() on on_bind: the concrete child requests it."""
+        from typing import Generic, TypeVar
+
+        resolve_metadata.cache_clear()
+        t = TypeVar("t")
+
+        class _Base(TableFunctionGenerator[t], Generic[t]):
+            @classmethod
+            def on_bind(
+                cls,
+                params: BindParams[t],
+                *,
+                key: Annotated[dict[str, Any] | None, Secret("congress_gov")] = None,
+            ) -> BindResponse:
+                return BindResponse(output_schema=pa.schema([pa.field("x", pa.int64())]))
+
+            @classmethod
+            def process(cls, params: Any, state: Any, out: Any) -> None: ...
+
+        class _Child(_Base[_Args]):
+            class Meta:
+                pass
+
+        assert set(_Child._secret_params) == {"key"}
+        assert _Child.get_metadata().required_secrets == [SecretLookupEntry(secret_type="congress_gov")]
+
+    def test_concrete_base_secret_reaches_subclass(self) -> None:
+        """A concrete base's on_bind annotations are inherited too."""
+        resolve_metadata.cache_clear()
+
+        class _Base(TableFunctionGenerator[_Args]):
+            class Meta:
+                pass
+
+            @classmethod
+            def on_bind(
+                cls,
+                params: BindParams[_Args],
+                *,
+                key: Annotated[dict[str, Any] | None, Secret("s3", scope="s3://b/")] = None,
+            ) -> BindResponse:
+                return BindResponse(output_schema=pa.schema([pa.field("x", pa.int64())]))
+
+            @classmethod
+            def process(cls, params: Any, state: Any, out: Any) -> None: ...
+
+        class _Child(_Base):
+            class Meta:
+                pass
+
+        assert _Child.get_metadata().required_secrets == [SecretLookupEntry(secret_type="s3", scope="s3://b/")]
