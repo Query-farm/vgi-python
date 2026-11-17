@@ -1,6 +1,6 @@
 [project]
 name = "vgi-python"
-version = "0.52.2"
+version = "0.53.0"
 description = "Vector Gateway Interface - Connect DuckDB to external programs via Apache Arrow"
 readme = "README.md"
 keywords = [
@@ -40,7 +40,7 @@ dependencies = [
     "pyarrow",
     "typer>=0.9",
     "platformdirs",
-    "vgi-rpc>=0.52.3",
+    "vgi-rpc>=0.54.0",
     "httpx2>=2.12.0",
     # vgi.query_execution seals execution handles with vgi_rpc.crypto, which
     # imports pycryptodome. vgi-rpc only pulls it in under its `http` extra, but

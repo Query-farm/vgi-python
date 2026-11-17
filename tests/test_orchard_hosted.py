@@ -299,7 +299,18 @@ class TestHostedWorker:
 
     @pytest.mark.parametrize(
         "case",
-        ["garbage", "tampered", "wrong_aud", "expired", "wrong_typ", "rs256", "hs256", "wrong_iss", "no_exp"],
+        [
+            "garbage",
+            "tampered",
+            "wrong_aud",
+            "multi_aud",
+            "expired",
+            "wrong_typ",
+            "rs256",
+            "hs256",
+            "wrong_iss",
+            "no_exp",
+        ],
     )
     def test_bad_pass_401(self, worker: _Worker, case: str) -> None:
         """Every invalid Pass gets the same 401."""
@@ -308,6 +319,7 @@ class TestHostedWorker:
             "garbage": lambda: "not-a-jwt",
             "tampered": lambda: _tamper(_pass(), org_id="org_EVIL"),
             "wrong_aud": lambda: _pass(aud="https://desk.orchard.test/d/dep_other"),
+            "multi_aud": lambda: _pass(aud=[AUDIENCE, "https://desk.orchard.test/d/dep_other"]),
             "expired": lambda: _pass(iat=now - 1200, nbf=now - 1200, exp=now - 120),
             "wrong_typ": lambda: _pass(typ="JWT"),
             "rs256": lambda: _pass(RSA, alg="RS256"),

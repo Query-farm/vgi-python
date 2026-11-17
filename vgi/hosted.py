@@ -199,6 +199,7 @@ def hosted_authenticate(config: HostedConfig) -> Callable[[falcon.Request], Auth
         algorithms=config.algorithms,
         required_typ=REQUIRED_TYP,
         require_exp=True,
+        single_audience=True,
         leeway=LEEWAY_SECONDS,
         jwks_max_age=JWKS_MAX_AGE_SECONDS,
         jwks_refresh_min_interval=JWKS_REFRESH_MIN_INTERVAL_SECONDS,
