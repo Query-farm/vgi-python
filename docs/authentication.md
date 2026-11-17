@@ -27,6 +27,8 @@ the principal in the `AuthContext` available to functions.
 | `VGI_JWT_ISSUER` | JWT issuer URL (requires `vgi-python[oauth]` extra) |
 | `VGI_JWT_AUDIENCE` | JWT audience string, comma-separated for multiple audiences (required when `VGI_JWT_ISSUER` is set) |
 | `VGI_JWT_JWKS_URI` | JWKS endpoint URL (auto-discovered from issuer if omitted) |
+| `VGI_JWT_ALGORITHMS` | Comma-separated allow-list of JWS algorithms (e.g. `ES256`). `none` and `HS*` are refused. Unset keeps joserfc's recommended set (`ES256` only in hosted mode) |
+| `VGI_ORCHARD_HOSTED` | `1` turns on [Orchard hosted mode](#orchard-hosted-mode) |
 | `VGI_OAUTH_RESOURCE` | OAuth resource URL for RFC 9728 metadata |
 | `VGI_OAUTH_AUTH_SERVERS` | Comma-separated authorization server URLs |
 | `VGI_OAUTH_SCOPES` | Comma-separated supported scopes (optional) |
@@ -80,6 +82,94 @@ The startup rules are unchanged. Overriding `resolve_token` still requires
 minting answers only for the caller. Grants and `resolve_token` bearers are
 HTTP-only, like the rest of Identity. When `VGI_PROXY_PROOF_MODE` is on, both
 are accepted only *inside* the proxy-proof gate, never as an alternative to it.
+
+## Orchard hosted mode
+
+`VGI_ORCHARD_HOSTED=1` runs the worker as an Orchard *Field Worker*. The
+hosted base image sets it; you do not set it per deployment. Callers present a
+*Pass*: a short-lived [RFC 9068](https://www.rfc-editor.org/rfc/rfc9068) JWT
+access token issued by the Orchard Front Desk for one canonical Desk Address.
+The worker verifies every Pass locally and accepts no other credential. The
+full design is in the extension repository's `docs/location-delegation.md`.
+
+```bash
+VGI_ORCHARD_HOSTED=1 \
+VGI_JWT_ISSUER=https://auth.queryfarm.cloud \
+VGI_JWT_AUDIENCE=https://desk.queryfarm.cloud/d/dep_123 \
+VGI_JWT_JWKS_URI=https://auth.queryfarm.cloud/.well-known/jwks.json \
+vgi-serve my_app:MyWorker --http
+```
+
+**Startup fails closed.** The worker exits with an error and a non-zero status
+unless all three of `VGI_JWT_ISSUER`, `VGI_JWT_AUDIENCE` and
+`VGI_JWT_JWKS_URI` are set. Unset and empty are both errors. Each takes
+exactly one value: there is no comma splitting, and a value containing a comma
+is refused. It also refuses to start when any other way in is configured:
+
+- `VGI_BEARER_TOKENS`;
+- sealed-grant keys (`VGI_RPC_GRANT_KEYS` or `--grant-key`);
+- a worker that overrides `resolve_token` or `mint_grant`;
+- `VGI_OAUTH_RESOURCE` (a Field Worker never advertises `resource_metadata`);
+- `VGI_PROXY_PROOF_MODE` other than `off`, or Iroh / peer identity;
+- a custom `authenticate` callback passed to `create_app`;
+- `--tcp`, `--unix` or `--iroh-raw-upstream`, which carry no Pass;
+- a `VGI_ORCHARD_HOSTED` value other than `1`/`0`/`true`/`false`/`yes`/`no`/`on`/`off`.
+
+**Verification:**
+
+- algorithm `ES256` only (`VGI_JWT_ALGORITHMS` overrides; `none` and `HS*`
+  are always refused);
+- JOSE header `typ` must be `at+jwt` (case-insensitive, `application/` prefix
+  optional);
+- `iss` and `aud` must match exactly;
+- `exp` is required, and `exp` / `nbf` are checked with 60 s of clock skew;
+- the JWKS is cached for at most 10 minutes, or less if its
+  `Cache-Control: max-age` is shorter. When that time is up the keys are
+  discarded. If the re-fetch fails, requests get a 503 until it succeeds;
+  stale keys are never used;
+- a Pass with an unknown `kid` triggers a JWKS re-fetch at most once every 60
+  seconds. Between re-fetches it is simply rejected.
+
+**Every request needs a Pass**, except `HEAD /health` (the Front Desk's
+liveness probe) and CORS preflights, which browsers send without credentials.
+That includes `GET /health`, `OPTIONS /health`, the landing and describe pages
+and unknown paths. A request without a valid Pass, including one with no
+`Authorization` header at all, gets:
+
+```text
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer error="invalid_token"
+VGI-Auth-Reason: missing_credential | invalid_credential | expired_credential
+VGI-Supported-Encodings: ...        (and the other VGI capability headers)
+```
+
+There is no `resource_metadata` in the challenge. If the JWKS cannot be
+fetched, the answer is 503 with `Retry-After` instead: the worker cannot tell
+whether the Pass is valid, so it does not claim that it isn't. Authentication
+runs before the request body is read, size-checked or decompressed. CORS is
+open (`Access-Control-Allow-Origin: *`), because the only credential is the
+bearer Pass. The `Authorization` header is never logged, including under
+`--debug`.
+
+**Function code sees the Pass's claims** through the usual
+[`Auth()`](#scalar-functions-auth-annotation) / `ProcessParams.auth` path, with
+their JSON types (`email_verified` is a `bool`, `exp` an `int`).
+`AuthContext.principal` is `sub` and `AuthContext.domain` is `"orchard"`.
+
+| Claim | Meaning |
+|-------|---------|
+| `sub` | Users: the WorkOS user id. Workloads: an opaque Registry id |
+| `kind` | `user` or `workload` |
+| `email`, `email_verified` | Users only |
+| `name` | The user's name, or the name an admin gave the Workload |
+| `org_id`, `org_name` | The workspace that owns the deployment |
+| `federated_iss`, `federated_sub` | Workloads signed in through a Trust Rule only |
+| `client_id`, `iat`, `nbf`, `exp`, `jti` | Standard token claims |
+
+A valid Pass means "a member, or a Workload, of the workspace that owns this
+deployment". Anything finer is the worker's own decision. Code that authorizes
+by `sub` or `name` must also check `kind`, because a Workload's id and name
+could look like a user's.
 
 ## Programmatic API
 

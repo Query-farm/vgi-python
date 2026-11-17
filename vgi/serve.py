@@ -36,6 +36,7 @@ from collections.abc import Callable, Iterable, Sequence
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Literal
 
+from vgi.hosted import HOSTED_CHALLENGE, hosted_mode_enabled
 from vgi.logging_config import LogFormat, LogLevel
 from vgi.profiling import maybe_start_profile
 
@@ -327,6 +328,28 @@ def create_app(
     if proxy_proof_required is None:
         proxy_proof_required = (os.environ.get("VGI_PROXY_PROOF_MODE") or "").strip().lower() == "require"
 
+    # Orchard hosted mode: Passes only, every request authenticated. Checked
+    # before the worker is built so a misconfigured deployment never serves.
+    hosted = hosted_mode_enabled()
+    if hosted:
+        from vgi import hosted as _hosted
+
+        _hosted.check_create_app(
+            worker_cls,
+            authenticate=authenticate,
+            grant_keys=grant_keys if grant_keys is not None else resolve_grant_keys(),
+            oauth_resource_metadata=oauth_resource_metadata,
+            peer_identity_providers=peer_identity_providers,
+            peer_authentication_policy=peer_authentication_policy,
+            proxy_proof_required=proxy_proof_required,
+            iroh_bridge_issuer=iroh_bridge_issuer,
+        )
+        if authenticate is None:
+            authenticate = _hosted.hosted_authenticate(_hosted.resolve_hosted_config())
+        # Authentication is by bearer Pass only, never ambient credentials,
+        # so any origin may call.
+        cors_origins = "*"
+
     worker = worker_cls(quiet=True, log_level=log_level)
     worker._vgi_tracer = VgiTracer.create(otel_config)
     worker._signing_key = signing_key
@@ -377,6 +400,8 @@ def create_app(
         max_externalized_response_bytes=max_externalized_response_bytes,
         enable_landing_page=False,
         identity_bearer=identity_bearer,
+        strict_auth=hosted,
+        www_authenticate=HOSTED_CHALLENGE if hosted else None,
     )
 
     # Frontend: either redirect to external CDN or serve pre-rendered worker page
@@ -577,6 +602,10 @@ def main() -> None:
 
         if http and iroh_raw_upstream is not None:
             sys.exit("--http and --iroh-raw-upstream are mutually exclusive")
+        if iroh_raw_upstream is not None and hosted_mode_enabled():
+            from vgi.hosted import refuse_in_hosted_mode
+
+            refuse_in_hosted_mode("only --http is allowed; --iroh-raw-upstream carries no Pass.")
         if (iroh_raw_upstream is not None or iroh_trusted_proxy) and iroh_issuer is None:
             sys.exit("Iroh bridge options require --iroh-issuer")
         trusted_iroh_proxies = tuple(iroh_trusted_proxy or ["127.0.0.1"])
@@ -794,9 +823,17 @@ def _resolve_authenticate() -> Callable[..., Any] | None:
 
     Raises:
         SystemExit: If env vars are malformed (e.g. bearer token without ``=``,
-            JWT issuer without audience).
+            JWT issuer without audience), or in Orchard hosted mode
+            (``VGI_ORCHARD_HOSTED=1``) when the Pass configuration is
+            incomplete or another credential is configured.
 
     """
+    if hosted_mode_enabled():
+        from vgi import hosted as _hosted
+
+        _hosted.check_environment_conflicts()
+        return _hosted.hosted_authenticate(_hosted.resolve_hosted_config())
+
     # Ordered by cost: JWT resolves a signature, bearer does a constant-time
     # scan over the token set, so the cheaper one goes last.
     candidates = [fn for fn in (_resolve_jwt_authenticate(), _resolve_bearer_authenticate()) if fn is not None]
@@ -986,7 +1023,13 @@ def _resolve_jwt_authenticate() -> Callable[..., Any] | None:
     # Pass a single string when only one issuer (backwards compatible),
     # or a tuple when multiple issuers are configured.
     issuer: str | tuple[str, ...] = issuers[0] if len(issuers) == 1 else issuers
-    return jwt_authenticate(issuer=issuer, audience=audiences, jwks_uri=jwks_uri)
+    algorithms_raw = os.environ.get("VGI_JWT_ALGORITHMS")
+    algorithms = tuple(a.strip() for a in algorithms_raw.split(",") if a.strip()) if algorithms_raw else None
+    try:
+        return jwt_authenticate(issuer=issuer, audience=audiences, jwks_uri=jwks_uri, algorithms=algorithms)
+    except ValueError as exc:
+        sys.stderr.write(f"Error: invalid JWT configuration: {exc}\n")
+        sys.exit(1)
 
 
 def _resolve_oauth_resource_metadata() -> Any:
@@ -1448,6 +1491,24 @@ def _serve_http(
     iroh_authenticate: bool = True,
 ) -> None:
     """Start the worker as an HTTP server."""
+    if hosted_mode_enabled():
+        # Checked here as well as in create_app: under granian the app is only
+        # built in the worker processes, and a refusal must stop the parent.
+        from vgi import hosted as _hosted
+        from vgi.rpc_server import resolve_grant_keys
+
+        _hosted.check_create_app(
+            worker_cls,
+            authenticate=authenticate,
+            grant_keys=resolve_grant_keys(grant_keys) if grant_keys else resolve_grant_keys(),
+            explicit_grant_keys=grant_keys,
+            oauth_resource_metadata=oauth_resource_metadata,
+            peer_identity_providers=(),
+            peer_authentication_policy=None,
+            proxy_proof_required=None,
+            iroh_bridge_issuer=iroh_bridge_issuer,
+        )
+        _hosted.resolve_hosted_config()
     port = _resolve_http_port(host, port)
 
     # Republished as environment rather than threaded through as arguments, so

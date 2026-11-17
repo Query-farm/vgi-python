@@ -177,6 +177,7 @@ from vgi.function import (
     Function,
 )
 from vgi.function_storage import BoundStorage, FrameworkNS, attach_catalog_bytes
+from vgi.hosted import hosted_mode_enabled as _hosted_mode_enabled
 from vgi.invocation import (
     BindResponse,
     GlobalInitResponse,
@@ -1877,6 +1878,13 @@ class Worker:
 
             if sum(x for x in (http, unix is not None, tcp is not None)) > 1:
                 raise typer.BadParameter("--http, --unix, and --tcp are mutually exclusive")
+
+            if (unix is not None or tcp is not None) and _hosted_mode_enabled():
+                # TCP and AF_UNIX carry no authentication: a hosted worker
+                # serves Passes over HTTP only.
+                from vgi.hosted import refuse_in_hosted_mode
+
+                refuse_in_hosted_mode("only --http is allowed; --unix and --tcp carry no authentication.")
 
             if http:
                 from vgi.serve import (
