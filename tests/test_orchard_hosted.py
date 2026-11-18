@@ -26,7 +26,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -315,7 +315,7 @@ class TestHostedWorker:
     def test_bad_pass_401(self, worker: _Worker, case: str) -> None:
         """Every invalid Pass gets the same 401."""
         now = int(time.time())
-        token = {
+        makers: dict[str, Callable[[], str]] = {
             "garbage": lambda: "not-a-jwt",
             "tampered": lambda: _tamper(_pass(), org_id="org_EVIL"),
             "wrong_aud": lambda: _pass(aud="https://desk.orchard.test/d/dep_other"),
@@ -326,7 +326,8 @@ class TestHostedWorker:
             "hs256": lambda: _pass(OctKey.import_key(b"k" * 32, {"kid": "desk-es256-1"}), alg="HS256"),
             "wrong_iss": lambda: _pass(iss="https://evil.test"),
             "no_exp": lambda: _pass(exp=None),
-        }[case]()
+        }
+        token = makers[case]()
         status, headers, _ = _request(
             worker, "POST", "/vgi.v3/catalog_attach", _use(token), headers={"Origin": "https://shell.example.com"}
         )
@@ -527,6 +528,8 @@ class TestResolveAuthenticate:
 
     def test_create_app_refuses_custom_authenticate(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """create_app refuses a caller-supplied authenticator in hosted mode."""
+        from vgi_rpc.rpc import AuthContext
+
         from vgi._test_fixtures.orchard_hosted import OrchardHostedWorker
         from vgi.serve import create_app
 
@@ -534,7 +537,7 @@ class TestResolveAuthenticate:
             if key.startswith("VGI_"):
                 monkeypatch.setenv(key, value)
         with pytest.raises(SystemExit):
-            create_app(OrchardHostedWorker, signing_key=b"k" * 32, authenticate=lambda req: None)
+            create_app(OrchardHostedWorker, signing_key=b"k" * 32, authenticate=lambda req: AuthContext.anonymous())
 
     def test_jwt_algorithms_outside_hosted_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """VGI_JWT_ALGORITHMS also applies to ordinary JWT auth; HS* refuses."""

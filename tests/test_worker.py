@@ -3,7 +3,7 @@
 """Tests for vgi.worker module, including function overloading and cardinality."""
 
 from dataclasses import dataclass
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import pyarrow as pa
 import pytest
@@ -1693,7 +1693,9 @@ class TestScalarColumnCountOverloading:
         result = Worker._match_function_arguments(
             function_name="decode",
             arguments=Arguments(positional=()),
-            input_schema=pa.schema([("code", pa.string()), ("year", pa.int64())]),
+            input_schema=pa.schema(
+                cast("list[pa.Field[Any]]", [pa.field("code", pa.string()), pa.field("year", pa.int64())])
+            ),
             candidates=[one, two],
         )
         assert result is two
@@ -1705,7 +1707,12 @@ class TestScalarColumnCountOverloading:
             Worker._match_function_arguments(
                 function_name="decode",
                 arguments=Arguments(positional=()),
-                input_schema=pa.schema([("a", pa.string()), ("b", pa.int64()), ("c", pa.int64())]),
+                input_schema=pa.schema(
+                    cast(
+                        "list[pa.Field[Any]]",
+                        [pa.field("a", pa.string()), pa.field("b", pa.int64()), pa.field("c", pa.int64())],
+                    )
+                ),
                 candidates=[one, two],
             )
 

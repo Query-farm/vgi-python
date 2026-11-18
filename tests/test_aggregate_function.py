@@ -1145,6 +1145,7 @@ class TestInheritedOnBindSecrets:
                 params: Any,
                 *,
                 key: Annotated[dict[str, Any] | None, Secret("s3")] = None,
+                **kwargs: Any,
             ) -> BindResponse:
                 return super().on_bind(params)
 
