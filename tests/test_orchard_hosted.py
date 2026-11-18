@@ -51,6 +51,9 @@ EC = ECKey.generate_key("P-256", parameters={"kid": "desk-es256-1"}, private=Tru
 RSA = RSAKey.generate_key(2048, parameters={"kid": "desk-rs256-1"}, private=True)
 
 _AUTH_ENV = (
+    # Other tests in the same process may export vgi-serve's "minted key"
+    # marker; inherited, it makes the hosted worker refuse its test key.
+    "VGI_SIGNING_KEY_MINTED",
     "VGI_BEARER_TOKENS",
     "VGI_JWT_ISSUER",
     "VGI_JWT_AUDIENCE",
