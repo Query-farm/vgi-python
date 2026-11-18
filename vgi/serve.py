@@ -334,6 +334,7 @@ def create_app(
     if hosted:
         from vgi import hosted as _hosted
 
+        _hosted.check_signing_key(signing_key, configured=signing_key_configured)
         _hosted.check_create_app(
             worker_cls,
             authenticate=authenticate,
@@ -1497,6 +1498,7 @@ def _serve_http(
         from vgi import hosted as _hosted
         from vgi.rpc_server import resolve_grant_keys
 
+        _hosted.check_signing_key(_resolve_signing_key(), configured=not signing_key_was_minted())
         _hosted.check_create_app(
             worker_cls,
             authenticate=authenticate,

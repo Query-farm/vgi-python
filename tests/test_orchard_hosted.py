@@ -411,6 +411,22 @@ class TestStartupRefusals:
         """An empty required variable refuses, the same as unset."""
         assert name in _refused(_env(_JWKS, **{name: "  "}))
 
+    def test_signing_key_unset(self) -> None:
+        """No VGI_SIGNING_KEY refuses: a minted key breaks sessions on every restart."""
+        assert "VGI_SIGNING_KEY" in _refused(_env(_JWKS, VGI_SIGNING_KEY=None))
+
+    def test_signing_key_short(self) -> None:
+        """A VGI_SIGNING_KEY under 32 bytes refuses."""
+        stderr = _refused(_env(_JWKS, VGI_SIGNING_KEY="short-key"))
+        assert "VGI_SIGNING_KEY" in stderr
+        assert "32 bytes" in stderr
+
+    def test_signing_key_minted_by_vgi_serve(self) -> None:
+        """A key vgi-serve minted for its children is not a configured one."""
+        env = _env(_JWKS, VGI_SIGNING_KEY="minted-by-a-parent-vgi-serve-process-0001")
+        env["VGI_SIGNING_KEY_MINTED"] = "1"
+        assert "VGI_SIGNING_KEY" in _refused(env)
+
     def test_comma_audience(self) -> None:
         """The audience is one canonical Desk Address, never a list."""
         stderr = _refused(_env(_JWKS, VGI_JWT_AUDIENCE=f"{AUDIENCE},https://desk.orchard.test/d/other"))

@@ -245,6 +245,36 @@ def check_environment_conflicts() -> None:
         refuse_in_hosted_mode("VGI_PROXY_PROOF_MODE must be off; hosted workers authenticate by Pass only.")
 
 
+#: The shortest VGI_SIGNING_KEY a hosted worker accepts.
+MIN_SIGNING_KEY_BYTES = 32
+
+
+def check_signing_key(signing_key: bytes | None, *, configured: bool) -> None:
+    """Refuse a hosted worker whose signing key isn't stable across restarts.
+
+    The key seals catalog opaque data and HTTP state tokens. A Field Worker's
+    machines stop and start, and a deployment can run on several of them: a
+    key minted per process makes every restart (and every other machine)
+    reject the sessions DuckDB already holds.
+
+    Args:
+        signing_key: The resolved key, or ``None`` if there is none.
+        configured: Whether it was configured by the operator (``VGI_SIGNING_KEY``
+            or passed in), rather than minted by this process or by ``vgi-serve``.
+
+    Raises:
+        SystemExit: When the key is missing, minted, or shorter than 32 bytes.
+
+    """
+    if not configured or signing_key is None:
+        refuse_in_hosted_mode(
+            "VGI_SIGNING_KEY is not set; hosted workers need a stable key shared by every machine of the "
+            "deployment, or every restart breaks attached sessions."
+        )
+    if len(signing_key) < MIN_SIGNING_KEY_BYTES:
+        refuse_in_hosted_mode(f"VGI_SIGNING_KEY must be at least {MIN_SIGNING_KEY_BYTES} bytes.")
+
+
 def check_create_app(
     worker_cls: Any,
     *,
