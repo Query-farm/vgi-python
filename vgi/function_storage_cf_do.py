@@ -36,68 +36,28 @@ Workflow contract:
     semantics in the ``vgi-cloudflare-durable-object-storage`` repo
     (``src/index.ts``).
 
-Value envelope and blob externalization:
-    The DO refuses any stored value over 1 MiB. Every value this client
-    writes (work-queue items, ``state_*`` values, log items) is wrapped in a
-    one-byte-tagged envelope:
-
-    * ``0x00 || raw`` -- the value, inline;
-    * ``0x01 || u64be(size) || sha256(32) || object_id`` -- a pointer to a
-      blob held by the blob vendor (``VGI_BLOB_VENDOR_URL``).
-
-    With the vendor configured, a value of ``VGI_CF_DO_EXTERNALIZE_BYTES``
-    (default 512 KiB) or more is uploaded to the vendor *before* the DO
-    request and the DO stores only the ~73-byte pointer; reads fetch it back
-    and verify size and SHA-256. Without the vendor every value is inline
-    and one whose envelope exceeds 1 MiB is refused client-side, naming
-    ``VGI_BLOB_VENDOR_URL``.
-
-    The envelope is applied whether or not the vendor is configured, so the
-    stored format never depends on a per-process environment variable: two
-    machines of one deployment that disagree about the vendor still read
-    each other's values (a pointer read without a vendor fails clearly).
-    Decoding is strict: an empty value or an unknown tag (e.g. a raw value
-    written by a release before the envelope) raises `StorageEnvelopeError`.
-    As with sealed framework payloads, mixing old and new clients within one
-    running query is not supported; executions are short-lived and never
-    reused, so nothing needs migrating.
-
-    Sealed framework payloads (`vgi._storage_seal`) are sealed by
-    ``BoundStorage`` before they reach this client, so an externalized
-    sealed payload is still authenticated by its slot-bound AAD when read.
-
-    Blobs are uploaded under the vendor scope ``(shard_key, "q.<hex
-    execution_id>")`` for queue items and ``(shard_key, "s.<hex scope_id>")``
-    for state and log values. ``queue_clear`` and ``execution_clear`` delete
-    the matching scope, ``state_drain`` deletes the blobs it drained and
-    ``queue_pop`` the blob it claimed -- all best-effort and on a background
-    thread (never on the query's critical path); the vendor's idle sweep and
-    the bucket lifecycle rules are the backstop.
+Large values:
+    The DO refuses values over 1 MiB (`MAX_VALUE_BYTES`). This class is the
+    raw transport; the configured backend (``_resolve_storage``) wraps it in
+    `vgi.function_storage_blobs.ExternalizingStorage`, which envelopes every
+    value and stores large ones in the blob vendor (``VGI_BLOB_VENDOR_URL``).
 
 """
 
 import base64
-import hashlib
 import json
 import logging
 import os
-import re
-import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator, Sequence
-from concurrent.futures import Future, ThreadPoolExecutor
-from typing import TYPE_CHECKING, Any
+from collections.abc import Iterator
+from typing import Any
 
 import httpx2
 
-if TYPE_CHECKING:
-    from vgi_rpc.vendor import BlobRef, VendorBlobClient
-
 __all__ = [
+    "MAX_VALUE_BYTES",
     "FunctionStorageCfDo",
-    "StorageEnvelopeError",
-    "StorageValueTooLargeError",
 ]
 
 _logger = logging.getLogger("vgi.storage.cf_do")
@@ -120,129 +80,11 @@ if _debug_log_path:
     _logger.setLevel(logging.DEBUG)
 
 
-# ---------------------------------------------------------------------------
-# Value envelope (see the module docstring)
-# ---------------------------------------------------------------------------
-
 #: The storage service's per-value cap (``MAX_VALUE_BYTES`` in its src/index.ts).
+#: ``_resolve_storage`` wraps this backend in
+#: `vgi.function_storage_blobs.ExternalizingStorage` with this cap, which
+#: envelopes every value and moves large ones to the blob vendor.
 MAX_VALUE_BYTES = 1024 * 1024
-#: Values of at least this many bytes go to the blob vendor when it is configured.
-DEFAULT_EXTERNALIZE_BYTES = 512 * 1024
-#: Largest blob a read will fetch (the vendor's per-object cap).
-MAX_BLOB_BYTES = 4 * 1024**3
-
-ENV_EXTERNALIZE_BYTES = "VGI_CF_DO_EXTERNALIZE_BYTES"
-ENV_VENDOR_URL = "VGI_BLOB_VENDOR_URL"
-ENV_VENDOR_TOKEN = "VGI_BLOB_VENDOR_TOKEN"
-
-TAG_INLINE = 0x00
-TAG_POINTER = 0x01
-_POINTER_FIXED = 1 + 8 + 32
-_OBJECT_ID_RE = re.compile(rb"[A-Za-z0-9._:-]{1,128}")
-# The vendor's scope.shard charset; shard keys outside it are hashed.
-_SHARD_RE = re.compile(r"[A-Za-z0-9._-]{1,128}")
-# Concurrent vendor transfers per storage call.
-_TRANSFER_PARALLELISM = 8
-
-
-class StorageEnvelopeError(OSError):
-    """A value read from the Cloudflare DO is not a valid envelope.
-
-    Raised for an empty value, an unknown tag (such as a raw value written by
-    a client older than the envelope) or a malformed pointer, and for a
-    pointer read by a client with no blob vendor configured.
-    """
-
-
-class StorageValueTooLargeError(RuntimeError):
-    """A value is too large for the Durable Object and no blob vendor is configured."""
-
-
-def _encode_inline(value: bytes) -> bytes:
-    return bytes((TAG_INLINE,)) + value
-
-
-def _encode_pointer(ref: "BlobRef") -> bytes:
-    object_id = ref.object_id.encode("ascii")
-    if not _OBJECT_ID_RE.fullmatch(object_id):
-        raise ValueError(f"blob vendor returned an unusable object id {ref.object_id!r}")
-    return bytes((TAG_POINTER,)) + ref.size.to_bytes(8, "big") + bytes.fromhex(ref.sha256) + object_id
-
-
-def _decode_pointer(envelope: bytes) -> "BlobRef":
-    from vgi_rpc.vendor import BlobRef
-
-    object_id = envelope[_POINTER_FIXED:]
-    if len(envelope) <= _POINTER_FIXED or not _OBJECT_ID_RE.fullmatch(object_id):
-        raise StorageEnvelopeError(f"malformed blob pointer in Cloudflare DO value ({len(envelope)} bytes)")
-    return BlobRef(
-        object_id=object_id.decode("ascii"),
-        size=int.from_bytes(envelope[1:9], "big"),
-        sha256=envelope[9:_POINTER_FIXED].hex(),
-    )
-
-
-def _tag_of(envelope: bytes) -> int:
-    if not envelope:
-        raise StorageEnvelopeError("empty Cloudflare DO value: not a value envelope (written by an older client?)")
-    tag = envelope[0]
-    if tag not in (TAG_INLINE, TAG_POINTER):
-        raise StorageEnvelopeError(
-            f"Cloudflare DO value has unknown envelope tag 0x{tag:02x} (written by an older or newer "
-            "client? mixing client versions within one query is not supported)"
-        )
-    return tag
-
-
-def _blob_execution_id(kind: str, ident: bytes) -> str:
-    """Vendor ``scope.execution_id`` for one queue (``q``) or state scope (``s``)."""
-    text = f"{kind}.{ident.hex()}"
-    if len(text) <= 128:
-        return text
-    return f"{kind}.h{hashlib.sha256(ident).hexdigest()}"
-
-
-def _blob_shard(shard_key: str) -> str:
-    shard = shard_key or "loc-anon"
-    if _SHARD_RE.fullmatch(shard):
-        return shard
-    return "h-" + hashlib.sha256(shard.encode()).hexdigest()
-
-
-def _parallel_map[T, R](fn: Callable[[T], R], items: Sequence[T]) -> list[R]:
-    if len(items) <= 1:
-        return [fn(item) for item in items]
-    with ThreadPoolExecutor(max_workers=min(_TRANSFER_PARALLELISM, len(items))) as pool:
-        return list(pool.map(fn, items))
-
-
-def _externalize_bytes_from_env() -> int:
-    raw = os.environ.get(ENV_EXTERNALIZE_BYTES, "").strip()
-    if not raw:
-        return DEFAULT_EXTERNALIZE_BYTES
-    try:
-        value = int(raw)
-    except ValueError:
-        raise ValueError(f"{ENV_EXTERNALIZE_BYTES} must be an integer, got {raw!r}") from None
-    return value
-
-
-def _blob_client_from_env() -> "VendorBlobClient | None":
-    url = os.environ.get(ENV_VENDOR_URL, "").strip()
-    if not url:
-        return None
-    token = os.environ.get(ENV_VENDOR_TOKEN, "").strip() or os.environ.get("VGI_CF_DO_TOKEN", "").strip()
-    if not token:
-        raise ValueError(f"{ENV_VENDOR_URL} is set but neither {ENV_VENDOR_TOKEN} nor VGI_CF_DO_TOKEN is")
-    try:
-        import aiohttp  # noqa: F401  (get_bytes downloads with it; fail at startup, not mid-query)
-        from vgi_rpc.external_fetch import FetchConfig
-        from vgi_rpc.vendor import VendorBlobClient
-    except ImportError as exc:  # pragma: no cover - depends on installed extras
-        raise ImportError(
-            f"{ENV_VENDOR_URL} needs vgi-rpc's blob vendor client: pip install 'vgi[external]' ({exc})"
-        ) from exc
-    return VendorBlobClient(url, token, purpose="fs", fetch_config=FetchConfig(max_fetch_bytes=MAX_BLOB_BYTES))
 
 
 class FunctionStorageCfDo:
@@ -270,42 +112,17 @@ class FunctionStorageCfDo:
     _CONNECT_RETRIES = 2
     _POST_ATTEMPTS = 3
 
-    def __init__(
-        self,
-        *,
-        url: str,
-        token: str | None = None,
-        blob_client: "VendorBlobClient | None" = None,
-        externalize_bytes: int = DEFAULT_EXTERNALIZE_BYTES,
-    ) -> None:
+    def __init__(self, *, url: str, token: str | None = None) -> None:
         """Initialize Cloudflare DO storage client.
 
         Args:
             url: Base URL of the Cloudflare Worker
                 (e.g., ``https://vgi-storage.myaccount.workers.dev``).
             token: Optional bearer token for authentication.
-            blob_client: Blob vendor client for values too large for the DO.
-                ``None`` keeps every value inline (and refuses one over the
-                DO's 1 MiB cap). Closed by :meth:`close`.
-            externalize_bytes: With a ``blob_client``, values of at least
-                this many bytes are stored in the vendor. At most 1 MiB.
-
-        Raises:
-            ValueError: If ``externalize_bytes`` is outside ``1..1 MiB``.
 
         """
-        if not 1 <= externalize_bytes <= MAX_VALUE_BYTES:
-            raise ValueError(
-                f"externalize_bytes ({ENV_EXTERNALIZE_BYTES}) must be between 1 and {MAX_VALUE_BYTES}, "
-                f"got {externalize_bytes}"
-            )
         self._url = url.rstrip("/")
         self._token = token
-        self._blobs = blob_client
-        self._externalize_bytes = externalize_bytes
-        self._cleanup_lock = threading.Lock()
-        self._cleanup_pool: ThreadPoolExecutor | None = None
-        self._cleanup_futures: list[Future[None]] = []
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -328,126 +145,8 @@ class FunctionStorageCfDo:
         )
 
     def close(self) -> None:
-        """Close the HTTP client and, after pending blob clean-up finishes, the blob client."""
+        """Close the underlying HTTP client and its connection pool."""
         self._client.close()
-        with self._cleanup_lock:
-            pool, self._cleanup_pool = self._cleanup_pool, None
-        if pool is not None:
-            pool.shutdown(wait=True)
-        if self._blobs is not None:
-            self._blobs.close()
-
-    # --- Value envelope / blob externalization -------------------------------
-
-    def _encode_values(
-        self,
-        values: Sequence[bytes],
-        *,
-        attempt_id: str,
-        shard_key: str,
-        blob_execution_id: str,
-    ) -> list[str]:
-        """Envelope each value (uploading large ones) and base64 it for the DO.
-
-        Uploads happen before the DO request. Each carries the idempotency key
-        ``<attempt_id>.<index>``, so a retried upload of the same logical
-        write reuses the vendor object instead of creating another.
-        """
-        large = [i for i, v in enumerate(values) if self._blobs is not None and len(v) >= self._externalize_bytes]
-        large_set = set(large)
-        envelopes: list[bytes | None] = [None if i in large_set else _encode_inline(v) for i, v in enumerate(values)]
-        if self._blobs is None:
-            for env in envelopes:
-                assert env is not None
-                if len(env) > MAX_VALUE_BYTES:
-                    raise StorageValueTooLargeError(
-                        f"Cloudflare DO storage value of {len(env) - 1} bytes exceeds the Durable Object's "
-                        f"{MAX_VALUE_BYTES}-byte limit; set {ENV_VENDOR_URL} (the blob vendor) so large "
-                        "values are stored as blobs"
-                    )
-        if large:
-            from vgi_rpc.vendor import BlobScope
-
-            blobs = self._blobs
-            assert blobs is not None
-            scope = BlobScope(shard=_blob_shard(shard_key), execution_id=blob_execution_id)
-
-            def upload(i: int) -> bytes:
-                ref = blobs.put_bytes(values[i], scope=scope, idempotency_key=f"{attempt_id}.{i}")
-                return _encode_pointer(ref)
-
-            for i, env in zip(large, _parallel_map(upload, large), strict=True):
-                envelopes[i] = env
-        out: list[str] = []
-        for env in envelopes:
-            assert env is not None
-            out.append(base64.b64encode(env).decode())
-        return out
-
-    def _decode_values(
-        self, encoded: Sequence[str | None], *, refs_out: "list[BlobRef] | None" = None
-    ) -> list[bytes | None]:
-        """Decode base64 envelopes from the DO, fetching pointers (in parallel).
-
-        ``refs_out``, when given, receives the blob references that were read.
-        """
-        raw = [None if e is None else base64.b64decode(e) for e in encoded]
-        pointers = [i for i, env in enumerate(raw) if env is not None and _tag_of(env) == TAG_POINTER]
-        out: list[bytes | None] = [None if env is None else env[1:] for env in raw]
-        if pointers:
-            blobs = self._blobs
-            if blobs is None:
-                raise StorageEnvelopeError(
-                    f"Cloudflare DO value is a blob pointer but {ENV_VENDOR_URL} is not configured in this process"
-                )
-            refs = []
-            for i in pointers:
-                env = raw[i]
-                assert env is not None
-                refs.append(_decode_pointer(env))
-            for i, data in zip(pointers, _parallel_map(blobs.get_bytes, refs), strict=True):
-                out[i] = data
-            if refs_out is not None:
-                refs_out.extend(refs)
-        return out
-
-    # Blob clean-up runs on a background thread: it is best-effort (the
-    # vendor's idle sweep and the bucket lifecycle rules are the backstop), so
-    # it never adds a vendor round trip to a query's critical path -- in
-    # particular execution_clear, which runs at the end of every query.
-
-    def _submit_cleanup(self, fn: Callable[[], object], what: str) -> None:
-        def run() -> None:
-            try:
-                fn()
-            except Exception as exc:
-                _logger.warning("blob vendor clean-up after %s failed: %s", what, exc)
-
-        with self._cleanup_lock:
-            if self._cleanup_pool is None:
-                self._cleanup_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="vgi-blob-cleanup")
-            self._cleanup_futures = [f for f in self._cleanup_futures if not f.done()]
-            self._cleanup_futures.append(self._cleanup_pool.submit(run))
-
-    def flush_blob_cleanup(self) -> None:
-        """Wait for pending background blob clean-up (for tests and shutdown)."""
-        with self._cleanup_lock:
-            pending = list(self._cleanup_futures)
-        for future in pending:
-            future.result()
-
-    def _delete_blobs(self, refs: list["BlobRef"], what: str) -> None:
-        blobs = self._blobs
-        if blobs is None or not refs:
-            return
-        self._submit_cleanup(lambda: blobs.delete(refs), what)
-
-    def _delete_blob_scope(self, shard_key: str, blob_execution_id: str, what: str) -> None:
-        blobs = self._blobs
-        if blobs is None:
-            return
-        shard = _blob_shard(shard_key)
-        self._submit_cleanup(lambda: blobs.delete_scope(shard, blob_execution_id), what)
 
     def __enter__(self) -> "FunctionStorageCfDo":
         """Enter the context manager."""
@@ -571,20 +270,13 @@ class FunctionStorageCfDo:
     def queue_push(self, execution_id: bytes, items: list[bytes], *, shard_key: str = "") -> int:
         """Add work items to the queue and register the invocation."""
         t0 = time.monotonic()
-        attempt_id = uuid.uuid4().hex
-        encoded = self._encode_values(
-            items,
-            attempt_id=attempt_id,
-            shard_key=shard_key,
-            blob_execution_id=_blob_execution_id("q", execution_id),
-        )
         data = self._post(
             "queue_push",
             {
                 "execution_id": base64.b64encode(execution_id).decode(),
-                "items": encoded,
+                "items": [base64.b64encode(item).decode() for item in items],
             },
-            attempt_id=attempt_id,
+            attempt_id=uuid.uuid4().hex,
             shard_key=shard_key,
         )
         count = int(data["count"])
@@ -611,12 +303,7 @@ class FunctionStorageCfDo:
             attempt_id=uuid.uuid4().hex,
             shard_key=shard_key,
         )
-        result: bytes | None = None
-        if data["item"]:
-            claimed: list[BlobRef] = []
-            result = self._decode_values([data["item"]], refs_out=claimed)[0]
-            # The item is claimed; its blob (if any) is not needed again.
-            self._delete_blobs(claimed, "queue_pop")
+        result = base64.b64decode(data["item"]) if data["item"] else None
         got_item = result is not None
         _logger.debug(
             "queue_pop eid=%s result=%s elapsed_ms=%.1f",
@@ -638,7 +325,6 @@ class FunctionStorageCfDo:
             shard_key=shard_key,
         )
         cleared = int(data["cleared"])
-        self._delete_blob_scope(shard_key, _blob_execution_id("q", execution_id), "queue_clear")
         _logger.debug(
             "queue_clear eid=%s cleared=%d elapsed_ms=%.1f",
             execution_id.hex()[:8],
@@ -685,7 +371,7 @@ class FunctionStorageCfDo:
         )
         # Server returns rows as a list parallel to the input keys.
         rows = data["rows"]
-        result = self._decode_values([None if r is None else r["value"] for r in rows])
+        result: list[bytes | None] = [None if r is None else base64.b64decode(r["value"]) for r in rows]
         _logger.debug(
             "state_get_many scope=%s ns=%s n_keys=%d hits=%d elapsed_ms=%.1f",
             scope_id.hex()[:8],
@@ -708,23 +394,16 @@ class FunctionStorageCfDo:
         if not items:
             return
         t0 = time.monotonic()
-        attempt_id = uuid.uuid4().hex
-        encoded = self._encode_values(
-            [v for _k, v in items],
-            attempt_id=attempt_id,
-            shard_key=shard_key,
-            blob_execution_id=_blob_execution_id("s", scope_id),
-        )
         self._post(
             "state_put_many",
             {
                 "scope_id": base64.b64encode(scope_id).decode(),
                 "ns": base64.b64encode(ns).decode(),
                 "items": [
-                    {"key": base64.b64encode(k).decode(), "value": v} for (k, _v), v in zip(items, encoded, strict=True)
+                    {"key": base64.b64encode(k).decode(), "value": base64.b64encode(v).decode()} for k, v in items
                 ],
             },
-            attempt_id=attempt_id,
+            attempt_id=uuid.uuid4().hex,
             shard_key=shard_key,
         )
         _logger.debug(
@@ -786,11 +465,8 @@ class FunctionStorageCfDo:
             if after_key is not None:
                 body["after_key"] = after_key
             data = self._post("state_scan", body, shard_key=shard_key)
-            rows = data["rows"]
-            values = self._decode_values([r["value"] for r in rows])
-            for r, value in zip(rows, values, strict=True):
-                assert value is not None
-                yield (base64.b64decode(r["key"]), value)
+            for r in data["rows"]:
+                yield (base64.b64decode(r["key"]), base64.b64decode(r["value"]))
                 n += 1
                 if remaining is not None:
                     remaining -= 1
@@ -831,7 +507,6 @@ class FunctionStorageCfDo:
         t0 = time.monotonic()
         attempt_id = uuid.uuid4().hex
         after_key: str | None = None
-        drained_refs: list[BlobRef] = []
         n = 0
         while True:
             body: dict[str, object] = {
@@ -841,17 +516,12 @@ class FunctionStorageCfDo:
             if after_key is not None:
                 body["after_key"] = after_key
             data = self._post("state_drain", body, attempt_id=attempt_id, shard_key=shard_key)
-            rows = data["rows"]
-            values = self._decode_values([r["value"] for r in rows], refs_out=drained_refs)
-            for r, value in zip(rows, values, strict=True):
-                assert value is not None
-                yield (base64.b64decode(r["key"]), value)
+            for r in data["rows"]:
+                yield (base64.b64decode(r["key"]), base64.b64decode(r["value"]))
                 n += 1
             after_key = data.get("next_after")
             if not after_key:
                 break
-        # The drained rows are tombstoned: their blobs are not read again.
-        self._delete_blobs(drained_refs, "state_drain")
         _logger.debug(
             "state_drain scope=%s ns=%s rows=%d elapsed_ms=%.1f",
             scope_id.hex()[:8],
@@ -925,7 +595,6 @@ class FunctionStorageCfDo:
             shard_key=shard_key,
         )
         deleted = int(data["deleted"])
-        self._delete_blob_scope(shard_key, _blob_execution_id("s", scope_id), "execution_clear")
         _logger.debug(
             "execution_clear scope=%s deleted=%d elapsed_ms=%.1f",
             scope_id.hex()[:8],
@@ -949,22 +618,15 @@ class FunctionStorageCfDo:
         the server returns the prior ordinal so retries are idempotent.
         """
         t0 = time.monotonic()
-        attempt_id = uuid.uuid4().hex
-        (encoded,) = self._encode_values(
-            [item],
-            attempt_id=attempt_id,
-            shard_key=shard_key,
-            blob_execution_id=_blob_execution_id("s", scope_id),
-        )
         data = self._post(
             "state_append",
             {
                 "scope_id": base64.b64encode(scope_id).decode(),
                 "ns": base64.b64encode(ns).decode(),
                 "key": base64.b64encode(key).decode(),
-                "item": encoded,
+                "item": base64.b64encode(item).decode(),
             },
-            attempt_id=attempt_id,
+            attempt_id=uuid.uuid4().hex,
             shard_key=shard_key,
         )
         ordinal = int(data["ordinal"])
@@ -999,8 +661,7 @@ class FunctionStorageCfDo:
         if limit is not None:
             body["limit"] = int(limit)
         data = self._post("state_log_scan", body, shard_key=shard_key)
-        values = self._decode_values([r["value"] for r in data["rows"]])
-        rows = [(int(r["id"]), v) for r, v in zip(data["rows"], values, strict=True) if v is not None]
+        rows = [(int(r["id"]), base64.b64decode(r["value"])) for r in data["rows"]]
         _logger.debug(
             "state_log_scan scope=%s ns=%s key=%s after_id=%d rows=%d elapsed_ms=%.1f",
             scope_id.hex()[:8],
@@ -1086,11 +747,6 @@ class FunctionStorageCfDo:
             VGI_CF_DO_TOKEN: Per-worker API key (sent as a bearer token).
                 Required by the multi-tenant cloudflare-do deployment, where
                 it resolves server-side to this worker's tenant.
-            VGI_BLOB_VENDOR_URL: Blob vendor for values too large for the DO
-                (see the module docstring). Its token is
-                ``VGI_BLOB_VENDOR_TOKEN``, falling back to ``VGI_CF_DO_TOKEN``.
-            VGI_CF_DO_EXTERNALIZE_BYTES: Externalization threshold with the
-                vendor (default 512 KiB, at most 1 MiB).
 
         """
         url = os.environ.get("VGI_CF_DO_URL")
@@ -1101,8 +757,6 @@ class FunctionStorageCfDo:
         return cls(
             url=url,
             token=os.environ.get("VGI_CF_DO_TOKEN") or None,
-            blob_client=_blob_client_from_env(),
-            externalize_bytes=_externalize_bytes_from_env(),
         )
 
 

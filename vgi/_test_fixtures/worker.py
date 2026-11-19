@@ -2344,12 +2344,14 @@ def main() -> None:
 
     Always serves the base ExampleWorker catalog plus the
     ``projection_repro``, ``schema_reconcile``, ``accumulate``,
-    ``narrow_bind``, ``twin_a``, ``twin_b`` and ``contents_*`` fixture catalogs (all
+    ``narrow_bind``, ``twin_a``, ``twin_b``, ``contents_*``, ``ticket_probe`` and
+    ``blob_test`` fixture catalogs (all
     depend on the ``vgi[test-fixtures]`` extra). Adds the writable
     catalog when the ``vgi[test-fixtures-writable]`` extra is also
     installed.
     """
     from vgi._test_fixtures.accumulate.worker import AccumulateWorker
+    from vgi._test_fixtures.blob_catalog import BlobTestWorker
     from vgi._test_fixtures.catalog_contents import CONTENTS_WORKERS
     from vgi._test_fixtures.narrow_bind.worker import NarrowBindWorker
     from vgi._test_fixtures.projection_repro.worker import ProjReproWorker
@@ -2374,6 +2376,9 @@ def main() -> None:
         # ticket_probe: attach tickets (vgi.attach_tickets.v1) -- one plain and
         # one secret attach option whose effect a table reveals.
         TicketProbeWorker,
+        # blob_test: functions sized by their arguments, for the blob
+        # externalization lane (a separate catalog, so example counts hold).
+        BlobTestWorker,
     ]
     try:
         from vgi._test_fixtures.writable.worker import WritableWorker

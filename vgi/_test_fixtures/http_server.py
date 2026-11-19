@@ -309,6 +309,23 @@ def main() -> None:
                 f"compression={compression_choice}\n"
             )
             sys.stderr.flush()
+        elif os.environ.get("VGI_BLOB_VENDOR_URL", "").strip():
+            # The blob vendor, configured as for vgi-serve (VGI_BLOB_VENDOR_URL,
+            # VGI_RPC_EXTERNALIZE_THRESHOLD_BYTES, VGI_RPC_MAX_REQUEST_BYTES,
+            # VGI_RPC_MAX_UPLOAD_BYTES): the extension's externalization lane
+            # runs this server against the fake vendor.
+            from vgi.serve import resolve_blob_vendor_http_config
+
+            blob_http = resolve_blob_vendor_http_config()
+            external_location = blob_http.external_location
+            upload_url_provider = blob_http.upload_url_provider
+            max_request_bytes = blob_http.max_request_bytes
+            if blob_http.max_upload_bytes is not None:
+                max_upload_bytes = blob_http.max_upload_bytes
+            sys.stderr.write(
+                f"Blob vendor enabled: {os.environ['VGI_BLOB_VENDOR_URL']} max_request_bytes={max_request_bytes}\n"
+            )
+            sys.stderr.flush()
 
         from vgi.serve import _resolve_authenticate, _resolve_oauth_resource_metadata
 
@@ -376,6 +393,7 @@ def main() -> None:
         # and not the other fails the file on that transport alone — which reads
         # as a transport bug and is not one. narrow_bind drifted exactly that
         # way, and it guards a client SIGSEGV, so it was the worst one to lose.
+        from vgi._test_fixtures.blob_catalog import BlobTestWorker
         from vgi._test_fixtures.catalog_contents import CONTENTS_WORKERS
         from vgi._test_fixtures.narrow_bind.worker import NarrowBindWorker
         from vgi._test_fixtures.ticket_probe import TicketProbeWorker
@@ -391,6 +409,7 @@ def main() -> None:
             TwinBWorker,
             *CONTENTS_WORKERS,
             TicketProbeWorker,
+            BlobTestWorker,
         ]
         try:
             from vgi._test_fixtures.writable.worker import WritableWorker

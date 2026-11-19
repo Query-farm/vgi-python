@@ -2,7 +2,7 @@
 
 """Value envelope and blob-vendor externalization in the Cloudflare DO client.
 
-Runs `FunctionStorageCfDo` against an in-memory fake of the DO service
+Runs `ExternalizingStorage` over `FunctionStorageCfDo` against an in-memory fake of the DO service
 (``tests/_fake_cf_do.py``) and vgi-rpc's fake blob vendor.
 """
 
@@ -26,15 +26,15 @@ from tests._fake_cf_do import FakeCfDo
 from vgi import _storage_profile as sp
 from vgi._storage_seal import StoragePayloadError
 from vgi.function_storage import BoundStorage, FrameworkNS
-from vgi.function_storage_cf_do import (
+from vgi.function_storage_blobs import (
     DEFAULT_EXTERNALIZE_BYTES,
-    MAX_VALUE_BYTES,
     TAG_INLINE,
     TAG_POINTER,
-    FunctionStorageCfDo,
+    ExternalizingStorage,
     StorageEnvelopeError,
     StorageValueTooLargeError,
 )
+from vgi.function_storage_cf_do import MAX_VALUE_BYTES, FunctionStorageCfDo
 
 THRESHOLD = 4096
 SHARD = "att-" + "ab" * 16
@@ -59,17 +59,17 @@ def _storage(
     *,
     threshold: int = THRESHOLD,
     cls: type[FunctionStorageCfDo] = FunctionStorageCfDo,
-) -> FunctionStorageCfDo:
-    s = cls(
-        url="https://do.example",
-        token="t",
-        blob_client=_client(vendor) if vendor is not None else None,
-        externalize_bytes=threshold,
-    )
-    old = s._client
-    s._client = httpx2.Client(base_url=str(old.base_url), headers=old.headers, transport=do.transport())
+) -> ExternalizingStorage:
+    base = cls(url="https://do.example", token="t")
+    old = base._client
+    base._client = httpx2.Client(base_url=str(old.base_url), headers=old.headers, transport=do.transport())
     old.close()
-    return s
+    return ExternalizingStorage(
+        base,
+        blob_client=_client(vendor) if vendor is not None else None,
+        threshold=threshold,
+        max_value_bytes=MAX_VALUE_BYTES,
+    )
 
 
 def _tags(do: FakeCfDo) -> list[int]:
@@ -227,19 +227,6 @@ def test_state_append_and_log_scan_round_trip(vendor: FakeVendorServer) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_retry_reuses_the_same_object(vendor: FakeVendorServer) -> None:
-    """The same attempt_id + index is the same vendor object (idempotency key)."""
-    do = FakeCfDo()
-    s = _storage(do, vendor)
-    value = b"z" * THRESHOLD
-    first = s._encode_values([b"small", value], attempt_id="a" * 32, shard_key=SHARD, blob_execution_id="s.11")
-    again = s._encode_values([b"small", value], attempt_id="a" * 32, shard_key=SHARD, blob_execution_id="s.11")
-    assert first == again
-    assert len(_objects(vendor)) == 1
-    other = s._encode_values([b"small", value], attempt_id="b" * 32, shard_key=SHARD, blob_execution_id="s.11")
-    assert other[1] != first[1]
-
-
 def test_do_retry_after_upload_does_not_reupload(vendor: FakeVendorServer) -> None:
     """A 5xx from the DO is retried with the same body; the blob is uploaded once."""
     do = FakeCfDo()
@@ -261,6 +248,7 @@ def test_vendor_put_retry_uses_idempotency_key(vendor: FakeVendorServer) -> None
     s.queue_push(SCOPE, [b"w" * THRESHOLD], shard_key=SHARD)
     assert len(_objects(vendor)) == 1
     assert s.queue_pop(SCOPE, shard_key=SHARD) == b"w" * THRESHOLD
+    s.flush_blob_cleanup()
 
 
 def test_checksum_mismatch_on_fetch_raises(vendor: FakeVendorServer) -> None:
@@ -308,7 +296,7 @@ def test_clean_up_failure_is_logged_not_raised(vendor: FakeVendorServer, caplog:
     """A vendor error during clean-up never fails the storage call."""
     do = FakeCfDo()
     s = _storage(do, vendor)
-    s._blobs._api._max_attempts = 1  # type: ignore[union-attr]
+    s.blob_client._api._max_attempts = 1  # type: ignore[union-attr]
     vendor.vendor.fail_next("/v1/blobs/delete_scope", status=500)
     assert s.execution_clear(SCOPE, shard_key=SHARD) == 0
     s.flush_blob_cleanup()
@@ -360,36 +348,84 @@ def test_no_vendor_mid_size_values_stay_inline() -> None:
     assert s.state_get_many(SCOPE, NS, [b"k"], shard_key=SHARD) == [value]
 
 
-def test_externalize_bytes_validation() -> None:
-    """The threshold must be in 1..1 MiB (an inline value must fit the DO)."""
+def test_threshold_validation() -> None:
+    """The threshold must be positive and, with a cap, fit the backend (an inline value must fit)."""
+    base = FunctionStorageCfDo(url="https://do.example")
     for bad in (0, MAX_VALUE_BYTES + 1):
-        with pytest.raises(ValueError, match="externalize_bytes"):
-            FunctionStorageCfDo(url="https://do.example", externalize_bytes=bad)
+        with pytest.raises(ValueError, match="threshold"):
+            ExternalizingStorage(base, blob_client=None, threshold=bad, max_value_bytes=MAX_VALUE_BYTES)
+    assert (
+        ExternalizingStorage(base, blob_client=None, threshold=10 * MAX_VALUE_BYTES).threshold == 10 * MAX_VALUE_BYTES
+    )
 
 
-def test_from_env(monkeypatch: pytest.MonkeyPatch, vendor: FakeVendorServer) -> None:
-    """from_env wires the vendor from VGI_BLOB_VENDOR_URL, token falling back to VGI_CF_DO_TOKEN."""
+_ENV_NAMES = (
+    "VGI_WORKER_SHARED_STORAGE",
+    "VGI_BLOB_VENDOR_URL",
+    "VGI_BLOB_VENDOR_TOKEN",
+    "VGI_CF_DO_TOKEN",
+    "VGI_STORAGE_EXTERNALIZE",
+    "VGI_STORAGE_EXTERNALIZE_BYTES",
+    "VGI_CF_DO_EXTERNALIZE_BYTES",
+)
+
+
+def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in _ENV_NAMES:
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_resolve_cf_do_is_always_wrapped(monkeypatch: pytest.MonkeyPatch, vendor: FakeVendorServer) -> None:
+    """cloudflare-do: wrapped with or without the vendor; token falls back to VGI_CF_DO_TOKEN."""
+    from vgi.function import _resolve_storage
+
+    _clean_env(monkeypatch)
+    monkeypatch.setenv("VGI_WORKER_SHARED_STORAGE", "cloudflare-do")
     monkeypatch.setenv("VGI_CF_DO_URL", "https://do.example")
-    monkeypatch.delenv("VGI_BLOB_VENDOR_URL", raising=False)
-    monkeypatch.delenv("VGI_BLOB_VENDOR_TOKEN", raising=False)
-    monkeypatch.delenv("VGI_CF_DO_EXTERNALIZE_BYTES", raising=False)
-    plain = FunctionStorageCfDo.from_env()
-    assert plain._blobs is None and plain._externalize_bytes == DEFAULT_EXTERNALIZE_BYTES
+    plain = _resolve_storage()
+    assert isinstance(plain, ExternalizingStorage) and plain.blob_client is None
+    assert plain.threshold == DEFAULT_EXTERNALIZE_BYTES
     plain.close()
 
     monkeypatch.setenv("VGI_BLOB_VENDOR_URL", vendor.url)
-    monkeypatch.delenv("VGI_CF_DO_TOKEN", raising=False)
     with pytest.raises(ValueError, match="VGI_BLOB_VENDOR_TOKEN"):
-        FunctionStorageCfDo.from_env()
+        _resolve_storage()
     monkeypatch.setenv("VGI_CF_DO_TOKEN", "test-token")
-    monkeypatch.setenv("VGI_CF_DO_EXTERNALIZE_BYTES", "100000")
-    s = FunctionStorageCfDo.from_env()
-    assert s._blobs is not None and s._externalize_bytes == 100000
-    assert s._blobs.put_bytes(b"hello").size == 5  # the fallback token authenticates
+    monkeypatch.setenv("VGI_CF_DO_EXTERNALIZE_BYTES", "100000")  # the alias
+    s = _resolve_storage()
+    assert isinstance(s, ExternalizingStorage) and s.blob_client is not None
+    assert s.threshold == 100000
+    assert s.blob_client.put_bytes(b"hello").size == 5  # the fallback token authenticates
     s.close()
-    monkeypatch.setenv("VGI_CF_DO_EXTERNALIZE_BYTES", "lots")
-    with pytest.raises(ValueError, match="VGI_CF_DO_EXTERNALIZE_BYTES"):
-        FunctionStorageCfDo.from_env()
+    monkeypatch.setenv("VGI_STORAGE_EXTERNALIZE_BYTES", str(4 * MAX_VALUE_BYTES))  # wins; clamped to the cap
+    s = _resolve_storage()
+    assert isinstance(s, ExternalizingStorage) and s.threshold == MAX_VALUE_BYTES
+    s.close()
+    monkeypatch.setenv("VGI_STORAGE_EXTERNALIZE_BYTES", "lots")
+    with pytest.raises(ValueError, match="VGI_STORAGE_EXTERNALIZE_BYTES"):
+        _resolve_storage()
+
+
+def test_resolve_sqlite_unwrapped_by_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    """SQLite keeps its on-disk format unless VGI_STORAGE_EXTERNALIZE=1, even with a vendor URL set."""
+    from vgi.function import _resolve_storage
+    from vgi.function_storage import FunctionStorageSqlite
+
+    _clean_env(monkeypatch)
+    monkeypatch.setenv("VGI_WORKER_SQLITE_PATH", str(tmp_path / "s.db"))
+    monkeypatch.setenv("VGI_BLOB_VENDOR_URL", "http://127.0.0.1:9")
+    assert isinstance(_resolve_storage(), FunctionStorageSqlite)
+
+
+def test_resolve_sqlite_externalize_needs_vendor(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+    """VGI_STORAGE_EXTERNALIZE=1 without VGI_BLOB_VENDOR_URL stops startup."""
+    from vgi.function import _resolve_storage
+
+    _clean_env(monkeypatch)
+    monkeypatch.setenv("VGI_WORKER_SQLITE_PATH", str(tmp_path / "s.db"))
+    monkeypatch.setenv("VGI_STORAGE_EXTERNALIZE", "1")
+    with pytest.raises(ValueError, match="VGI_BLOB_VENDOR_URL"):
+        _resolve_storage()
 
 
 # ---------------------------------------------------------------------------
@@ -400,7 +436,7 @@ _ATTACH = b"\xaa" * 16 + b"catalog"
 _SIGNING_KEY = b"k" * 32
 
 
-def _bound(s: FunctionStorageCfDo, eid: bytes = SCOPE) -> BoundStorage:
+def _bound(s: ExternalizingStorage, eid: bytes = SCOPE) -> BoundStorage:
     return BoundStorage(s, eid, attach_plaintext=_ATTACH)
 
 
@@ -514,11 +550,10 @@ def test_2048_rows_of_1mb_strings(vendor: FakeVendorServer) -> None:
 
     url = os.environ.get("VGI_CF_DO_INTEGRATION_URL")
     if url:
-        s = FunctionStorageCfDo(
-            url=url,
-            token=os.environ.get("VGI_CF_DO_TOKEN"),
+        s = ExternalizingStorage(
+            FunctionStorageCfDo(url=url, token=os.environ.get("VGI_CF_DO_TOKEN")),
             blob_client=_client(vendor),
-            externalize_bytes=DEFAULT_EXTERNALIZE_BYTES,
+            max_value_bytes=MAX_VALUE_BYTES,
         )
     else:
         s = _storage(FakeCfDo(), vendor, threshold=DEFAULT_EXTERNALIZE_BYTES)
@@ -531,4 +566,70 @@ def test_2048_rows_of_1mb_strings(vendor: FakeVendorServer) -> None:
     bound.execution_clear()
     s.flush_blob_cleanup()
     assert _objects(vendor) == []
+    s.close()
+
+
+# ---------------------------------------------------------------------------
+# Over SQLite (VGI_STORAGE_EXTERNALIZE=1)
+# ---------------------------------------------------------------------------
+
+
+def _sqlite(tmp_path: Any, vendor: FakeVendorServer) -> ExternalizingStorage:
+    from vgi.function_storage import FunctionStorageSqlite
+
+    return ExternalizingStorage(
+        FunctionStorageSqlite(db_path=str(tmp_path / "s.db")), blob_client=_client(vendor), threshold=THRESHOLD
+    )
+
+
+def test_sqlite_round_trip_every_method(tmp_path: Any, vendor: FakeVendorServer) -> None:
+    """Queue, state and log values over SQLite, mixed inline and external."""
+    s = _sqlite(tmp_path, vendor)
+    assert not s.requires_shard_key
+    values = _mixed(6)
+    s.queue_push(SCOPE, values[:3])
+    assert [s.queue_pop(SCOPE) for _ in range(3)] == values[:3]
+    s.state_put_many(SCOPE, NS, [(bytes([i]), v) for i, v in enumerate(values)])
+    assert s.state_get_many(SCOPE, NS, [bytes([i]) for i in range(6)] + [b"x"]) == [*values, None]
+    assert list(s.state_scan(SCOPE, NS, reverse=True, limit=2)) == [(b"\x05", values[5]), (b"\x04", values[4])]
+    ids = [s.state_append(SCOPE, b"log", b"", v) for v in values]
+    assert s.state_log_scan(SCOPE, b"log", b"") == list(zip(ids, values, strict=True))
+    assert list(s.state_drain(SCOPE, NS)) == [(bytes([i]), v) for i, v in enumerate(values)]
+    s.execution_clear(SCOPE)
+    s.flush_blob_cleanup()
+    assert _objects(vendor) == []
+    s.close()
+
+
+def test_sqlite_stores_envelopes(tmp_path: Any, vendor: FakeVendorServer) -> None:
+    """The SQLite rows hold envelopes: tag byte, and only a pointer for large values."""
+    s = _sqlite(tmp_path, vendor)
+    s.state_put_many(SCOPE, NS, [(b"a", b"tiny"), (b"b", b"B" * THRESHOLD)])
+    raw = dict(s.base.state_scan(SCOPE, NS))
+    assert raw[b"a"] == b"\x00tiny"
+    assert raw[b"b"][0] == TAG_POINTER and len(raw[b"b"]) < 100
+    s.close()
+
+
+def test_sqlite_drain_is_eager(tmp_path: Any, vendor: FakeVendorServer) -> None:
+    """An unconsumed state_drain still drains an eager backend, as without the wrapper."""
+    s = _sqlite(tmp_path, vendor)
+    s.state_put_many(SCOPE, NS, [(b"a", b"x")])
+    s.state_drain(SCOPE, NS)
+    assert s.state_get_many(SCOPE, NS, [b"a"]) == [None]
+    s.close()
+
+
+def test_sqlite_sealed_payload_and_buffered_fixture(tmp_path: Any, vendor: FakeVendorServer) -> None:
+    """Sealed framework payloads and the raw-input buffered fixture over wrapped SQLite."""
+    from vgi._test_fixtures.table_in_out import BufferInputFunction
+
+    s = _sqlite(tmp_path, vendor)
+    bound = BoundStorage(s, SCOPE)
+    payload = secrets.token_bytes(THRESHOLD * 2)
+    bound.sealed_put(FrameworkNS.BUFFERING_INIT, b"k", payload, signing_key=_SIGNING_KEY)
+    assert bound.sealed_get(FrameworkNS.BUFFERING_INIT, b"k", signing_key=_SIGNING_KEY) == payload
+    batches = [pa.RecordBatch.from_pydict({"s": ["y" * 10_000] * 3}) for _ in range(3)]
+    out = _run_buffered(BufferInputFunction, bound, batches)
+    assert pa.Table.from_batches(out).equals(pa.Table.from_batches(batches))
     s.close()

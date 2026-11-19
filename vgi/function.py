@@ -38,8 +38,26 @@ from vgi.metadata import MetadataMixin, ResolvedMetadata
 
 
 def _resolve_storage() -> FunctionStorage:
-    """Resolve the default `FunctionStorage` backend from environment."""
+    """Resolve the default `FunctionStorage` backend from environment.
+
+    The backend is wrapped in `vgi.function_storage_blobs.ExternalizingStorage`
+    (value envelope plus blob-vendor externalization) always for
+    ``cloudflare-do``, and for any other backend with
+    ``VGI_STORAGE_EXTERNALIZE=1``; see `wrap_storage_from_env`.
+    """
+    from vgi.function_storage_blobs import wrap_storage_from_env
+
     backend = os.environ.get("VGI_WORKER_SHARED_STORAGE", "sqlite").lower()
+    if backend == "cloudflare-do":
+        from vgi.function_storage_cf_do import MAX_VALUE_BYTES, FunctionStorageCfDo
+
+        # Always enveloped (vendor or not) so every process writes one format.
+        return wrap_storage_from_env(FunctionStorageCfDo.from_env(), max_value_bytes=MAX_VALUE_BYTES)
+    return wrap_storage_from_env(_resolve_base_storage(backend))
+
+
+def _resolve_base_storage(backend: str) -> FunctionStorage:
+    """Build the unwrapped backend named by ``VGI_WORKER_SHARED_STORAGE``."""
     if backend == "memory":
         # In-process tier: SQLite at ":memory:" (shared-cache, process-local).
         # Ignores VGI_WORKER_SQLITE_PATH by design — "memory" always means a
@@ -63,10 +81,6 @@ def _resolve_storage() -> FunctionStorage:
         from vgi.function_storage_azure_sql import FunctionStorageAzureSql
 
         return FunctionStorageAzureSql.from_env()
-    if backend == "cloudflare-do":
-        from vgi.function_storage_cf_do import FunctionStorageCfDo
-
-        return FunctionStorageCfDo.from_env()
     raise ValueError(
         f"Unknown VGI_WORKER_SHARED_STORAGE backend: {backend!r}. "
         "Supported: 'memory', 'sqlite', 'azure-sql', 'cloudflare-do'"

@@ -82,11 +82,6 @@ def storage(mock_transport: _MockTransport) -> FunctionStorageCfDo:
     return s
 
 
-def _env(data: bytes) -> str:
-    """Base64 of an inline value envelope (``0x00 || value``), as the DO stores it."""
-    return base64.b64encode(b"\x00" + data).decode()
-
-
 def _b64(data: bytes) -> str:
     return base64.b64encode(data).decode()
 
@@ -111,13 +106,13 @@ class TestFunctionStorageCfDo:
 
         body = _body(mock_transport.requests[0])
         assert len(body["items"]) == 3
-        assert base64.b64decode(body["items"][0]) == b"\x00item1"
+        assert base64.b64decode(body["items"][0]) == b"item1"
 
     def test_queue_pop_returns_item(self, storage: FunctionStorageCfDo, mock_transport: _MockTransport) -> None:
         """Test that queue_pop returns a decoded item."""
         execution_id = b"\x02" * 16
 
-        mock_transport.queue_response(200, {"item": _env(b"item1")})
+        mock_transport.queue_response(200, {"item": _b64(b"item1")})
         result = storage.queue_pop(execution_id)
         assert result == b"item1"
 
@@ -204,7 +199,13 @@ class TestLazyStorageDescriptorCfDo:
         }
         with patch.dict("os.environ", env):
             s = _resolve_storage()
-            assert isinstance(s, FunctionStorageCfDo)
+            # Always wrapped: every value enveloped, 1 MiB cap, no vendor here.
+            from vgi.function_storage_blobs import ExternalizingStorage
+
+            assert isinstance(s, ExternalizingStorage)
+            assert isinstance(s.base, FunctionStorageCfDo)
+            assert s.blob_client is None
+            assert s.requires_shard_key
 
 
 class TestCfDoStateUnified:
@@ -220,9 +221,9 @@ class TestCfDoStateUnified:
             200,
             {
                 "rows": [
-                    {"value": _env(b"v1")},
+                    {"value": _b64(b"v1")},
                     None,
-                    {"value": _env(b"v3")},
+                    {"value": _b64(b"v3")},
                 ]
             },
         )
@@ -256,8 +257,8 @@ class TestCfDoStateUnified:
         assert body["scope_id"] == _b64(b"exec1")
         assert body["ns"] == _b64(b"agg")
         assert body["items"] == [
-            {"key": _b64(b"k1"), "value": _env(b"v1")},
-            {"key": _b64(b"k2"), "value": _env(b"v2")},
+            {"key": _b64(b"k1"), "value": _b64(b"v1")},
+            {"key": _b64(b"k2"), "value": _b64(b"v2")},
         ]
         assert "attempt_id" in body
         assert len(body["attempt_id"]) == 32  # uuid.uuid4().hex
@@ -272,7 +273,7 @@ class TestCfDoStateUnified:
             200,
             {
                 "rows": [
-                    {"key": _b64(b"k"), "value": _env(b"v")},
+                    {"key": _b64(b"k"), "value": _b64(b"v")},
                 ]
             },
         )
@@ -291,8 +292,8 @@ class TestCfDoStateUnified:
             200,
             {
                 "rows": [
-                    {"key": _b64(b"k1"), "value": _env(b"v1")},
-                    {"key": _b64(b"k2"), "value": _env(b"v2")},
+                    {"key": _b64(b"k1"), "value": _b64(b"v1")},
+                    {"key": _b64(b"k2"), "value": _b64(b"v2")},
                 ]
             },
         )
@@ -350,7 +351,7 @@ class TestCfDoStateUnified:
         assert body["scope_id"] == _b64(b"exec1")
         assert body["ns"] == _b64(b"buf")
         assert body["key"] == _b64(b"k1")
-        assert body["item"] == _env(b"payload")
+        assert body["item"] == _b64(b"payload")
         assert "attempt_id" in body
 
     def test_state_log_scan_no_attempt_id_returns_rows(
@@ -363,9 +364,9 @@ class TestCfDoStateUnified:
             200,
             {
                 "rows": [
-                    {"id": 1, "value": _env(b"a")},
-                    {"id": 2, "value": _env(b"b")},
-                    {"id": 3, "value": _env(b"c")},
+                    {"id": 1, "value": _b64(b"a")},
+                    {"id": 2, "value": _b64(b"b")},
+                    {"id": 3, "value": _b64(b"c")},
                 ]
             },
         )
@@ -386,7 +387,7 @@ class TestCfDoStateUnified:
         mock_transport: _MockTransport,
     ) -> None:
         """after_id + limit are forwarded in the request body for cursor-based paging."""
-        mock_transport.queue_response(200, {"rows": [{"id": 5, "value": _env(b"e")}]})
+        mock_transport.queue_response(200, {"rows": [{"id": 5, "value": _b64(b"e")}]})
         result = storage.state_log_scan(b"exec1", b"buf", b"k1", after_id=4, limit=1)
         assert result == [(5, b"e")]
         body = _body(mock_transport.requests[0])

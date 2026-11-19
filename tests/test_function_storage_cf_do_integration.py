@@ -76,8 +76,7 @@ def test_queue_push_replay_does_not_duplicate(storage: FunctionStorageCfDo) -> N
     attempt = uuid.uuid4().hex
     body: dict[str, object] = {
         "execution_id": base64.b64encode(eid).decode(),
-        # Raw wire values carry the client's inline envelope (0x00 || value).
-        "items": [base64.b64encode(b"\x00a").decode(), base64.b64encode(b"\x00b").decode()],
+        "items": [base64.b64encode(b"a").decode(), base64.b64encode(b"b").decode()],
     }
     r1 = storage._post("queue_push", body, attempt_id=attempt)
     r2 = storage._post("queue_push", body, attempt_id=attempt)
@@ -106,7 +105,7 @@ def test_queue_pop_replay_returns_same_item(storage: FunctionStorageCfDo) -> Non
     r2 = storage._post("queue_pop", body, attempt_id=attempt)
 
     assert r1 == r2
-    assert base64.b64decode(r1["item"]) == b"\x00a"  # the inline envelope of b"a"
+    assert base64.b64decode(r1["item"]) == b"a"
 
     # Fresh attempt → next item, confirming the tombstone is not "consumed"
     # by a replay.
@@ -216,11 +215,14 @@ def test_large_values_round_trip_through_blob_vendor() -> None:
     from vgi_rpc.conformance.fake_vendor import serve_fake_vendor
     from vgi_rpc.vendor import VendorBlobClient
 
+    from vgi.function_storage_blobs import ExternalizingStorage
+    from vgi.function_storage_cf_do import MAX_VALUE_BYTES
+
     with serve_fake_vendor() as vendor:
-        s = FunctionStorageCfDo(
-            url=_URL or "",
-            token=os.environ.get("VGI_CF_DO_TOKEN"),
+        s = ExternalizingStorage(
+            FunctionStorageCfDo(url=_URL or "", token=os.environ.get("VGI_CF_DO_TOKEN")),
             blob_client=VendorBlobClient(vendor.url, "test-token"),
+            max_value_bytes=MAX_VALUE_BYTES,
         )
         try:
             eid, shard = _eid(), "att-" + secrets.token_hex(16)
@@ -242,7 +244,9 @@ def test_large_values_round_trip_through_blob_vendor() -> None:
 
 def test_large_value_without_vendor_fails_before_the_do(storage: FunctionStorageCfDo) -> None:
     """Without a vendor an over-cap value is refused client-side, naming VGI_BLOB_VENDOR_URL."""
-    from vgi.function_storage_cf_do import StorageValueTooLargeError
+    from vgi.function_storage_blobs import ExternalizingStorage, StorageValueTooLargeError
+    from vgi.function_storage_cf_do import MAX_VALUE_BYTES
 
+    wrapped = ExternalizingStorage(storage, blob_client=None, max_value_bytes=MAX_VALUE_BYTES)
     with pytest.raises(StorageValueTooLargeError, match="VGI_BLOB_VENDOR_URL"):
-        storage.state_append(_eid(), b"log", b"", b"x" * (2 * 1024 * 1024))
+        wrapped.state_append(_eid(), b"log", b"", b"x" * (2 * 1024 * 1024), shard_key="att-" + "0" * 32)
