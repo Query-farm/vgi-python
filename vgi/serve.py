@@ -36,6 +36,7 @@ from collections.abc import Callable, Iterable, Sequence
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Literal
 
+from vgi import idle_exit as _idle_exit
 from vgi.hosted import HOSTED_CHALLENGE, hosted_mode_enabled
 from vgi.logging_config import LogFormat, LogLevel
 from vgi.profiling import maybe_start_profile
@@ -1314,7 +1315,7 @@ def wsgi_app_factory() -> Any:
 
     # Resolved here, not inherited as objects: each worker re-reads the same
     # environment the parent did and arrives at the same answer.
-    return create_app(
+    app = create_app(
         load_worker_class(config["worker_ref"]),
         prefix=config["prefix"],
         cors_origins=config["cors_origins"],
@@ -1330,6 +1331,10 @@ def wsgi_app_factory() -> Any:
         iroh_trusted_proxy_addresses=config.get("iroh_trusted_proxy_addresses", ()),
         iroh_authenticate=config.get("iroh_authenticate", True),
     )
+    # Idle exit: the parent owns the timer; this worker only reports activity
+    # into the directory the parent exported (see vgi.idle_exit).
+    tracker = _idle_exit.child_tracker()
+    return _idle_exit.IdleMiddleware(app, tracker) if tracker is not None else app
 
 
 def _resolve_http_port(host: str, port: int | None) -> int:
@@ -1367,6 +1372,7 @@ def _serve_http_granian(
     iroh_bridge_issuer: str | None = None,
     iroh_trusted_proxy_addresses: tuple[str, ...] = (),
     iroh_authenticate: bool = True,
+    idle_exit_seconds: float | None = None,
 ) -> None:
     """Serve via granian, which forks workers that import the app themselves.
 
@@ -1403,6 +1409,8 @@ def _serve_http_granian(
         iroh_bridge_issuer: Identity namespace for forwarded Iroh EndpointIds.
         iroh_trusted_proxy_addresses: Exact immediate bridge addresses.
         iroh_authenticate: Whether verified EndpointIds become primary auth.
+        idle_exit_seconds: Exit (status 0) after this many seconds with no
+            request in flight or received; ``None`` serves until stopped.
 
     """
     try:
@@ -1448,7 +1456,7 @@ def _serve_http_granian(
     sys.stderr.write(f"Serving {worker_cls.__name__} on http://{host}:{port}{prefix} (granian, {workers} worker(s))\n")
     sys.stderr.flush()
 
-    Granian(
+    server = Granian(
         "vgi.serve:wsgi_app_factory",
         address=host,
         port=port,
@@ -1463,7 +1471,21 @@ def _serve_http_granian(
         # external I/O want more; --http-threads raises it.
         blocking_threads=http_threads or 1,
         factory=True,
-    ).serve()
+    )
+    if idle_exit_seconds is None:
+        server.serve()
+        return
+    # Children report into a private directory; the parent aggregates it and,
+    # once quiet, sends itself SIGTERM -- granian's graceful shutdown.
+    with _idle_exit.state_directory() as state_dir:
+        watcher = _idle_exit.IdleWatcher(
+            _idle_exit.DirectoryActivity(state_dir), idle_exit_seconds, _idle_exit.terminate_self
+        )
+        watcher.start()
+        try:
+            server.serve()
+        finally:
+            watcher.stop()
 
 
 def _serve_http(
@@ -1492,6 +1514,10 @@ def _serve_http(
     iroh_authenticate: bool = True,
 ) -> None:
     """Start the worker as an HTTP server."""
+    try:
+        idle_exit_seconds = _idle_exit.idle_exit_seconds()
+    except ValueError as exc:
+        sys.exit(str(exc))
     if hosted_mode_enabled():
         # Checked here as well as in create_app: under granian the app is only
         # built in the worker processes, and a refusal must stop the parent.
@@ -1544,6 +1570,7 @@ def _serve_http(
             iroh_bridge_issuer=iroh_bridge_issuer,
             iroh_trusted_proxy_addresses=iroh_trusted_proxy_addresses,
             iroh_authenticate=iroh_authenticate,
+            idle_exit_seconds=idle_exit_seconds,
         )
         return
 
@@ -1588,7 +1615,21 @@ def _serve_http(
     serve_kwargs.update(waitress_arrow_tuning())
     if http_threads is not None:
         serve_kwargs["threads"] = http_threads
-    waitress.serve(wsgi_app, **serve_kwargs)
+    if idle_exit_seconds is None:
+        waitress.serve(wsgi_app, **serve_kwargs)
+        return
+    # One process: the watcher interrupts the main thread, where waitress turns
+    # KeyboardInterrupt into a clean shutdown and returns.
+    tracker = _idle_exit.ActivityTracker()
+    watcher = _idle_exit.IdleWatcher(tracker, idle_exit_seconds, _idle_exit.interrupt_main)
+    watcher.start()
+    try:
+        waitress.serve(_idle_exit.IdleMiddleware(wsgi_app, tracker), **serve_kwargs)
+    except KeyboardInterrupt:
+        if watcher.is_alive():
+            raise  # a real Ctrl-C, not the idle timer
+    finally:
+        watcher.stop()
 
 
 if __name__ == "__main__":

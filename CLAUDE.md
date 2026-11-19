@@ -306,6 +306,7 @@ vgi-client --input data.parquet --function sum_all_columns --worker vgi-fixture-
 | `VGI_WORKER_ACCESS_LOG_SAMPLE` | Fraction of *successful* calls to keep in the access log, `0.0`–`1.0`. Errors are always kept; the decision is per call, so every record of one stream shares a fate |
 | `VGI_WORKER_ACCESS_LOG_ASYNC` | When `1`/`true`/`yes`, emit access-log records from a listener thread. Bounded queue; full means drop, and a crash loses whatever is queued |
 | `VGI_WORKER_ACCESS_LOG_QUEUE_SIZE` | Bound on the async access-log queue (default 10000) |
+| `VGI_IDLE_EXIT_SECONDS` | `vgi-serve --http` only: exit with status 0 after this many seconds with no request in flight and none received (`/health` doesn't count). Works under waitress and granian (the parent aggregates its workers' activity). For platforms that start the machine on the next request |
 | `VGI_OTEL_ENABLED` | Enable OpenTelemetry instrumentation (`1`/`true`/`yes`) |
 | `VGI_OTEL_CUSTOM_ATTRIBUTES` | Comma-separated `key=value` pairs for custom span/metric attributes |
 | `VGI_OTEL_CLAIM_ATTRIBUTES` | Comma-separated `claim_key=span_attr_name` pairs for claim extraction |
