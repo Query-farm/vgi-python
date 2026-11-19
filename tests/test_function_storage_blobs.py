@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import secrets
 from collections.abc import Iterator
 from types import SimpleNamespace
@@ -31,6 +32,9 @@ from vgi.function_storage_blobs import (
     TAG_INLINE,
     TAG_POINTER,
     ExternalizingStorage,
+    StorageBlobError,
+    StorageBlobIntegrityError,
+    StorageBlobMissingError,
     StorageEnvelopeError,
     StorageValueTooLargeError,
 )
@@ -259,7 +263,45 @@ def test_checksum_mismatch_on_fetch_raises(vendor: FakeVendorServer) -> None:
     s.state_put_many(SCOPE, NS, [(b"k", value)], shard_key=SHARD)
     (object_id,) = _objects(vendor)
     vendor.vendor.corrupt(object_id, b"V" * THRESHOLD)
-    with pytest.raises(VendorError, match="SHA-256 mismatch"):
+    with pytest.raises(StorageBlobIntegrityError, match=rf"^storage blob {object_id} .*sha256 mismatch") as exc:
+        s.state_get_many(SCOPE, NS, [b"k"], shard_key=SHARD)
+    assert isinstance(exc.value.__cause__, VendorError)
+
+
+# The SDK-neutral message contract (vgi docs/testing/blob-test-catalog.md).
+_CONTRACT = r"storage blob.*(sha256|size|missing|not found)"
+
+
+def test_size_mismatch_on_fetch_raises(vendor: FakeVendorServer) -> None:
+    """A blob of another length is reported as a size mismatch."""
+    s = _storage(FakeCfDo(), vendor)
+    s.state_put_many(SCOPE, NS, [(b"k", b"v" * THRESHOLD)], shard_key=SHARD)
+    (object_id,) = _objects(vendor)
+    vendor.vendor.corrupt(object_id, b"v" * (THRESHOLD + 1))
+    with pytest.raises(StorageBlobIntegrityError, match="storage blob .*size mismatch") as exc:
+        s.state_get_many(SCOPE, NS, [b"k"], shard_key=SHARD)
+    assert re.search(_CONTRACT, str(exc.value))
+
+
+def test_missing_blob_raises(vendor: FakeVendorServer) -> None:
+    """A blob deleted (or expired) at the vendor is reported missing, never as other bytes."""
+    s = _storage(FakeCfDo(), vendor)
+    s.state_put_many(SCOPE, NS, [(b"k", b"v" * THRESHOLD)], shard_key=SHARD)
+    (object_id,) = _objects(vendor)
+    with VendorBlobClient(vendor.url, "test-token") as other:
+        other.delete([object_id])
+    with pytest.raises(StorageBlobMissingError, match="storage blob .*is missing: not found") as exc:
+        s.state_get_many(SCOPE, NS, [b"k"], shard_key=SHARD)
+    assert re.search(_CONTRACT, str(exc.value))
+
+
+def test_other_blob_read_failures_keep_the_prefix(vendor: FakeVendorServer) -> None:
+    """Any other vendor failure is a StorageBlobError naming the blob."""
+    s = _storage(FakeCfDo(), vendor)
+    s.blob_client._api._max_attempts = 1  # type: ignore[union-attr]
+    s.state_put_many(SCOPE, NS, [(b"k", b"v" * THRESHOLD)], shard_key=SHARD)
+    vendor.vendor.fail_next("/v1/blobs/get", status=503)
+    with pytest.raises(StorageBlobError, match="^storage blob .* could not be read"):
         s.state_get_many(SCOPE, NS, [b"k"], shard_key=SHARD)
 
 

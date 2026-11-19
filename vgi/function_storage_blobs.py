@@ -22,7 +22,8 @@ Envelope:
     ``VGI_BLOB_VENDOR_URL``.
 
     Decoding is strict: an empty value or an unknown tag (e.g. a raw value
-    written without the wrapper) raises `StorageEnvelopeError`. User bytes
+    written without the wrapper) raises `StorageEnvelopeError`. A pointer
+    whose blob cannot be read raises a `StorageBlobError` (see "Errors"). User bytes
     that start with ``0x01`` are safe because every value is enveloped.
     Mixing wrapped and unwrapped clients over one store in one running query
     is not supported; executions are short-lived and never reused, so no
@@ -48,6 +49,17 @@ Clean-up:
     ``queue_pop`` the blob it claimed -- all best-effort and on a background
     thread (never on the query's critical path); the vendor's idle sweep and
     the bucket lifecycle rules are the backstop.
+
+Errors:
+    The messages follow the SDK-neutral contract in the vgi extension's
+    ``docs/testing/blob-test-catalog.md``, so the same sqllogictests check
+    every SDK:
+
+    * `StorageBlobIntegrityError` -- ``storage blob <id> failed its
+      integrity check: sha256 mismatch ...`` or ``... size mismatch ...``;
+    * `StorageBlobMissingError` -- ``storage blob <id> is missing: not
+      found in the blob vendor ...`` (expired, deleted, never uploaded);
+    * `StorageBlobError` -- ``storage blob <id> could not be read: ...``.
 
 Environment:
     ``VGI_BLOB_VENDOR_URL``, ``VGI_BLOB_VENDOR_TOKEN`` (falls back to
@@ -76,6 +88,9 @@ if TYPE_CHECKING:
 __all__ = [
     "DEFAULT_EXTERNALIZE_BYTES",
     "ExternalizingStorage",
+    "StorageBlobError",
+    "StorageBlobIntegrityError",
+    "StorageBlobMissingError",
     "StorageEnvelopeError",
     "StorageValueTooLargeError",
     "blob_client_from_env",
@@ -114,6 +129,44 @@ class StorageEnvelopeError(OSError):
     without the envelope) or a malformed pointer, and for a pointer read by a
     client with no blob vendor configured.
     """
+
+
+class StorageBlobError(OSError):
+    """An externalized storage value's blob could not be read.
+
+    The message starts ``storage blob <object id>``. Subclasses name the
+    failures a test (or an operator) needs to tell apart.
+    """
+
+
+class StorageBlobIntegrityError(StorageBlobError):
+    """The downloaded blob does not match the pointer's size or SHA-256."""
+
+
+class StorageBlobMissingError(StorageBlobError):
+    """The blob is gone from the vendor or its storage (expired, deleted, never uploaded)."""
+
+
+_MISSING_CODES = frozenset({"not_found", "not_uploaded", "NoSuchKey"})
+
+
+def _blob_read_error(ref: BlobRef, exc: Exception) -> StorageBlobError:
+    """Map a vendor client failure onto the storage-blob error contract."""
+    code = getattr(exc, "code", None)
+    status = getattr(exc, "status", None)
+    text = str(exc)
+    # vgi-rpc >= 0.56.1 sets the code; older releases only say so in the message.
+    if code == "sha256_mismatch" or (code is None and "SHA-256 mismatch" in text):
+        return StorageBlobIntegrityError(f"storage blob {ref.object_id} failed its integrity check: sha256 mismatch")
+    if code == "size_mismatch" or (code is None and "size mismatch" in text):
+        return StorageBlobIntegrityError(
+            f"storage blob {ref.object_id} failed its integrity check: size mismatch (expected {ref.size} bytes)"
+        )
+    if status == 404 or code in _MISSING_CODES:
+        return StorageBlobMissingError(
+            f"storage blob {ref.object_id} is missing: not found in the blob vendor (expired or deleted?)"
+        )
+    return StorageBlobError(f"storage blob {ref.object_id} could not be read: {text}")
 
 
 class StorageValueTooLargeError(RuntimeError):
@@ -459,6 +512,8 @@ class ExternalizingStorage:
         Raises:
             StorageEnvelopeError: A value is not a valid envelope, or a pointer
                 was read with no vendor configured.
+            StorageBlobError: A pointer's blob is missing, fails its size or
+                SHA-256 check, or cannot be fetched (see the module's "Errors").
         """
         pointers = [i for i, env in enumerate(envelopes) if env is not None and envelope_tag(env) == TAG_POINTER]
         out: list[bytes | None] = [None if env is None else bytes(env[1:]) for env in envelopes]
@@ -473,7 +528,16 @@ class ExternalizingStorage:
                 env = envelopes[i]
                 assert env is not None
                 refs.append(decode_pointer(env))
-            for i, data in zip(pointers, _parallel_map(blobs.get_bytes, refs), strict=True):
+
+            def fetch(ref: BlobRef) -> bytes:
+                from vgi_rpc.vendor import VendorError
+
+                try:
+                    return blobs.get_bytes(ref)
+                except VendorError as exc:
+                    raise _blob_read_error(ref, exc) from exc
+
+            for i, data in zip(pointers, _parallel_map(fetch, refs), strict=True):
                 out[i] = data
             if refs_out is not None:
                 refs_out.extend(refs)

@@ -1,86 +1,65 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
-"""The ``blob_test`` fixture catalog and the runnable fake blob vendor.
+"""The ``blob_test`` fixture catalog.
 
 End to end through the subprocess fixture worker with
-``VGI_STORAGE_EXTERNALIZE=1`` over SQLite and the fake vendor: the hermetic
-setup the DuckDB extension's externalization lane uses.
+``VGI_STORAGE_EXTERNALIZE=1`` over SQLite and vgi-rpc's fake vendor: the
+hermetic setup the DuckDB extension's externalization lane uses (there the
+fake runs as ``vgi-rpc-fake-vendor --test-routes`` and SQL reads its
+``/__stats__``; here the same counters come from the in-process fake).
 """
 
 from __future__ import annotations
 
 import hashlib
-import json
-import subprocess
-import sys
 from collections.abc import Iterator
 from pathlib import Path
 
-import httpx2
 import pyarrow as pa
 import pytest
-from vgi_rpc.conformance.fake_vendor import FakeVendorServer
-from vgi_rpc.vendor import VendorBlobClient
+from vgi_rpc.conformance.fake_vendor import FakeVendorServer, serve_fake_vendor
 
-from vgi._test_fixtures.fake_blob_vendor import serve_fake_blob_vendor
+from vgi._test_fixtures.blob_catalog import CATALOG_NAME, BlobTestWorker
 from vgi.arguments import Arguments
 from vgi.client import Client
 
 pytest.importorskip("aiohttp", reason="blob downloads need vgi-rpc[external]")
 
 WORKER = "vgi-fixture-worker"
+THRESHOLD = 4096
 
 
 @pytest.fixture
 def vendor() -> Iterator[FakeVendorServer]:
-    """The fake vendor with its stats route."""
-    server = serve_fake_blob_vendor()
-    try:
+    """Run the fake vendor on a background thread."""
+    with serve_fake_vendor({"test-token": "tenant-a"}) as server:
         yield server
-    finally:
-        server.close()
 
 
 def _stats(vendor: FakeVendorServer) -> dict[str, int]:
-    resp = httpx2.get(vendor.url + "/__stats__", timeout=10.0)
-    resp.raise_for_status()
-    stats: dict[str, int] = json.loads(resp.content)
-    return stats
+    """Vendor API call counts (the ``/__stats__`` keys that tests here use)."""
+    hits = vendor.vendor.stats()
+    return {
+        "puts": hits.get("/v1/blobs/put", 0),
+        "gets": hits.get("/v1/blobs/get", 0),
+        "deletes": hits.get("/v1/blobs/delete", 0),
+    }
 
 
-def test_stats_endpoint_counts_traffic(vendor: FakeVendorServer) -> None:
-    """``/__stats__`` counts vendor calls, signed-URL traffic and live bytes."""
-    assert _stats(vendor)["puts"] == 0
-    client = VendorBlobClient(vendor.url, "test-token")
-    ref = client.put_bytes(b"x" * 1000)
-    assert client.get_bytes(ref) == b"x" * 1000
-    client.delete([ref])
-    client.close()
-    stats = _stats(vendor)
-    assert stats["puts"] == 1 and stats["gets"] == 1 and stats["deletes"] == 1
-    assert stats["storage_puts"] == 1 and stats["storage_gets"] >= 1
-    assert stats["bytes_uploaded"] == 1000 and stats["bytes_downloaded"] >= 1000
-    assert stats["objects"] == 0 and stats["bytes"] == 0
-
-
-def test_launcher_cli_prints_port_and_url(tmp_path: Path) -> None:
-    """``python -m vgi._test_fixtures.fake_blob_vendor`` prints PORT and URL, honours --token."""
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "vgi._test_fixtures.fake_blob_vendor", "--token", "T=ten"],
-        stdout=subprocess.PIPE,
-        text=True,
-    )
-    try:
-        assert proc.stdout is not None
-        port = proc.stdout.readline().strip()
-        url = proc.stdout.readline().strip()
-        assert port.startswith("PORT:") and url == f"URL:http://127.0.0.1:{port[5:]}"
-        base = url[4:]
-        assert httpx2.get(base + "/__stats__", timeout=10.0).json()["puts"] == 0
-        assert VendorBlobClient(base, "T").put_bytes(b"hi").size == 2
-    finally:
-        proc.terminate()
-        proc.wait(timeout=10)
+def test_catalog_functions_match_the_contract() -> None:
+    """The catalog serves exactly the functions docs/testing/blob-test-catalog.md documents."""
+    assert CATALOG_NAME == "blob_test"
+    (schema,) = BlobTestWorker.catalog.schemas
+    names = sorted(f.Meta.name for f in schema.functions)  # type: ignore[attr-defined]
+    assert names == [
+        "blob_buffer_echo",
+        "blob_len",
+        "blob_param_echo",
+        "blob_repeat",
+        "blob_rows",
+        "blob_store_values",
+        "blob_tio",
+    ]
 
 
 @pytest.fixture
@@ -89,14 +68,14 @@ def externalizing_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, vendor: F
     monkeypatch.setenv("VGI_WORKER_SHARED_STORAGE", "sqlite")
     monkeypatch.setenv("VGI_WORKER_SQLITE_PATH", str(tmp_path / "storage.db"))
     monkeypatch.setenv("VGI_STORAGE_EXTERNALIZE", "1")
-    monkeypatch.setenv("VGI_STORAGE_EXTERNALIZE_BYTES", "4096")
+    monkeypatch.setenv("VGI_STORAGE_EXTERNALIZE_BYTES", str(THRESHOLD))
     monkeypatch.setenv("VGI_BLOB_VENDOR_URL", vendor.url)
     monkeypatch.setenv("VGI_BLOB_VENDOR_TOKEN", "test-token")
     return vendor
 
 
 def _expected(values: list[str]) -> tuple[list[int], list[str]]:
-    return [len(v.encode()) for v in values], [hashlib.sha256(v.encode()).hexdigest() for v in values]
+    return [len(v.encode()) for v in values], [hashlib.sha256(str(v).encode()).hexdigest() for v in values]
 
 
 def _input(width: int, n: int) -> list[pa.RecordBatch]:
@@ -139,7 +118,7 @@ def test_blob_tio_externalizes_storage(externalizing_env: FakeVendorServer) -> N
 
 
 def test_scalars_and_table_functions(externalizing_env: FakeVendorServer) -> None:
-    """blob_repeat, blob_len, blob_rows, blob_param_echo and vgi_test_blob_stats."""
+    """blob_repeat, blob_len, blob_rows and blob_param_echo."""
     with Client(WORKER, pool=None) as client:
         rep = list(
             client.scalar_function(
@@ -177,6 +156,33 @@ def test_scalars_and_table_functions(externalizing_env: FakeVendorServer) -> Non
         )
         row = pa.Table.from_batches([b for b in echo if b.num_rows]).to_pylist()
         assert row == [{"payload_len": 300_000, "payload_sha256": hashlib.sha256(payload.encode()).hexdigest()}]
-        stats = list(client.table_function(function_name="vgi_test_blob_stats", schema_path=["main"]))
-        stats_row = pa.Table.from_batches([b for b in stats if b.num_rows]).to_pylist()
-        assert len(stats_row) == 1 and set(stats_row[0]) >= {"puts", "gets", "bytes", "upload_urls", "deletes"}
+
+
+def _store_values(values: list[str | None]) -> list[dict[str, object]]:
+    batch = pa.RecordBatch.from_pydict({"s": pa.array(values, pa.string()), "id": list(range(len(values)))})
+    with Client(WORKER, pool=None) as client:
+        out = list(
+            client.table_in_out_function(function_name="blob_store_values", schema_path=["main"], input=iter([batch]))
+        )
+    return sorted(pa.Table.from_batches([b for b in out if b.num_rows]).to_pylist(), key=lambda r: int(r["id"]))
+
+
+def test_blob_store_values_threshold_boundary(externalizing_env: FakeVendorServer) -> None:
+    """Values one below, at and one above the threshold round-trip; only the last two are vendored."""
+    values: list[str | None] = ["a" * (THRESHOLD - 1), "b" * THRESHOLD, "c" * (THRESHOLD + 1)]
+    rows = _store_values(values)
+    assert list(rows[0]) == ["id", "payload_len", "payload_sha256"]
+    assert [r["payload_len"] for r in rows] == [len(str(v)) for v in values]
+    assert [r["payload_sha256"] for r in rows] == [hashlib.sha256(str(v).encode()).hexdigest() for v in values]
+    assert _stats(externalizing_env)["puts"] == 2
+
+
+def test_blob_store_values_empty_and_null(externalizing_env: FakeVendorServer) -> None:
+    """An empty value round-trips as empty; NULL stores nothing and reports NULLs."""
+    rows = _store_values(["", None, "é"])
+    assert [(r["payload_len"], r["payload_sha256"]) for r in rows] == [
+        (0, hashlib.sha256(b"").hexdigest()),
+        (None, None),
+        (2, hashlib.sha256("é".encode()).hexdigest()),
+    ]
+    assert _stats(externalizing_env)["puts"] == 0

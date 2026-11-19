@@ -24,7 +24,7 @@ Function                   Kind                        What it moves
 ``blob_param_echo(p)``     table                       large bind parameter: length + sha256
 ``blob_buffer_echo(t)``    table-buffering             stores each input batch raw, replays it
 ``blob_tio(t)``            table-in-out                stores each batch in state, reads back
-``vgi_test_blob_stats()``  table                       the fake vendor's counters
+``blob_store_values(t)``   table-in-out                stores each value of column 0 exactly
 =========================  ==========================  ========================================
 
 ``blob_buffer_echo`` and ``blob_tio`` pass every input column through and add
@@ -32,13 +32,23 @@ Function                   Kind                        What it moves
 the first column cast to text, matching DuckDB's ``strlen(x)`` and
 ``sha256(x)``. ``blob_rows`` row ``i`` is ``chr(97 + i % 26)`` repeated
 ``width`` times, i.e. ``repeat(chr(97 + i % 26), width)``.
+
+``blob_store_values`` stores the UTF-8 bytes of each non-NULL value of the
+first column as one storage value of exactly that size, reads them back and
+reports ``payload_len`` / ``payload_sha256`` of the bytes *read back*, so a
+SQL test controls the stored value size exactly (e.g. one byte either side of
+``VGI_STORAGE_EXTERNALIZE_BYTES``).
+
+The vendor's counters are read from the fake vendor itself
+(``GET $VGI_BLOB_VENDOR_URL/__stats__``, vgi-rpc's ``vgi-rpc-fake-vendor
+--test-routes``), not through this catalog. The SDK-neutral contract for this
+catalog is the vgi extension's ``docs/testing/blob-test-catalog.md``; keep the
+two in step.
 """
 
 from __future__ import annotations
 
 import hashlib
-import json
-import os
 import uuid
 from dataclasses import dataclass
 from typing import Annotated, Any, ClassVar
@@ -69,19 +79,6 @@ from vgi.worker import Worker
 __all__ = ["CATALOG_NAME", "BlobTestWorker"]
 
 CATALOG_NAME = "blob_test"
-_STATS_KEYS = (
-    "puts",
-    "gets",
-    "deletes",
-    "delete_scopes",
-    "upload_urls",
-    "storage_puts",
-    "storage_gets",
-    "objects",
-    "bytes",
-    "bytes_uploaded",
-    "bytes_downloaded",
-)
 _ROWS_PER_BATCH = 2048
 
 
@@ -276,77 +273,6 @@ class BlobParamEchoFunction(TableFunctionGenerator[_BlobParamArgs, _EmitOnceStat
         state.emitted = True
 
 
-@dataclass(slots=True, frozen=True)
-class _NoArgs:
-    pass
-
-
-def blob_stats_url() -> str:
-    """The fake vendor's stats URL: ``VGI_TEST_BLOB_STATS_URL`` or ``$VGI_BLOB_VENDOR_URL/__stats__``.
-
-    Returns:
-        The URL.
-
-    Raises:
-        ValueError: If neither is set.
-    """
-    explicit = os.environ.get("VGI_TEST_BLOB_STATS_URL", "").strip()
-    if explicit:
-        return explicit
-    base = os.environ.get("VGI_BLOB_VENDOR_URL", "").strip()
-    if not base:
-        raise ValueError("vgi_test_blob_stats() needs VGI_BLOB_VENDOR_URL (the fake vendor) or VGI_TEST_BLOB_STATS_URL")
-    return base.rstrip("/") + "/__stats__"
-
-
-@init_single_worker
-@bind_fixed_schema
-class BlobStatsFunction(TableFunctionGenerator[_NoArgs, _EmitOnceState]):
-    """``vgi_test_blob_stats()``: one row of the fake blob vendor's counters.
-
-    Reads ``GET /__stats__`` from `vgi._test_fixtures.fake_blob_vendor`; see
-    its ``stats`` for what each column counts. Counters are cumulative for
-    the fake's lifetime, so tests compare before/after values.
-
-    Attributes:
-        FIXED_SCHEMA: One BIGINT column per counter.
-    """
-
-    class Meta:
-        """Function metadata."""
-
-        name = "vgi_test_blob_stats"
-        description = "Counters of the fake blob vendor (externalization tests)"
-        examples = [FunctionExample(sql="SELECT puts, bytes FROM vgi_test_blob_stats()", description="Vendor counters")]
-
-    FIXED_SCHEMA: ClassVar[pa.Schema] = pa.schema([pa.field(k, pa.int64()) for k in _STATS_KEYS])
-
-    @classmethod
-    def cardinality(cls, params: BindParams[_NoArgs]) -> TableCardinality:
-        """One row."""
-        return TableCardinality(estimate=1, max=1)
-
-    @classmethod
-    def initial_state(cls, params: ProcessParams[_NoArgs]) -> _EmitOnceState:
-        """Not yet emitted."""
-        return _EmitOnceState()
-
-    @classmethod
-    def process(cls, params: ProcessParams[_NoArgs], state: _EmitOnceState, out: OutputCollector) -> None:
-        """Fetch the counters and emit them as one row."""
-        if state.emitted:
-            out.finish()
-            return
-        import httpx2
-
-        resp = httpx2.get(blob_stats_url(), timeout=10.0)
-        resp.raise_for_status()
-        counters: dict[str, Any] = json.loads(resp.content)
-        row = {k: [int(counters.get(k, 0))] for k in params.output_schema.names}
-        out.emit(pa.RecordBatch.from_pydict(row, schema=params.output_schema))
-        state.emitted = True
-
-
 # ---------------------------------------------------------------------------
 # Table-buffering and table-in-out
 # ---------------------------------------------------------------------------
@@ -458,6 +384,75 @@ class BlobTioFunction(TableInOutFunction[_TableArgs]):
         return [_with_checksums(pa.ipc.open_stream(stored).read_next_batch(), params.output_schema)]
 
 
+_VALUES_NS = b"blob_values"
+
+
+def _text_values(column: pa.Array[Any]) -> list[bytes | None]:
+    text = column if pa.types.is_string(column.type) else pc.cast(column, pa.string())
+    return [None if v is None else v.encode() for v in text.to_pylist()]
+
+
+class BlobStoreValuesFunction(TableInOutFunction[_TableArgs]):
+    """``blob_store_values(t)``: stores each value of column 0 as one storage value, reads them back.
+
+    Output: input columns 2..n passed through, then ``payload_len`` and
+    ``payload_sha256`` of each stored value *as read back* (NULL for a NULL
+    input, which stores nothing).
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "blob_store_values"
+        description = "Store each value of the first column exactly and read it back (externalization test)"
+        examples = [
+            FunctionExample(
+                sql="SELECT * FROM blob_store_values((SELECT repeat('x', 10) AS s, 1 AS id))",
+                description="id, payload_len, payload_sha256",
+            )
+        ]
+
+    @classmethod
+    def on_bind(cls, params: BindParams[_TableArgs]) -> BindResponse:
+        """Input columns after the first, plus ``payload_len`` and ``payload_sha256``."""
+        input_schema = params.bind_call.input_schema
+        assert input_schema is not None
+        rest = [input_schema.field(i) for i in range(1, len(input_schema))]
+        return BindResponse(output_schema=_checksum_schema(pa.schema(rest)))
+
+    @classmethod
+    def transform(cls, batch: pa.RecordBatch, params: ProcessParams[_TableArgs], state: Any) -> list[pa.RecordBatch]:
+        """Put every non-NULL value under its own key, read all back, emit their length and SHA-256."""
+        storage = params.storage
+        assert storage is not None
+        values = _text_values(batch.column(0))
+        prefix = uuid.uuid4().bytes
+        keys = [prefix + i.to_bytes(4, "big") for i in range(len(values))]
+        items = [(k, v) for k, v in zip(keys, values, strict=True) if v is not None]
+        if items:
+            storage.state_put_many(_VALUES_NS, items)
+            stored = storage.state_get_many(_VALUES_NS, [k for k, _v in items])
+            storage.state_delete(_VALUES_NS, [k for k, _v in items])
+        else:
+            stored = []
+        back: dict[bytes, bytes | None] = {k: got for (k, _v), got in zip(items, stored, strict=True)}
+        lens: list[int | None] = []
+        digests: list[str | None] = []
+        for key, value in zip(keys, values, strict=True):
+            if value is None:
+                lens.append(None)
+                digests.append(None)
+                continue
+            got = back[key]
+            if got is None:
+                raise RuntimeError("blob_store_values: a value just stored is missing")
+            lens.append(len(got))
+            digests.append(hashlib.sha256(got).hexdigest())
+        columns = [batch.column(i) for i in range(1, batch.num_columns)]
+        columns += [pa.array(lens, pa.int64()), pa.array(digests, pa.string())]
+        return [pa.RecordBatch.from_arrays(columns, schema=params.output_schema)]
+
+
 # ---------------------------------------------------------------------------
 # Catalog and worker
 # ---------------------------------------------------------------------------
@@ -477,7 +472,7 @@ _CATALOG = Catalog(
                 BlobParamEchoFunction,
                 BlobBufferEchoFunction,
                 BlobTioFunction,
-                BlobStatsFunction,
+                BlobStoreValuesFunction,
             ],
         )
     ],
