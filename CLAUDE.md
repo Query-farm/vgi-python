@@ -324,6 +324,10 @@ vgi-client --input data.parquet --function sum_all_columns --worker vgi-fixture-
 | `VGI_CF_DO_URL` | Cloudflare Worker URL (required when `cloudflare-do`) |
 | `VGI_CF_DO_TOKEN` | Bearer token for Cloudflare Worker auth (optional) |
 | `VGI_CF_DO_DEBUG_LOG` | File path for Cloudflare DO storage debug/timing logs |
+| `VGI_BLOB_VENDOR_URL` | Blob vendor (region-pinned pre-signed R2 URLs). Enables cf-do value externalization and, under `vgi-serve --http`, result externalization + client upload URLs. Token: `VGI_BLOB_VENDOR_TOKEN`, falling back to `VGI_CF_DO_TOKEN` |
+| `VGI_CF_DO_EXTERNALIZE_BYTES` | cf-do values at or over this size go to the blob vendor (default 524288, max 1048576) |
+| `VGI_RPC_MAX_REQUEST_BYTES` | `vgi-serve --http`: advertised and enforced request cap; clients upload larger requests via the vendor's upload URLs |
+| `VGI_RPC_EXTERNALIZE_THRESHOLD_BYTES` / `VGI_RPC_EXTERNAL_COMPRESSION` / `VGI_RPC_MAX_UPLOAD_BYTES` | With the vendor: result externalization threshold (default 1 MiB), its compression, and the advertised upload size |
 
 ### Worker Debug Mode
 

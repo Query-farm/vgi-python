@@ -32,7 +32,8 @@ import logging
 import os
 import secrets
 import sys
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -198,6 +199,81 @@ def _make_frontend_redirect(frontend_url: str, prefix: str) -> object:
     return _FrontendRedirectResource()
 
 
+@dataclass(frozen=True)
+class BlobVendorHttpConfig:
+    """HTTP server settings derived from the blob-vendor environment.
+
+    Attributes:
+        external_location: Server external-location config (large results
+            are uploaded to the vendor and replaced by a pointer; inbound
+            pointers are fetched only from the vendor's storage hosts), or
+            ``None`` when ``VGI_BLOB_VENDOR_URL`` is unset.
+        upload_url_provider: The vendor, vending pre-signed upload URLs so
+            clients can send requests over ``max_request_bytes``; ``None``
+            without the vendor.
+        max_upload_bytes: ``VGI_RPC_MAX_UPLOAD_BYTES`` (advertised only).
+        max_request_bytes: ``VGI_RPC_MAX_REQUEST_BYTES`` -- advertised and
+            enforced. Clients (the DuckDB extension) only take the upload-URL
+            path for a request larger than this, so set it with the vendor.
+
+    """
+
+    external_location: Any = None
+    upload_url_provider: Any = None
+    max_upload_bytes: int | None = None
+    max_request_bytes: int | None = None
+
+
+def resolve_blob_vendor_http_config(env: Mapping[str, str] | None = None) -> BlobVendorHttpConfig:
+    """Read the blob-vendor HTTP settings from the environment.
+
+    ``VGI_BLOB_VENDOR_URL`` (with ``VGI_BLOB_VENDOR_TOKEN``, falling back to
+    ``VGI_CF_DO_TOKEN``) turns on result externalization
+    (``VGI_RPC_EXTERNALIZE_THRESHOLD_BYTES``, default 1 MiB;
+    ``VGI_RPC_EXTERNAL_COMPRESSION``) and client upload URLs
+    (``VGI_RPC_MAX_UPLOAD_BYTES``). ``VGI_RPC_MAX_REQUEST_BYTES`` is read
+    either way: it is an explicit operator setting.
+
+    Args:
+        env: Environment mapping (defaults to ``os.environ``).
+
+    Returns:
+        The settings; all ``None`` when nothing is configured.
+
+    Raises:
+        ValueError: A variable is set but malformed, or the vendor URL is set
+            without a token.
+
+    """
+    environ = os.environ if env is None else env
+    max_request_bytes = _positive_int_env(environ, "VGI_RPC_MAX_REQUEST_BYTES")
+    if not environ.get("VGI_BLOB_VENDOR_URL", "").strip():
+        return BlobVendorHttpConfig(max_request_bytes=max_request_bytes)
+    from vgi_rpc.vendor import external_config_from_env, max_upload_bytes_from_env
+
+    external = external_config_from_env(environ)
+    assert external is not None
+    return BlobVendorHttpConfig(
+        external_location=external,
+        upload_url_provider=external.storage,
+        max_upload_bytes=max_upload_bytes_from_env(environ),
+        max_request_bytes=max_request_bytes,
+    )
+
+
+def _positive_int_env(env: Mapping[str, str], name: str) -> int | None:
+    raw = env.get(name, "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be an integer, got {raw!r}") from None
+    if value <= 0:
+        raise ValueError(f"{name} must be positive, got {value}")
+    return value
+
+
 def create_app(
     worker_cls: type[Worker],
     *,
@@ -355,12 +431,15 @@ def create_app(
     worker._vgi_tracer = VgiTracer.create(otel_config)
     worker._signing_key = signing_key
 
+    blob_http = resolve_blob_vendor_http_config()
+
     server = build_rpc_server(
         worker,
         transport="http",
         describe=describe,
         introspect_principals=introspect_principals,
         grant_keys=grant_keys if grant_keys is not None else resolve_grant_keys(),
+        external_location=blob_http.external_location,
         signing_key_configured=signing_key_configured,
     )
     authenticate, identity_bearer = _compose_identity_bearer(server, authenticate)
@@ -399,6 +478,9 @@ def create_app(
         otel_config=otel_config,
         max_stream_response_bytes=max_stream_response_bytes,
         max_externalized_response_bytes=max_externalized_response_bytes,
+        max_request_bytes=blob_http.max_request_bytes,
+        upload_url_provider=blob_http.upload_url_provider,
+        max_upload_bytes=blob_http.max_upload_bytes,
         enable_landing_page=False,
         identity_bearer=identity_bearer,
         strict_auth=hosted,
@@ -1585,7 +1667,7 @@ def _serve_http(
 
     _tame_queue_depth_logger()
     serve_kwargs: dict[str, Any] = {"host": host, "port": port, "_quiet": True}
-    serve_kwargs.update(waitress_arrow_tuning())
+    serve_kwargs.update(waitress_arrow_tuning(resolve_blob_vendor_http_config().max_request_bytes))
     if http_threads is not None:
         serve_kwargs["threads"] = http_threads
     waitress.serve(wsgi_app, **serve_kwargs)
