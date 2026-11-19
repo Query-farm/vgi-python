@@ -305,16 +305,23 @@ def test_serve_exits_cleanly_when_idle(extra: tuple[str, ...]) -> None:
             assert _get(port, "/?format=json") == 200
             time.sleep(0.3)
         assert proc.poll() is None
-        # Health checks only: they must not keep it alive.
+        # Health checks only: they must not keep it alive. One attempt per probe:
+        # _get retries for 10 s, which would count the time after a clean exit.
         started = time.monotonic()
-        while proc.poll() is None and time.monotonic() - started < 15:
-            try:
-                _get(port, "/health", method="HEAD")
-            except OSError:
+        exited_at: float | None = None
+        while time.monotonic() - started < 15:
+            if proc.poll() is not None:
+                exited_at = time.monotonic()
                 break
+            try:
+                req = urllib.request.Request(f"http://127.0.0.1:{port}/health", method="HEAD")
+                with urllib.request.urlopen(req, timeout=2) as resp:
+                    resp.read()
+            except OSError:
+                pass  # shutting down or gone; poll() above decides
             time.sleep(0.3)
         code = proc.wait(timeout=15)
-        quiet = time.monotonic() - started
+        quiet = (exited_at or time.monotonic()) - started
         assert code == 0, proc.stderr.read() if proc.stderr else ""
         assert 1.5 <= quiet <= 12
     finally:
