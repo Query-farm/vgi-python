@@ -1685,12 +1685,6 @@ def _serve_http(
         iroh_authenticate=iroh_authenticate,
     )
 
-    # Machine-readable port for process managers and test harnesses
-    print(f"PORT:{port}", flush=True)
-    _logger.info("http_server_starting host=%s port=%d prefix=%s", host, port, prefix)
-    sys.stderr.write(f"Serving {worker_cls.__name__} on http://{host}:{port}{prefix}\n")
-    sys.stderr.flush()
-
     # Same Arrow-sized buffers the other two serve paths use. Without them
     # waitress spools multi-MiB bodies through temp files and reads sockets in
     # 8 KiB chunks; measured on this path, tuning is worth ~2x.
@@ -1701,16 +1695,28 @@ def _serve_http(
     serve_kwargs.update(waitress_arrow_tuning(resolve_blob_vendor_http_config().max_request_bytes))
     if http_threads is not None:
         serve_kwargs["threads"] = http_threads
-    if idle_exit_seconds is None:
-        waitress.serve(wsgi_app, **serve_kwargs)
+    serve_kwargs.pop("_quiet")
+    tracker = _idle_exit.ActivityTracker() if idle_exit_seconds is not None else None
+    app = _idle_exit.IdleMiddleware(wsgi_app, tracker) if tracker is not None else wsgi_app
+    # Bind and listen before announcing the port: a harness that reads PORT:
+    # and connects at once must never race the listener.
+    waitress_server = waitress.create_server(app, **serve_kwargs)
+
+    # Machine-readable port for process managers and test harnesses
+    print(f"PORT:{port}", flush=True)
+    _logger.info("http_server_starting host=%s port=%d prefix=%s", host, port, prefix)
+    sys.stderr.write(f"Serving {worker_cls.__name__} on http://{host}:{port}{prefix}\n")
+    sys.stderr.flush()
+
+    if tracker is None or idle_exit_seconds is None:
+        waitress_server.run()
         return
     # One process: the watcher interrupts the main thread, where waitress turns
     # KeyboardInterrupt into a clean shutdown and returns.
-    tracker = _idle_exit.ActivityTracker()
     watcher = _idle_exit.IdleWatcher(tracker, idle_exit_seconds, _idle_exit.interrupt_main)
     watcher.start()
     try:
-        waitress.serve(_idle_exit.IdleMiddleware(wsgi_app, tracker), **serve_kwargs)
+        waitress_server.run()
     except KeyboardInterrupt:
         if watcher.is_alive():
             raise  # a real Ctrl-C, not the idle timer
