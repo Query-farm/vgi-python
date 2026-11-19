@@ -1538,6 +1538,10 @@ def _serve_http_granian(
     sys.stderr.write(f"Serving {worker_cls.__name__} on http://{host}:{port}{prefix} (granian, {workers} worker(s))\n")
     sys.stderr.flush()
 
+    if idle_exit_seconds is not None and sys.platform == "win32":
+        # The parent stops granian with SIGTERM, which Windows can only deliver as
+        # TerminateProcess: a hard kill with exit status 15, not a clean exit.
+        raise SystemExit("VGI_IDLE_EXIT_SECONDS is not supported with --server granian on Windows; use waitress")
     server = Granian(
         "vgi.serve:wsgi_app_factory",
         address=host,

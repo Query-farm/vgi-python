@@ -38,6 +38,7 @@ import contextlib
 import logging
 import os
 import signal
+import sys
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator
@@ -219,6 +220,8 @@ class IdleMiddleware:
 
 
 def _pid_alive(pid: int) -> bool:
+    if sys.platform == "win32":
+        return _pid_alive_windows(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -226,6 +229,27 @@ def _pid_alive(pid: int) -> bool:
     except PermissionError:  # pragma: no cover - exists, owned by someone else
         return True
     return True
+
+
+def _pid_alive_windows(pid: int) -> bool:  # pragma: no cover - Windows only
+    # Not os.kill(pid, 0): on Windows signal 0 is CTRL_C_EVENT, which interrupts
+    # every process on the console instead of probing one.
+    import ctypes
+
+    process_query_limited_information = 0x1000
+    still_active = 259
+    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined,unused-ignore]
+    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    if not handle:
+        # Access denied means it exists; anything else (invalid parameter) means gone.
+        return bool(kernel32.GetLastError() == 5)
+    try:
+        code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return True
+        return code.value == still_active
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 class DirectoryActivity:

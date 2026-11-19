@@ -287,9 +287,20 @@ _SERVERS = [
     pytest.param(
         ("--server", "granian", "--http-workers", "2"),
         id="granian",
-        marks=pytest.mark.skipif(importlib.util.find_spec("granian") is None, reason="granian extra not installed"),
+        marks=[
+            pytest.mark.skipif(importlib.util.find_spec("granian") is None, reason="granian extra not installed"),
+            pytest.mark.skipif(sys.platform == "win32", reason="granian idle exit is refused on Windows"),
+        ],
     ),
 ]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows only")
+def test_pid_alive_does_not_signal_on_windows() -> None:
+    """The liveness probe never sends CTRL_C_EVENT (signal 0) to the console."""
+    assert idle_exit._pid_alive(os.getpid())
+    proc = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True)
+    assert not idle_exit._pid_alive(int(proc.stdout.strip()))
 
 
 @pytest.mark.parametrize("extra", _SERVERS)
