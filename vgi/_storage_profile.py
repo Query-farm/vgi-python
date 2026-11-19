@@ -96,7 +96,9 @@ _MAX_SAMPLES = 20_000
 _MAX_SCOPES = 2_000
 _MAX_RPCS = 200_000
 
-_VGI_DIR = os.path.dirname(os.path.abspath(__file__))
+# normcase: on Windows a code object's filename can differ from these in drive
+# letter case or separators, and every comparison below must still match.
+_VGI_DIR = os.path.normcase(os.path.dirname(os.path.abspath(__file__)))
 _VGI_PARENT = os.path.dirname(_VGI_DIR)
 _STORAGE_MODULES = frozenset(
     {
@@ -113,7 +115,7 @@ _STORAGE_MODULES = frozenset(
 # ---------------------------------------------------------------------------
 
 
-_STDLIB_DIR = os.path.dirname(os.path.abspath(os.__file__))
+_STDLIB_DIR = os.path.normcase(os.path.dirname(os.path.abspath(os.__file__)))
 
 # _classify kinds.
 _K_STORAGE = 0  # a storage module: skipped when choosing the call site
@@ -125,16 +127,25 @@ _K_LIBRARY = 4  # stdlib or site-packages: the boundary (vgi-rpc's dispatch, a t
 
 @functools.lru_cache(maxsize=4096)
 def _classify(filename: str) -> tuple[str, int]:
-    """Return ``(display_path, kind)`` for a code object's filename."""
-    path = os.path.abspath(filename)
+    """Return ``(display_path, kind)`` for a code object's filename.
+
+    The display path always uses ``/`` so reports read the same on every OS.
+    """
+    display, kind = _classify_native(filename)
+    return display.replace(os.sep, "/"), kind
+
+
+def _classify_native(filename: str) -> tuple[str, int]:
+    """`_classify` with the platform's separators."""
+    path = os.path.normcase(os.path.abspath(filename))
     if path.startswith(_VGI_DIR + os.sep):
         rel = os.path.relpath(path, _VGI_PARENT)
         base = os.path.basename(path)
         if os.path.dirname(path) == _VGI_DIR and base in _STORAGE_MODULES:
             return rel, _K_STORAGE
-        if rel.startswith(os.path.join("vgi", "_test_fixtures") + os.sep):
+        if rel.startswith(os.path.normcase(os.path.join("vgi", "_test_fixtures")) + os.sep):
             return rel, _K_USER
-        return rel, _K_WORKER if rel == os.path.join("vgi", "worker.py") else _K_VGI
+        return rel, _K_WORKER if rel == os.path.normcase(os.path.join("vgi", "worker.py")) else _K_VGI
     parts = path.split(os.sep)
     for marker in ("site-packages", "dist-packages"):
         if marker in parts:
