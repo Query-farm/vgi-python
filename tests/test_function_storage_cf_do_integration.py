@@ -76,7 +76,8 @@ def test_queue_push_replay_does_not_duplicate(storage: FunctionStorageCfDo) -> N
     attempt = uuid.uuid4().hex
     body: dict[str, object] = {
         "execution_id": base64.b64encode(eid).decode(),
-        "items": [base64.b64encode(b"a").decode(), base64.b64encode(b"b").decode()],
+        # Raw wire values carry the client's inline envelope (0x00 || value).
+        "items": [base64.b64encode(b"\x00a").decode(), base64.b64encode(b"\x00b").decode()],
     }
     r1 = storage._post("queue_push", body, attempt_id=attempt)
     r2 = storage._post("queue_push", body, attempt_id=attempt)
@@ -105,7 +106,7 @@ def test_queue_pop_replay_returns_same_item(storage: FunctionStorageCfDo) -> Non
     r2 = storage._post("queue_pop", body, attempt_id=attempt)
 
     assert r1 == r2
-    assert base64.b64decode(r1["item"]) == b"a"
+    assert base64.b64decode(r1["item"]) == b"\x00a"  # the inline envelope of b"a"
 
     # Fresh attempt → next item, confirming the tombstone is not "consumed"
     # by a replay.
@@ -203,3 +204,45 @@ def test_health_check_get_is_rejected(storage: FunctionStorageCfDo) -> None:
     """
     resp = httpx2.get(_URL or "")
     assert resp.status_code in (401, 405)
+
+
+# ---------------------------------------------------------------------------
+# Blob externalization (values over the DO's 1 MiB cap)
+# ---------------------------------------------------------------------------
+
+
+def test_large_values_round_trip_through_blob_vendor() -> None:
+    """Values over 1 MiB go to the (fake) blob vendor; the real DO stores pointers."""
+    from vgi_rpc.conformance.fake_vendor import serve_fake_vendor
+    from vgi_rpc.vendor import VendorBlobClient
+
+    with serve_fake_vendor() as vendor:
+        s = FunctionStorageCfDo(
+            url=_URL or "",
+            token=os.environ.get("VGI_CF_DO_TOKEN"),
+            blob_client=VendorBlobClient(vendor.url, "test-token"),
+        )
+        try:
+            eid, shard = _eid(), "att-" + secrets.token_hex(16)
+            big = [secrets.token_bytes(2 * 1024 * 1024), secrets.token_bytes(1024 * 1024 + 1)]
+            s.queue_push(eid, [b"small", *big], shard_key=shard)
+            assert [s.queue_pop(eid, shard_key=shard) for _ in range(3)] == [b"small", *big]
+            s.state_put_many(eid, b"ns", [(b"a", big[0]), (b"b", b"tiny")], shard_key=shard)
+            assert s.state_get_many(eid, b"ns", [b"a", b"b"], shard_key=shard) == [big[0], b"tiny"]
+            assert list(s.state_scan(eid, b"ns", shard_key=shard)) == [(b"a", big[0]), (b"b", b"tiny")]
+            ordinal = s.state_append(eid, b"log", b"", big[1], shard_key=shard)
+            assert s.state_log_scan(eid, b"log", b"", shard_key=shard) == [(ordinal, big[1])]
+            assert list(s.state_drain(eid, b"ns", shard_key=shard)) == [(b"a", big[0]), (b"b", b"tiny")]
+            s.execution_clear(eid, shard_key=shard)
+            s.flush_blob_cleanup()
+            assert vendor.vendor.object_ids() == []
+        finally:
+            s.close()
+
+
+def test_large_value_without_vendor_fails_before_the_do(storage: FunctionStorageCfDo) -> None:
+    """Without a vendor an over-cap value is refused client-side, naming VGI_BLOB_VENDOR_URL."""
+    from vgi.function_storage_cf_do import StorageValueTooLargeError
+
+    with pytest.raises(StorageValueTooLargeError, match="VGI_BLOB_VENDOR_URL"):
+        storage.state_append(_eid(), b"log", b"", b"x" * (2 * 1024 * 1024))

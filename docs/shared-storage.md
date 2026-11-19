@@ -144,6 +144,33 @@ tables automatically on first request.
 | `VGI_CF_DO_URL` | Cloudflare Worker URL (required) |
 | `VGI_CF_DO_TOKEN` | Bearer token for authentication (optional) |
 | `VGI_CF_DO_DEBUG_LOG` | File path for debug/timing logs |
+| `VGI_BLOB_VENDOR_URL` | Blob vendor for values over the DO's 1 MiB cap (optional; see below) |
+| `VGI_BLOB_VENDOR_TOKEN` | Vendor bearer token (defaults to `VGI_CF_DO_TOKEN`) |
+| `VGI_CF_DO_EXTERNALIZE_BYTES` | With the vendor, values of at least this size are stored as blobs (default 524288, at most 1048576) |
+
+### Large Values (Blob Vendor)
+
+The Durable Object refuses any stored value over 1 MiB. With
+`VGI_BLOB_VENDOR_URL` set, a value of `VGI_CF_DO_EXTERNALIZE_BYTES` or more
+(work-queue item, `state_*` value or log item) is uploaded to the blob vendor
+before the DO request, and the DO stores a ~73-byte pointer. Reads fetch the
+blob back and check its size and SHA-256. The `FunctionStorage` API does not
+change. Without the vendor, a value over 1 MiB fails client-side with an
+error naming `VGI_BLOB_VENDOR_URL`. Installing the vendor client needs
+`vgi[external]`.
+
+Every value the client writes carries a one-byte envelope tag, whether or not
+the vendor is configured: `0x00 || value` inline, `0x01 || size || sha256 ||
+object_id` for a blob. A value without a valid tag (for example one written by
+an older release) fails to read with `StorageEnvelopeError`. Executions are
+short-lived, so nothing needs migrating, but old and new clients cannot share
+one running query.
+
+Blobs are scoped to the shard and execution. `execution_clear` and
+`queue_clear` delete their scope, `state_drain` the blobs it drained and
+`queue_pop` the blob it claimed. Clean-up is best-effort and runs on a
+background thread; the vendor's idle sweep and the bucket lifecycle rules
+are the backstop.
 
 ### Programmatic Usage
 
