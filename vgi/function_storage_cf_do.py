@@ -56,16 +56,12 @@ __all__ = [
 _logger = logging.getLogger("vgi.storage.cf_do")
 
 
-# Per-shard storage round-trip profiler (opt-in via VGI_STORAGE_PROFILE=1).
-#
-# The shared profiler (vgi._storage_profile) normally records at the
-# BoundStorage facade so any backend can be profiled locally. This backend is
-# special: a single logical state_scan / state_drain fans out into many _post
-# round-trips (pagination), and that per-page network cost is the whole reason
-# cloudflare-do is slower than in-process sqlite. So we record at _post here for
-# the true round-trip count, and FunctionStorageCfDo sets
-# _profiles_at_transport=True so BoundStorage defers to us (no double-count).
-from vgi._storage_profile import _PROFILE_ON, _profiler  # noqa: E402
+# Storage profiler (opt-in via VGI_STORAGE_PROFILE=1). The backend class is
+# instrumented per logical call like every other backend (see the end of this
+# module); a single logical state_scan / state_drain can fan out into several
+# paginated _post round trips, so _post reports each one with note_round_trip
+# and the call's record carries the true round-trip count.
+from vgi._storage_profile import _PROFILE_ON, note_round_trip, profile_backend_class  # noqa: E402
 
 # Optional file-based debug logging
 _debug_log_path = os.environ.get("VGI_CF_DO_DEBUG_LOG")
@@ -90,10 +86,6 @@ class FunctionStorageCfDo:
     without coordination.
 
     """
-
-    # This backend self-profiles at the transport layer (``_post``), so the
-    # BoundStorage facade defers to avoid double-counting. See _storage_profile.
-    _profiles_at_transport = True
 
     # Remote-sharding backend: every request must carry a valid shard_key, so a
     # BoundStorage built without a sealed attach is a hard error rather than a
@@ -189,7 +181,6 @@ class FunctionStorageCfDo:
             body = {**body, "attempt_id": attempt_id}
 
         for attempt in range(self._POST_ATTEMPTS):
-            t0 = time.monotonic()
             try:
                 resp = self._client.post(path, json=body)
             except httpx2.RequestError as exc:
@@ -254,12 +245,7 @@ class FunctionStorageCfDo:
                 # request/response size caps apply to. resp.request.content is
                 # the actual serialized (base64-inflated) request payload.
                 req_len = len(resp.request.content) if resp.request is not None else 0
-                _profiler.record(
-                    str(body["shard_key"]),
-                    endpoint,
-                    time.monotonic() - t0,
-                    max(req_len, len(resp.content)),
-                )
+                note_round_trip(max(req_len, len(resp.content)))
             return data
 
         assert last_exc is not None
@@ -758,3 +744,6 @@ class FunctionStorageCfDo:
             url=url,
             token=os.environ.get("VGI_CF_DO_TOKEN") or None,
         )
+
+
+profile_backend_class(FunctionStorageCfDo)

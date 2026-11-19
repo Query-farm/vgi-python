@@ -226,3 +226,33 @@ open is an error, never a plaintext fallback.
 What your functions write themselves (`process()` appends, aggregate states,
 window partitions, finalize output, work-queue items) is your data and is
 stored as written, unsealed.
+
+## Profiling Storage Traffic
+
+Set `VGI_STORAGE_PROFILE=1` to count every storage call. With it off, nothing is
+wrapped and the hot path is the unprofiled code. Each call is attributed to:
+
+- its operation (which is also the cloudflare-do endpoint);
+- its call site (the first frame outside the storage modules);
+- the VGI RPC it ran under;
+- its attach shard and execution or transaction id.
+
+The worker logs the following under `vgi.storage.profile`:
+
+- a per-shard `storage_profile` JSON line every 5 s;
+- a `storage_profile_execution` line when each execution is cleared;
+- a summary table at a clean exit, covering:
+  - calls by call site;
+  - storage calls per RPC invocation (for example `Worker.table_buffering_process: 147 RPCs, 294 calls, 2.00/RPC`);
+  - per-execution latency (mean, p50, p95);
+  - in-flight concurrency, and the wall time with a call in flight against the execution's span.
+
+Set `VGI_STORAGE_PROFILE_FILE=/tmp/storage-{pid}.jsonl` to also write one JSON
+line per call. Then rebuild the table from those files, for example for a
+server stopped by SIGTERM, which never runs `atexit`:
+
+```bash
+python -m vgi._storage_profile_report /tmp/storage-*.jsonl
+```
+
+A custom backend opts in with `vgi._storage_profile.profile_backend_class(MyCustomStorage)`.

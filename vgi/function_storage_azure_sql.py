@@ -27,6 +27,8 @@ from typing import Any, cast
 
 import pymssql
 
+from vgi._storage_profile import profile_backend_class
+
 __all__ = [
     "FunctionStorageAzureSql",
     "MissingTablesError",
@@ -920,3 +922,7 @@ def _encode_access_token(token: str) -> bytes:
     """
     token_bytes = token.encode("UTF-16-LE")
     return struct.pack("<I", len(token_bytes)) + token_bytes
+
+
+# VGI_STORAGE_PROFILE=1 instruments the backend (no-op when off).
+profile_backend_class(FunctionStorageAzureSql)

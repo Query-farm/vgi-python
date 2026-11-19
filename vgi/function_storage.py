@@ -25,50 +25,18 @@ import logging
 import os
 import sqlite3
 import threading
-import time
-from collections.abc import Callable, Iterable, Iterator
-from typing import Any, Protocol, TypeVar
+from collections.abc import Iterable, Iterator
+from typing import Any, Protocol
 
 import pyarrow as pa
 
 from vgi._sqlite_wal import connect_wal
-from vgi._storage_profile import _PROFILE_ON, _profiler, io_call_bytes
+from vgi._storage_profile import profile_backend_class
 
 # When the parent vgi.* logger is configured at DEBUG, this emits one line
 # per BoundStorage construction with the resolved shard_key — handy for
 # cross-referencing storage-routing bugs with MetaWorker dispatch logs.
 _shard_logger = logging.getLogger("vgi.storage.shard")
-
-_F = TypeVar("_F", bound=Callable[..., Any])
-
-
-def _profiled(op: str) -> Callable[[_F], _F]:
-    """Record a `[`BoundStorage`][]` op to the shared per-shard profiler.
-
-    No-op (returns the method unchanged, zero overhead) unless
-    ``VGI_STORAGE_PROFILE=1``. Backends that already self-profile at their
-    transport layer (cloudflare-do, ``_profiles_at_transport=True``) are
-    skipped so the two layers never double-count. Records
-    ``(shard_key, op, elapsed, resp_bytes)`` — keyed per shard, i.e. per test.
-    """
-
-    def deco(fn: _F) -> _F:
-        if not _PROFILE_ON:
-            return fn
-
-        @functools.wraps(fn)
-        def wrapper(self: "BoundStorage", *args: Any, **kwargs: Any) -> Any:
-            if getattr(self._base, "_profiles_at_transport", False):
-                return fn(self, *args, **kwargs)
-            t0 = time.monotonic()
-            result = fn(self, *args, **kwargs)
-            _profiler.record(self._shard_key, op, time.monotonic() - t0, io_call_bytes(args, kwargs, result))
-            return result
-
-        return wrapper  # type: ignore[return-value]
-
-    return deco
-
 
 __all__ = [
     "FrameworkNS",
@@ -702,7 +670,6 @@ class BoundStorage:
             shard_key=self._shard_key,
         )
 
-    @_profiled("queue_push")
     def queue_push(self, items: list[bytes]) -> int:
         """Add work items to the queue and register the invocation."""
         return self._base.queue_push(
@@ -715,7 +682,6 @@ class BoundStorage:
         """Serialize and push RecordBatches as work items."""
         return self.queue_push([self.serialize_record_batch(b) for b in batches])
 
-    @_profiled("queue_pop")
     def queue_pop(self) -> bytes | None:
         """Atomically claim one work item from the queue."""
         return self._base.queue_pop(
@@ -730,7 +696,6 @@ class BoundStorage:
             return None
         return self.deserialize_record_batch(data)
 
-    @_profiled("queue_clear")
     def queue_clear(self) -> int:
         """Clear all remaining work items and unregister the invocation."""
         return self._base.queue_clear(
@@ -747,18 +712,15 @@ class BoundStorage:
     # for transaction-scoped state, use BoundStorage.transaction() to get
     # a separate facade bound to ``transaction_opaque_data``.
 
-    @_profiled("state_get")
     def state_get(self, ns: "bytes | FrameworkNS", key: bytes) -> bytes | None:
         """Read one key's value (or None)."""
         result = self._base.state_get_many(self._execution_id, _coerce_ns(ns), [key], shard_key=self._shard_key)
         return result[0]
 
-    @_profiled("state_get_many")
     def state_get_many(self, ns: "bytes | FrameworkNS", keys: list[bytes]) -> list[bytes | None]:
         """Batched non-destructive read."""
         return self._base.state_get_many(self._execution_id, _coerce_ns(ns), keys, shard_key=self._shard_key)
 
-    @_profiled("state_put")
     def state_put(self, ns: "bytes | FrameworkNS", key: bytes, value: bytes) -> None:
         """Upsert one (key, value)."""
         self._base.state_put_many(self._execution_id, _coerce_ns(ns), [(key, value)], shard_key=self._shard_key)
@@ -805,12 +767,10 @@ class BoundStorage:
             return None
         return self.open_sealed(ns, key, sealed, signing_key=signing_key)
 
-    @_profiled("state_put_many")
     def state_put_many(self, ns: "bytes | FrameworkNS", items: list[tuple[bytes, bytes]]) -> None:
         """Batched atomic upsert."""
         self._base.state_put_many(self._execution_id, _coerce_ns(ns), items, shard_key=self._shard_key)
 
-    @_profiled("state_scan")
     def state_scan(
         self,
         ns: "bytes | FrameworkNS",
@@ -836,7 +796,6 @@ class BoundStorage:
             shard_key=self._shard_key,
         )
 
-    @_profiled("state_drain")
     def state_drain(self, ns: "bytes | FrameworkNS") -> Iterable[tuple[bytes, bytes]]:
         """Atomic scan-and-delete of every (key, value) in one namespace.
 
@@ -845,7 +804,6 @@ class BoundStorage:
         """
         return self._base.state_drain(self._execution_id, _coerce_ns(ns), shard_key=self._shard_key)
 
-    @_profiled("state_delete")
     def state_delete(
         self,
         ns: "bytes | FrameworkNS",
@@ -868,12 +826,10 @@ class BoundStorage:
             shard_key=self._shard_key,
         )
 
-    @_profiled("execution_clear")
     def execution_clear(self) -> int:
         """Wipe ALL state and log rows for this execution across every namespace."""
         return self._base.execution_clear(self._execution_id, shard_key=self._shard_key)
 
-    @_profiled("state_append")
     def state_append(self, ns: "bytes | FrameworkNS", key: bytes, item: bytes) -> int:
         """Append an item to the (ns, key) log; return the assigned ordinal.
 
@@ -885,7 +841,6 @@ class BoundStorage:
         """
         return self._base.state_append(self._execution_id, _coerce_ns(ns), key, item, shard_key=self._shard_key)
 
-    @_profiled("state_log_scan")
     def state_log_scan(
         self,
         ns: "bytes | FrameworkNS",
@@ -909,22 +864,18 @@ class BoundStorage:
 
     # --- Atomic int64 counters (function_counter table) ---
 
-    @_profiled("state_counter_get")
     def counter_get(self, ns: "bytes | FrameworkNS", key: bytes) -> int:
         """Read the int64 counter (0 if absent)."""
         return self._base.state_counter_get(self._execution_id, _coerce_ns(ns), key, shard_key=self._shard_key)
 
-    @_profiled("state_counter_add")
     def counter_add(self, ns: "bytes | FrameworkNS", key: bytes, delta: int) -> int:
         """Atomically add ``delta``; return the new value. See FunctionStorage."""
         return self._base.state_counter_add(self._execution_id, _coerce_ns(ns), key, delta, shard_key=self._shard_key)
 
-    @_profiled("state_counter_set")
     def counter_set(self, ns: "bytes | FrameworkNS", key: bytes, value: int) -> None:
         """Overwrite the counter with ``value``."""
         self._base.state_counter_set(self._execution_id, _coerce_ns(ns), key, value, shard_key=self._shard_key)
 
-    @_profiled("state_counter_delete")
     def counter_delete(self, ns: "bytes | FrameworkNS", key: bytes) -> None:
         """Delete the counter (no-op if absent)."""
         self._base.state_counter_delete(self._execution_id, _coerce_ns(ns), key, shard_key=self._shard_key)
@@ -1733,3 +1684,10 @@ class ShardedSqliteStorage:
 
     def close(self) -> None:
         self._inner.close()
+
+
+# VGI_STORAGE_PROFILE=1 instruments every backend at the backend layer, so
+# BoundStorage, TransactionBoundStorage and direct backend calls are all seen
+# (a no-op when profiling is off). Applied after _guard_sqlite_ops.
+profile_backend_class(FunctionStorageSqlite)
+profile_backend_class(ShardedSqliteStorage)
