@@ -201,3 +201,28 @@ Assign it to your function classes:
 class MyFunction(TableFunctionGenerator):
     storage = MyCustomStorage()
 ```
+
+## Sealed Framework Payloads
+
+The framework stores some of its own context so that any worker process can
+serve any RPC of an execution:
+
+- a buffered table function's init request, including its resolved secrets and the attach and transaction context;
+- aggregate constant arguments;
+- the streaming-aggregate session.
+
+These are always written sealed (`vgi._storage_seal`, sealed framework payload v1):
+
+- **Cipher:** AES-256-GCM under `HKDF-SHA256(signing key, info="vgi.storage.payload.v1")`.
+- **Associated data:** bound to the shard, execution id, namespace and key.
+- **Envelope:** `0x01 || nonce(12) || ciphertext || tag(16)`.
+
+A worker with no signing key (subprocess and unix transports) uses the
+per-user host-local key file that secret ATTACH options use. Every process
+serving one deployment must therefore share `VGI_SIGNING_KEY`, which
+multi-machine HTTP deployments already require. A payload that fails to
+open is an error, never a plaintext fallback.
+
+What your functions write themselves (`process()` appends, aggregate states,
+window partitions, finalize output, work-queue items) is your data and is
+stored as written, unsealed.

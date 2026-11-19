@@ -559,11 +559,12 @@ _aggregate_const_args_cache = _AggregateConstArgsCache()
 # miss (other machine, LRU eviction, restart) falls through to storage.
 # Without it every process() RPC paid one extra storage round trip, half
 # of all storage traffic for a buffered function (one HTTP RTT per input
-# batch on cloudflare-do). The cache holds the raw payload, so each RPC
-# still decodes fresh objects. Evicted on table_buffering_destructor.
+# batch on cloudflare-do). The cache holds the sealed envelope exactly as
+# stored; each RPC opens it (AEAD-checked against its own shard and execution
+# id) and decodes fresh objects. Evicted on table_buffering_destructor.
 _TABLE_BUFFERING_INIT_KEY = -1
 
-# (shard_key, execution_id) -> raw BUFFERING_INIT payload bytes.
+# (shard_key, execution_id) -> sealed BUFFERING_INIT envelope.
 _table_buffering_init_cache = _AggregateConstArgsCache()
 
 
@@ -778,7 +779,11 @@ def _encode_streaming_session(session: _StreamingSession) -> bytes:
     """Pickle a session for FunctionStorage.
 
     ``func_cls`` is *not* pickled — it's resolved on the fly from the
-    function name on cold reload.
+    function name on cold reload. ``streaming_state`` is whatever the user's
+    ``streaming_open`` returned (any object), so this payload is the one place
+    the framework still pickles storage data. It is only ever stored sealed
+    (``BoundStorage.sealed_put``) and unpickled after the AEAD check passes, so
+    bytes that this deployment's key did not seal never reach ``pickle.loads``.
     """
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, session.output_schema):
@@ -816,20 +821,29 @@ def _decode_streaming_session(payload: bytes, func_cls: type[AggregateFunction[A
 # classes and to handle version skew if the function definition changes.
 
 
+# Framing (no pickle: the bytes come back from shared storage):
+# ``0x01 || u32 len(init_call) || init_call || init_response``. Stored sealed
+# (vgi._storage_seal), so a tampered or foreign payload never reaches it.
+_TABLE_BUFFERING_INIT_FORMAT = 1
+
+
 def _encode_table_buffering_init(init_call: InitRequest, init_response: GlobalInitResponse) -> bytes:
-    return pickle.dumps(
-        {
-            "init_call_bytes": init_call.serialize_to_bytes(),
-            "init_response_bytes": init_response.serialize_to_bytes(),
-        }
-    )
+    call = init_call.serialize_to_bytes()
+    header = bytes([_TABLE_BUFFERING_INIT_FORMAT]) + len(call).to_bytes(4, "big")
+    return header + call + init_response.serialize_to_bytes()
 
 
 def _decode_table_buffering_init(payload: bytes) -> tuple[InitRequest, GlobalInitResponse]:
-    d = pickle.loads(payload)
+    from vgi._storage_seal import StoragePayloadError
+
+    if len(payload) < 5 or payload[0] != _TABLE_BUFFERING_INIT_FORMAT:
+        raise StoragePayloadError("table_buffering: unrecognized init payload format")
+    n = int.from_bytes(payload[1:5], "big")
+    if 5 + n > len(payload):
+        raise StoragePayloadError("table_buffering: truncated init payload")
     return (
-        InitRequest.deserialize_from_bytes(d["init_call_bytes"]),
-        GlobalInitResponse.deserialize_from_bytes(d["init_response_bytes"]),
+        InitRequest.deserialize_from_bytes(payload[5 : 5 + n]),
+        GlobalInitResponse.deserialize_from_bytes(payload[5 + n :]),
     )
 
 
@@ -3715,7 +3729,9 @@ class Worker:
         # same row-keyspace as the rest of aggregate_state, no separate table
         # needed. The negative key avoids collision with caller-supplied
         # group_ids (which are non-negative).
-        result = storage.state_get(FrameworkNS.AGGREGATE_STATE, BoundStorage.pack_int_key(-2))
+        result = storage.sealed_get(
+            FrameworkNS.AGGREGATE_STATE, BoundStorage.pack_int_key(-2), signing_key=self._signing_key
+        )
         if result is None:
             # Most aggregates have no const params; cache the negative result
             # so we don't re-hit storage on every aggregate_window /
@@ -3787,8 +3803,11 @@ class Worker:
         # (synthetic group_id=-2 in namespace FrameworkNS.AGGREGATE_STATE).
         if request.arguments and request.arguments.positional:
             storage = self._bound(func_cls.storage, execution_id, request)
-            storage.state_put(
-                FrameworkNS.AGGREGATE_STATE, BoundStorage.pack_int_key(-2), request.arguments.serialize_to_bytes()
+            storage.sealed_put(
+                FrameworkNS.AGGREGATE_STATE,
+                BoundStorage.pack_int_key(-2),
+                request.arguments.serialize_to_bytes(),
+                signing_key=self._signing_key,
             )
 
         return AggregateBindResponse(
@@ -4112,20 +4131,21 @@ class Worker:
             request=request,
             attach_plaintext=attach_full,
         )
-        payload = _table_buffering_init_cache.get(cold_storage._shard_key, request.execution_id)
-        if payload is None:
-            payload = cold_storage.state_get(
-                FrameworkNS.BUFFERING_INIT,
-                BoundStorage.pack_int_key(_TABLE_BUFFERING_INIT_KEY),
-            )
-            if payload is not None:
-                _table_buffering_init_cache.put(cold_storage._shard_key, request.execution_id, payload)
-        if payload is None:
+        init_key = BoundStorage.pack_int_key(_TABLE_BUFFERING_INIT_KEY)
+        sealed = _table_buffering_init_cache.get(cold_storage._shard_key, request.execution_id)
+        if sealed is None:
+            sealed = cold_storage.state_get(FrameworkNS.BUFFERING_INIT, init_key)
+            if sealed is not None:
+                _table_buffering_init_cache.put(cold_storage._shard_key, request.execution_id, sealed)
+        if sealed is None:
             raise OSError(
                 f"table_buffering: unknown execution_id "
                 f"{request.execution_id.hex()} "
                 f"(init never ran or destructor already fired)"
             )
+        # Opened on every use, cache hit or not: the AEAD check binds the
+        # payload to this request's shard and execution id.
+        payload = cold_storage.open_sealed(FrameworkNS.BUFFERING_INIT, init_key, sealed, signing_key=self._signing_key)
         init_call, init_response = _decode_table_buffering_init(payload)
         # AttachOpaqueData is a NewType over bytes; just pass the bytes
         # through. Empty when the catalog doesn't seal attaches.
@@ -4543,8 +4563,11 @@ class Worker:
         # declares const params.
         if request.arguments and request.arguments.positional:
             storage = self._bound(func_cls.storage, execution_id, request)
-            storage.state_put(
-                FrameworkNS.AGGREGATE_STATE, BoundStorage.pack_int_key(-2), request.arguments.serialize_to_bytes()
+            storage.sealed_put(
+                FrameworkNS.AGGREGATE_STATE,
+                BoundStorage.pack_int_key(-2),
+                request.arguments.serialize_to_bytes(),
+                signing_key=self._signing_key,
             )
 
         storage = self._bound(func_cls.storage, execution_id, request)
@@ -4572,10 +4595,11 @@ class Worker:
         _streaming_session_cache.put(execution_id, session)
         # Also persist to FunctionStorage so a chunk RPC landing on a
         # different pool worker can reload the session.
-        storage.state_put(
+        storage.sealed_put(
             FrameworkNS.STREAMING_SESSION,
             BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY),
             _encode_streaming_session(session),
+            signing_key=self._signing_key,
         )
         return AggregateStreamingOpenResponse(execution_id=execution_id)
 
@@ -4596,9 +4620,10 @@ class Worker:
             import time as _t
 
             t_get_start = _t.perf_counter()
-            payload = cold_storage.state_get(
+            payload = cold_storage.sealed_get(
                 FrameworkNS.STREAMING_SESSION,
                 BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY),
+                signing_key=self._signing_key,
             )
             t_get = _t.perf_counter() - t_get_start
             with _streaming_persist_lock:
@@ -4657,10 +4682,11 @@ class Worker:
         payload = _encode_streaming_session(session)
         t_enc = _t.perf_counter() - t_enc_start
         t_put_start = _t.perf_counter()
-        storage.state_put(
+        storage.sealed_put(
             FrameworkNS.STREAMING_SESSION,
             BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY),
             payload,
+            signing_key=self._signing_key,
         )
         t_put = _t.perf_counter() - t_put_start
         _record_persist_timing(t_enc, t_put, len(payload))
@@ -4693,10 +4719,16 @@ class Worker:
                 func_cls = None
             if func_cls is not None and issubclass(func_cls, AggregateFunction):
                 cold_storage = self._bound(func_cls.storage, request.execution_id, request)
-                payload = cold_storage.state_get(
-                    FrameworkNS.STREAMING_SESSION,
-                    BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY),
-                )
+                try:
+                    payload = cold_storage.sealed_get(
+                        FrameworkNS.STREAMING_SESSION,
+                        BoundStorage.pack_int_key(_STREAMING_SESSION_STORAGE_KEY),
+                        signing_key=self._signing_key,
+                    )
+                except OSError:
+                    # Best-effort close: an unopenable payload is dropped below.
+                    _logger.warning("aggregate_streaming_close: stored session failed authentication; dropped")
+                    payload = None
                 if payload is not None:
                     session = _decode_streaming_session(payload, func_cls)
                 cold_storage.state_delete(
@@ -4918,13 +4950,15 @@ class Worker:
             if request.phase == TableInOutFunctionInitPhase.TABLE_BUFFERING:
                 # Sink init: persist init metadata so any pool worker
                 # can cold-load + serve subsequent process/combine RPCs.
-                init_payload = _encode_table_buffering_init(request, init_response)
-                cold_storage.state_put(
+                # Sealed: the init request carries bind_call.secrets and
+                # the attach / transaction context (vgi._storage_seal).
+                sealed_init = cold_storage.sealed_put(
                     FrameworkNS.BUFFERING_INIT,
                     BoundStorage.pack_int_key(_TABLE_BUFFERING_INIT_KEY),
-                    init_payload,
+                    _encode_table_buffering_init(request, init_response),
+                    signing_key=self._signing_key,
                 )
-                _table_buffering_init_cache.put(cold_storage._shard_key, init_response.execution_id, init_payload)
+                _table_buffering_init_cache.put(cold_storage._shard_key, init_response.execution_id, sealed_init)
                 state = BufferedFinalizeState(
                     execution_id=init_response.execution_id,
                     ns=FrameworkNS.BUFFERING_INIT,

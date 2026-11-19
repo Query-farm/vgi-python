@@ -763,6 +763,48 @@ class BoundStorage:
         """Upsert one (key, value)."""
         self._base.state_put_many(self._execution_id, _coerce_ns(ns), [(key, value)], shard_key=self._shard_key)
 
+    # --- Sealed framework payloads (see vgi._storage_seal) -------------------
+
+    def sealed_put(self, ns: "FrameworkNS", key: bytes, payload: bytes, *, signing_key: bytes | None) -> bytes:
+        """Seal a framework payload to its slot and store it; return the stored envelope.
+
+        For framework context only (init requests, constant arguments, session
+        state): authenticated encryption bound to (shard, execution, ns, key).
+        """
+        from vgi._storage_seal import seal_payload
+
+        ns_b = _coerce_ns(ns)
+        sealed = seal_payload(
+            payload,
+            signing_key=signing_key,
+            shard_key=self._shard_key,
+            scope_id=self._execution_id,
+            ns=ns_b,
+            key=key,
+        )
+        self.state_put(ns, key, sealed)
+        return sealed
+
+    def open_sealed(self, ns: "FrameworkNS", key: bytes, sealed: bytes, *, signing_key: bytes | None) -> bytes:
+        """Open an envelope from `sealed_put` for this slot (`StoragePayloadError` on failure)."""
+        from vgi._storage_seal import open_payload
+
+        return open_payload(
+            sealed,
+            signing_key=signing_key,
+            shard_key=self._shard_key,
+            scope_id=self._execution_id,
+            ns=_coerce_ns(ns),
+            key=key,
+        )
+
+    def sealed_get(self, ns: "FrameworkNS", key: bytes, *, signing_key: bytes | None) -> bytes | None:
+        """Read and open a sealed framework payload; None when the slot is empty."""
+        sealed = self.state_get(ns, key)
+        if sealed is None:
+            return None
+        return self.open_sealed(ns, key, sealed, signing_key=signing_key)
+
     @_profiled("state_put_many")
     def state_put_many(self, ns: "bytes | FrameworkNS", items: list[tuple[bytes, bytes]]) -> None:
         """Batched atomic upsert."""
