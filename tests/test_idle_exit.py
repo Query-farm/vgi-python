@@ -266,8 +266,8 @@ def _serve(port: int, idle: str, *extra: str) -> subprocess.Popen[str]:
     return proc
 
 
-def _get(port: int, path: str, method: str = "GET") -> int:
-    deadline = time.monotonic() + 10
+def _get(port: int, path: str, method: str = "GET", wait: float = 10) -> int:
+    deadline = time.monotonic() + wait
     while True:
         try:
             req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", method=method)
@@ -309,7 +309,9 @@ def test_serve_exits_cleanly_when_idle(extra: tuple[str, ...]) -> None:
     port = _free_port()
     proc = _serve(port, "2", *extra)
     try:
-        _get(port, "/")
+        # granian announces its port before its workers listen, and a cold macOS
+        # runner can take well over 10 s to start them.
+        _get(port, "/", wait=60)
         # Busy for well over the period: still serving.
         end = time.monotonic() + 4
         while time.monotonic() < end:
