@@ -551,16 +551,20 @@ _aggregate_const_args_cache = _AggregateConstArgsCache()
 
 # TableBufferingFunction init metadata is persisted to FunctionStorage at
 # init time (namespace FrameworkNS.BUFFERING_INIT, key = pack_int_key(_TABLE_BUFFERING_INIT_KEY))
-# and cold-loaded by every subsequent table_buffering_{process,combine}
-# RPC. There is intentionally NO in-process cache here — workers are
-# stateless w.r.t. table_buffering executions, so any pool worker can
-# serve any RPC for any execution_id.
-#
-# Cost: one extra storage round-trip per RPC. Negligible on subprocess
-# (SQLite is microseconds). One HTTP RTT on CfDo deployments — if that
-# surfaces as a hot-path bottleneck, the mitigation is to thread the
-# init metadata bytes through the request envelope from C++ instead.
+# and loaded by every subsequent table_buffering_{process,combine} RPC.
+# Storage stays authoritative — any pool worker can serve any RPC for any
+# execution_id — but the payload is written at init and never changed for
+# the life of the execution_id (ids are minted per execution and never
+# reused), so a process-local read-through cache is correctness-safe: a
+# miss (other machine, LRU eviction, restart) falls through to storage.
+# Without it every process() RPC paid one extra storage round trip, half
+# of all storage traffic for a buffered function (one HTTP RTT per input
+# batch on cloudflare-do). The cache holds the raw payload, so each RPC
+# still decodes fresh objects. Evicted on table_buffering_destructor.
 _TABLE_BUFFERING_INIT_KEY = -1
+
+# (shard_key, execution_id) -> raw BUFFERING_INIT payload bytes.
+_table_buffering_init_cache = _AggregateConstArgsCache()
 
 
 # Streaming-shape FINALIZE phase materializes the user's
@@ -4108,10 +4112,14 @@ class Worker:
             request=request,
             attach_plaintext=attach_full,
         )
-        payload = cold_storage.state_get(
-            FrameworkNS.BUFFERING_INIT,
-            BoundStorage.pack_int_key(_TABLE_BUFFERING_INIT_KEY),
-        )
+        payload = _table_buffering_init_cache.get(cold_storage._shard_key, request.execution_id)
+        if payload is None:
+            payload = cold_storage.state_get(
+                FrameworkNS.BUFFERING_INIT,
+                BoundStorage.pack_int_key(_TABLE_BUFFERING_INIT_KEY),
+            )
+            if payload is not None:
+                _table_buffering_init_cache.put(cold_storage._shard_key, request.execution_id, payload)
         if payload is None:
             raise OSError(
                 f"table_buffering: unknown execution_id "
@@ -4210,6 +4218,7 @@ class Worker:
                 schema_path=getattr(request, "schema_path", None),
             )
             storage = self._bound(func_cls.storage, request.execution_id, request)
+            _table_buffering_init_cache.clear_execution(storage._shard_key, request.execution_id)
             storage.execution_clear()
         except Exception:
             _logger.exception(
@@ -4909,11 +4918,13 @@ class Worker:
             if request.phase == TableInOutFunctionInitPhase.TABLE_BUFFERING:
                 # Sink init: persist init metadata so any pool worker
                 # can cold-load + serve subsequent process/combine RPCs.
+                init_payload = _encode_table_buffering_init(request, init_response)
                 cold_storage.state_put(
                     FrameworkNS.BUFFERING_INIT,
                     BoundStorage.pack_int_key(_TABLE_BUFFERING_INIT_KEY),
-                    _encode_table_buffering_init(request, init_response),
+                    init_payload,
                 )
+                _table_buffering_init_cache.put(cold_storage._shard_key, init_response.execution_id, init_payload)
                 state = BufferedFinalizeState(
                     execution_id=init_response.execution_id,
                     ns=FrameworkNS.BUFFERING_INIT,
