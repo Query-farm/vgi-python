@@ -11,8 +11,10 @@ Covers the wire records (``ScanBranch.row_count`` / ``column_statistics``,
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import json
+import os
 from typing import Any
 
 import pyarrow as pa
@@ -34,9 +36,10 @@ COLUMNS = schema(event_date=pa.date32(), n=pa.int64())
 D = datetime.date
 
 
-def _filters(*predicates: tuple[str, str, Any]) -> ScanPlanningFilters:
+def _filters(*predicates: tuple[str, str, Any], columns: pa.Schema | None = None) -> ScanPlanningFilters:
     """Build a filter v2 snapshot of ``column op literal`` conjuncts over COLUMNS."""
     doc_predicates = []
+    cols = COLUMNS if columns is None else columns
     payloads = []
     for i, (column, op, value) in enumerate(predicates):
         doc_predicates.append(
@@ -50,14 +53,14 @@ def _filters(*predicates: tuple[str, str, Any]) -> ScanPlanningFilters:
                     "op": op,
                     "left": {
                         "node": "column_ref",
-                        "column_index": COLUMNS.get_field_index(column),
+                        "column_index": cols.get_field_index(column),
                         "column_name": column,
                     },
                     "right": {"node": "literal", "value_ref": i},
                 },
             }
         )
-        payloads.append(value_payload(i, value, COLUMNS.field(column).type))
+        payloads.append(value_payload(i, value, cols.field(column).type))
     document = {
         "encoding": "vgi.filters.v2",
         "semantics": "vgi.duckdb.standard.v1",
@@ -65,7 +68,7 @@ def _filters(*predicates: tuple[str, str, Any]) -> ScanPlanningFilters:
         "predicates": doc_predicates,
     }
     raw = serialize_filter_batch(build_filter_batch(document, payloads))
-    return ScanPlanningFilters(raw, lambda: COLUMNS)
+    return ScanPlanningFilters(raw, lambda: cols)
 
 
 def _day_stats(day: datetime.date) -> list[ColumnStatistics]:
@@ -359,3 +362,63 @@ def test_default_plan_hook_delegates_to_branches_get() -> None:
         pushdown_filters=_filters(("n", "eq", 1)),
     )
     assert result.required_extensions == ["sentinel"]
+
+
+# --------------------------------------------------------------------------- planned_events
+
+
+def _planned_events_plan(client: Any, filters: ScanPlanningFilters | None) -> tuple[list[str], dict[str, Any] | None]:
+    from vgi._test_fixtures.worker import _BRANCH_DIR
+
+    path = f"{_BRANCH_DIR}/planned_events_last_plan.json"
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(path)
+    result = client.table_scan_branches_get(
+        attach_opaque_data=_attach(client),
+        schema_path=["data"],
+        name="planned_events",
+        pushdown_filters=None if filters is None else filters.raw,
+    )
+    files = [f.rsplit("/", 1)[1] for b in result.branches for f in b.positional_arguments[0].as_py()]
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return files, json.load(fh)
+    except FileNotFoundError:
+        return files, None
+
+
+def test_planned_events_is_a_filtered_mixed_type_table(client: Any) -> None:
+    from vgi._test_fixtures.worker import _PLANNED_EVENTS_SCHEMA
+
+    info = client.table_get(attach_opaque_data=_attach(client), schema_path=["data"], name="planned_events")
+    assert info.scan_planning == "filtered"
+    assert [f.name for f in _PLANNED_EVENTS_SCHEMA] == ["event_date", "ts", "series", "ticker", "n", "price", "flag"]
+
+
+def test_planned_events_prunes_on_the_timestamp(client: Any) -> None:
+    from vgi._test_fixtures.worker import _PLANNED_EVENTS_SCHEMA
+
+    cutoff = datetime.datetime(2026, 10, 4, 5, tzinfo=datetime.UTC)
+    files, plan = _planned_events_plan(client, _filters(("ts", "ge", cutoff), columns=_PLANNED_EVENTS_SCHEMA))
+    assert files == ["planned_events_2026-10-04.parquet", "planned_events_2026-10-05.parquet"]
+    assert plan == {"days": ["2026-10-04", "2026-10-05"], "filters": ["ts GE"]}
+
+
+def test_planned_events_records_predicates_it_cannot_use(client: Any) -> None:
+    """A predicate on a column without statistics reaches the worker but prunes nothing."""
+    from vgi._test_fixtures.worker import _PLANNED_EVENTS_SCHEMA
+
+    filters = _filters(("event_date", "eq", D(2026, 10, 2)), ("n", "lt", 3), columns=_PLANNED_EVENTS_SCHEMA)
+    files, plan = _planned_events_plan(client, filters)
+    assert files == ["planned_events_2026-10-02.parquet"]
+    assert plan == {"days": ["2026-10-02"], "filters": ["event_date EQ", "n LT"]}
+    files, plan = _planned_events_plan(client, _filters(("n", "lt", 3), columns=_PLANNED_EVENTS_SCHEMA))
+    assert len(files) == 5
+    assert plan == {"days": [f"2026-10-0{d}" for d in range(1, 6)], "filters": ["n LT"]}
+
+
+def test_planned_events_without_filters_plans_every_day(client: Any) -> None:
+    """A planning call without predicates (nothing the client could push) records filters: null."""
+    files, plan = _planned_events_plan(client, None)
+    assert files == [f"planned_events_2026-10-0{d}.parquet" for d in range(1, 6)]
+    assert plan == {"days": [f"2026-10-0{d}" for d in range(1, 6)], "filters": None}

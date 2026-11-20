@@ -387,6 +387,52 @@ def _planned_day_stats(day: datetime.date) -> list[ColumnStatistics]:
     return [ColumnStatistics("event_date", min=pa.scalar(day), max=pa.scalar(day), has_null=False)]
 
 
+# planned_events: one file per day (planned_events_<day>.parquet, written by
+# scan_planning_predicates.test), 10 rows each. Statistics cover event_date and ts,
+# so predicates on either prune; every other column only reaches DuckDB.
+_PLANNED_EVENTS_SCHEMA = schema(
+    event_date=pa.date32(),
+    ts=pa.timestamp("us", tz="UTC"),
+    series=pa.string(),
+    ticker=pa.string(),
+    n=pa.int64(),
+    price=pa.float64(),
+    flag=pa.bool_(),
+)
+
+
+def _planned_event_file(day: datetime.date) -> str:
+    return f"{_BRANCH_DIR}/planned_events_{day.isoformat()}.parquet"
+
+
+def _planned_event_stats(day: datetime.date) -> list[ColumnStatistics]:
+    start = datetime.datetime(day.year, day.month, day.day, tzinfo=datetime.UTC)
+    ts_type = pa.timestamp("us", tz="UTC")
+    return [
+        ColumnStatistics("event_date", min=pa.scalar(day), max=pa.scalar(day), has_null=False),
+        ColumnStatistics(
+            "ts",
+            min=pa.scalar(start, type=ts_type),
+            max=pa.scalar(start + datetime.timedelta(hours=9), type=ts_type),
+            has_null=False,
+        ),
+    ]
+
+
+def _describe_filter(f: Any) -> str:
+    """A stable one-line description of a decoded pushdown filter, for test assertions."""
+    from vgi.table_filter_pushdown import AndFilter, ConstantFilter, OrFilter, StructFilter
+
+    kind = type(f).__name__.removesuffix("Filter")
+    if isinstance(f, AndFilter | OrFilter):
+        return f"{kind}({', '.join(_describe_filter(child) for child in f.children)})"
+    if isinstance(f, ConstantFilter):
+        return f"{f.column_name} {f.op.name}"
+    if isinstance(f, StructFilter):
+        return f"{f.column_name}.{f.child_name} {_describe_filter(f.child_filter)}"
+    return f"{f.column_name} {kind}"
+
+
 # ---------------------------------------------------------------------------
 # DuckDB-backed table: demonstrates statistics_from_duckdb() helper.
 # Creates an in-memory table and extracts real statistics from it.
@@ -1167,6 +1213,15 @@ _EXAMPLE_CATALOG = Catalog(
                     columns=schema(event_date=pa.date32(), n=pa.int64()),
                     comment="Protocol 3.2: pruning by branch_filter contradiction — scan_planning_branch_filter.test",
                 ),
+                # Protocol 3.2 filtered planning over a mixed-type table: the predicates a
+                # real catalog sees (string LIKE / functions / NULLs / timestamps / bools),
+                # most of which the worker cannot use and DuckDB must still apply.
+                Table(
+                    name="planned_events",
+                    columns=_PLANNED_EVENTS_SCHEMA,
+                    scan_planning="filtered",
+                    comment="Protocol 3.2: filtered planning, non-prunable predicates — scan_planning_predicates.test",
+                ),
                 # Protocol 3.2: branch_filter must be ONE expression. "n < 5, n > 2"
                 # parses as two; 3.1 clients silently kept the first.
                 Table(
@@ -1754,6 +1809,9 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
         if [component.lower() for component in schema_path] == ["data"] and name.lower().startswith("planned_days"):
             _validate_at_params(at_unit, at_value)
             return _planned_days_branches(name.lower(), pushdown_filters)
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() == "planned_events":
+            _validate_at_params(at_unit, at_value)
+            return _planned_events_branches(pushdown_filters, record=True)
         return super().table_scan_branches_plan(
             attach_opaque_data=attach_opaque_data,
             transaction_opaque_data=transaction_opaque_data,
@@ -1784,6 +1842,8 @@ class ExampleCatalog(ReadOnlyCatalogInterface):
 
         if [component.lower() for component in schema_path] == ["data"] and name.lower().startswith("planned_days"):
             return _planned_days_branches(name.lower(), None)
+        if [component.lower() for component in schema_path] == ["data"] and name.lower() == "planned_events":
+            return _planned_events_branches(None, record=False)
         if [component.lower() for component in schema_path] == ["data"] and name.lower() == "multi_branch_comma_filter":
             return ScanBranchesResult(
                 branches=[
@@ -2446,3 +2506,33 @@ def _planned_days_branches(name: str, filters: ScanPlanningFilters | None) -> Sc
             required_extensions=["parquet"],
         )
     raise ValueError(f"unknown planned_days fixture table: {name}")
+
+
+def _planned_events_branches(filters: ScanPlanningFilters | None, *, record: bool) -> ScanBranchesResult:
+    """Branches for data.planned_events: the day files the predicates may match.
+
+    Every planning call (``record``) writes planned_events_last_plan.json with the
+    planned days and the decoded filters (null when the client sent none), so a test
+    can assert what reached the worker, including that a predicate it cannot use
+    (LIKE, most functions) stayed with the client. Only scan_planning_predicates*.test
+    query this table, in one serial group, so the record is never overwritten
+    concurrently.
+    """
+    days = [d for d in _PLANNED_DAYS if filters is None or filters.may_match(_planned_event_stats(d))]
+    if record:
+        described = None if filters is None else sorted(_describe_filter(f) for f in filters.decode().filters)
+        with open(f"{_BRANCH_DIR}/planned_events_last_plan.json", "w", encoding="utf-8") as fh:
+            json.dump({"days": [d.isoformat() for d in days], "filters": described}, fh)
+    if not days:
+        return ScanBranchesResult(branches=[], required_extensions=["parquet"])
+    return ScanBranchesResult(
+        branches=[
+            ScanBranch(
+                function_name="read_parquet",
+                positional_arguments=[pa.scalar([_planned_event_file(d) for d in days], type=pa.list_(pa.string()))],
+                named_arguments={},
+                row_count=10 * len(days),
+            )
+        ],
+        required_extensions=["parquet"],
+    )
