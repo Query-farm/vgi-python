@@ -270,3 +270,27 @@ class TestInheritedOnBindAnnotations:
                 pass
 
         assert _Child.get_metadata().required_secrets == [SecretLookupEntry(secret_type="s3", scope="s3://b/")]
+
+    def test_mixin_secret_reaches_subclass(self) -> None:
+        """A plain mixin listed before TableFunctionGenerator supplies on_bind and its Secret()."""
+        resolve_metadata.cache_clear()
+
+        class _AuthMixin:
+            @classmethod
+            def on_bind(
+                cls,
+                params: BindParams[_Args],
+                *,
+                key: Annotated[dict[str, Any] | None, Secret("amazon_sp")] = None,
+            ) -> BindResponse:
+                return BindResponse(output_schema=pa.schema([pa.field("x", pa.int64())]))
+
+        class _Scan(_AuthMixin, TableFunctionGenerator[_Args]):
+            class Meta:
+                pass
+
+            @classmethod
+            def process(cls, params: Any, state: Any, out: Any) -> None: ...
+
+        assert set(_Scan._secret_params) == {"key"}
+        assert _Scan.get_metadata().required_secrets == [SecretLookupEntry(secret_type="amazon_sp")]
