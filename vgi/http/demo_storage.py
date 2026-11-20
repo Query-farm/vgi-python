@@ -33,6 +33,8 @@ class DemoBlobStorage:
 
     def __init__(self, *, max_blobs: int = 1000) -> None:  # noqa: D107
         self._blobs: OrderedDict[str, tuple[bytes, str | None]] = OrderedDict()
+        # Declared (size, sha256_b64) of each client upload URL (upload-URL v2).
+        self._declared: dict[str, tuple[int, str]] = {}
         self._lock = threading.Lock()
         self._max_blobs = max_blobs
         self._base_url = ""
@@ -61,21 +63,54 @@ class DemoBlobStorage:
 
     # -- UploadUrlProvider protocol --
 
-    def generate_upload_url(self, schema: Any) -> UploadUrl:
-        """Generate PUT/GET URL pair for client-side uploads."""
-        from vgi_rpc.external import UploadUrl
+    def generate_upload_url(self, size: int, sha256_hex: str) -> UploadUrl:
+        """Generate a PUT/GET URL pair for one sized client upload (upload-URL protocol v2).
 
+        The PUT is verified like S3 verifies a URL signed over
+        ``Content-Length`` and ``x-amz-checksum-sha256``: see
+        :meth:`check_put`.
+        """
+        from vgi_rpc.external import UploadUrl, sha256_b64_from_hex
+
+        checksum = sha256_b64_from_hex(sha256_hex)
         key = f"{uuid.uuid4().hex}.arrow"
         # Create placeholder — will be filled by the client's PUT.
         with self._lock:
             self._blobs[key] = (b"", None)
+            self._declared[key] = (size, checksum)
             self._evict()
         url = f"{self._base_url}/__blobs__/{key}"
         return UploadUrl(
             upload_url=url,
             download_url=url,
             expires_at=datetime.now(UTC) + timedelta(hours=1),
+            headers={"x-amz-checksum-sha256": checksum},
         )
+
+    def check_put(self, key: str, data: bytes, checksum_header: str | None) -> tuple[str, str] | None:
+        """Return ``(HTTP status, S3 error code)`` when a PUT to *key* must be refused.
+
+        Only keys vended by :meth:`generate_upload_url` are checked: a body
+        whose length is not the declared size is ``IncompleteBody``, an
+        ``x-amz-checksum-sha256`` header absent or different from the declared
+        digest fails the signature, and a body that does not hash to it is
+        ``BadDigest``.
+        """
+        import base64
+        import hashlib
+
+        with self._lock:
+            declared = self._declared.get(key)
+        if declared is None:
+            return None
+        size, checksum = declared
+        if len(data) != size:
+            return "400 Bad Request", "IncompleteBody"
+        if checksum_header != checksum:
+            return "403 Forbidden", "SignatureDoesNotMatch"
+        if base64.b64encode(hashlib.sha256(data).digest()).decode() != checksum:
+            return "400 Bad Request", "BadDigest"
+        return None
 
     # -- Internal accessors for BlobResource --
 
@@ -97,7 +132,8 @@ class DemoBlobStorage:
     def _evict(self) -> None:
         """Evict oldest entries if over capacity.  Caller must hold lock."""
         while len(self._blobs) > self._max_blobs:
-            self._blobs.popitem(last=False)
+            key, _ = self._blobs.popitem(last=False)
+            self._declared.pop(key, None)
 
 
 class BlobResource:
@@ -154,6 +190,13 @@ class BlobResource:
         else:
             data = req.bounded_stream.read()
             content_encoding = req.get_header("Content-Encoding")
+        refusal = self._storage.check_put(blob_id, data, req.get_header("x-amz-checksum-sha256"))
+        if refusal is not None:
+            status, code = refusal
+            resp.status = status
+            resp.content_type = "application/xml"
+            resp.data = f"<Error><Code>{code}</Code></Error>".encode()
+            return
         self._storage.put(blob_id, data, content_encoding)
         resp.status = "201 Created"
 

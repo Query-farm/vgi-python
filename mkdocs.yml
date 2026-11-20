@@ -147,6 +147,7 @@ nav:
     - "Filtered scan planning (normative)": protocol/scan-planning.md
     - "Function visibility (normative)": protocol/function-visibility.md
     - "Write path changes in 3.3 (normative)": protocol/write-path-3-3.md
+    - "Upload URLs v2 in 3.4 (normative)": protocol/upload-urls-v2.md
     - "Filter Encoding v2 (normative, proposed)": protocol/vgi-filter-encoding-v2-spec.md
     - "Runtime-filter artifacts (optional extension)": protocol/vgi-runtime-filter-artifacts.md
     - "Opaque values: sealing (normative)": protocol/vgi-opaque-data-sealing.md

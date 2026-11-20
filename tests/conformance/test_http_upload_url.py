@@ -80,6 +80,7 @@ def test_oversize_input_auto_externalized(small_request_limit_base_url: str) -> 
     with Client.from_http(small_request_limit_base_url, external_location=config) as client:
         caps = client.server_capabilities()
         assert caps.upload_url_support is True
+        assert caps.upload_url_version == 2
         assert caps.max_request_bytes is not None and caps.max_request_bytes > 0
 
         out = list(

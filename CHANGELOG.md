@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased (protocol 3.4)
+
+### Breaking
+
+- **VGI protocol 3.4.0.** Clients and workers match on exact major and minor, so a 3.4 worker refuses a 3.3
+  client and vice versa. The only change is the upload-URL contract below; see
+  [docs/protocol/upload-urls-v2.md](docs/protocol/upload-urls-v2.md).
+- **Upload URLs v2 (`VGI-Upload-URL-Support: 2`).** Built on the unreleased vgi-rpc upload-URL protocol v2 (pinned
+  by git commit until the release wave). `__upload_url__/init` takes one `(size, sha256)` entry per upload instead
+  of `count`, and each vended PUT URL is signed for exactly that body. `Client` hashes an oversized input, PUTs
+  exactly those bytes with the vended `upload_headers` on a bare client (never the RPC client's credentials), and
+  puts `vgi_rpc.location.sha256` on the pointer. Workers refuse a request pointer without that digest. A storage
+  refusal raises `ClientError` with the S3 error code and a redacted URL. `DemoBlobStorage` and the S3 fixture
+  storage implement `generate_upload_url(size, sha256_hex)`, and `vgi-serve --http` with `VGI_BLOB_VENDOR_URL`
+  vends sized vendor grants.
+
 ## 0.52.2 (2026-11-16)
 
 ### Fixes

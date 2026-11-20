@@ -122,9 +122,11 @@ def test_http_input_upload_url_then_external_location_scalar_exchange(compressio
             pytest.skip("zstd input test requires aiohttp zstd decode support (backports.zstd)")
         pytest.importorskip("zstandard")
 
+    import hashlib
+
     from vgi_rpc import ExternalLocationConfig
     from vgi_rpc.http import http_capabilities, http_connect, request_upload_urls
-    from vgi_rpc.metadata import LOCATION_KEY
+    from vgi_rpc.metadata import LOCATION_KEY, LOCATION_SHA256_KEY
     from vgi_rpc.rpc import AnnotatedBatch
 
     from vgi.http.demo_storage import localhost_only_validator
@@ -139,21 +141,26 @@ def test_http_input_upload_url_then_external_location_scalar_exchange(compressio
 
         caps = http_capabilities(base_url=base_url)
         assert caps.upload_url_support
+        assert caps.upload_url_version == 2
         assert caps.max_upload_bytes == threshold_bytes
-
-        urls = request_upload_urls(base_url=base_url, count=1)
-        assert len(urls) == 1
-        upload = urls[0]
 
         input_schema = pa.schema([("x", pa.int64())])
         uploaded_batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=input_schema)
         payload = _batch_to_ipc_bytes(uploaded_batch)
-        headers: dict[str, str] = {}
+        # The pointer digest covers the decoded IPC stream; the upload entry
+        # covers the stored (possibly compressed) bytes S3 verifies.
+        raw_sha256 = hashlib.sha256(payload).hexdigest()
+        extra_headers: dict[str, str] = {}
         if compression == "zstd":
             import zstandard
 
             payload = zstandard.ZstdCompressor(level=3).compress(payload)
-            headers["Content-Encoding"] = "zstd"
+            extra_headers["Content-Encoding"] = "zstd"
+
+        urls = request_upload_urls(base_url=base_url, uploads=[(len(payload), hashlib.sha256(payload).hexdigest())])
+        assert len(urls) == 1
+        upload = urls[0]
+        headers = {**upload.headers, **extra_headers}
 
         put_resp = httpx2.put(upload.upload_url, content=payload, headers=headers, timeout=30.0)
         assert put_resp.status_code in (200, 201)
@@ -183,7 +190,9 @@ def test_http_input_upload_url_then_external_location_scalar_exchange(compressio
             )
             try:
                 pointer_batch = pa.RecordBatch.from_pydict({"x": []}, schema=input_schema)
-                cm = pa.KeyValueMetadata({LOCATION_KEY: upload.download_url.encode()})
+                cm = pa.KeyValueMetadata(
+                    {LOCATION_KEY: upload.download_url.encode(), LOCATION_SHA256_KEY: raw_sha256.encode()}
+                )
                 output = stream.exchange(AnnotatedBatch(batch=pointer_batch, custom_metadata=cm))
             finally:
                 stream.close()

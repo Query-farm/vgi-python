@@ -90,19 +90,22 @@ class _SigV4S3Storage:
         )
         return url
 
-    def generate_upload_url(self, schema: Any) -> UploadUrl:
+    def generate_upload_url(self, size: int, sha256_hex: str) -> UploadUrl:
+        """Presign a PUT bound to exactly *size* bytes hashing to *sha256_hex* (upload-URL v2)."""
         import uuid
 
-        from vgi_rpc.external import UploadUrl
+        from vgi_rpc.external import UploadUrl, sha256_b64_from_hex
 
+        checksum = sha256_b64_from_hex(sha256_hex)
         client = self._get_client()
         key = f"{self.prefix}{uuid.uuid4().hex}.arrow"
         params = {"Bucket": self.bucket, "Key": key}
         expires_at = datetime.now(UTC) + timedelta(seconds=self.presign_expiry_seconds)
 
+        # SigV4 signs content-length and x-amz-checksum-sha256 as headers.
         put_url = client.generate_presigned_url(
             "put_object",
-            Params=params,
+            Params={**params, "ContentLength": size, "ChecksumSHA256": checksum},
             ExpiresIn=self.presign_expiry_seconds,
         )
         get_url = client.generate_presigned_url(
@@ -110,7 +113,12 @@ class _SigV4S3Storage:
             Params=params,
             ExpiresIn=self.presign_expiry_seconds,
         )
-        return UploadUrl(upload_url=put_url, download_url=get_url, expires_at=expires_at)
+        return UploadUrl(
+            upload_url=put_url,
+            download_url=get_url,
+            expires_at=expires_at,
+            headers={"x-amz-checksum-sha256": checksum},
+        )
 
 
 def main() -> None:

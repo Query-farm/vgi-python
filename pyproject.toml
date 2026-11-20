@@ -287,6 +287,11 @@ members = ["packages/vgi-fixtures"]
 [tool.uv.sources]
 # duckdb = { path = "/path/to/duckdb-python/dist/duckdb-*.whl" }  # local engine-build override
 vgi-fixtures = { workspace = true }
+# TODO(release-wave): vgi protocol 3.4 needs vgi-rpc upload-URL protocol v2
+# (VGI-Upload-URL-Support: 2), which is unreleased on vgi-rpc-python's
+# protocol-3.4 branch. Replace this pin with a `vgi-rpc>=<release>` floor
+# when that release ships.
+vgi-rpc = { git = "https://github.com/Query-farm/vgi-rpc-python", rev = "a07ccf2e1bf1c0832ae43757a55e8b4817674b2d" }
 
 [dependency-groups]
 dev = ["lxml>=6.0.2", "pytest-timeout>=2.4.0", "vgi-fixtures"]

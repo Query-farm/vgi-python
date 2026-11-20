@@ -2057,11 +2057,15 @@ class Client(CatalogClientMixin, AggregateClientMixin):
     # Non-DuckDB clients send IPC bytes inline on each exchange() call.
     # Servers can advertise a maximum request size via VGI-Max-Request-Bytes
     # (surfaced as HttpServerCapabilities.max_request_bytes). When an input
-    # batch would exceed it AND the server supports upload URLs, we:
-    #   1. request_upload_urls(count=1) → {upload_url, download_url}
-    #   2. PUT the IPC bytes to upload_url
+    # batch would exceed it AND the server supports upload URLs, we
+    # (vgi-rpc upload-URL protocol v2, VGI-Upload-URL-Support: 2):
+    #   1. hash the IPC bytes; request_upload_urls(uploads=[(size, sha256)])
+    #      → {upload_url, download_url, headers}, signed for exactly that body
+    #   2. PUT exactly those bytes to upload_url with the vended headers, on a
+    #      bare client (a pre-signed URL is its own credential)
     #   3. replace the batch with an empty one + vgi_rpc.location metadata
-    #      pointing at download_url
+    #      pointing at download_url and vgi_rpc.location.sha256 (required on
+    #      request pointers)
     # The worker resolves the pointer batch on its end (mirror of the
     # client's own external-location resolution on outputs).
     # -----------------------------------------------------------------------
@@ -2113,28 +2117,45 @@ class Client(CatalogClientMixin, AggregateClientMixin):
         if len(ipc_bytes) <= threshold:
             return AnnotatedBatch(batch=batch)
 
-        from vgi_rpc.http import request_upload_urls
-        from vgi_rpc.metadata import LOCATION_KEY
+        import hashlib
+
+        from vgi_rpc.http import request_upload_urls, storage_put, upload_put_headers
+        from vgi_rpc.metadata import LOCATION_KEY, LOCATION_SHA256_KEY
 
         httpx_client = self._get_or_create_httpx_client()
         upload_options: dict[str, Any] = {}
         if self._transport == "httpi":
             upload_options["prefix"] = self._http_prefix
-        urls = request_upload_urls(base_url=self._base_url, count=1, client=httpx_client, **upload_options)
-        if not urls:
-            # Server claimed support but vended no URLs — surface the raw
-            # request rather than silently sending too-large bytes.
-            return AnnotatedBatch(batch=batch)
+        sha256_hex = hashlib.sha256(ipc_bytes).hexdigest()
+        # Raises for a server on another upload-URL protocol version (a v1
+        # "true" server is refused, never fallen back to).
+        urls = request_upload_urls(
+            base_url=self._base_url,
+            uploads=[(len(ipc_bytes), sha256_hex)],
+            client=httpx_client,
+            capabilities=caps,
+            **upload_options,
+        )
         upload = urls[0]
 
-        put_resp = httpx_client.put(upload.upload_url, content=ipc_bytes, timeout=30.0)
-        put_resp.raise_for_status()
+        put_resp = storage_put(upload.upload_url, ipc_bytes, headers=upload_put_headers(upload), timeout=30.0)
+        if not 200 <= put_resp.status_code < 300:
+            import re
+
+            from vgi_rpc.external_fetch import redact_url
+
+            # Never echo the signed query: a pre-signed URL is a credential.
+            match = re.search(rb"<Code>([A-Za-z0-9]{1,64})</Code>", put_resp.content[:4096])
+            code = f" {match.group(1).decode()}" if match else ""
+            raise ClientError(
+                f"Upload to storage refused: HTTP {put_resp.status_code}{code}: {redact_url(upload.upload_url)}"
+            )
 
         pointer = pa.RecordBatch.from_pydict(
             {field.name: [] for field in batch.schema},
             schema=batch.schema,
         )
-        cm = pa.KeyValueMetadata({LOCATION_KEY: upload.download_url.encode()})
+        cm = pa.KeyValueMetadata({LOCATION_KEY: upload.download_url.encode(), LOCATION_SHA256_KEY: sha256_hex.encode()})
         _logger.debug(
             "externalized_input_batch size_bytes=%s download_url=%s",
             len(ipc_bytes),

@@ -183,12 +183,29 @@ class TestDemoBlobStorageUnit:
         """generate_upload_url returns matching PUT/GET URLs with .arrow extension."""
         storage = DemoBlobStorage()
         storage.set_base_url("http://127.0.0.1:9999")
-        upload_url = storage.generate_upload_url(pa.schema([]))
+        upload_url = storage.generate_upload_url(5, "ab" * 32)
 
         assert "/__blobs__/" in upload_url.upload_url
+        assert set(upload_url.headers) == {"x-amz-checksum-sha256"}
         assert upload_url.upload_url == upload_url.download_url
         assert upload_url.upload_url.endswith(".arrow")
         assert upload_url.expires_at is not None
+
+    def test_check_put_verifies_declared_body(self) -> None:
+        """A vended key accepts only the declared bytes, like a SigV4 sized PUT."""
+        import hashlib
+
+        storage = DemoBlobStorage()
+        storage.set_base_url("http://127.0.0.1:9999")
+        body = b"hello"
+        upload = storage.generate_upload_url(len(body), hashlib.sha256(body).hexdigest())
+        key = upload.upload_url.rsplit("/", 1)[1]
+        checksum = upload.headers["x-amz-checksum-sha256"]
+        assert storage.check_put(key, body, checksum) is None
+        assert storage.check_put(key, b"hellO", checksum) == ("400 Bad Request", "BadDigest")
+        assert storage.check_put(key, b"hell", checksum) == ("400 Bad Request", "IncompleteBody")
+        assert storage.check_put(key, body, None) == ("403 Forbidden", "SignatureDoesNotMatch")
+        assert storage.check_put("not-vended.arrow", b"anything", None) is None
 
     def test_put_and_get(self) -> None:
         """Direct put/get stores and retrieves blob data with encoding."""
@@ -311,9 +328,11 @@ def test_demo_input_upload_url_then_exchange(compression: str) -> None:
             pytest.skip("zstd test requires aiohttp zstd decode support (backports.zstd)")
         pytest.importorskip("zstandard")
 
+    import hashlib
+
     from vgi_rpc import ExternalLocationConfig
     from vgi_rpc.http import http_capabilities, http_connect, request_upload_urls
-    from vgi_rpc.metadata import LOCATION_KEY
+    from vgi_rpc.metadata import LOCATION_KEY, LOCATION_SHA256_KEY
     from vgi_rpc.rpc import AnnotatedBatch
 
     # Must exceed the per-exchange protocol overhead (the sealed state token
@@ -324,16 +343,19 @@ def test_demo_input_upload_url_then_exchange(compression: str) -> None:
     with _run_demo_http_server(threshold_bytes=threshold_bytes) as base_url:
         caps = http_capabilities(base_url=base_url)
         assert caps.upload_url_support
+        assert caps.upload_url_version == 2
         assert caps.max_upload_bytes == threshold_bytes
-
-        urls = request_upload_urls(base_url=base_url, count=1)
-        assert len(urls) == 1
-        upload = urls[0]
 
         input_schema = pa.schema([("x", pa.int64())])
         uploaded_batch = pa.RecordBatch.from_pydict({"x": [1, 2, 3]}, schema=input_schema)
         payload = _batch_to_ipc_bytes(uploaded_batch)
-        headers: dict[str, str] = {}
+        raw_sha256 = hashlib.sha256(payload).hexdigest()
+        # The demo store decodes a Content-Encoding PUT before storing, so the
+        # declared (stored) bytes are the raw IPC stream for every codec.
+        urls = request_upload_urls(base_url=base_url, uploads=[(len(payload), raw_sha256)])
+        assert len(urls) == 1
+        upload = urls[0]
+        headers: dict[str, str] = dict(upload.headers)
         if compression == "zstd":
             import zstandard
 
@@ -370,7 +392,9 @@ def test_demo_input_upload_url_then_exchange(compression: str) -> None:
             )
             try:
                 pointer_batch = pa.RecordBatch.from_pydict({"x": []}, schema=input_schema)
-                cm = pa.KeyValueMetadata({LOCATION_KEY: upload.download_url.encode()})
+                cm = pa.KeyValueMetadata(
+                    {LOCATION_KEY: upload.download_url.encode(), LOCATION_SHA256_KEY: raw_sha256.encode()}
+                )
                 output = stream.exchange(AnnotatedBatch(batch=pointer_batch, custom_metadata=cm))
             finally:
                 stream.close()
