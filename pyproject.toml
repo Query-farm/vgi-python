@@ -291,7 +291,7 @@ vgi-fixtures = { workspace = true }
 # (VGI-Upload-URL-Support: 2), which is unreleased on vgi-rpc-python's
 # protocol-3.4 branch. Replace this pin with a `vgi-rpc>=<release>` floor
 # when that release ships.
-vgi-rpc = { git = "https://github.com/Query-farm/vgi-rpc-python", rev = "a07ccf2e1bf1c0832ae43757a55e8b4817674b2d" }
+vgi-rpc = { git = "https://github.com/Query-farm/vgi-rpc-python", rev = "f0fb6754ae5b70900ba21629a1e2d48eb2182774" }
 
 [dependency-groups]
 dev = ["lxml>=6.0.2", "pytest-timeout>=2.4.0", "vgi-fixtures"]
