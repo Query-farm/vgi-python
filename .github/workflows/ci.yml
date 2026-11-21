@@ -181,6 +181,46 @@ jobs:
       - name: Run hosted-protocols group (stdio, unix, http)
         run: scripts/hosted_protocols_conformance.sh
 
+  orchard-hosted-conformance:
+    # The SDK-neutral Orchard hosted-mode harness (vgi test/hosted/), which
+    # every SDK runs against its own fixture worker. vgi-python is the
+    # reference, so it must pass here in full. Bump VGI_HOSTED_REF with the
+    # harness.
+    name: Orchard hosted-mode conformance
+    runs-on: ubuntu-latest
+    env:
+      VGI_HOSTED_REF: 2957674e1167abf884fbd0d7e159472afa31291c
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Checkout the harness (vgi)
+        uses: actions/checkout@v7
+        with:
+          repository: Query-farm/vgi
+          ref: ${{ env.VGI_HOSTED_REF }}
+          path: vgi-upstream
+          token: ${{ secrets.GITHUB_TOKEN }}
+          sparse-checkout: test/hosted
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+
+      - name: Set up Python 3.14
+        run: uv python install 3.14
+
+      - name: Install dependencies
+        run: uv sync --all-extras --python 3.14
+
+      - name: Run the hosted-mode harness
+        run: VGI_DIR=vgi-upstream scripts/hosted_conformance.sh --log-dir hosted-conformance-logs
+
+      - name: Upload worker logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: hosted-conformance-logs
+          path: hosted-conformance-logs
+
   bare-install:
     # Every other job syncs --all-extras, which hides a core-dependency gap: a
     # worker that installs vgi-python with no extras must still import the
