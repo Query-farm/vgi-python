@@ -20,15 +20,19 @@ from vgi.auth import TokenIdentity
 from vgi.scalar_function import ScalarFunction
 from vgi.worker import Worker
 
-#: The Pass claims ``pass_claims`` returns, when present.
-PASS_CLAIM_NAMES = ("sub", "kind", "email", "email_verified", "name", "org_id", "org_name", "client_id", "exp")
-
 
 class PassClaimsFunction(ScalarFunction):
-    """Return the caller's verified Pass claims as a JSON object.
+    """Return the caller's identity and verified Pass claims as JSON.
+
+    This is the fixture function of the SDK-neutral hosted-mode conformance
+    harness (the extension repo's ``test/hosted/README.md``), which every
+    SDK's hosted fixture worker implements the same way:
+    ``main.pass_claims(x BIGINT) -> VARCHAR``, one output row per input row,
+    each row the JSON object ``{"principal": <principal>, "domain": <auth
+    domain>, "claims": <the verified claim set>}``.
 
     Claims keep their JSON types: ``email_verified`` is a boolean and ``exp``
-    a number, so the test can tell a real boolean from the string ``"true"``.
+    a number, so the harness can tell a real boolean from the string ``"true"``.
 
     SQL: ``SELECT pass_claims(1)``
     """
@@ -44,10 +48,9 @@ class PassClaimsFunction(ScalarFunction):
         x: Annotated[pa.Int64Array, Param(doc="dummy input")],
         auth: Annotated[AuthContext, Auth()],
     ) -> Annotated[pa.StringArray, Returns()]:
-        """Return selected claims plus the principal and auth domain."""
-        claims = {name: auth.claims[name] for name in PASS_CLAIM_NAMES if name in auth.claims}
+        """Return the verified claims plus the principal and auth domain."""
         payload = json.dumps(
-            {"principal": auth.principal, "domain": auth.domain, "claims": claims},
+            {"principal": auth.principal, "domain": auth.domain, "claims": dict(auth.claims)},
             sort_keys=True,
         )
         return pa.array([payload] * len(x))
