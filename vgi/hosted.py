@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "HOSTED_CHALLENGE",
+    "HOSTED_DEFAULT_MAX_REQUEST_BYTES",
     "HOSTED_ENV",
     "HostedConfig",
     "hosted_authenticate",
@@ -67,6 +68,12 @@ JWKS_REFRESH_MIN_INTERVAL_SECONDS = 60.0
 #: Timeout for each JWKS request.
 JWKS_FETCH_TIMEOUT_SECONDS = 10.0
 
+#: Request-body cap in hosted mode when ``VGI_RPC_MAX_REQUEST_BYTES`` is unset.
+#: It is advertised (``VGI-Max-Request-Bytes``), enforced by the app, and is
+#: also the most the HTTP server buffers before authentication runs. Larger
+#: requests go through upload URLs.
+HOSTED_DEFAULT_MAX_REQUEST_BYTES = 32 * 1024 * 1024
+
 _TRUE = frozenset({"1", "true", "yes", "on"})
 _FALSE = frozenset({"", "0", "false", "no", "off"})
 
@@ -87,8 +94,11 @@ def refuse_in_hosted_mode(reason: str) -> NoReturn:
     sys.exit(1)
 
 
-def hosted_mode_enabled() -> bool:
+def hosted_mode_enabled(env: Mapping[str, str] | None = None) -> bool:
     """Return whether ``VGI_ORCHARD_HOSTED`` turns hosted mode on.
+
+    Args:
+        env: Environment mapping (defaults to ``os.environ``).
 
     Returns:
         True for ``1``/``true``/``yes``/``on`` (any case), False when unset
@@ -100,7 +110,7 @@ def hosted_mode_enabled() -> bool:
             start a worker without authentication.
 
     """
-    raw = os.environ.get(HOSTED_ENV)
+    raw = (os.environ if env is None else env).get(HOSTED_ENV)
     if raw is None:
         return False
     value = raw.strip().lower()
@@ -243,6 +253,25 @@ def check_environment_conflicts() -> None:
     proof_mode = (os.environ.get("VGI_PROXY_PROOF_MODE") or "off").strip().lower()
     if proof_mode != "off":
         refuse_in_hosted_mode("VGI_PROXY_PROOF_MODE must be off; hosted workers authenticate by Pass only.")
+
+
+def hosted_waitress_limits(max_request_bytes: int | None) -> dict[str, int]:
+    """Waitress settings that cap what it buffers before the app runs.
+
+    Waitress reads a whole request body before it calls the WSGI app, so
+    before the Pass is checked. Its own default cap is 1 GiB; in hosted mode
+    it is the worker's request cap instead, so a caller without a Pass can
+    make the worker hold at most one capped body per connection. A larger
+    ``Content-Length`` gets waitress's 413 before any of the body is read.
+
+    Args:
+        max_request_bytes: The effective request cap (hosted mode always has one).
+
+    Returns:
+        Keyword arguments to splat into ``waitress.serve`` / ``create_server``.
+
+    """
+    return {"max_request_body_size": max_request_bytes or HOSTED_DEFAULT_MAX_REQUEST_BYTES}
 
 
 #: The shortest VGI_SIGNING_KEY a hosted worker accepts.

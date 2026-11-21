@@ -112,7 +112,10 @@ is refused. It also refuses to start when any other way in is configured:
 - `VGI_OAUTH_RESOURCE` (a Field Worker never advertises `resource_metadata`);
 - `VGI_PROXY_PROOF_MODE` other than `off`, or Iroh / peer identity;
 - a custom `authenticate` callback passed to `create_app`;
-- `--tcp`, `--unix` or `--iroh-raw-upstream`, which carry no Pass;
+- stdio (no `--http`, for both `vgi-serve` and `Worker.main`), `--tcp`, `--unix`
+  or `--iroh-raw-upstream`, which carry no Pass;
+- `--server granian`, which cannot cap a request body before authentication
+  (see below);
 - a `VGI_ORCHARD_HOSTED` value other than `1`/`0`/`true`/`false`/`yes`/`no`/`on`/`off`.
 
 **Verification:**
@@ -146,7 +149,17 @@ VGI-Supported-Encodings: ...        (and the other VGI capability headers)
 There is no `resource_metadata` in the challenge. If the JWKS cannot be
 fetched, the answer is 503 with `Retry-After` instead: the worker cannot tell
 whether the Pass is valid, so it does not claim that it isn't. Authentication
-runs before the request body is read, size-checked or decompressed. CORS is
+runs before the app reads, size-checks or decompresses the request body.
+
+**Request-body cap.** Waitress receives a whole request body before it calls
+the app, so before the Pass is checked. In hosted mode its buffer limit is the
+worker's request cap: `VGI_RPC_MAX_REQUEST_BYTES`, or 32 MiB when that is
+unset. The cap is advertised as `VGI-Max-Request-Bytes`, and larger requests
+go through upload URLs. A request whose `Content-Length` is over the cap gets
+waitress's 413 before any of the body is read. What remains is bounded: a
+caller without a Pass can make the worker hold at most one capped body per
+open connection (waitress accepts up to 100 connections by default) until
+the 401. granian has no such cap, so hosted mode refuses `--server granian`. CORS is
 open (`Access-Control-Allow-Origin: *`), because the only credential is the
 bearer Pass. The `Authorization` header is never logged, including under
 `--debug`.

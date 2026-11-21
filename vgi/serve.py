@@ -38,7 +38,7 @@ from types import ModuleType
 from typing import TYPE_CHECKING, Any, Literal
 
 from vgi import idle_exit as _idle_exit
-from vgi.hosted import HOSTED_CHALLENGE, hosted_mode_enabled
+from vgi.hosted import HOSTED_CHALLENGE, HOSTED_DEFAULT_MAX_REQUEST_BYTES, hosted_mode_enabled
 from vgi.logging_config import LogFormat, LogLevel
 from vgi.profiling import maybe_start_profile
 
@@ -233,7 +233,9 @@ def resolve_blob_vendor_http_config(env: Mapping[str, str] | None = None) -> Blo
     (``VGI_RPC_EXTERNALIZE_THRESHOLD_BYTES``, default 1 MiB;
     ``VGI_RPC_EXTERNAL_COMPRESSION``) and client upload URLs
     (``VGI_RPC_MAX_UPLOAD_BYTES``). ``VGI_RPC_MAX_REQUEST_BYTES`` is read
-    either way: it is an explicit operator setting.
+    either way: it is an explicit operator setting. In Orchard hosted mode it
+    defaults to ``HOSTED_DEFAULT_MAX_REQUEST_BYTES`` (32 MiB), because the
+    HTTP server buffers that much before authentication runs.
 
     Args:
         env: Environment mapping (defaults to ``os.environ``).
@@ -248,6 +250,8 @@ def resolve_blob_vendor_http_config(env: Mapping[str, str] | None = None) -> Blo
     """
     environ = os.environ if env is None else env
     max_request_bytes = _positive_int_env(environ, "VGI_RPC_MAX_REQUEST_BYTES")
+    if max_request_bytes is None and hosted_mode_enabled(environ):
+        max_request_bytes = HOSTED_DEFAULT_MAX_REQUEST_BYTES
     if not environ.get("VGI_BLOB_VENDOR_URL", "").strip():
         return BlobVendorHttpConfig(max_request_bytes=max_request_bytes)
     from vgi_rpc.vendor import external_config_from_env, max_upload_bytes_from_env
@@ -690,6 +694,10 @@ def main() -> None:
             from vgi.hosted import refuse_in_hosted_mode
 
             refuse_in_hosted_mode("only --http is allowed; --iroh-raw-upstream carries no Pass.")
+        if not http and iroh_raw_upstream is None and hosted_mode_enabled():
+            from vgi.hosted import refuse_in_hosted_mode
+
+            refuse_in_hosted_mode("only --http is allowed; stdio carries no Pass.")
         if (iroh_raw_upstream is not None or iroh_trusted_proxy) and iroh_issuer is None:
             sys.exit("Iroh bridge options require --iroh-issuer")
         trusted_iroh_proxies = tuple(iroh_trusted_proxy or ["127.0.0.1"])
@@ -1623,6 +1631,13 @@ def _serve_http(
             iroh_bridge_issuer=iroh_bridge_issuer,
         )
         _hosted.resolve_hosted_config()
+        if server == "granian":
+            # granian hands the app a fully read body and has no body-size
+            # cap, so a caller without a Pass could make it buffer anything.
+            _hosted.refuse_in_hosted_mode(
+                "--server granian cannot cap request bodies before authentication; "
+                "hosted workers serve with waitress (the default)."
+            )
     port = _resolve_http_port(host, port)
 
     # Republished as environment rather than threaded through as arguments, so
@@ -1692,7 +1707,12 @@ def _serve_http(
 
     _tame_queue_depth_logger()
     serve_kwargs: dict[str, Any] = {"host": host, "port": port, "_quiet": True}
-    serve_kwargs.update(waitress_arrow_tuning(resolve_blob_vendor_http_config().max_request_bytes))
+    max_request_bytes = resolve_blob_vendor_http_config().max_request_bytes
+    serve_kwargs.update(waitress_arrow_tuning(max_request_bytes))
+    if hosted_mode_enabled():
+        from vgi.hosted import hosted_waitress_limits
+
+        serve_kwargs.update(hosted_waitress_limits(max_request_bytes))
     if http_threads is not None:
         serve_kwargs["threads"] = http_threads
     serve_kwargs.pop("_quiet")

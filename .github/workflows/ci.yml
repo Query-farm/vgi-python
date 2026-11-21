@@ -189,7 +189,7 @@ jobs:
     name: Orchard hosted-mode conformance
     runs-on: ubuntu-latest
     env:
-      VGI_HOSTED_REF: 2957674e1167abf884fbd0d7e159472afa31291c
+      VGI_HOSTED_REF: fce57984a7e8ea35f9dcd4a034b5ed37c85ca5c5
     steps:
       - uses: actions/checkout@v7
 

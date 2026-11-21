@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -370,6 +371,21 @@ class TestHostedWorker:
                 assert token.split(".")[2] not in text
         assert "Bearer " not in text
 
+    def test_body_cap_advertised(self, worker: _Worker) -> None:
+        """With VGI_RPC_MAX_REQUEST_BYTES unset, hosted mode advertises its 32 MiB default."""
+        from vgi.hosted import HOSTED_DEFAULT_MAX_REQUEST_BYTES
+
+        status, headers, _ = _request(worker, "HEAD", "/health")
+        assert status == 200
+        assert headers.get("vgi-max-request-bytes") == str(HOSTED_DEFAULT_MAX_REQUEST_BYTES)
+
+    @pytest.mark.parametrize("excess", [1, 64 * 1024**3])
+    def test_body_over_cap_refused_unread(self, worker: _Worker, excess: int) -> None:
+        """A body declared over the cap gets 413 at once, before any of it is read or buffered."""
+        from vgi.hosted import HOSTED_DEFAULT_MAX_REQUEST_BYTES
+
+        assert _declared_body_status(worker.url, HOSTED_DEFAULT_MAX_REQUEST_BYTES + excess) == 413
+
     @staticmethod
     def _assert_401(status: int, headers: dict[str, str]) -> None:
         assert status == 401
@@ -377,6 +393,29 @@ class TestHostedWorker:
         assert "resource_metadata" not in headers.get("www-authenticate", "")
         assert "vgi-supported-encodings" in headers
         assert "vgi-accept-max-response-bytes-support" in headers or "vgi-externalization-enabled" in headers
+
+
+def _declared_body_status(url: str, length: int) -> int:
+    """Declare a body of *length* bytes, send none of it, and return the status.
+
+    Nothing follows the headers, so a server that waits for the body before
+    answering times out here (and the test fails) instead of answering.
+    """
+    port = int(url.rsplit(":", 1)[1])
+    head = (
+        f"POST /vgi.v3/catalog_attach HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        f"Content-Type: application/vnd.apache.arrow.stream\r\nContent-Length: {length}\r\n"
+        "Connection: close\r\n\r\n"
+    )
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as sock:
+        sock.sendall(head.encode())
+        data = b""
+        while b"\r\n" not in data:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+    return int(data.split(b" ", 2)[1])
 
 
 # ---------------------------------------------------------------------------
@@ -467,9 +506,13 @@ class TestStartupRefusals:
         """A typo in VGI_ORCHARD_HOSTED refuses instead of meaning 'off'."""
         assert "VGI_ORCHARD_HOSTED" in _refused(_env(_JWKS, VGI_ORCHARD_HOSTED="yes please"))
 
-    @pytest.mark.parametrize("flag", [["--tcp", "127.0.0.1:0"], ["--unix", "/tmp/vgi-orchard-hosted-refuse.sock"]])
+    @pytest.mark.parametrize(
+        "flag",
+        [[], ["--tcp", "127.0.0.1:0"], ["--unix", "/tmp/vgi-orchard-hosted-refuse.sock"]],
+        ids=["stdio", "tcp", "unix"],
+    )
     def test_unauthenticated_transports(self, flag: list[str]) -> None:
-        """Worker.main refuses --tcp and --unix: they carry no Pass."""
+        """Worker.main refuses stdio (the default), --tcp and --unix: they carry no Pass."""
         proc = subprocess.run(
             [sys.executable, "-m", FIXTURE, *flag],
             cwd=_REPO,
@@ -480,6 +523,19 @@ class TestStartupRefusals:
         )
         assert proc.returncode != 0
         assert "only --http" in proc.stderr
+
+    def test_vgi_serve_stdio(self) -> None:
+        """vgi-serve without --http (stdio) refuses in hosted mode."""
+        argv = [sys.executable, "-m", "vgi.serve", f"{FIXTURE}:OrchardHostedWorker"]
+        proc = subprocess.run(
+            argv, cwd=_REPO, env=_env(_JWKS), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60
+        )
+        assert proc.returncode != 0
+        assert "only --http" in proc.stderr
+
+    def test_granian_refused(self) -> None:
+        """--server granian refuses: it cannot cap a body before authentication runs."""
+        assert "granian" in _refused(_env(_JWKS), "--server", "granian")
 
     def test_iroh_raw_upstream(self) -> None:
         """vgi-serve refuses --iroh-raw-upstream in hosted mode."""
@@ -522,6 +578,10 @@ class TestStartupRefusals:
             with pytest.raises(urllib.error.HTTPError) as info:
                 urllib.request.urlopen(urllib.request.Request(url + "/health"), timeout=30)
             assert info.value.code == 401
+            # Worker.main's waitress is capped too.
+            from vgi.hosted import HOSTED_DEFAULT_MAX_REQUEST_BYTES
+
+            assert _declared_body_status(url, HOSTED_DEFAULT_MAX_REQUEST_BYTES + 1) == 413
         finally:
             proc.terminate()
             proc.wait(timeout=15)
@@ -570,6 +630,19 @@ class TestResolveAuthenticate:
         monkeypatch.setenv("VGI_JWT_ALGORITHMS", "HS256")
         with pytest.raises(SystemExit):
             _resolve_jwt_authenticate()
+
+    def test_request_cap_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Hosted mode always has a request cap; an explicit one wins; outside it, none by default."""
+        from vgi.hosted import HOSTED_DEFAULT_MAX_REQUEST_BYTES, hosted_waitress_limits
+        from vgi.serve import resolve_blob_vendor_http_config
+
+        assert resolve_blob_vendor_http_config({}).max_request_bytes is None
+        hosted = {"VGI_ORCHARD_HOSTED": "1"}
+        assert resolve_blob_vendor_http_config(hosted).max_request_bytes == HOSTED_DEFAULT_MAX_REQUEST_BYTES
+        explicit = {**hosted, "VGI_RPC_MAX_REQUEST_BYTES": "65536"}
+        assert resolve_blob_vendor_http_config(explicit).max_request_bytes == 65536
+        assert hosted_waitress_limits(65536) == {"max_request_body_size": 65536}
+        assert hosted_waitress_limits(None) == {"max_request_body_size": HOSTED_DEFAULT_MAX_REQUEST_BYTES}
 
     @pytest.mark.parametrize("value", ["0", "false", "", "off"])
     def test_off_values(self, monkeypatch: pytest.MonkeyPatch, value: str) -> None:

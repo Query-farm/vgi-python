@@ -10,8 +10,8 @@
 # --streaming-body, --only 'jwks.*'). Runs from the project env
 # (`uv sync --all-extras`), which has the client, joserfc and cryptography.
 #
-# No stdio --refuse-cmd: Worker.main refuses --unix and --tcp in hosted mode
-# but still serves stdio (see the harness README).
+# Must-refuse commands: stdio (Worker.main and vgi-serve without --http),
+# --unix, --tcp, --iroh-raw-upstream, and --server granian (no body cap).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -30,6 +30,9 @@ FIXTURE="$(printf '%q' "$PY") -m vgi._test_fixtures.orchard_hosted"
 exec "$PY" "$HARNESS" \
   --worker-cwd "$PWD" \
   --worker-cmd "$WORKER --http --host 127.0.0.1 --port 0 --debug" \
+  --refuse-cmd "$FIXTURE" \
+  --refuse-cmd "$WORKER" \
+  --refuse-cmd "$WORKER --http --server granian --host 127.0.0.1 --port 0" \
   --refuse-cmd "$FIXTURE --unix /tmp/vgi-hosted-refuse-{port}.sock" \
   --refuse-cmd "$FIXTURE --tcp 127.0.0.1:{port}" \
   --refuse-cmd "$WORKER --iroh-raw-upstream 0" \

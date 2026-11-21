@@ -1897,12 +1897,12 @@ class Worker:
             if sum(x for x in (http, unix is not None, tcp is not None)) > 1:
                 raise typer.BadParameter("--http, --unix, and --tcp are mutually exclusive")
 
-            if (unix is not None or tcp is not None) and _hosted_mode_enabled():
-                # TCP and AF_UNIX carry no authentication: a hosted worker
-                # serves Passes over HTTP only.
+            if not http and _hosted_mode_enabled():
+                # stdio, TCP and AF_UNIX carry no authentication: a hosted
+                # worker serves Passes over HTTP only.
                 from vgi.hosted import refuse_in_hosted_mode
 
-                refuse_in_hosted_mode("only --http is allowed; --unix and --tcp carry no authentication.")
+                refuse_in_hosted_mode("only --http is allowed; stdio, --unix and --tcp carry no authentication.")
 
             if http:
                 from vgi.serve import (
@@ -2155,6 +2155,11 @@ class Worker:
         }
         if http_threads is not None:
             serve_kwargs["threads"] = http_threads
+        if _hosted_mode_enabled():
+            from vgi.hosted import hosted_waitress_limits
+            from vgi.serve import resolve_blob_vendor_http_config
+
+            serve_kwargs.update(hosted_waitress_limits(resolve_blob_vendor_http_config().max_request_bytes))
         # Same reasoning as vgi_rpc.http.server.serve_http: waitress warns per
         # request whenever its queue is non-empty, which for VGI-length
         # requests is the steady state rather than an exception, and costs
