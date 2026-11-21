@@ -4054,9 +4054,11 @@ class Worker:
 
         func_cls = self._resolve_aggregate(request)
 
-        # Called once when all states have been destroyed (C++ tracks with
-        # destroy_counter == group_id_counter). Clear all FunctionStorage
-        # state. execution_clear() sweeps every namespace (every FrameworkNS
+        # The extension sends exactly one aggregate_destructor per execution,
+        # when the last copy of the bind data is destroyed: after every
+        # partition and every state is gone. A prepared statement keeps its
+        # bind data, and so this execution's storage, until it is deallocated.
+        # Clear all FunctionStorage state. execution_clear() sweeps every namespace (every FrameworkNS
         # member plus any user-chosen namespaces under b"buf"/etc.) for this
         # execution_id in one call — subsumes the per-family clears we used to
         # need.
