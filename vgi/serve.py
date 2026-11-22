@@ -212,7 +212,11 @@ class BlobVendorHttpConfig:
         upload_url_provider: The vendor, vending pre-signed upload URLs so
             clients can send requests over ``max_request_bytes``; ``None``
             without the vendor.
-        max_upload_bytes: ``VGI_RPC_MAX_UPLOAD_BYTES`` (advertised only).
+        max_upload_bytes: ``VGI_RPC_MAX_UPLOAD_BYTES``, or ``None``.
+            ``make_wsgi_app`` advertises ``None`` as the inbound fetch cap
+            (``VGI_RPC_MAX_FETCH_BYTES``, default 256 MiB, raised to this
+            value when it is larger), so the advertised upload size never
+            exceeds what the worker will fetch back.
         max_request_bytes: ``VGI_RPC_MAX_REQUEST_BYTES`` -- advertised and
             enforced. Clients (the DuckDB extension) only take the upload-URL
             path for a request larger than this, so set it with the vendor.
@@ -232,7 +236,8 @@ def resolve_blob_vendor_http_config(env: Mapping[str, str] | None = None) -> Blo
     ``VGI_CF_DO_TOKEN``) turns on result externalization
     (``VGI_RPC_EXTERNALIZE_THRESHOLD_BYTES``, default 1 MiB;
     ``VGI_RPC_EXTERNAL_COMPRESSION``) and client upload URLs
-    (``VGI_RPC_MAX_UPLOAD_BYTES``). ``VGI_RPC_MAX_REQUEST_BYTES`` is read
+    (``VGI_RPC_MAX_UPLOAD_BYTES``; the inbound fetch cap follows it, or
+    ``VGI_RPC_MAX_FETCH_BYTES`` sets it). ``VGI_RPC_MAX_REQUEST_BYTES`` is read
     either way: it is an explicit operator setting. In Orchard hosted mode it
     defaults to ``HOSTED_DEFAULT_MAX_REQUEST_BYTES`` (32 MiB), because the
     HTTP server buffers that much before authentication runs.
@@ -244,8 +249,9 @@ def resolve_blob_vendor_http_config(env: Mapping[str, str] | None = None) -> Blo
         The settings; all ``None`` when nothing is configured.
 
     Raises:
-        ValueError: A variable is set but malformed, or the vendor URL is set
-            without a token.
+        ValueError: A variable is set but malformed, the vendor URL is set
+            without a token, or ``VGI_RPC_MAX_UPLOAD_BYTES`` exceeds an
+            explicit ``VGI_RPC_MAX_FETCH_BYTES``.
 
     """
     environ = os.environ if env is None else env

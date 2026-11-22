@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Iterator
+from typing import Protocol
 from urllib.parse import urlsplit
 
 import pyarrow as pa
@@ -30,6 +31,15 @@ def vendor() -> Iterator[FakeVendorServer]:
     """A fake blob vendor on a background thread."""
     with serve_fake_vendor() as server:
         yield server
+
+
+class _Echo(Protocol):
+    def echo(self, value: int) -> int: ...
+
+
+class _EchoImpl:
+    def echo(self, value: int) -> int:
+        return value
 
 
 def test_nothing_configured() -> None:
@@ -73,7 +83,42 @@ def test_vendor_configured(vendor: FakeVendorServer) -> None:
     assert cfg.external_location.storage is cfg.upload_url_provider
     assert cfg.external_location.externalize_threshold_bytes == 2048
     assert cfg.max_upload_bytes == 1073741824
+    # The inbound fetch cap follows the advertised upload size (a 300 MB
+    # upload used to be refused after upload by the 256 MiB default).
+    assert cfg.external_location.fetch_config.max_fetch_bytes == 1073741824
     assert cfg.max_request_bytes == 65536
+
+
+def test_vendor_upload_cap_defaults_to_fetch_cap(vendor: FakeVendorServer) -> None:
+    """Unset VGI_RPC_MAX_UPLOAD_BYTES: vgi-rpc advertises the fetch cap, so a client is never surprised after upload."""
+    import falcon.testing
+    from vgi_rpc.http import make_wsgi_app
+    from vgi_rpc.rpc import RpcServer
+
+    cfg = resolve_blob_vendor_http_config(
+        {"VGI_BLOB_VENDOR_URL": vendor.url, "VGI_CF_DO_TOKEN": "test-token", "VGI_RPC_MAX_FETCH_BYTES": "536870912"}
+    )
+    assert cfg.max_upload_bytes is None
+    assert cfg.external_location is not None
+    assert cfg.external_location.fetch_config.max_fetch_bytes == 536870912
+    server = RpcServer(_Echo, _EchoImpl(), external_location=cfg.external_location)
+    app = make_wsgi_app(
+        server, token_key=b"k" * 32, upload_url_provider=cfg.upload_url_provider, max_upload_bytes=cfg.max_upload_bytes
+    )
+    assert falcon.testing.TestClient(app).simulate_get("/health").headers["VGI-Max-Upload-Bytes"] == "536870912"
+
+
+def test_vendor_contradictory_caps_stop_startup(vendor: FakeVendorServer) -> None:
+    """VGI_RPC_MAX_UPLOAD_BYTES above an explicit VGI_RPC_MAX_FETCH_BYTES is a startup error."""
+    with pytest.raises(ValueError, match="exceeds VGI_RPC_MAX_FETCH_BYTES"):
+        resolve_blob_vendor_http_config(
+            {
+                "VGI_BLOB_VENDOR_URL": vendor.url,
+                "VGI_CF_DO_TOKEN": "test-token",
+                "VGI_RPC_MAX_UPLOAD_BYTES": "1073741824",
+                "VGI_RPC_MAX_FETCH_BYTES": "268435456",
+            }
+        )
 
 
 def test_vendor_without_token(vendor: FakeVendorServer) -> None:

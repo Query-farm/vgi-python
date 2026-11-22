@@ -329,7 +329,8 @@ vgi-client --input data.parquet --function sum_all_columns --worker vgi-fixture-
 | `VGI_STORAGE_EXTERNALIZE` | `1` wraps any storage backend (e.g. SQLite) in `ExternalizingStorage`; needs `VGI_BLOB_VENDOR_URL`. cloudflare-do is always wrapped |
 | `VGI_STORAGE_EXTERNALIZE_BYTES` | Storage values at or over this size go to the blob vendor (default 524288; max 1048576 on cloudflare-do). Alias: `VGI_CF_DO_EXTERNALIZE_BYTES` |
 | `VGI_RPC_MAX_REQUEST_BYTES` | `vgi-serve --http` (and `vgi-fixture-http` with the vendor): advertised and enforced request cap; clients upload larger requests via the vendor's upload URLs |
-| `VGI_RPC_EXTERNALIZE_THRESHOLD_BYTES` / `VGI_RPC_EXTERNAL_COMPRESSION` / `VGI_RPC_MAX_UPLOAD_BYTES` | With the vendor: result externalization threshold (default 1 MiB), its compression, and the advertised upload size |
+| `VGI_RPC_EXTERNALIZE_THRESHOLD_BYTES` / `VGI_RPC_EXTERNAL_COMPRESSION` / `VGI_RPC_MAX_UPLOAD_BYTES` | With the vendor: result externalization threshold (default 1 MiB), its compression, and the advertised upload size (unset: the inbound fetch cap) |
+| `VGI_RPC_MAX_FETCH_BYTES` | With the vendor: largest request fetched from an inbound upload pointer. Default 256 MiB, raised to `VGI_RPC_MAX_UPLOAD_BYTES` when that is larger; an upload cap above an explicit fetch cap fails startup. vgi-rpc never advertises an upload size above it |
 
 ### Worker Debug Mode
 

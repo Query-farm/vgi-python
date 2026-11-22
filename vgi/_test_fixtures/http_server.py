@@ -22,6 +22,8 @@ import time
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+from vgi_rpc.external_fetch import DEFAULT_MAX_FETCH_BYTES, FetchConfig
+
 from vgi._test_fixtures.accumulate.worker import AccumulateWorker
 from vgi._test_fixtures.projection_repro.worker import ProjReproWorker
 from vgi._test_fixtures.schema_reconcile.worker import SchemaReconcileWorker
@@ -121,6 +123,24 @@ class _SigV4S3Storage:
         )
 
 
+def _upload_fetch_config(max_upload_bytes: int) -> FetchConfig:
+    """Inbound fetch config able to fetch back the uploads this server advertises.
+
+    ``make_wsgi_app`` refuses a ``max_upload_bytes`` above the server's fetch
+    cap (an upload it would then refuse to fetch), so ``--max-upload-bytes``
+    raises the cap from its 256 MiB default, as ``VGI_RPC_MAX_UPLOAD_BYTES``
+    does for the blob vendor.
+
+    Args:
+        max_upload_bytes: The advertised upload cap.
+
+    Returns:
+        A fetch config whose ``max_fetch_bytes`` is at least *max_upload_bytes*.
+
+    """
+    return FetchConfig(max_fetch_bytes=max(DEFAULT_MAX_FETCH_BYTES, max_upload_bytes))
+
+
 def main() -> None:
     """Run the fixture worker as an HTTP server.
 
@@ -176,7 +196,10 @@ def main() -> None:
         max_upload_bytes: int = typer.Option(
             4 * 1024 * 1024,
             "--max-upload-bytes",
-            help="Advertise max direct HTTP upload bytes for server-vended upload URLs",
+            help=(
+                "Advertise max direct HTTP upload bytes for server-vended upload URLs; with "
+                "--s3-bucket/--demo-storage the inbound fetch cap is raised to match"
+            ),
         ),
         externalize_compression: str = typer.Option(
             "none",
@@ -289,6 +312,7 @@ def main() -> None:
                 storage=storage,
                 externalize_threshold_bytes=externalize_threshold_bytes,
                 compression=compression,
+                fetch_config=_upload_fetch_config(max_upload_bytes),
                 **_s3_kwargs,
             )
             upload_url_provider = storage
@@ -307,6 +331,7 @@ def main() -> None:
                 storage=demo_blob_storage,
                 externalize_threshold_bytes=externalize_threshold_bytes,
                 compression=compression,
+                fetch_config=_upload_fetch_config(max_upload_bytes),
                 url_validator=localhost_only_validator,
             )
             upload_url_provider = demo_blob_storage
