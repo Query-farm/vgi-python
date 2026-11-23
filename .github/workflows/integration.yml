@@ -30,7 +30,7 @@ env:
   # TODO(release-wave): vgi's protocol-3.4 branch (protocol 3.4.0, upload URLs v2,
   # one aggregate_destructor per execution, argument references); back to a
   # v2.0 commit and VGI_NATIVE_RUNNER_BRANCH v2.0 once 3.4 lands there.
-  VGI_REF: 4e7e4b249a321f34994b03e2cf245ca1cb3f0c41
+  VGI_REF: e99683f2af215c5a166697945e796c91d0cc66fe
   VGI_NATIVE_RUNNER_BRANCH: protocol-3.4
   # CI is not a user: its ATTACHes should not land in Query.Farm's adoption data.
   # The vgi extension fires a telemetry event per successful ATTACH, and this
