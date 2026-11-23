@@ -120,7 +120,65 @@ class _SigV4S3Storage:
             download_url=get_url,
             expires_at=expires_at,
             headers={"x-amz-checksum-sha256": checksum},
+            # Protocol 3.4: the server seals the key into the grant's argument
+            # reference and fetches it back with get().
+            object_id=key,
         )
+
+    def put_object(self, data: bytes) -> str:
+        """Store *data* under a fresh key, size- and SHA-256-checked by S3 (``ObjectStore``)."""
+        import base64
+        import hashlib
+        import uuid
+
+        key = f"{self.prefix}{uuid.uuid4().hex}.bin"
+        self._get_client().put_object(
+            Bucket=self.bucket,
+            Key=key,
+            Body=data,
+            ContentLength=len(data),
+            ChecksumSHA256=base64.b64encode(hashlib.sha256(data).digest()).decode("ascii"),
+            ContentType="application/octet-stream",
+        )
+        return key
+
+    def get(self, object_id: str, *, max_bytes: int | None = None) -> bytes:
+        """Fetch the object at key *object_id* (``ObjectStore``).
+
+        Args:
+            object_id: The object key.
+            max_bytes: Largest object accepted; ``None`` means 256 MiB.
+
+        Returns:
+            The object bytes.
+
+        Raises:
+            ObjectMissingError: S3 reports ``NoSuchKey`` / 404.
+            ValueError: The object is larger than *max_bytes* (default 256 MiB).
+
+        """
+        from vgi_rpc.external import ObjectMissingError
+
+        limit = max_bytes if max_bytes is not None else DEFAULT_MAX_FETCH_BYTES
+        try:
+            resp = self._get_client().get_object(Bucket=self.bucket, Key=object_id)
+        except Exception as exc:
+            error = getattr(exc, "response", None)
+            code = error.get("Error", {}).get("Code") if isinstance(error, dict) else None
+            if code in ("NoSuchKey", "404", "NotFound"):
+                raise ObjectMissingError("S3 object is gone") from None
+            raise
+        body = resp["Body"]
+        try:
+            length = resp.get("ContentLength")
+            if isinstance(length, int) and length > limit:
+                raise ValueError(f"S3 object is {length} bytes, over max_fetch_bytes ({limit})")
+            data: bytes = body.read(limit + 1)
+        finally:
+            body.close()
+        if len(data) > limit:
+            raise ValueError(f"S3 object exceeds max_fetch_bytes ({limit})")
+        return data
 
 
 def _upload_fetch_config(max_upload_bytes: int) -> FetchConfig:
@@ -360,7 +418,7 @@ def main() -> None:
             )
             sys.stderr.flush()
 
-        from vgi.serve import _resolve_authenticate, _resolve_oauth_resource_metadata
+        from vgi.serve import TOKEN_TTL_SECONDS, _resolve_authenticate, _resolve_oauth_resource_metadata
 
         authenticate = _resolve_authenticate()
         oauth_metadata = _resolve_oauth_resource_metadata()
@@ -489,6 +547,16 @@ def main() -> None:
             authenticate=authenticate,
             oauth_resource_metadata=oauth_metadata,
             enable_landing_page=False,
+            token_ttl=TOKEN_TTL_SECONDS,
+            cursor_rule="error",
+        )
+        # VGI-Arguments-Ref-Bytes (protocol 3.4); VGI_TEST_DISABLE_ARGUMENTS_REF=1
+        # turns it off so the server behaves like a worker without argument
+        # references (the extension's arguments_ref_fallback.test).
+        from vgi.arguments_ref import install_arguments_ref_header
+
+        install_arguments_ref_header(
+            wsgi_app, upload_url_provider=upload_url_provider, external_location=external_location
         )
 
         if demo_storage:

@@ -2,9 +2,9 @@
 
 """In-process blob storage for demonstrating and testing external batch offloading.
 
-Provides a simple HTTP blob store that implements the ``ExternalStorage`` and
-``UploadUrlProvider`` protocols from vgi_rpc, served from the same HTTP server
-process.  This allows the example worker to demonstrate external record batch
+Provides a simple HTTP blob store that implements the ``ExternalStorage``,
+``UploadUrlProvider`` and ``ObjectStore`` protocols from vgi_rpc, served from
+the same HTTP server process.  This allows the example worker to demonstrate external record batch
 offloading without requiring S3 or any cloud infrastructure.
 
 **Not for production use** — blobs are held in memory with LRU eviction.
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 
 class DemoBlobStorage:
-    """In-memory blob store implementing ``ExternalStorage`` and ``UploadUrlProvider``.
+    """In-memory blob store implementing ``ExternalStorage``, ``UploadUrlProvider`` and ``ObjectStore``.
 
     Blobs are stored in an ``OrderedDict`` with LRU eviction when ``max_blobs``
     is exceeded.  Thread-safe for use with multi-threaded WSGI servers like
@@ -85,7 +85,48 @@ class DemoBlobStorage:
             download_url=url,
             expires_at=datetime.now(UTC) + timedelta(hours=1),
             headers={"x-amz-checksum-sha256": checksum},
+            object_id=key,
         )
+
+    # -- ObjectStore protocol (protocol 3.4: StateRef objects, argument references) --
+
+    def put_object(self, data: bytes) -> str:
+        """Store *data* as one object and return its id (the blob key)."""
+        key = f"{uuid.uuid4().hex}.bin"
+        with self._lock:
+            self._blobs[key] = (bytes(data), None)
+            self._evict()
+        return key
+
+    def get(self, object_id: str, *, max_bytes: int | None = None) -> bytes:
+        """Return the object *object_id* names.
+
+        Args:
+            object_id: An id from :meth:`put_object` or :meth:`generate_upload_url`.
+            max_bytes: Refuse objects larger than this; ``None`` means no limit.
+
+        Returns:
+            The object bytes.
+
+        Raises:
+            ObjectMissingError: The id is unknown, evicted, or a vended upload
+                that was never PUT.
+            ValueError: The object is larger than *max_bytes*.
+
+        """
+        from vgi_rpc.external import ObjectMissingError
+
+        with self._lock:
+            entry = self._blobs.get(object_id)
+            declared = self._declared.get(object_id)
+        if entry is None or (declared is not None and len(entry[0]) != declared[0]):
+            raise ObjectMissingError("demo blob is gone")
+        data, content_encoding = entry
+        if content_encoding is not None:
+            raise ValueError(f"demo blob {object_id!r} is stored {content_encoding}-encoded, not as an object")
+        if max_bytes is not None and len(data) > max_bytes:
+            raise ValueError(f"demo blob is {len(data)} bytes, over max_fetch_bytes ({max_bytes})")
+        return data
 
     def check_put(self, key: str, data: bytes, checksum_header: str | None) -> tuple[str, str] | None:
         """Return ``(HTTP status, S3 error code)`` when a PUT to *key* must be refused.
@@ -114,7 +155,7 @@ class DemoBlobStorage:
 
     # -- Internal accessors for BlobResource --
 
-    def get(self, key: str) -> tuple[bytes, str | None] | None:
+    def get_entry(self, key: str) -> tuple[bytes, str | None] | None:
         """Return ``(data, content_encoding)`` or ``None``."""
         with self._lock:
             entry = self._blobs.get(key)
@@ -145,7 +186,7 @@ class BlobResource:
     def on_get(self, req: Any, resp: Any, blob_id: str) -> None:  # noqa: D102
         import falcon
 
-        entry = self._storage.get(blob_id)
+        entry = self._storage.get_entry(blob_id)
         if entry is None:
             raise falcon.HTTPNotFound(description=f"Blob {blob_id!r} not found")
         data, content_encoding = entry
@@ -165,7 +206,7 @@ class BlobResource:
         # decompression.
         import falcon
 
-        entry = self._storage.get(blob_id)
+        entry = self._storage.get_entry(blob_id)
         if entry is None:
             raise falcon.HTTPNotFound(description=f"Blob {blob_id!r} not found")
         data, content_encoding = entry

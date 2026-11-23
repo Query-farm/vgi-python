@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import sys
@@ -126,7 +127,7 @@ class TestDemoBlobStorageUnit:
         assert url.endswith(".arrow")
 
         key = url.rsplit("/", 1)[1]
-        entry = storage.get(key)
+        entry = storage.get_entry(key)
         assert entry is not None
         data, encoding = entry
         assert data == b"hello"
@@ -140,7 +141,7 @@ class TestDemoBlobStorageUnit:
         assert url.endswith(".arrow.zst")
 
         key = url.rsplit("/", 1)[1]
-        entry = storage.get(key)
+        entry = storage.get_entry(key)
         assert entry is not None
         data, encoding = entry
         assert data == b"compressed"
@@ -154,7 +155,7 @@ class TestDemoBlobStorageUnit:
         assert url.endswith(".arrow.gz")
 
         key = url.rsplit("/", 1)[1]
-        entry = storage.get(key)
+        entry = storage.get_entry(key)
         assert entry is not None
         data, encoding = entry
         assert data == b"compressed"
@@ -172,12 +173,12 @@ class TestDemoBlobStorageUnit:
         # First two should have been evicted.
         for url in urls[:2]:
             key = url.rsplit("/", 1)[1]
-            assert storage.get(key) is None
+            assert storage.get_entry(key) is None
 
         # Last three should still be present.
         for url in urls[2:]:
             key = url.rsplit("/", 1)[1]
-            assert storage.get(key) is not None
+            assert storage.get_entry(key) is not None
 
     def test_generate_upload_url(self) -> None:
         """generate_upload_url returns matching PUT/GET URLs with .arrow extension."""
@@ -211,9 +212,28 @@ class TestDemoBlobStorageUnit:
         """Direct put/get stores and retrieves blob data with encoding."""
         storage = DemoBlobStorage()
         storage.put("test-key.arrow", b"payload", "zstd")
-        entry = storage.get("test-key.arrow")
+        entry = storage.get_entry("test-key.arrow")
         assert entry is not None
         assert entry == (b"payload", "zstd")
+
+    def test_object_store(self) -> None:
+        """The ObjectStore half (protocol 3.4): put_object/get by id, missing ids, vended uploads."""
+        from vgi_rpc.external import ObjectMissingError, ObjectStore
+
+        storage = DemoBlobStorage()
+        assert isinstance(storage, ObjectStore)
+        object_id = storage.put_object(b"state")
+        assert storage.get(object_id) == b"state"
+        with pytest.raises(ValueError, match="max_fetch_bytes"):
+            storage.get(object_id, max_bytes=2)
+        with pytest.raises(ObjectMissingError):
+            storage.get("nope.bin")
+        grant = storage.generate_upload_url(3, hashlib.sha256(b"abc").hexdigest())
+        assert grant.object_id
+        with pytest.raises(ObjectMissingError):
+            storage.get(grant.object_id)  # vended but never PUT
+        storage.put(grant.object_id, b"abc")
+        assert storage.get(grant.object_id) == b"abc"
 
     def test_localhost_only_validator_accepts_localhost(self) -> None:
         """localhost_only_validator accepts 127.0.0.1 and localhost URLs."""
