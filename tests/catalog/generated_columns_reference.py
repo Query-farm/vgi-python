@@ -54,7 +54,7 @@ def _args(params: Any) -> dict[str, Any]:
     return dict(
         attach_opaque_data=params.attach_opaque_data,
         transaction_opaque_data=params.transaction_opaque_data,
-        **json.loads(present(call.arguments.positional[0]).as_py()),
+        **json.loads(present(call.require_arguments().positional[0]).as_py()),
     )
 
 

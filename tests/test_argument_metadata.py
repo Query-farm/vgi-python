@@ -86,10 +86,10 @@ def test_bind_and_init_preserve_argument_metadata() -> None:
     original = _arguments()
     bind = BindRequest(function_name="f", arguments=Arguments.from_batch(original), function_type=FunctionType.TABLE)
     restored = BindRequest.deserialize_from_bytes(bind.serialize_to_bytes())
-    assert restored.arguments.to_batch().equals(original, check_metadata=True)
+    assert restored.require_arguments().to_batch().equals(original, check_metadata=True)
     init = InitRequest(bind_call=restored, output_schema=pa.schema([]))
     restored_init = InitRequest.deserialize_from_bytes(init.serialize_to_bytes())
-    assert restored_init.bind_call.arguments.to_batch().equals(original, check_metadata=True)
+    assert restored_init.bind_call.require_arguments().to_batch().equals(original, check_metadata=True)
 
 
 @pytest.mark.parametrize(
@@ -145,7 +145,7 @@ class _MetadataWorker(Worker):
     """Return the decoded argument schema through the real bind RPC."""
 
     def bind(self, request: BindRequest, ctx: CallContext) -> BindResponse:
-        return BindResponse(output_schema=request.arguments.schema())
+        return BindResponse(output_schema=request.require_arguments().schema())
 
 
 def test_public_http_bind_preserves_argument_metadata() -> None:

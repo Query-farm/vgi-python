@@ -97,7 +97,7 @@ def _identifier(name: str) -> str:
 
 def _table_argument(params: BindParams[None] | InitParams[None] | ProcessParams[None]) -> str:
     bind = present(params).bind_call if isinstance(params, BindParams) else present(params.init_call).bind_call
-    arguments = bind.arguments.positional
+    arguments = bind.require_arguments().positional
     if len(arguments) != 1 or arguments[0] is None:
         raise _error("one table-name argument is required")
     name = arguments[0].as_py()

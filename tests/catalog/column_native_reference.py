@@ -34,7 +34,7 @@ COUNT = pa.schema([pa.field("count", pa.int64(), nullable=False)])
 
 def _args(params: Any) -> dict[str, Any]:
     call = params.bind_call if isinstance(params, BindParams) else params.init_call.bind_call
-    target = json.loads(present(call.arguments.positional[0]).as_py())
+    target = json.loads(present(call.require_arguments().positional[0]).as_py())
     return dict(
         attach_opaque_data=params.attach_opaque_data,
         transaction_opaque_data=params.transaction_opaque_data,

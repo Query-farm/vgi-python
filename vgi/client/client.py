@@ -1767,6 +1767,12 @@ class Client(CatalogClientMixin, AggregateClientMixin):
             bind_response: BindResponse = proxy.bind(request=bind_request)
         except RpcError as e:
             raise ClientError.from_rpc_error(e) from e
+        except OSError as e:
+            # Writing the request to a worker that has already exited. POSIX
+            # raises BrokenPipeError, which vgi-rpc reports as an RpcError; a
+            # Windows pipe raises a plain OSError (EINVAL) once the request is
+            # larger than the pipe buffer, which reaches here unwrapped.
+            raise ClientError(f"bind: the worker connection failed while sending the request: {e}") from e
 
         if bind_result_callback is not None:
             bind_result_callback(bind_response)
