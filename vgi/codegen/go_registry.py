@@ -80,10 +80,6 @@ TARGET = "vgi/vgi_service_gen.go"
 #: The Go struct of a packed record that does not follow the ``<Record>Wire``
 #: convention. Go identifiers only: whether it is a pointer is the model's call.
 GO_RECORD_TYPES: dict[str, str] = {
-    # One Go type serves both table-function requests (identical records).
-    "TableFunctionCardinalityRequest": "CardinalityRequestWire",
-    "TableFunctionStatisticsRequest": "CardinalityRequestWire",
-    "TableFunctionPlanRequest": "PlanRequestWire",
     "TableCardinality": "TableCardinality",
     # Every per-kind listing is one `items: list<binary>` record.
     "CopyFromFormatsResponse": "ItemsResponseWire",

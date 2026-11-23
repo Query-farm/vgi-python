@@ -23,10 +23,11 @@ from pathlib import Path
 
 import pytest
 
-from vgi.codegen import csharp_schemas, csharp_types
+from vgi.codegen import csharp_nested_test, csharp_schemas, csharp_types
 
 _TYPES = Path("src/QueryFarm.Vgi/Protocol/Generated/VgiProtocolTypes.g.cs")
 _SCHEMAS = Path("test/QueryFarm.Vgi.Tests/Generated/VgiProtocolSchemas.g.cs")
+_NESTED_TEST = Path(csharp_nested_test.TARGET)
 
 _REGEN_HINT = (
     "To regenerate, run:\n"
@@ -51,7 +52,9 @@ def _render(module: object) -> str:
     return buf.getvalue()
 
 
-@pytest.mark.parametrize("module", [csharp_types, csharp_schemas], ids=["types", "schemas"])
+@pytest.mark.parametrize(
+    "module", [csharp_types, csharp_schemas, csharp_nested_test], ids=["types", "schemas", "nested-test"]
+)
 def test_generator_is_deterministic(module: object) -> None:
     """Calling emit() twice produces byte-identical output."""
     assert _render(module) == _render(module)
@@ -59,8 +62,8 @@ def test_generator_is_deterministic(module: object) -> None:
 
 @pytest.mark.parametrize(
     ("module", "relative"),
-    [(csharp_types, _TYPES), (csharp_schemas, _SCHEMAS)],
-    ids=["types", "schemas"],
+    [(csharp_types, _TYPES), (csharp_schemas, _SCHEMAS), (csharp_nested_test, _NESTED_TEST)],
+    ids=["types", "schemas", "nested-test"],
 )
 def test_checked_in_file_matches_generator(module: object, relative: Path) -> None:
     """Drift check: the checked-in C# matches what the generator produces."""
@@ -109,3 +112,43 @@ def test_enum_members_round_trip_to_their_wire_names() -> None:
             derived = csharp_types._to_snake_case(m.name).upper()
             rendered = csharp_types._render_enum(e)
             assert derived == m.wire_name or f'RpcName("{m.wire_name}")' in rendered, (e.name, m.name)
+
+
+_EMBEDDING = {
+    "InitRequest",
+    "TableFunctionCardinalityRequest",
+    "TableFunctionStatisticsRequest",
+    "TableFunctionDynamicToStringRequest",
+    "TableFunctionPlanRequest",
+    "TableFunctionProjectionRequest",
+}
+
+
+def test_bind_call_is_the_raw_preserving_wrapper() -> None:
+    """Every request embedding bind_call carries it as Nested<BindRequest>, with its field path."""
+    records = csharp_types.build_model().records
+    for name in _EMBEDDING:
+        props = {p.wire_name: p for p in records[name].props}
+        assert props["bind_call"].clr_type == "Nested<BindRequest>", name
+        assert props["bind_call"].nested_path == f"{name}.bind_call"
+        assert f'WithPath("{name}.bind_call")' in csharp_types._render_record(records[name])
+    # Only the records in NESTED_BINARY_RECORDS: bind_result stays raw bytes.
+    projection = {p.wire_name: p for p in records["TableFunctionProjectionRequest"].props}
+    assert projection["bind_result"].clr_type == "byte[]"
+    assert set(csharp_nested_test.embedding_fields()) == _EMBEDDING
+
+
+def test_wrapper_is_emitted_once_and_bind_request_ends_with_the_location() -> None:
+    """The Nested<T> class is emitted exactly once; arguments is nullable and arguments_location last."""
+    text = _render(csharp_types)
+    assert text.count("public sealed class Nested<T>") == 1
+    assert "IRawBinary<Nested<T>>" in text
+    props = csharp_types.build_model().records["BindRequest"].props
+    assert props[-1].wire_name == "arguments_location"
+    assert props[-1].clr_type == "ArgumentsLocation?"
+    assert {p.wire_name: p.clr_type for p in props}["arguments"] == "byte[]?"
+    assert [p.wire_name for p in csharp_types.build_model().records["ArgumentsLocation"].props] == [
+        "ref",
+        "size",
+        "sha256",
+    ]

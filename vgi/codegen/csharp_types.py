@@ -59,6 +59,7 @@ from vgi.codegen._common import (
     INFO_TYPES,
     REQUEST_TYPES,
     GeneratorError,
+    nested_binary_record,
     provenance_comment,
 )
 from vgi.protocol import VgiProtocol
@@ -155,6 +156,9 @@ _ATTR_LARGE = f"[{_REL_NS}QueryFarm.VgiRpc.Reflection.LargeWidth]"
 _ATTR_DICT = f"[{_REL_NS}QueryFarm.VgiRpc.Reflection.DictionaryEncoded]"
 _ATTR_WIRE_OPTIONAL = f"[{_REL_NS}QueryFarm.Vgi.Internal.WireOptional]"
 
+#: The generic raw-preserving wrapper class emitted once into the generated file.
+NESTED_CLASS = "Nested"
+
 
 # ---------------------------------------------------------------------------
 # Model
@@ -169,6 +173,9 @@ class _Prop:
     attrs: list[str]
     initializer: str | None
     doc: str | None
+    #: For a raw-preserving nested record (``Nested<T>``): the field path its
+    #: setter stamps on the wrapper, so a decode error names it.
+    nested_path: str | None = None
 
 
 @dataclass
@@ -365,6 +372,16 @@ def _map(dtype: pa.DataType, annotation: object, *, model: _Model, origin: str, 
         return _Mapped("string", (), False, '""')
     if pa.types.is_large_string(dtype):
         return _Mapped("string", (_ATTR_LARGE,), False, '""')
+    nested = nested_binary_record(dtype, annotation)
+    if nested is not None:
+        # A record in NESTED_BINARY_RECORDS carried as binary: the raw-preserving
+        # lazy wrapper (large-values spec §3.3), which vgi-rpc-csharp writes and
+        # reads verbatim through IRawBinary. The record itself is emitted as a
+        # root (it is in SHARED_CONTRACT_TYPES).
+        if element:
+            raise GeneratorError(f"{origin}: a raw-preserving nested record inside a container is not supported.")
+        wrapper = f"{NESTED_CLASS}<{csharp_name(nested.__name__)}>"
+        return _Mapped(wrapper, (), False, f"{wrapper}.Empty")
     if pa.types.is_binary(dtype):
         # Every binary column is raw bytes in C#, including the ones Python
         # annotates as `pa.RecordBatch`/`pa.Schema` or a nested record. Python
@@ -545,7 +562,8 @@ def _layout(cls: type, arrow_fields: list[pa.Field[Any]], origin: str, model: _M
             raise GeneratorError(f"{where}: a C# member cannot share its type's name.")
         if _to_snake_case(prop_name) != f.name:
             attrs.append(_rpc_name_attr(f.name))
-        props.append(_Prop(f.name, prop_name, clr, attrs, initializer, attr_docs.get(f.name)))
+        nested_path = f"{name}.{f.name}" if mapped.clr.startswith(f"{NESTED_CLASS}<") else None
+        props.append(_Prop(f.name, prop_name, clr, attrs, initializer, attr_docs.get(f.name), nested_path))
 
     # [WireOptional] columns must trail every positional one; EmbeddedIpc refuses
     # the type otherwise.
@@ -573,6 +591,10 @@ def _root_types() -> list[tuple[type, str]]:
         if isinstance(getattr(result, "ARROW_SCHEMA", None), pa.Schema):
             roots.append((result, f"method '{method_name}' result"))  # type: ignore[arg-type]
     return roots
+
+
+def _uses_nested(model: _Model) -> bool:
+    return any(p.nested_path is not None for r in model.records.values() for p in r.props)
 
 
 def build_model() -> _Model:
@@ -642,10 +664,170 @@ def _render_record(r: _Record) -> str:
             lines.append("")
         lines += _doc_lines(p.doc, "    ")
         lines += [f"    {a}" for a in p.attrs]
+        if p.nested_path is not None:
+            lines += _render_nested_property(p)
+            continue
         init = f" = {p.initializer};" if p.initializer is not None else ""
         lines.append(f"    public {p.clr_type} {p.name} {{ get; set; }}{init}")
     lines.append("}")
     return "\n".join(lines) + "\n"
+
+
+def _render_nested_property(p: _Prop) -> list[str]:
+    """A ``Nested<T>`` property: its setter stamps the field path the wrapper names in decode errors."""
+    field_name = "_" + p.name[:1].lower() + p.name[1:]
+    path = f'"{p.nested_path}"'
+    if p.clr_type.endswith("?"):
+        setter = f"{field_name} = value?.WithPath({path});"
+        backing = f"    private {p.clr_type} {field_name};"
+    else:
+        guard = "value ?? throw new global::System.ArgumentNullException(nameof(value))"
+        setter = f"{field_name} = ({guard}).WithPath({path});"
+        backing = f"    private {p.clr_type} {field_name} = {p.initializer}.WithPath({path});"
+    return [
+        f"    public {p.clr_type} {p.name}",
+        "    {",
+        f"        get => {field_name};",
+        f"        set => {setter}",
+        "    }",
+        "",
+        backing,
+    ]
+
+
+#: The raw-preserving wrapper of a nested record carried as binary (vgi
+#: docs/large-values-3.4.md §3.3), emitted once. Encode/decode of ``T`` is
+#: vgi-csharp's EmbeddedIpc (the same codec every generated record uses); the
+#: column is written and read verbatim by vgi-rpc-csharp through IRawBinary.
+_NESTED_SOURCE = """\
+/// <summary>
+/// A nested protocol record carried as a complete Arrow IPC stream in a <c>binary</c> column,
+/// held as the exact bytes received (vgi <c>docs/large-values-3.4.md</c> §3.3).
+/// <para>
+/// The bytes are never re-serialized: encoding the embedding record writes <see cref="Bytes"/>
+/// verbatim, whether or not <see cref="Value"/> was read, so the extension's byte-identity
+/// checks on <c>bind_call</c> hold. <see cref="Value"/> decodes on first access and caches the
+/// result (thread-safe; one decode); a malformed value fails there, naming the field path, not
+/// when the embedding record is decoded. <see cref="Of"/> serializes a typed record once and
+/// then behaves exactly like a wrapper over those bytes. Equality and hashing are over the bytes,
+/// and <see cref="ToString"/> never decodes.
+/// </para>
+/// <para>
+/// <see cref="Value"/> is the shared decoded instance: treat it as read-only. Nothing done to it
+/// can change the held bytes (encoding never consults it), but it is visible to every reader of
+/// this wrapper; call <see cref="DecodeCopy"/> for an independent instance, and <see cref="Of"/>
+/// to build a changed value.
+/// </para>
+/// </summary>
+/// <typeparam name="T">The generated record the bytes decode to.</typeparam>
+public sealed class Nested<T>
+    : global::QueryFarm.VgiRpc.Reflection.IRawBinary<Nested<T>>, global::System.IEquatable<Nested<T>>
+    where T : class, new()
+{
+    private readonly byte[] _bytes;
+    private readonly global::System.Lazy<(T? Value, global::System.Exception? Error)> _decoded;
+
+    private Nested(
+        byte[] bytes, global::System.Lazy<(T? Value, global::System.Exception? Error)>? decoded, string? path)
+    {
+        _bytes = bytes;
+        _decoded = decoded ?? new(
+            () => Decode(bytes), global::System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
+        Path = path;
+    }
+
+    /// <summary>A wrapper over zero bytes: encodable, but a decode error at access.</summary>
+    public static Nested<T> Empty { get; } = new([], null, null);
+
+    /// <summary>The field path named in decode errors (e.g. <c>InitRequest.bind_call</c>), if known.</summary>
+    public string? Path { get; }
+
+    /// <summary>The held bytes, exactly as received or serialized once.</summary>
+    public global::System.ReadOnlyMemory<byte> Bytes => _bytes;
+
+    /// <summary>The held bytes' length.</summary>
+    public int Length => _bytes.Length;
+
+    global::System.ReadOnlyMemory<byte> global::QueryFarm.VgiRpc.Reflection.IRawBinary.RawBinary => _bytes;
+
+    /// <summary>The decoded record (decoded once, on first access).</summary>
+    /// <exception cref="global::System.IO.InvalidDataException">The bytes are not a valid record.</exception>
+    public T Value
+    {
+        get
+        {
+            var (value, error) = _decoded.Value;
+            if (error is not null)
+            {
+                throw Failure(error);
+            }
+
+            return value!;
+        }
+    }
+
+    /// <summary>Wrap bytes received elsewhere (copied).</summary>
+    public static Nested<T> FromBytes(global::System.ReadOnlySpan<byte> bytes) => new(bytes.ToArray(), null, null);
+
+    /// <summary>The codec's constructor: wraps its private copy of the column value, undecoded.</summary>
+    public static Nested<T> FromRawBinary(byte[] bytes) => new(bytes, null, null);
+
+    /// <summary>Serialize <paramref name="record"/> once and hold those bytes.</summary>
+    public static Nested<T> Of(T record)
+    {
+        global::System.ArgumentNullException.ThrowIfNull(record);
+        return new(global::QueryFarm.Vgi.Internal.EmbeddedIpc.Encode(record), null, null);
+    }
+
+    /// <summary>A freshly decoded, independent instance of the record.</summary>
+    public T DecodeCopy()
+    {
+        var (value, error) = Decode(_bytes);
+        return error is null ? value! : throw Failure(error);
+    }
+
+    /// <summary>This wrapper (same bytes, same decoded value) naming <paramref name="path"/> in errors.</summary>
+    public Nested<T> WithPath(string path) => path == Path ? this : new(_bytes, _decoded, path);
+
+    private global::System.IO.InvalidDataException Failure(global::System.Exception cause) =>
+        new($"{Path ?? typeof(T).Name}: {cause.Message}", cause);
+
+    private static (T? Value, global::System.Exception? Error) Decode(byte[] bytes)
+    {
+        if (bytes.Length == 0)
+        {
+            return (null, new global::System.IO.InvalidDataException($"empty {typeof(T).Name} value"));
+        }
+
+        try
+        {
+            return (global::QueryFarm.Vgi.Internal.EmbeddedIpc.Decode<T>(bytes), null);
+        }
+        catch (global::System.Exception e)
+        {
+            return (null, e);
+        }
+    }
+
+    /// <inheritdoc/>
+    public bool Equals(Nested<T>? other) =>
+        other is not null && global::System.MemoryExtensions.SequenceEqual<byte>(_bytes, other._bytes);
+
+    /// <inheritdoc/>
+    public override bool Equals(object? obj) => obj is Nested<T> other && Equals(other);
+
+    /// <inheritdoc/>
+    public override int GetHashCode()
+    {
+        var hash = new global::System.HashCode();
+        hash.AddBytes(_bytes);
+        return hash.ToHashCode();
+    }
+
+    /// <inheritdoc/>
+    public override string ToString() => $"Nested<{typeof(T).Name}>({_bytes.Length} bytes)";
+}
+"""
 
 
 def emit(out: TextIO, *, namespace: str = DEFAULT_NAMESPACE) -> None:
@@ -664,7 +846,8 @@ def emit(out: TextIO, *, namespace: str = DEFAULT_NAMESPACE) -> None:
         "\n/// <summary>Canonical nested catalog wire contract.</summary>\npublic static class CatalogWireContract\n{\n"
     )
     body.write(f'    public const string Hash = "{catalog_contract_hash()}";\n}}\n')
-    blocks = [_render_enum(model.enums[n]) for n in sorted(model.enums)]
+    blocks = [_NESTED_SOURCE] if _uses_nested(model) else []
+    blocks += [_render_enum(model.enums[n]) for n in sorted(model.enums)]
     blocks += [_render_record(model.records[n]) for n in sorted(model.records)]
     for block in blocks:
         body.write("\n")

@@ -51,6 +51,7 @@ import typing
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
+from vgi_rpc import Transient
 from vgi_rpc.rpc._types import rpc_methods
 
 from vgi.codegen._common import INFO_TYPES, GeneratorError, provenance_comment
@@ -128,6 +129,18 @@ class _Ctx:
 # --------------------------------------------------------------------------- #
 # Type helpers
 # --------------------------------------------------------------------------- #
+
+
+def wire_fields(cls: type) -> list[dataclasses.Field[typing.Any]]:
+    """The dataclass fields of *cls* that are on the wire (``Transient()`` ones are not)."""
+    hints = typing.get_type_hints(cls, include_extras=True)
+    out = []
+    for f in dataclasses.fields(cls):
+        hint = hints.get(f.name, f.type)
+        if typing.get_origin(hint) is typing.Annotated and any(isinstance(m, Transient) for m in hint.__metadata__):
+            continue
+        out.append(f)
+    return out
 
 
 def _unwrap(t: typing.Any) -> tuple[typing.Any, typing.Any]:
@@ -293,7 +306,7 @@ def _register_dataclass(cls: type, ctx: _Ctx) -> str:
     ts_name = _ts_name_for(cls, ctx)
     ctx.dataclasses_seen[cls] = ts_name
     hints = typing.get_type_hints(cls, include_extras=True)
-    for f in dataclasses.fields(cls):
+    for f in wire_fields(cls):
         t = hints.get(f.name, f.type)
         _emit_type(t, ctx)
     ctx.dataclass_order.append(cls)
@@ -344,7 +357,7 @@ def _render_dataclass(cls: type, ctx: _Ctx) -> str:
     ts_name = ctx.dataclasses_seen[cls]
     lines = [f"export interface {ts_name} {{"]
     info_inner: type | None = INFO_ENVELOPES.get(cls.__name__)
-    for f in dataclasses.fields(cls):
+    for f in wire_fields(cls):
         # INFO_TYPES envelope: promote items:list[bytes] to typed array
         if info_inner is not None and f.name == "items":
             inner_name = _register_dataclass(info_inner, ctx)

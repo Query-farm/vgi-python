@@ -45,7 +45,7 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 
 from vgi.catalog.catalog_interface import CatalogAttachResult
-from vgi.codegen._common import SHARED_CONTRACT_TYPES, GeneratorError, provenance_comment
+from vgi.codegen._common import SHARED_CONTRACT_TYPES, GeneratorError, nested_binary_record, provenance_comment
 from vgi.codegen.csharp_types import _base, _hints, _parse_docstring
 from vgi.protocol import CatalogContentsResponse, SchemaContents
 
@@ -53,7 +53,7 @@ if TYPE_CHECKING:
     from typing import TextIO
 
 
-GENERATOR_VERSION = "1"
+GENERATOR_VERSION = "2"
 
 #: The records emitted as Go structs, in output order.
 #:
@@ -124,6 +124,9 @@ class GoField:
     go_type: str
     options: list[str]
     doc: str | None
+    #: The Go record name a raw-preserving `Nested` field decodes to, else ``None``.
+    nested: str | None = None
+    nullable: bool = False
 
     @property
     def tag(self) -> str:
@@ -236,14 +239,32 @@ def _layout(cls: type) -> GoRecord:
     seen: dict[str, str] = {}
     for f in schema:
         where = f"{name}.{f.name}"
-        go, options = _map(f.type, hints.get(f.name), origin=where)
+        nested = nested_binary_record(f.type, hints.get(f.name))
+        if nested is not None:
+            # A nested record carried as binary (large-values spec §3.3): the
+            # raw-preserving wrapper, still a `binary` column on the wire.
+            if nested not in GO_TYPE_RECORDS:
+                raise GeneratorError(f"{where}: nested record {nested.__name__} is not in GO_TYPE_RECORDS.")
+            go, options = f"Nested[{go_name(nested.__name__)}]", ["binary"]
+        else:
+            go, options = _map(f.type, hints.get(f.name), origin=where)
         if f.nullable:
             go = "*" + go
         field_name = go_field_name(f.name)
         if field_name in seen:
             raise GeneratorError(f"{where}: Go name {field_name} also derived from {seen[field_name]!r}.")
         seen[field_name] = f.name
-        fields.append(GoField(f.name, field_name, go, options, attr_docs.get(f.name)))
+        fields.append(
+            GoField(
+                f.name,
+                field_name,
+                go,
+                options,
+                attr_docs.get(f.name),
+                nested=go_name(nested.__name__) if nested is not None else None,
+                nullable=f.nullable,
+            )
+        )
     return GoRecord(name, cls.__name__, schema, fields, summary)
 
 
@@ -305,7 +326,164 @@ def _render_record(r: GoRecord) -> str:
         lines += _comment([_sentence(p) for p in _paragraphs(f.doc)], "\t")
         lines.append(f'\t{f.name} {f.go_type} `vgirpc:"{f.tag}"`')
     lines.append("}")
+    for f in r.fields:
+        if f.nested is not None:
+            lines.append("")
+            lines += _render_nested_accessor(r, f)
     return "\n".join(lines) + "\n"
+
+
+def _render_nested_accessor(r: GoRecord, f: GoField) -> list[str]:
+    """``<Field>Value()``: the decoded nested record, its errors naming the field path."""
+    path = f"{r.py_name}.{f.wire_name}"
+    method = f"{f.name}Value"
+    if f.nullable:
+        return [
+            f"// {method} decodes {f.name} ({path}), or returns nil when the column is null.",
+            "// The decode happens once per wrapper; errors name the field path.",
+            f"func (r {r.name}) {method}() (*{f.nested}, error) {{",
+            f"\tif r.{f.name} == nil {{",
+            "\t\treturn nil, nil",
+            "\t}",
+            f"\tv, err := r.{f.name}.Get()",
+            "\tif err != nil {",
+            f'\t\treturn nil, fmt.Errorf("{path}: %w", err)',
+            "\t}",
+            "\treturn &v, nil",
+            "}",
+        ]
+    return [
+        f"// {method} decodes {f.name} ({path}). The decode happens once per",
+        "// wrapper; errors name the field path.",
+        f"func (r {r.name}) {method}() ({f.nested}, error) {{",
+        f"\tv, err := r.{f.name}.Get()",
+        "\tif err != nil {",
+        f'\t\treturn v, fmt.Errorf("{path}: %w", err)',
+        "\t}",
+        "\treturn v, nil",
+        "}",
+    ]
+
+
+#: The raw-preserving wrapper (large-values spec §3.3), emitted once when any
+#: record has a nested-binary field.
+_NESTED_GO = """\
+// Nested is a protocol record carried as a complete Arrow IPC stream in a
+// binary column (vgi docs/large-values-3.4.md §3.3), held raw-preserving:
+//
+//   - it holds the bytes exactly as received (a private copy);
+//   - Get decodes them on first use and caches the result; concurrent first
+//     use decodes once;
+//   - encoding the embedding record writes the held bytes verbatim, accessed or
+//     not, so a re-encoded request is byte-identical to the one received;
+//   - NestedOf serializes a typed record once and then behaves exactly like a
+//     wrapper decoded from those bytes;
+//   - equality is over the held bytes, and printing never decodes.
+//
+// The zero value holds no bytes: Get reports a decode error and encoding fails.
+// A nullable column is a *Nested[T]. To change a field, build a new wrapper with
+// NestedOf; nothing done to a value returned by Get changes the held bytes.
+//
+// vgi-rpc-go carries it through encoding.BinaryMarshaler and
+// encoding.BinaryUnmarshaler on a `binary`-tagged field.
+type Nested[T any] struct {
+\traw   []byte
+\tcache *nestedCache[T]
+}
+
+type nestedCache[T any] struct {
+\tonce  sync.Once
+\tvalue T
+\terr   error
+}
+
+// NestedFromBytes wraps bytes received elsewhere (for example a bind call kept
+// from an earlier request). The bytes are copied; they are decoded on Get.
+func NestedFromBytes[T any](data []byte) Nested[T] {
+\treturn Nested[T]{raw: bytes.Clone(nonNil(data)), cache: &nestedCache[T]{}}
+}
+
+// NestedOf serializes value once and wraps those bytes.
+func NestedOf[T any](value T) (Nested[T], error) {
+\tdata, err := vgirpc.MarshalRecord(value)
+\tif err != nil {
+\t\tvar zero T
+\t\treturn Nested[T]{}, fmt.Errorf("encoding nested %T: %w", zero, err)
+\t}
+\treturn Nested[T]{raw: data, cache: &nestedCache[T]{}}, nil
+}
+
+// Get returns the decoded record, decoding the held bytes on first use.
+func (n Nested[T]) Get() (T, error) {
+\tif n.cache == nil {
+\t\tvar zero T
+\t\treturn zero, fmt.Errorf("decoding nested %T: the wrapper holds no bytes", zero)
+\t}
+\tn.cache.once.Do(func() {
+\t\tif len(n.raw) == 0 {
+\t\t\tn.cache.err = fmt.Errorf("decoding nested %T: empty IPC stream", n.cache.value)
+\t\t\treturn
+\t\t}
+\t\tif err := vgirpc.UnmarshalRecord(n.raw, &n.cache.value); err != nil {
+\t\t\tn.cache.err = fmt.Errorf("decoding nested %T: %w", n.cache.value, err)
+\t\t}
+\t})
+\treturn n.cache.value, n.cache.err
+}
+
+// Bytes returns a copy of the held bytes.
+func (n Nested[T]) Bytes() []byte {
+\treturn bytes.Clone(n.raw)
+}
+
+// Len is the number of held bytes.
+func (n Nested[T]) Len() int {
+\treturn len(n.raw)
+}
+
+// IsZero reports whether this is the zero wrapper (no bytes at all).
+func (n Nested[T]) IsZero() bool {
+\treturn n.cache == nil
+}
+
+// Equal compares the held bytes.
+func (n Nested[T]) Equal(other Nested[T]) bool {
+\treturn n.cache != nil && other.cache != nil && bytes.Equal(n.raw, other.raw)
+}
+
+// MarshalBinary returns the held bytes verbatim (never a re-encoding).
+func (n Nested[T]) MarshalBinary() ([]byte, error) {
+\tif n.cache == nil {
+\t\tvar zero T
+\t\treturn nil, fmt.Errorf("encoding nested %T: the wrapper holds no bytes", zero)
+\t}
+\treturn n.raw, nil
+}
+
+// UnmarshalBinary holds a copy of data, undecoded.
+func (n *Nested[T]) UnmarshalBinary(data []byte) error {
+\t*n = NestedFromBytes[T](data)
+\treturn nil
+}
+
+// String describes the wrapper without decoding it.
+func (n Nested[T]) String() string {
+\tvar zero T
+\treturn fmt.Sprintf("Nested[%T](%d bytes)", zero, len(n.raw))
+}
+
+// GoString describes the wrapper without decoding it.
+func (n Nested[T]) GoString() string {
+\treturn n.String()
+}
+
+func nonNil(data []byte) []byte {
+\tif data == nil {
+\t\treturn []byte{}
+\t}
+\treturn data
+}
+"""
 
 
 def emit(out: TextIO) -> None:
@@ -315,8 +493,13 @@ def emit(out: TextIO) -> None:
     body.write("\n")
     body.write("package generated\n")
     body.write("\n")
+    records = build_records()
+    blocks = [_render_record(r) for r in records]
+    if any(f.nested for r in records for f in r.fields):
+        body.write('import (\n\t"bytes"\n\t"fmt"\n\t"sync"\n\n\t"github.com/Query-farm/vgi-rpc-go/vgirpc"\n)\n\n')
+        blocks.append(_NESTED_GO)
     # Blank line BETWEEN blocks, none trailing at EOF (gofmt rejects it).
-    body.write("\n".join(_render_record(r) for r in build_records()))
+    body.write("\n".join(blocks))
 
     out.write(
         provenance_comment(

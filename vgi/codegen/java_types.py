@@ -38,13 +38,20 @@ import io
 import re
 import sys
 import textwrap
+import typing
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
 
 from vgi.catalog.catalog_interface import CatalogAttachResult
-from vgi.codegen._common import SHARED_CONTRACT_TYPES, GeneratorError, provenance_comment
+from vgi.codegen._common import (
+    NESTED_WRAPPER_NAME,
+    SHARED_CONTRACT_TYPES,
+    GeneratorError,
+    nested_binary_record,
+    provenance_comment,
+)
 from vgi.protocol import CatalogContentsResponse, MacroCreateRequest, SchemaContents, TableCreateResponse
 
 if TYPE_CHECKING:
@@ -91,9 +98,18 @@ def record_names() -> list[str]:
     return [java_name(cls) for cls in JAVA_RECORDS]
 
 
+#: The generated raw-preserving wrapper class (large-values spec §3.3), emitted
+#: beside the records as its own file.
+NESTED_CLASS = NESTED_WRAPPER_NAME
+
+
 def targets() -> list[tuple[str, str]]:
-    """``(record name, path relative to the vgi-java checkout)`` for every generated file."""
-    return [(name, f"{JAVA_PROTOCOL_DIR}/{name}.java") for name in record_names()]
+    """``(record name, path relative to the vgi-java checkout)`` for every generated file.
+
+    The records, then the ``Nested`` wrapper class their binary-carried nested
+    records use.
+    """
+    return [(name, f"{JAVA_PROTOCOL_DIR}/{name}.java") for name in [*record_names(), NESTED_CLASS]]
 
 
 # ---------------------------------------------------------------------------
@@ -154,11 +170,22 @@ def _element(dtype: pa.DataType, origin: str) -> str:
     )
 
 
-def _component(f: pa.Field[Any], origin: str) -> _Component:
-    """Map one Arrow field to the record component vgi-rpc-java derives it back from."""
+def _component(f: pa.Field[Any], origin: str, annotation: object = None) -> _Component:
+    """Map one Arrow field to the record component vgi-rpc-java derives it back from.
+
+    ``annotation`` is the field's Python type hint; it only matters for a
+    ``binary`` column carrying a record in `NESTED_BINARY_RECORDS`, which maps
+    to the raw-preserving ``Nested<Record>`` wrapper instead of ``byte[]``.
+    """
     where = f"{origin}.{f.name}"
     nullable = ("@Nullable",) if f.nullable else ()
     dtype = f.type
+
+    nested = nested_binary_record(dtype, annotation)
+    if nested is not None:
+        if nested not in JAVA_RECORDS:
+            raise GeneratorError(f"{where}: {nested.__name__} is carried as Nested but is not in JAVA_RECORDS.")
+        return _Component(f.name, f"{NESTED_CLASS}<{java_name(nested)}>", nullable)
 
     if dtype.equals(_DICT_UTF8):
         return _Component(f.name, "String", (*nullable, "@ArrowField(ArrowFieldType.DICT_INT16_UTF8)"))
@@ -177,6 +204,10 @@ def _component(f: pa.Field[Any], origin: str) -> _Component:
         item = dtype.value_field
         if item.name != "item" or not item.nullable:
             raise GeneratorError(f"{where}: vgi-rpc-java derives every list item as a nullable 'item'; got {item}.")
+        if item.type.equals(pa.large_binary()):
+            # An @ArrowField on a List is the ELEMENT override in SchemaDerivation
+            # (buildOverriddenChild): List<byte[]> -> list<item: large_binary>.
+            return _Component(f.name, "List<byte[]>", (*nullable, "@ArrowField(ArrowFieldType.LARGE_BINARY)"))
         return _Component(f.name, f"List<{_element(item.type, where + '[]')}>", nullable)
 
     if pa.types.is_map(dtype):
@@ -292,7 +323,8 @@ def _render_record(cls: type) -> str:
     schema = getattr(cls, "ARROW_SCHEMA", None)
     if not isinstance(schema, pa.Schema):
         raise GeneratorError(f"{cls.__qualname__} has no ARROW_SCHEMA to generate {name} from.")
-    components = [_component(schema.field(i), name) for i in range(len(schema))]
+    hints = _hints(cls)
+    components = [_component(schema.field(i), name, hints.get(schema.field(i).name)) for i in range(len(schema))]
     summary, attr_docs = _parse_docstring(cls)
     params = [(c.name, attr_docs.get(c.name) or f"the {{@code {c.name}}} column") for c in components]
 
@@ -339,9 +371,192 @@ def _render_record(cls: type) -> str:
     return "\n".join(lines) + "\n"
 
 
+_NESTED_JAVA = """\
+// Copyright 2025, 2026 Query Farm LLC - https://query.farm
+
+package farm.query.vgi.protocol;
+
+import farm.query.vgirpc.marshal.RecordCodec;
+import farm.query.vgirpc.schema.ArrowSerializableRecord;
+import farm.query.vgirpc.schema.RawBinary;
+
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
+import java.util.Arrays;
+import java.util.Objects;
+
+/**
+ * A protocol record carried as a complete Arrow IPC stream in a {@code binary}
+ * column, held as the bytes it arrived as (vgi large-values spec §3.3).
+ *
+ * <p>The raw-preserving wrapper: it holds the original bytes, decodes them to the
+ * generated record on first {@link #get()} (thread-safe, cached), and encodes as
+ * exactly those bytes whether or not it was accessed, so a request embedding it
+ * (e.g. {@code InitRequest.bind_call}) re-emits byte for byte what it received.
+ * It is never re-serialized from its typed value: {@link #toString()}, equality
+ * and encoding all use the held bytes.
+ *
+ * <p>To change a field, build a new wrapper with {@link #of}; the typed value
+ * cannot write back. Opened sealed values (attach/transaction opaque data) belong
+ * beside the wrapper, never in it (rule 11).
+ *
+ * <p>vgi-rpc-java's record codec carries it through {@link RawBinary}: it derives
+ * as {@code binary}, encodes as {@link #rawBinary()}, and decodes through
+ * {@link #fromRawBinary(byte[], Type, String)}.
+ *
+ * @param <T> the generated record the bytes decode to
+ */
+public final class Nested<T extends ArrowSerializableRecord> implements RawBinary {
+
+    private final byte[] bytes;
+    private final Class<T> type;
+    private final String path;
+    private volatile T value;
+
+    private Nested(byte[] bytes, Class<T> type, String path) {
+        this.bytes = bytes;
+        this.type = Objects.requireNonNull(type, "type");
+        this.path = path == null ? type.getSimpleName() : path;
+    }
+
+    /**
+     * Wrap a typed record: serializes it once with the record codec and holds those
+     * bytes; from then on it behaves exactly like a wrapper decoded from them.
+     *
+     * @param record the record to carry
+     * @param <T> its type
+     * @return the wrapper
+     */
+    @SuppressWarnings("unchecked")
+    public static <T extends ArrowSerializableRecord> Nested<T> of(T record) {
+        Objects.requireNonNull(record, "record");
+        return new Nested<>(RecordCodec.serializeToBytes(record), (Class<T>) record.getClass(), null);
+    }
+
+    /**
+     * Wrap bytes received elsewhere (e.g. a {@code bind_call} kept from an earlier
+     * request). The bytes are copied.
+     *
+     * @param bytes the record's Arrow IPC stream
+     * @param type the record type they decode to
+     * @param <T> that type
+     * @return the wrapper
+     */
+    public static <T extends ArrowSerializableRecord> Nested<T> fromBytes(byte[] bytes, Class<T> type) {
+        return new Nested<>(Objects.requireNonNull(bytes, "bytes").clone(), type, null);
+    }
+
+    /**
+     * The record codec's decode hook ({@link RawBinary}): wraps a column value of a
+     * {@code Nested<T>} record component without decoding it.
+     *
+     * @param bytes the column value (owned by the wrapper from here on)
+     * @param componentType the component's generic type, {@code Nested<T>}
+     * @param path the component's field path, e.g. {@code InitRequest.bind_call}, named by decode errors
+     * @return the wrapper
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public static Nested<?> fromRawBinary(byte[] bytes, Type componentType, String path) {
+        if (!(componentType instanceof ParameterizedType pt)
+                || !(pt.getActualTypeArguments()[0] instanceof Class<?> record)
+                || !ArrowSerializableRecord.class.isAssignableFrom(record)) {
+            throw new IllegalArgumentException(path + ": Nested needs a concrete record type, got " + componentType);
+        }
+        return new Nested(bytes, record, path);
+    }
+
+    /**
+     * The typed record, decoded from the held bytes on first access and cached.
+     *
+     * <p>The value is shared by every caller and must be treated as read-only: its
+     * {@code byte[]} and {@code List} components are Java arrays and lists. Nothing
+     * done to it can change the held bytes, which are what is encoded.
+     *
+     * @return the decoded record
+     * @throws IllegalArgumentException naming the field path when the bytes do not
+     *     decode as {@code T} (including zero bytes)
+     */
+    public T get() {
+        T v = value;
+        if (v == null) {
+            synchronized (this) {
+                v = value;
+                if (v == null) {
+                    if (bytes.length == 0) {
+                        throw new IllegalArgumentException(path + ": empty " + type.getSimpleName() + " IPC stream");
+                    }
+                    try {
+                        v = RecordCodec.deserializeFromBytes(bytes, type);
+                    } catch (RuntimeException e) {
+                        Throwable cause = e.getCause() != null ? e.getCause() : e;
+                        throw new IllegalArgumentException(path + ": " + cause.getMessage(), e);
+                    }
+                    value = v;
+                }
+            }
+        }
+        return v;
+    }
+
+    /** @return a copy of the held bytes */
+    public byte[] bytes() {
+        return bytes.clone();
+    }
+
+    /** @return the number of held bytes */
+    public int size() {
+        return bytes.length;
+    }
+
+    /** @return the record type the bytes decode to */
+    public Class<T> type() {
+        return type;
+    }
+
+    /**
+     * The held bytes themselves, for the record codec's encode path. Callers must
+     * not modify the array; use {@link #bytes()} for a copy.
+     */
+    @Override
+    public byte[] rawBinary() {
+        return bytes;
+    }
+
+    /** Equality is over the held bytes. */
+    @Override
+    public boolean equals(Object o) {
+        return o instanceof Nested<?> other && Arrays.equals(bytes, other.bytes);
+    }
+
+    @Override
+    public int hashCode() {
+        return Arrays.hashCode(bytes);
+    }
+
+    /** Names the type and size; never decodes. */
+    @Override
+    public String toString() {
+        return "Nested<" + type.getSimpleName() + ">[" + bytes.length + " bytes]";
+    }
+}
+"""
+
+
+def _render_nested() -> str:
+    """The generated ``Nested<T>`` raw-preserving wrapper class."""
+    return _NESTED_JAVA
+
+
+def _hints(cls: type) -> dict[str, object]:
+    try:
+        return typing.get_type_hints(cls, include_extras=True)
+    except Exception:  # noqa: BLE001 - an unresolvable forward ref just loses its hint
+        return {}
+
+
 def emit(out: TextIO, *, record: str) -> None:
-    """Emit the generated Java record named *record* to *out*."""
-    body = _render_record(_record(record))
+    """Emit the generated Java record (or the ``Nested`` wrapper) named *record* to *out*."""
+    body = _render_nested() if record == NESTED_CLASS else _render_record(_record(record))
     out.write(
         provenance_comment(
             generator_module="vgi.codegen.java_types",
@@ -365,7 +580,7 @@ def render(record: str) -> str:
 def main() -> None:
     """Console-script entrypoint — write one generated Java record to stdout."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("record", choices=record_names(), help="the Java record to emit")
+    parser.add_argument("record", choices=[*record_names(), NESTED_CLASS], help="the Java record to emit")
     args = parser.parse_args()
     try:
         emit(sys.stdout, record=args.record)

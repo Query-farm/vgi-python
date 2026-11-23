@@ -58,10 +58,12 @@ from vgi.catalog.catalog_interface import CatalogAttachResult
 from vgi.codegen import ts_client
 from vgi.codegen._common import (
     EXTRA_RESPONSE_TYPES,
+    NESTED_BINARY_RECORDS,
     REQUEST_TYPES,
     SHARED_CONTRACT_TYPES,
     GeneratorError,
     collect_schemas,
+    nested_binary_record,
     provenance_comment,
 )
 from vgi.codegen.csharp_types import _parse_docstring
@@ -95,6 +97,8 @@ class _Field:
     #: TS expression for the Python default, or ``None`` when the field has none.
     default: str | None
     doc: str | None
+    #: The record a raw-preserving ``Nested<T>`` wrapper carries (spec §3.3), else ``None``.
+    nested: str | None = None
 
 
 @dataclass
@@ -105,6 +109,11 @@ class _Record:
     doc: str | None
     #: True when `ts_client` already emits the interface; it is re-exported.
     reexported: bool
+
+    @property
+    def nested_fields(self) -> list[_Field]:
+        """Fields carried as a raw-preserving ``Nested<T>`` wrapper."""
+        return [f for f in self.fields if f.nested is not None]
 
 
 def _ts_type(dtype: pa.DataType, origin: str) -> str:
@@ -206,7 +215,7 @@ def _ts_client_interfaces() -> dict[str, list[tuple[str, bool]]]:
     for cls, name in ctx.dataclasses_seen.items():
         hints = typing.get_type_hints(cls, include_extras=True)
         fields = []
-        for f in dataclasses.fields(cls):
+        for f in ts_client.wire_fields(cls):
             unwrapped, _ = ts_client._unwrap(hints.get(f.name, f.type))
             fields.append((f.name, ts_client._is_optional(unwrapped)))
         out[name] = fields
@@ -222,28 +231,38 @@ def build_model() -> list[_Record]:
         name = cls.__name__
         schema: pa.Schema = cls.ARROW_SCHEMA  # type: ignore[attr-defined]
         dc_fields = {f.name: f for f in dataclasses.fields(cls)}
+        hints = typing.get_type_hints(cls, include_extras=True)
         summary, attr_docs = _parse_docstring(cls)
         fields: list[_Field] = []
         for af in schema:
             origin = f"{name}.{af.name}"
             if af.name not in dc_fields:
                 raise GeneratorError(f"{origin}: in ARROW_SCHEMA but not a dataclass field.")
+            nested = nested_binary_record(af.type, hints.get(af.name))
+            if nested is not None and nested not in TS_RECORD_TYPES:
+                raise GeneratorError(f"{origin}: nested record {nested.__name__} is not in TS_RECORD_TYPES.")
             fields.append(
                 _Field(
                     name=af.name,
-                    ts_type=_ts_type(af.type, origin),
+                    ts_type=f"Nested<{nested.__name__}>" if nested is not None else _ts_type(af.type, origin),
                     nullable=af.nullable,
                     default=_default(dc_fields[af.name], origin),
                     doc=attr_docs.get(af.name),
+                    nested=nested.__name__ if nested is not None else None,
                 )
             )
-        reexported = name in client
-        if reexported:
+        # ts_client's interface is the raw wire shape (a nested record is its
+        # bytes). Its fields must agree with ours either way; a record carrying a
+        # Nested<T> field gets its own decoded interface here instead of the
+        # re-export, so the wire interface stays the bytes form.
+        in_client = name in client
+        if in_client:
             ours = [(f.name, f.nullable) for f in fields]
             if client[name] != ours:
                 raise GeneratorError(
                     f"{name}: ts_client's interface {client[name]} disagrees with ARROW_SCHEMA {ours}.",
                 )
+        reexported = in_client and not any(f.nested for f in fields)
         records.append(_Record(name, _schema_const_for(cls, consts), fields, summary, reexported))
     return records
 
@@ -312,13 +331,190 @@ def _render_record(r: _Record) -> str:
     lines.append("  };")
     lines.append("}")
     lines.append("")
-    lines.append(
-        f"export const encode{r.name} = (v: {r.name}): Uint8Array => encodeASD({r.schema_const}, v);",
-    )
-    lines.append(
-        f"export const decode{r.name} = (b: Uint8Array): {r.name} => decodeASD<{r.name}>({r.schema_const}, b);",
-    )
+    if not r.nested_fields:
+        lines.append(
+            f"export const encode{r.name} = (v: {r.name}): Uint8Array => encodeASD({r.schema_const}, v);",
+        )
+        lines.append(
+            f"export const decode{r.name} = (b: Uint8Array): {r.name} => decodeASD<{r.name}>({r.schema_const}, b);",
+        )
+    else:
+        lines += _render_nested_codec(r)
+    if r.name in _NESTED_NAMES:
+        lines += _render_nested_factory(r)
     return "\n".join(lines) + "\n"
+
+
+_NESTED_NAMES = frozenset(cls.__name__ for cls in NESTED_BINARY_RECORDS)
+
+
+def _render_nested_codec(r: _Record) -> list[str]:
+    """``encode``/``decode`` for a record with ``Nested<T>`` fields (spec §3.3 rules 1, 3, 4)."""
+    lines = [
+        f"/** Encode a `{r.name}`; each nested record is written as its wrapper's held bytes, never re-serialized. */",
+        f"export function encode{r.name}(v: {r.name}): Uint8Array {{",
+        f"  return encodeASD({r.schema_const}, {{",
+        "    ...v,",
+    ]
+    for f in r.nested_fields:
+        if f.nullable:
+            lines.append(f"    {f.name}: v.{f.name} == null ? null : v.{f.name}.bytes,")
+        else:
+            lines.append(f"    {f.name}: v.{f.name}.bytes,")
+    lines += [
+        "  });",
+        "}",
+        "",
+        f"/** Decode a `{r.name}`; each nested record is held as received and decoded only when accessed. */",
+        f"export function decode{r.name}(b: Uint8Array): {r.name} {{",
+        f"  const raw = decodeASD<Record<string, any>>({r.schema_const}, b);",
+        "  return {",
+        "    ...raw,",
+    ]
+    for f in r.nested_fields:
+        wrap = f'Nested.fromBytes(raw.{f.name}, decode{f.nested}, "{r.name}.{f.name}")'
+        if f.nullable:
+            lines.append(f"    {f.name}: raw.{f.name} == null ? null : {wrap},")
+        else:
+            lines.append(f"    {f.name}: {wrap},")
+    lines += [f"  }} as {r.name};", "}"]
+    return lines
+
+
+def _render_nested_factory(r: _Record) -> list[str]:
+    """``nested<Name>(source)``: wrap a typed record (serialized once) or received bytes."""
+    return [
+        "",
+        "/**",
+        f" * Wrap a `{r.name}` for a field that carries it as a nested record: a typed",
+        " * record is serialized once (spec §3.3 rule 6); bytes are held as given (rule 7).",
+        " */",
+        f"export function nested{r.name}(",
+        f"  source: {r.name} | Uint8Array,",
+        f"  path = {json.dumps(r.name)},",
+        f"): Nested<{r.name}> {{",
+        "  return source instanceof Uint8Array",
+        f"    ? Nested.fromBytes(source, decode{r.name}, path)",
+        f"    : Nested.of(source, encode{r.name}, decode{r.name}, path);",
+        "}",
+    ]
+
+
+#: The raw-preserving lazy wrapper (vgi docs/large-values-3.4.md §3.3), emitted
+#: once into the generated module so vgi-typescript carries no hand-written copy.
+_NESTED_CLASS = """
+// ----------------------------------------------------------------------------
+// Nested<T>: a record carried as a complete Arrow IPC stream in a binary column
+// ----------------------------------------------------------------------------
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === "object" && !ArrayBuffer.isView(value) && !Object.isFrozen(value)) {
+    for (const key of Object.keys(value as object)) deepFreeze((value as any)[key]);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.byteLength !== b.byteLength) return false;
+  for (let i = 0; i < a.byteLength; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+/**
+ * The raw-preserving lazy wrapper for a nested record carried as binary
+ * (vgi docs/large-values-3.4.md §3.3). It holds the bytes exactly as received
+ * (a private copy), decodes them only when `get()` / `value` is first read,
+ * and the embedding record's encoder writes the held bytes verbatim, so a
+ * decoded-then-re-encoded request is byte-identical to what the peer sent.
+ *
+ * The decoded value is frozen, and is decoded from a private copy of the bytes,
+ * so nothing done to it can change the held bytes. To change a field, build a
+ * new record and wrap it with `Nested.of` (or the generated `nested<Record>`).
+ * Printing (`toJSON`, `toString`, Node's inspect) never decodes or re-encodes.
+ */
+export class Nested<T> {
+  readonly #bytes: Uint8Array;
+  readonly #decode: (bytes: Uint8Array) => T;
+  readonly #path: string;
+  #state: { ok: true; value: Readonly<T> } | { ok: false; error: Error } | undefined;
+
+  private constructor(bytes: Uint8Array, decode: (bytes: Uint8Array) => T, path: string) {
+    this.#bytes = bytes;
+    this.#decode = decode;
+    this.#path = path;
+  }
+
+  /** Wrap bytes received elsewhere (rule 7). The bytes are copied, not decoded. */
+  static fromBytes<T>(bytes: Uint8Array, decode: (bytes: Uint8Array) => T, path = "nested record"): Nested<T> {
+    return new Nested(bytes.slice(), decode, path);
+  }
+
+  /** Serialize a typed record once and hold those bytes (rule 6). */
+  static of<T>(
+    record: T,
+    encode: (value: T) => Uint8Array,
+    decode: (bytes: Uint8Array) => T,
+    path = "nested record",
+  ): Nested<T> {
+    return new Nested(encode(record).slice(), decode, path);
+  }
+
+  /** The held bytes, exactly as received. Read-only by contract: do not mutate. */
+  get bytes(): Uint8Array {
+    return this.#bytes;
+  }
+
+  get byteLength(): number {
+    return this.#bytes.byteLength;
+  }
+
+  /** The field path decode errors name, e.g. `InitRequest.bind_call`. */
+  get path(): string {
+    return this.#path;
+  }
+
+  /**
+   * The decoded record, decoded on first access and cached (rule 2). A
+   * malformed or empty value throws here, naming the field path (rules 3, 9).
+   */
+  get(): Readonly<T> {
+    if (this.#state === undefined) {
+      try {
+        if (this.#bytes.byteLength === 0) throw new Error("empty nested record");
+        this.#state = { ok: true, value: deepFreeze(this.#decode(this.#bytes.slice())) };
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        this.#state = { ok: false, error: new Error(`${this.#path}: ${message}`, { cause }) };
+      }
+    }
+    if (!this.#state.ok) throw this.#state.error;
+    return this.#state.value;
+  }
+
+  /** Same as `get()`. */
+  get value(): Readonly<T> {
+    return this.get();
+  }
+
+  /** Equality is over the held bytes (rule 8). */
+  equals(other: Nested<T> | null | undefined): boolean {
+    return other != null && sameBytes(this.#bytes, other.#bytes);
+  }
+
+  toJSON(): { nested: string; byteLength: number } {
+    return { nested: this.#path, byteLength: this.#bytes.byteLength };
+  }
+
+  toString(): string {
+    return `Nested(${this.#path}, ${this.#bytes.byteLength} bytes)`;
+  }
+
+  [Symbol.for("nodejs.util.inspect.custom")](): string {
+    return this.toString();
+  }
+}
+"""
 
 
 def emit(out: TextIO) -> None:
@@ -334,6 +530,8 @@ def emit(out: TextIO) -> None:
     if reexported:
         body.write(f'import type {{ {", ".join(reexported)} }} from "./vgi-client.js";\n')
         body.write(f"export type {{ {', '.join(reexported)} }};\n")
+    if any(r.nested_fields for r in records):
+        body.write(_NESTED_CLASS)
     for r in records:
         body.write("\n")
         body.write(_render_record(r))

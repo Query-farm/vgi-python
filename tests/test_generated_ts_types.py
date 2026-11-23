@@ -57,8 +57,9 @@ def test_every_record_gets_builder_and_codec() -> None:
         name = cls.__name__
         assert f"export type {name}Init = " in text
         assert f"export function build{name}(init: {name}Init): {name} {{" in text
-        assert f"export const encode{name} = " in text
-        assert f"export const decode{name} = " in text
+        # A record carrying a Nested<T> field has hand-shaped codecs (functions).
+        assert f"export const encode{name} = " in text or f"export function encode{name}(v: {name})" in text
+        assert f"export const decode{name} = " in text or f"export function decode{name}(b: Uint8Array)" in text
 
 
 def test_builder_fields_follow_arrow_schema_order() -> None:

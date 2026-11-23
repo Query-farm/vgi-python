@@ -99,8 +99,14 @@ _COMPONENT_RE = re.compile(
 
 def _derive(java_type: str, annotations: str) -> pa.DataType:
     override = re.search(r"@ArrowField\(ArrowFieldType\.(\w+)\)", annotations)
+    if override and java_type.startswith("List<"):
+        # On a List the override is the ELEMENT type (SchemaDerivation.buildOverriddenChild).
+        return pa.list_(pa.field("item", _OVERRIDES[override.group(1)], nullable=True))
     if override:
         return _OVERRIDES[override.group(1)]
+    if java_type.startswith(f"{java_types.NESTED_CLASS}<"):
+        # Nested<T> implements vgi-rpc-java's RawBinary: carried as binary.
+        return pa.binary()
     if java_type.startswith("List<"):
         element = java_type[5:-1]
         return pa.list_(pa.field("item", _derive(element, ""), nullable=True))
@@ -151,3 +157,31 @@ def test_unsupported_arrow_type_is_refused() -> None:
         )
     with pytest.raises(GeneratorError):
         java_types._component(pa.field("nested", pa.list_(pa.list_(pa.field("renamed", pa.string())))), "X")
+
+
+def test_nested_binary_records_use_the_wrapper() -> None:
+    """``bind_call`` is the raw-preserving ``Nested<BindRequest>``; other binary records stay ``byte[]``."""
+    init = java_types.render("InitRequest")
+    assert "        Nested<BindRequest> bind_call," in init
+    projection = java_types.render("TableFunctionProjectionRequest")
+    assert "        Nested<BindRequest> bind_call," in projection
+    assert "        byte[] bind_result," in projection
+    bind = java_types.render("BindRequest")
+    assert "        @Nullable byte[] arguments," in bind
+    assert "        @Nullable ArgumentsLocation arguments_location) implements" in bind
+
+
+def test_nested_wrapper_is_emitted_beside_the_records() -> None:
+    """The wrapper class is a generated target and implements the codec's raw-binary hook."""
+    assert (java_types.NESTED_CLASS, f"{java_types.JAVA_PROTOCOL_DIR}/Nested.java") in java_types.targets()
+    text = java_types.render(java_types.NESTED_CLASS)
+    assert "public final class Nested<T extends ArrowSerializableRecord> implements RawBinary {" in text
+    assert "public static Nested<?> fromRawBinary(byte[] bytes, Type componentType, String path)" in text
+
+
+def test_large_binary_list_takes_the_element_override() -> None:
+    """``list<large_binary>`` maps to ``@ArrowField(LARGE_BINARY) List<byte[]>``."""
+    field = pa.field("join_keys", pa.list_(pa.large_binary()))
+    component = java_types._component(field, "X")
+    assert component.java_type == "List<byte[]>"
+    assert component.annotations == ("@Nullable", "@ArrowField(ArrowFieldType.LARGE_BINARY)")

@@ -115,3 +115,53 @@ def test_checked_in_rust_matches_generator() -> None:
     if not path.exists():
         pytest.skip(f"vgi-rust checkout not found at {path}")
     assert path.read_text(encoding="utf-8") == _emitted(), f"{path} is stale.\n\n{_REGEN_HINT}"
+
+
+def test_nested_binary_records_become_raw_preserving_wrappers() -> None:
+    """`bind_call` (a BindRequest carried as binary) is `Nested<BindRequest>`; other binary records stay bytes."""
+    by_name = {s.name: {f.wire_name: f for f in s.fields} for s in rust_types.build_model()}
+    embedding = {name for name, fields in by_name.items() if "bind_call" in fields}
+    assert embedding == {
+        "InitRequest",
+        "TableFunctionCardinalityRequest",
+        "TableFunctionStatisticsRequest",
+        "TableFunctionDynamicToStringRequest",
+        "TableFunctionPlanRequest",
+        "TableFunctionProjectionRequest",
+    }
+    for name in embedding:
+        field = by_name[name]["bind_call"]
+        assert field.rust_type == "Nested<BindRequest>", name
+        assert field.nested == "BindRequest"
+    # Records outside NESTED_BINARY_RECORDS keep plain bytes (spec §3.2).
+    assert by_name["TableFunctionProjectionRequest"]["bind_result"].rust_type == "Bytes"
+    assert by_name["BindRequest"]["arguments"].rust_type == "Option<Bytes>"
+    assert by_name["BindRequest"]["arguments_location"].rust_type == "Option<ArgumentsLocation>"
+    assert list(by_name["BindRequest"])[-1] == "arguments_location"
+
+
+def test_nested_runtime_accessors_and_validation_are_emitted() -> None:
+    """One `Nested<T>` runtime, a path-naming accessor per wrapped field, and the exactly-one rule."""
+    src = _emitted()
+    assert src.count("pub struct Nested<T> {") == 1
+    assert "impl<T: ::vgi_rpc::VgiArrow> ::vgi_rpc::VgiArrow for Nested<T>" in src
+    assert 'get_at("InitRequest.bind_call")' in src
+    assert "pub fn bind_call_value(&self) -> ::vgi_rpc::Result<&BindRequest>" in src
+    assert "pub fn validate_arguments(&self) -> ::vgi_rpc::Result<()>" in src
+    assert '"invalid_bind_request"' in src
+    assert '"invalid_arguments_ref"' in src
+
+
+def test_list_items_typed_optional_in_python_are_option_in_rust() -> None:
+    """`list[str | None]` keeps null items: Vec<Option<String>>, same derived schema."""
+    by_name = {s.name: {f.wire_name: f.rust_type for f in s.fields} for s in rust_types.build_model()}
+    assert by_name["BindRequest"]["argument_names"] == "Option<Vec<Option<String>>>"
+    assert by_name["BindRequest"]["schema_path"] == "Option<Vec<String>>"
+
+
+def test_emitted_lines_fit_rustfmt_width() -> None:
+    """vgi-rust CI runs `cargo fmt --check`; nothing generated may exceed rustfmt's 100 columns (doc comments aside)."""
+    for line in _emitted().splitlines():
+        if line.lstrip().startswith(("//", '"')):  # rustfmt never breaks comments or string literals
+            continue
+        assert len(line) <= 100, line
