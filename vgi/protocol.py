@@ -204,7 +204,10 @@ _SHA256_HEX_DIGITS = frozenset("0123456789abcdef")
 
 
 def _invalid_arguments_ref(message: str) -> StatusError:
-    return StatusError(message, code=Code.INVALID_ARGUMENT, kind=INVALID_ARGUMENTS_REF_KIND)
+    # The message names the kind too: some clients show only "<type>: <message>".
+    return StatusError(
+        f"{INVALID_ARGUMENTS_REF_KIND}: {message}", code=Code.INVALID_ARGUMENT, kind=INVALID_ARGUMENTS_REF_KIND
+    )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

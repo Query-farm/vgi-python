@@ -169,7 +169,9 @@ def install_arguments_ref_header(
 
 
 def _invalid(message: str) -> StatusError:
-    return StatusError(message, code=Code.INVALID_ARGUMENT, kind=_INVALID_ARGUMENTS_REF_KIND)
+    return StatusError(
+        f"{_INVALID_ARGUMENTS_REF_KIND}: {message}", code=Code.INVALID_ARGUMENT, kind=_INVALID_ARGUMENTS_REF_KIND
+    )
 
 
 def resolve_bind_call(bind_call: BindRequest, ctx: CallContext | None) -> BindRequest:
@@ -207,12 +209,17 @@ def resolve_bind_call(bind_call: BindRequest, ctx: CallContext | None) -> BindRe
     assert location is not None  # BindRequest.__post_init__: exactly one is set
     if ctx is None:
         raise _invalid("argument references need the request's context to resolve")
-    from vgi_rpc.state_ref import ArgumentsRefMissingError
+    from vgi_rpc.state_ref import ArgumentsRefIntegrityError, ArgumentsRefMissingError, InvalidArgumentsRefError
 
     try:
         data = ctx.resolve_argument_ref(location.ref, size=location.size, sha256=location.sha256)
     except ArgumentsRefMissingError:
         raise StatusError(ARGUMENTS_REF_MISSING_MESSAGE, code=Code.NOT_FOUND, kind=ARGUMENTS_REF_MISSING_KIND) from None
+    except (InvalidArgumentsRefError, ArgumentsRefIntegrityError) as exc:
+        # Same kind and code; the message also names the kind, because a client
+        # that shows only "<type>: <message>" (the DuckDB extension) would
+        # otherwise never show the reason a caller can act on.
+        raise StatusError(f"{exc.error_kind}: {exc}", code=exc.error_code, kind=exc.error_kind) from None
     try:
         arguments = Arguments.deserialize_from_bytes(data)
     except Exception as exc:
