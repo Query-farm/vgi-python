@@ -22,6 +22,7 @@ from vgi_rpc import ArrowSerializableDataclass
 from vgi_rpc.errors import StatusError
 
 from vgi.arguments import Arguments
+from vgi.arguments_ref import resolved_arguments
 from vgi.codegen import nested_binary_fixtures as nbf
 from vgi.invocation import FunctionType
 from vgi.protocol import (
@@ -99,7 +100,7 @@ def test_byte_identity_round_trip(entry: dict[str, Any]) -> None:
     assert bind_call.function_type.name == EXPECTED["function_type"]
     assert bind_call.schema_path == EXPECTED["schema_path"]
     assert bind_call.argument_names == EXPECTED["argument_names"]
-    assert bind_call.require_arguments().serialize_to_bytes() == bytes.fromhex(EXPECTED["arguments"]["hex"])
+    assert resolved_arguments(bind_call).serialize_to_bytes() == bytes.fromhex(EXPECTED["arguments"]["hex"])
     assert bind_call.attach_opaque_data == bytes.fromhex(EXPECTED["attach_opaque_data"]["hex"])
     assert bind_call.copy_from is not None and bind_call.copy_from.file_path == EXPECTED["copy_from"]["file_path"]
 
@@ -131,7 +132,7 @@ def test_null_arguments_with_location() -> None:
     expected = entry["arguments_location"]
     assert (location.size, location.sha256) == (expected["size"], expected["sha256"])
     with pytest.raises(StatusError) as excinfo:
-        decoded.require_arguments()
+        resolved_arguments(decoded)
     assert excinfo.value.error_kind == "arguments_not_resolved"
 
 

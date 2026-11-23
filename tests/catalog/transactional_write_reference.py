@@ -42,6 +42,7 @@ from vgi_rpc.rpc import OutputCollector
 
 from vgi._sqlite_wal import enable_wal, immediate_transaction
 from vgi._test_fixtures.simple_writable import _parse_write_options
+from vgi.arguments_ref import resolved_arguments
 from vgi.catalog import (
     AttachOpaqueData,
     Catalog,
@@ -97,7 +98,7 @@ def _identifier(name: str) -> str:
 
 def _table_argument(params: BindParams[None] | InitParams[None] | ProcessParams[None]) -> str:
     bind = present(params).bind_call if isinstance(params, BindParams) else present(params.init_call).bind_call
-    arguments = bind.require_arguments().positional
+    arguments = resolved_arguments(bind).positional
     if len(arguments) != 1 or arguments[0] is None:
         raise _error("one table-name argument is required")
     name = arguments[0].as_py()

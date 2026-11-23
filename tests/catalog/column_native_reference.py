@@ -19,6 +19,7 @@ import pyarrow as pa
 from vgi_rpc import ArrowSerializableDataclass
 from vgi_rpc.rpc import OutputCollector
 
+from vgi.arguments_ref import resolved_arguments
 from vgi.catalog import Catalog, ReadOnlyCatalogInterface, ScanFunctionResult, Schema, SchemaObjectType
 from vgi.catalog.sql import ColumnExpressions, with_column_expressions
 from vgi.invocation import BindResponse, GlobalInitResponse
@@ -34,7 +35,7 @@ COUNT = pa.schema([pa.field("count", pa.int64(), nullable=False)])
 
 def _args(params: Any) -> dict[str, Any]:
     call = params.bind_call if isinstance(params, BindParams) else params.init_call.bind_call
-    target = json.loads(present(call.require_arguments().positional[0]).as_py())
+    target = json.loads(present(resolved_arguments(call).positional[0]).as_py())
     return dict(
         attach_opaque_data=params.attach_opaque_data,
         transaction_opaque_data=params.transaction_opaque_data,

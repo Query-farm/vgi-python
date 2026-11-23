@@ -51,6 +51,7 @@ from vgi_rpc import ArrowSerializableDataclass, Transient
 from vgi_rpc.rpc import OutputCollector
 
 from vgi._sqlite_wal import connect_wal, immediate_transaction
+from vgi.arguments_ref import resolved_arguments
 from vgi.catalog import (
     FUNCTION_VISIBILITY_TABLE_ONLY,
     AttachOpaqueData,
@@ -250,7 +251,7 @@ def _to_arrow(values: list[Any], dtype: pa.DataType) -> pa.Array[Any]:
 
 
 def _qualified_from_bind(params: BindParams[None]) -> str:
-    args = params.bind_call.require_arguments()
+    args = resolved_arguments(params.bind_call)
     if not args.positional or args.positional[0] is None:
         raise ValueError("table_name positional argument is required")
     return str(args.positional[0].as_py())
@@ -258,7 +259,7 @@ def _qualified_from_bind(params: BindParams[None]) -> str:
 
 def _qualified_from_process(params: ProcessParams[None]) -> str:
     assert params.init_call is not None
-    args = params.init_call.bind_call.require_arguments()
+    args = resolved_arguments(params.init_call.bind_call)
     if not args.positional or args.positional[0] is None:
         raise ValueError("table_name positional argument is required")
     return str(args.positional[0].as_py())

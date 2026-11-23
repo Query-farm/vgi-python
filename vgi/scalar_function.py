@@ -64,6 +64,7 @@ from vgi.arguments import (
     _extract_setting_secret_params,
     validate_const_arg_constraints,
 )
+from vgi.arguments_ref import resolved_arguments
 from vgi.cache_control import CacheControl
 from vgi.function_storage import BoundStorage, attach_catalog_bytes
 from vgi.invocation import (
@@ -715,7 +716,7 @@ class ScalarFunctionGenerator(vgi.function.Function):
         assert input.input_schema is not None
         cls._validate_param_varargs_min(input.input_schema)
         cls._validate_param_type_bounds(input.input_schema)
-        cls._validate_const_param_constraints(input.require_arguments())
+        cls._validate_const_param_constraints(resolved_arguments(input))
 
         # Auto-request secrets declared via Secret() annotations on compute()
         # when they haven't been resolved yet (first bind call).
@@ -735,7 +736,7 @@ class ScalarFunctionGenerator(vgi.function.Function):
         auth = ctx.auth if ctx is not None else AuthContext.anonymous()
         secrets_accessor = SecretsAccessor(input.secrets, is_retry=input.resolved_secrets_provided)
         bind_params = BindParameters(
-            input.require_arguments(),
+            resolved_arguments(input),
             input.input_schema,
             input.settings,
             secrets_accessor,
@@ -1190,7 +1191,7 @@ class ScalarFunction(ScalarFunctionGenerator):
             # Use _resolution_index for Arguments.positional lookup
             arg_idx = cast(int, arg._resolution_index)
             # Get the scalar value from arguments
-            scalar = bind_call.require_arguments().positional[arg_idx]
+            scalar = resolved_arguments(bind_call).positional[arg_idx]
             if scalar is None:
                 kwargs[name] = None
             elif name in cls._const_scalar_params:

@@ -39,6 +39,7 @@ from vgi_rpc.rpc import OutputCollector
 from vgi import Worker
 from vgi._sqlite_wal import connect_wal, immediate_transaction
 from vgi._test_fixtures.constraint_facts import fixed_not_null
+from vgi.arguments_ref import resolved_arguments
 from vgi.catalog import Catalog, Schema
 from vgi.catalog.capabilities import CONSTRAINT_ENFORCE, CONSTRAINT_RECORDS_READ, CatalogCapabilities
 from vgi.catalog.catalog_interface import (
@@ -397,7 +398,7 @@ class SchemaReconcileInsert(TableInOutGenerator[None, None]):
         out: OutputCollector,
     ) -> None:
         assert params.init_call is not None
-        spec = _spec_from_args(params.init_call.bind_call.require_arguments().positional)
+        spec = _spec_from_args(resolved_arguments(params.init_call.bind_call).positional)
         _strict_assert_schema(f"INSERT[{spec.name}]", batch.schema, _write_input_schema(USER_SCHEMA))
         names = [f.name for f in USER_SCHEMA]
         for i in range(batch.num_rows):
@@ -431,7 +432,7 @@ class SchemaReconcileUpdate(TableInOutGenerator[None, None]):
         out: OutputCollector,
     ) -> None:
         assert params.init_call is not None
-        spec = _spec_from_args(params.init_call.bind_call.require_arguments().positional)
+        spec = _spec_from_args(resolved_arguments(params.init_call.bind_call).positional)
         cols = batch.schema.names
         if "rowid" not in cols:
             raise ValueError(f"[schema_reconcile] UPDATE[{spec.name}] missing rowid column; got: {cols}")
@@ -476,7 +477,7 @@ class SchemaReconcileDelete(TableInOutGenerator[None, None]):
         out: OutputCollector,
     ) -> None:
         assert params.init_call is not None
-        spec = _spec_from_args(params.init_call.bind_call.require_arguments().positional)
+        spec = _spec_from_args(resolved_arguments(params.init_call.bind_call).positional)
         _strict_assert_schema(f"DELETE[{spec.name}]", batch.schema, _write_input_schema(spec.delete_input_schema))
         n = 0
         for i in range(batch.num_rows):
@@ -496,7 +497,7 @@ class SchemaReconcileScan(TableFunctionGenerator[None, None]):
 
     @classmethod
     def on_bind(cls, params: BindParams[None]) -> BindResponse:
-        spec = _spec_from_args(params.bind_call.require_arguments().positional)
+        spec = _spec_from_args(resolved_arguments(params.bind_call).positional)
         return BindResponse(output_schema=spec.table_schema)
 
     @classmethod
@@ -508,7 +509,7 @@ class SchemaReconcileScan(TableFunctionGenerator[None, None]):
     @classmethod
     def process(cls, params: ProcessParams[None], state: None, out: OutputCollector) -> None:
         assert params.init_call is not None
-        spec = _spec_from_args(params.init_call.bind_call.require_arguments().positional)
+        spec = _spec_from_args(resolved_arguments(params.init_call.bind_call).positional)
         out_schema = params.output_schema
         rows: list[dict[str, Any]] = []
         for rid, payload in _all_rows(spec):

@@ -331,6 +331,8 @@ vgi-client --input data.parquet --function sum_all_columns --worker vgi-fixture-
 | `VGI_RPC_MAX_REQUEST_BYTES` | `vgi-serve --http` (and `vgi-fixture-http` with the vendor): advertised and enforced request cap; clients upload larger requests via the vendor's upload URLs |
 | `VGI_RPC_EXTERNALIZE_THRESHOLD_BYTES` / `VGI_RPC_EXTERNAL_COMPRESSION` / `VGI_RPC_MAX_UPLOAD_BYTES` | With the vendor: result externalization threshold (default 1 MiB), its compression, and the advertised upload size (unset: the inbound fetch cap) |
 | `VGI_RPC_MAX_FETCH_BYTES` | With the vendor: largest request fetched from an inbound upload pointer. Default 256 MiB, raised to `VGI_RPC_MAX_UPLOAD_BYTES` when that is larger; an upload cap above an explicit fetch cap fails startup. vgi-rpc never advertises an upload size above it |
+| `VGI_ARGUMENTS_REF_BYTES` | Protocol 3.4 argument references: the `VGI-Arguments-Ref-Bytes` value advertised with the upload-URL capability (default 4194304). Arguments IPC over `min(this, VGI-Max-Request-Bytes / 4)` is uploaded once and bound by reference (`vgi/arguments_ref.py`). Sent only when the server vends upload URLs and its storage can fetch objects by id |
+| `VGI_TEST_DISABLE_ARGUMENTS_REF` | Test switch: `1` stops sending `VGI-Arguments-Ref-Bytes` (the extension's `arguments_ref_fallback.test`) |
 
 ### Worker Debug Mode
 

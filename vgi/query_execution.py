@@ -16,6 +16,7 @@ from vgi_rpc.rpc import AuthContext, OutputCollector, current_auth
 
 from vgi import attach_capabilities, attach_secret_options
 from vgi.arguments import Arg
+from vgi.arguments_ref import resolved_arguments
 from vgi.catalog.query import (
     MAX_QUERY_TOKEN_BYTES,
     QUERY_AUTOMATIC,
@@ -263,7 +264,7 @@ class _QueryStreamState(ArrowSerializableDataclass):
 def _check_bind(request: BindRequest) -> None:
     if request.function_type != FunctionType.TABLE or request.schema_path not in (None, []):
         raise ValueError("catalog query executor is a schema-less TABLE function")
-    arguments = request.require_arguments()
+    arguments = resolved_arguments(request)
     if len(arguments.positional) != 2 or arguments.named:
         raise ValueError("catalog query executor requires exactly a receipt and one parameter batch")
     for value in arguments.positional:

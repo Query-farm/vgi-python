@@ -88,6 +88,7 @@ from vgi._redact import short_hash
 from vgi.aggregate_function import AggregateBindParams, AggregateFunction
 from vgi.argument_spec import ArgumentSpec, extract_argument_specs
 from vgi.arguments import Arguments
+from vgi.arguments_ref import resolve_request_arguments, resolved_arguments
 from vgi.catalog import CatalogInterface
 from vgi.catalog._dispatch import call_catalog
 from vgi.catalog.attach_option import AttachOptionSpec, extract_attach_option_specs
@@ -219,8 +220,8 @@ from vgi.protocol import (
     TableProducerState,
     TablesResponse,
     TransactionBeginResponse,
-    VgiCallState,
     VgiProtocol,
+    VgiStreamInit,
     ViewsResponse,
 )
 from vgi.rpc_server import build_rpc_server
@@ -2660,7 +2661,7 @@ class Worker:
 
         return self._match_function_arguments(
             function_name=request.function_name,
-            arguments=request.require_arguments(),
+            arguments=resolved_arguments(request),
             input_schema=request.input_schema,
             argument_names=request.argument_names,
             candidates=candidates,
@@ -3337,6 +3338,8 @@ class Worker:
 
         Implements VgiProtocol.bind().
         """
+        # Argument references (protocol 3.4) resolve at the turn's entry.
+        request = resolve_request_arguments(request, ctx)
         self._vgi_tracer.set_current_span_attributes(
             {
                 "vgi.function.name": request.function_name,
@@ -3386,6 +3389,7 @@ class Worker:
     ) -> TableFunctionProjectionResponse:
         """Validate a pure optional projection proposal before any plan rewrite."""
         request.__post_init__()
+        request = resolve_request_arguments(request, ctx)
         attach_plaintext = self._unwrap_attach_full(request.bind_call.attach_opaque_data)
         func_cls = self._resolve_function(request.bind_call)
         self._validate_required_settings(func_cls, request.bind_call)
@@ -3462,6 +3466,7 @@ class Worker:
 
         Implements VgiProtocol.table_function_cardinality().
         """
+        request = resolve_request_arguments(request, ctx)
         attach_plaintext = self._unwrap_attach_full(getattr(request.bind_call, "attach_opaque_data", None))
         func_cls = self._resolve_function(request.bind_call)
         if not issubclass(func_cls, TableFunctionGenerator):
@@ -3605,6 +3610,7 @@ class Worker:
         so an author cannot forget the consistency anchor or mis-bind the
         fingerprint.
         """
+        request = resolve_request_arguments(request, ctx)
         attach_plaintext = self._unwrap_attach_full(getattr(request.bind_call, "attach_opaque_data", None))
         func_cls = self._resolve_function(request.bind_call)
 
@@ -3648,6 +3654,7 @@ class Worker:
         of the serialized ColumnStatistics batch (same wire shape as
         catalog_table_column_statistics_get), or None when stats are unknown.
         """
+        request = resolve_request_arguments(request, ctx)
         attach_plaintext = self._unwrap_attach_full(getattr(request.bind_call, "attach_opaque_data", None))
         func_cls = self._resolve_function(request.bind_call)
         if not issubclass(func_cls, TableFunctionGenerator):
@@ -3676,6 +3683,7 @@ class Worker:
         """
         empty = TableFunctionDynamicToStringResponse(keys=[], values=[])
         try:
+            request = resolve_request_arguments(request, ctx)
             attach_plaintext = self._unwrap_attach_full(getattr(request.bind_call, "attach_opaque_data", None))
             func_cls = self._resolve_function(request.bind_call)
         except Exception:
@@ -4154,13 +4162,16 @@ class Worker:
         # payload to this request's shard and execution id.
         payload = cold_storage.open_sealed(FrameworkNS.BUFFERING_INIT, init_key, sealed, signing_key=self._signing_key)
         init_call, init_response = _decode_table_buffering_init(payload)
+        # The stored init keeps the bind call as received (an argument
+        # reference stays a reference); resolve it for this turn.
+        init_call = resolve_request_arguments(init_call, ctx)
         # AttachOpaqueData is a NewType over bytes; just pass the bytes
         # through. Empty when the catalog doesn't seal attaches.
         attach_id = bytes(catalog_bytes or b"")
         params = TableBufferingParams(
             args=func_cls._parse_arguments(
                 func_cls.FunctionArguments,
-                init_call.bind_call.require_arguments(),
+                resolved_arguments(init_call.bind_call),
             ),
             init_call=init_call,
             init_response=init_response,
@@ -4814,6 +4825,7 @@ class Worker:
         Implements VgiProtocol.init(). Creates the appropriate state object
         based on function type and creates the appropriate state object.
         """
+        request = resolve_request_arguments(request, ctx)
         self._vgi_tracer.set_current_span_attributes(
             {
                 "vgi.function.name": request.bind_call.function_name,
@@ -4834,8 +4846,8 @@ class Worker:
         # shard their cold-built storage on its UUID. It is threaded in memory
         # only (a Transient field): a later HTTP turn re-opens the sealed
         # envelope under its own auth instead of reading a decrypted copy back
-        # off the wire, because serialized state reaches the access log in
-        # plaintext — see VgiCallState in vgi/protocol.py.
+        # off the wire, so it never lands in a state token — see VgiStreamInit
+        # in vgi/protocol.py.
         attach_plaintext = self._unwrap_attach_full(getattr(request.bind_call, "attach_opaque_data", None))
         if request.bind_call.function_name == QUERY_EXECUTOR:
             from vgi.query_execution import check_init
@@ -4894,18 +4906,23 @@ class Worker:
         state: ProcessState
         input_schema: pa.Schema | None
 
-        # The stream's call state: everything about this invocation that is
-        # settled by the time init returns. The transport seals it once and
-        # replays it; nothing below may mutate it afterwards.
-        call_state = VgiCallState(
-            init_call=request,
-            init_response=init_response,
-        )
+        # Everything about this invocation that is settled by the time init
+        # returns, carried in the stream state as the vgi-rpc StateRef ``init``
+        # (large-values spec §6). Created here, while handling the init request
+        # (the only place ctx.state_ref() is allowed); later turns copy the ref.
+        # The bind call re-encodes as received, so an argument reference, never
+        # the resolved argument, goes into it; the output schema goes in only
+        # when the stream's own schema (in vgi-rpc's call token) is narrower.
+        stream_init = VgiStreamInit(init_call=request, init_response=init_response)
+
+        def init_ref() -> Any:
+            return ctx.state_ref(VgiStreamInit.for_stream(request, init_response, output_schema))
 
         if isinstance(instance, ScalarFunctionGenerator) and not isinstance(instance, TableInOutGenerator):
             # Scalar function: exchange state with per-batch process()
             state = ScalarExchangeState(
-                _call=call_state,
+                init=init_ref(),
+                _init=stream_init,
                 _attach_pt=attach_plaintext,
                 _func_cls=type(instance),
                 _vgi_tracer=self._vgi_tracer,
@@ -4933,7 +4950,7 @@ class Worker:
             params = TableBufferingParams(
                 args=type(instance)._parse_arguments(
                     type(instance).FunctionArguments,
-                    request.bind_call.require_arguments(),
+                    resolved_arguments(request.bind_call),
                 ),
                 init_call=request,
                 init_response=init_response,
@@ -5006,7 +5023,7 @@ class Worker:
             params = ProcessParams(
                 args=type(instance)._parse_arguments(
                     type(instance).FunctionArguments,
-                    request.bind_call.require_arguments(),
+                    resolved_arguments(request.bind_call),
                     blended=type(instance)._is_blended(),
                 ),
                 init_call=request,
@@ -5035,7 +5052,8 @@ class Worker:
             if request.phase == TableInOutFunctionInitPhase.INPUT:
                 user_state = type(instance).initial_state(params)
                 state = TableInOutExchangeState(
-                    _call=call_state,
+                    init=init_ref(),
+                    _init=stream_init,
                     _attach_pt=attach_plaintext,
                     _func_cls=type(instance),
                     _params=params,
@@ -5107,7 +5125,7 @@ class Worker:
             params = ProcessParams(
                 args=type(instance)._parse_arguments(
                     type(instance).FunctionArguments,
-                    request.bind_call.require_arguments(),
+                    resolved_arguments(request.bind_call),
                     blended=type(instance)._is_blended(),
                 ),
                 init_call=request,
@@ -5137,7 +5155,8 @@ class Worker:
                 params = dataclasses.replace(params, current_pushdown_filters=current_filters)
             user_state = type(instance).initial_state(params)
             state = TableProducerState(
-                _call=call_state,
+                init=init_ref(),
+                _init=stream_init,
                 _attach_pt=attach_plaintext,
                 _func_cls=type(instance),
                 _params=params,
@@ -5154,7 +5173,6 @@ class Worker:
             state=state,
             input_schema=input_schema or pa.schema([]),
             header=init_response,
-            call_state=call_state,
         )
 
     # ---------------------------------------------------------------------------

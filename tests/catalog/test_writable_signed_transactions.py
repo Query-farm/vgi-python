@@ -35,7 +35,7 @@ from vgi.client.catalog_mixin import CatalogClientError
 from vgi.client.errors import ClientError
 from vgi.invocation import GlobalInitResponse
 from vgi.meta_worker import MetaWorker
-from vgi.protocol import VgiCallState
+from vgi.protocol import VgiStreamInit
 from vgi.rpc_server import build_rpc_server
 from vgi.serve import create_app
 
@@ -225,7 +225,7 @@ def test_signed_http_wrong_attachment_rejected_before_service(service: SQLiteTra
 def test_signed_http_callback_token_survives_init_continuation_and_finalize(
     service: SQLiteTransactorService, monkeypatch: pytest.MonkeyPatch, use_meta_worker: bool
 ) -> None:
-    """All callbacks see provider bytes, while serialized call state keeps the seal."""
+    """All callbacks see provider bytes, while the serialized stream init keeps the seal."""
     seen: list[tuple[str, bytes | None]] = []
     original_bind = GenericTableInsert.on_bind
     original_process = GenericTableInsert.process
@@ -238,7 +238,7 @@ def test_signed_http_callback_token_survives_init_continuation_and_finalize(
         assert bind.transaction_opaque_data == sealed
         assert params.transaction_opaque_data == plaintext
         if phase in {"process", "finalize"}:
-            state = VgiCallState(init_call=params.init_call, init_response=params.init_response)
+            state = VgiStreamInit(init_call=params.init_call, init_response=params.init_response)
             raw = state.serialize_to_bytes()
             assert plaintext is not None and sealed is not None
             assert plaintext not in raw

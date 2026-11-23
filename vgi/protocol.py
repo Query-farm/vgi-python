@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Protocol, cast, get_
 
 import pyarrow as pa
 import pyarrow.compute as pc
-from vgi_rpc import ArrowSerializableDataclass, ArrowType, IpcValidation, Transient
+from vgi_rpc import ArrowSerializableDataclass, ArrowType, IpcValidation, StateRef, Transient
 from vgi_rpc.errors import Code, StatusError
 from vgi_rpc.rpc import (
     AnnotatedBatch,
@@ -47,6 +47,7 @@ from vgi_rpc.rpc import (
 )
 
 from vgi.arguments import Arguments
+from vgi.arguments_ref import resolve_request_arguments, resolved_arguments
 from vgi.cache_control import CACHE_SCOPE_CATALOG, CacheControl
 from vgi.catalog.capabilities import (
     ROW_SCALAR_EXPRESSION,
@@ -328,6 +329,11 @@ class BindRequest(ArrowSerializableDataclass):
     # dataclasses.replace(), which copies every init field, from carrying the
     # bytes onto a request whose fields changed: the copy has another id.
     _wire: Annotated[tuple[int, bytes] | None, Transient()] = field(default=None, repr=False, compare=False)
+    # The location a request resolved by with_resolved_arguments() arrived with,
+    # as ``(id(owner), location)`` for the same reason as ``_wire``.
+    _received_location: Annotated[tuple[int, ArgumentsLocation] | None, Transient()] = field(
+        default=None, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         """Require exactly one of ``arguments`` and ``arguments_location``."""
@@ -350,25 +356,6 @@ class BindRequest(ArrowSerializableDataclass):
         held = self.wire_bytes
         return held if held is not None else ArrowSerializableDataclass.serialize_to_bytes(self)
 
-    def require_arguments(self) -> Arguments:
-        """The inline (or already resolved) arguments.
-
-        Returns:
-            The bound [`Arguments`][].
-
-        Raises:
-            StatusError: ``arguments_not_resolved`` (``FAILED_PRECONDITION``) when
-                the arguments were externalized to ``arguments_location`` and
-                nothing has resolved them yet.
-        """
-        if self.arguments is None:
-            raise StatusError(
-                "BindRequest arguments are externalized (arguments_location) and were not resolved",
-                code=Code.FAILED_PRECONDITION,
-                kind="arguments_not_resolved",
-            )
-        return self.arguments
-
     @property
     def wire_bytes(self) -> bytes | None:
         """The exact bytes this request was decoded from; ``None`` if built from fields."""
@@ -383,9 +370,25 @@ class BindRequest(ArrowSerializableDataclass):
         the value) but still serializes as the received bytes, so the reference,
         never the value, goes back on the wire or into stream state.
         """
+        location = self.received_arguments_location
         resolved = dataclasses.replace(self, arguments=arguments, arguments_location=None)
         object.__setattr__(resolved, "_wire", (id(resolved), self.serialize_to_bytes()))
+        if location is not None:
+            object.__setattr__(resolved, "_received_location", (id(resolved), location))
         return resolved
+
+    @property
+    def received_arguments_location(self) -> ArgumentsLocation | None:
+        """The ``arguments_location`` this request arrived with, even once resolved.
+
+        ``arguments_location`` itself on an unresolved request; on one returned
+        by ``with_resolved_arguments``,
+        the location it was resolved from. ``None`` when the arguments came inline.
+        """
+        if self.arguments_location is not None:
+            return self.arguments_location
+        held = self._received_location
+        return held[1] if held is not None and held[0] == id(self) else None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -1521,83 +1524,169 @@ class IndexCreateRequest(ArrowSerializableDataclass):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class VgiCallState(ArrowSerializableDataclass):
+class VgiStreamInit(ArrowSerializableDataclass):
     """The half of a VGI stream's state that is fixed for the whole call.
 
-    Every VGI stream — scalar exchange, table producer, table-in-out — is
-    parameterized by the same trio, and none of it can change once the
-    stream exists: the init request that opened it, the worker's response to
-    that init, and the unwrapped attach plaintext.
+    Every VGI stream (scalar exchange, table producer, table-in-out) is
+    parameterized by the init request that opened it and the worker's
+    response to that init, and neither can change once the stream exists. The
+    stream state carries them as one vgi-rpc ``StateRef`` field, ``init``
+    (vgi ``docs/large-values-3.4.md`` §6): built while handling the init
+    request, inline in the cursor when small, stored once and named by a
+    ~130-byte sealed tag when large, and resolved at the entry of every later
+    turn. VGI passes nothing in vgi-rpc's ``call_state`` slot.
 
-    Under HTTP this travels in its own token, sealed once at ``/init`` and
-    echoed by the client thereafter (see
-    :data:`vgi_rpc.metadata.CALL_STATE_KEY`).  Keeping it out of the
-    per-turn state token is worth doing because it dominates: for a plain
-    ``sequence()`` scan it was 7,224 of the 8,344 serialized state bytes,
-    and re-parsing it cost more than everything else in a turn combined.
+    The bind call inside ``init_call`` serializes as the bytes the client sent
+    (raw preservation), so with an argument reference it is the small
+    ``arguments_location``, never the resolved argument, that goes into the
+    ref. Each turn resolves the arguments again through vgi-rpc's object
+    cache.
 
-    Frozen, and reachable only through immutable fields, because the server
-    hands one instance to every concurrent turn of the stream — the
-    contract :meth:`StreamState.bind_call_state` sets out.
+    The output schema is carried once. vgi-rpc's call token already holds the
+    stream's output schema, so when that is the whole init output schema (no
+    narrowing projection) ``init_call.output_schema`` is left empty here and
+    ``output_schema_from_stream`` is set; the turn's entry restores it from
+    the stream's own schema. A narrowing projection keeps it.
 
-    The attach is deliberately **not** carried here in unwrapped form. The
+    The attach is deliberately **not** carried here in unwrapped form: the
     sealed envelope is already reachable at
-    ``init_call.bind_call.attach_opaque_data``, so a decrypted copy would be
-    redundant — and worse than redundant, because these bytes do not stay
-    sealed at rest: the access log records the *plaintext* state at DEBUG
-    (``vgi_rpc.rpc._server``, deliberately, as an audit artifact), and on the
-    init turn the response state is ``call_state || cursor``. A decrypted
-    attach here therefore base64s catalog credentials into the log, which is
-    exactly what ``loggable_attach_options`` exists to prevent elsewhere. It
-    would also sit decrypted in the transport's call-state cache.
-    :meth:`_VgiCallStateHolder._attach_plaintext` re-opens the envelope per
-    turn instead, which additionally restores the per-turn identity check.
+    ``init_call.bind_call.attach_opaque_data``, and a decrypted copy would put
+    catalog credentials into every state token. It is re-opened per turn
+    (:meth:`_VgiStreamInitHolder._attach_plaintext`), which also restores the
+    per-turn identity check.
 
     Attributes:
         init_call: The [`InitRequest`][] that opened this stream.
         init_response: The worker's [`GlobalInitResponse`][] for that init.
+        output_schema_from_stream: ``init_call.output_schema`` was left out
+            because it equals the stream's output schema.
 
     """
 
     init_call: Annotated[InitRequest, ArrowType(pa.binary())]
     init_response: Annotated[GlobalInitResponse, ArrowType(pa.binary())]
+    output_schema_from_stream: bool = False
+
+    @classmethod
+    def for_stream(
+        cls, init_call: InitRequest, init_response: GlobalInitResponse, stream_output_schema: pa.Schema
+    ) -> VgiStreamInit:
+        """The value to put in the stream's ``init`` ref, with the output schema carried once.
+
+        Args:
+            init_call: The (argument-resolved) init request.
+            init_response: The worker's response to it.
+            stream_output_schema: The output schema the stream is opened with.
+
+        Returns:
+            The record, with ``init_call.output_schema`` elided when the stream
+            schema carries it.
+
+        """
+        if stream_output_schema.equals(init_call.output_schema, check_metadata=True):
+            return cls(
+                init_call=dataclasses.replace(init_call, output_schema=pa.schema([])),
+                init_response=init_response,
+                output_schema_from_stream=True,
+            )
+        return cls(init_call=init_call, init_response=init_response)
+
+    def restored(self, stream_output_schema: pa.Schema | None) -> VgiStreamInit:
+        """This record with an elided output schema put back from the stream's schema.
+
+        Args:
+            stream_output_schema: The stream's output schema, when the turn has
+                it (``None`` on a cancel, which has no output collector).
+
+        Returns:
+            A record whose ``init_call.output_schema`` is the init output schema
+            (left empty only when it was elided and no stream schema is known).
+
+        """
+        if not self.output_schema_from_stream or stream_output_schema is None:
+            return self
+        return VgiStreamInit(
+            init_call=dataclasses.replace(self.init_call, output_schema=stream_output_schema),
+            init_response=self.init_response,
+        )
 
 
 @dataclass
-class _VgiCallStateHolder:
-    """Mixin giving a VGI stream state access to its :class:`VgiCallState`.
+class _VgiStreamInitHolder:
+    """Mixin giving a VGI stream state its ``init`` ref and the resolved init.
 
-    The framework calls :meth:`bind_call_state` on both transports — once at
-    construction under pipe, once per turn under HTTP — so ``self._call``
-    reads the same on either.  It is ``Transient`` because the call state is
-    the transport's to serialize, not this object's; that is the whole point
-    of the split.
+    ``init`` is the one serialized field: a vgi-rpc ``StateRef`` to a
+    :class:`VgiStreamInit`, created with ``ctx.state_ref()`` in the worker's
+    init handler and copied, never re-created, by every later turn.
+
+    Under pipe the state never leaves the process and the worker constructs it
+    with ``_init`` already set, so nothing is resolved per turn. Under HTTP
+    each turn deserializes the state and vgi-rpc calls :meth:`rehydrate`,
+    which has no call context, so the init (and the argument reference inside
+    it) is resolved at the turn's entry instead: the first thing ``process``,
+    ``exchange`` and ``on_cancel`` do is :meth:`_enter_turn`, which resolves
+    ``init`` with ``ctx.resolve``, resolves the bind call's arguments, and
+    then rebuilds the transient fields (:meth:`_hydrate`).
     """
 
-    CALL_STATE_TYPE: ClassVar[type[ArrowSerializableDataclass] | None] = VgiCallState
+    init: StateRef | None = field(default=None, repr=False)
+    """The stream's :class:`VgiStreamInit`, by reference (vgi-rpc ``StateRef``)."""
 
-    _call: Annotated[VgiCallState, Transient()] = field(default=None, repr=False)  # type: ignore[assignment]
+    _init: Annotated[VgiStreamInit | None, Transient()] = field(default=None, repr=False)
+    """The resolved init (output schema restored, arguments resolved), in memory only."""
 
     _attach_pt: Annotated[bytes | None, Transient()] = field(default=None, repr=False)
     """This call's attach plaintext (``uuid || catalog_bytes``), in memory only.
 
     ``Transient`` is the whole point: the worker needs the decrypted attach to
-    shard storage, but these bytes must never reach the wire or the access log
-    (see :class:`VgiCallState`). Populated at construction under pipe — where
-    the worker already unwrapped it and there is no seal to reopen — and
-    re-derived from the sealed envelope on each HTTP turn by
-    :meth:`_attach_plaintext`.
+    shard storage, but these bytes must never reach the wire (see
+    :class:`VgiStreamInit`). Populated at construction under pipe, where the
+    worker already unwrapped it, and re-derived from the sealed envelope on
+    each HTTP turn by :meth:`_attach_plaintext`.
     """
 
-    def bind_call_state(self, call_state: ArrowSerializableDataclass | None) -> None:
-        """Attach the stream's call state (framework hook)."""
-        self._call = cast("VgiCallState", call_state)
+    _worker: Annotated[Any, Transient()] = field(default=None, repr=False)
+    """The worker serving this HTTP turn, set by :meth:`rehydrate`."""
+
+    def rehydrate(self, implementation: object) -> None:
+        """Remember the worker; the init is resolved at the turn's entry (:meth:`_enter_turn`)."""
+        self._worker = implementation
+        self._init = None
+
+    def _enter_turn(self, ctx: CallContext, stream_output_schema: pa.Schema | None) -> VgiStreamInit:
+        """Resolve the init at the start of a turn, once; return it.
+
+        Args:
+            ctx: The turn's call context.
+            stream_output_schema: The stream's output schema (from the turn's
+                output collector), or ``None`` when the turn has none.
+
+        Returns:
+            The resolved init.
+
+        """
+        if self._init is not None:
+            return self._init
+        if self.init is None or self._worker is None:
+            raise RuntimeError(f"{type(self).__name__} has no init state to resolve")
+        value = ctx.resolve(self.init, VgiStreamInit).restored(stream_output_schema)
+        init_call = resolve_request_arguments(value.init_call, ctx)
+        init = VgiStreamInit(init_call=init_call, init_response=value.init_response)
+        self._init = init
+        self._attach_pt = self._attach_plaintext(self._worker)
+        self._hydrate(
+            self._worker, have_output_schema=stream_output_schema is not None or not value.output_schema_from_stream
+        )
+        return init
+
+    def _hydrate(self, worker: Any, *, have_output_schema: bool) -> None:
+        """Rebuild the transient fields from ``self._init`` (overridden per state)."""
 
     def _attach_plaintext(self, worker: Any) -> bytes | None:
         """Open this call's attach envelope, returning ``uuid || catalog_bytes``.
 
         Re-opened per turn from the sealed envelope rather than carried
-        decrypted in :class:`VgiCallState` — see that class for why the
+        decrypted in :class:`VgiStreamInit`; see that class for why the
         decrypted form must not be serialized.
 
         Costs one AEAD open, and only for a stream that actually has an
@@ -1613,43 +1702,38 @@ class _VgiCallStateHolder:
             context.
 
         """
-        sealed = self._call.init_call.bind_call.attach_opaque_data
+        assert self._init is not None
+        sealed = self._init.init_call.bind_call.attach_opaque_data
         if sealed is None:
             return None
         return cast("bytes | None", worker._unwrap_attach_full(sealed))
 
 
 @dataclass
-class ScalarExchangeState(_VgiCallStateHolder, ExchangeState):
+class ScalarExchangeState(_VgiStreamInitHolder, ExchangeState):
     """Exchange state for scalar function streams.
 
     Calls ``ScalarFunctionGenerator.process()`` per batch. Each ``exchange()``
     call sends one input batch and receives one output batch.
 
-    The init request, init response, and attach plaintext live in the
-    stream's :class:`VgiCallState` — sealed once by the transport, not
-    re-serialized per exchange.  This class carries no cursor fields at all:
-    a scalar exchange is stateless between batches, so its state token is
-    now empty.  ``_func_cls`` is transient and restored via ``rehydrate()``.
+    The init request and init response live in the ``init`` ref (see
+    :class:`VgiStreamInit`); a scalar exchange is otherwise stateless between
+    batches. ``_func_cls`` is transient and restored at the turn's entry.
 
     """
 
     _func_cls: Annotated[type[ScalarFunctionGenerator], Transient()] = field(default=None, repr=False)  # type: ignore[assignment]
     _vgi_tracer: Annotated[VgiTracer, Transient()] = field(default_factory=get_noop_tracer, repr=False)
 
-    def rehydrate(self, implementation: object) -> None:
+    def _hydrate(self, worker: Any, *, have_output_schema: bool) -> None:
         """Restore ``_func_cls`` from the worker's function registry."""
-        from vgi.worker import Worker
-
-        worker: Worker = implementation  # type: ignore[assignment]
-        # HTTP turn: re-open the sealed attach rather than read a decrypted
-        # copy off the wire (see VgiCallState). No-op without a catalog.
-        self._attach_pt = self._attach_plaintext(worker)
-        self._func_cls = worker._resolve_function(self._call.init_call.bind_call)  # type: ignore[assignment]
+        assert self._init is not None
+        self._func_cls = worker._resolve_function(self._init.init_call.bind_call)
         self._vgi_tracer = worker._vgi_tracer
 
     def exchange(self, input: AnnotatedBatch, out: OutputCollector, ctx: CallContext) -> None:
         """Process one input batch through the scalar function."""
+        init = self._enter_turn(ctx, out.output_schema)
         cls = self._func_cls
         batch = input.batch
 
@@ -1666,19 +1750,19 @@ class ScalarExchangeState(_VgiCallStateHolder, ExchangeState):
         timer = _timed_exchange(
             self._vgi_tracer,
             "vgi.execute.scalar",
-            self._call.init_call.bind_call.function_name,
-            self._call.init_call.bind_call.function_type.value,
-            self._call.init_response.execution_id,
+            init.init_call.bind_call.function_name,
+            init.init_call.bind_call.function_type.value,
+            init.init_response.execution_id,
         )
         with timer:
             output = cls.process(
                 batch=batch,
-                init_call=self._call.init_call,
-                init_response=self._call.init_response,
+                init_call=init.init_call,
+                init_response=init.init_response,
                 # Shard on the UUID of the full attach plaintext persisted at init.
                 storage=BoundStorage(
                     cls.storage,
-                    self._call.init_response.execution_id,
+                    init.init_response.execution_id,
                     attach_plaintext=self._attach_pt,
                 ),
                 auth_context=ctx.auth,
@@ -2451,7 +2535,7 @@ def _replay_filter_history(filters: Any, history: list[bytes], order: list[str])
 
 
 @dataclass
-class TableProducerState(_VgiCallStateHolder, ProducerState):
+class TableProducerState(_VgiStreamInitHolder, ProducerState):
     """Producer state for table function streams.
 
     Calls ``TableFunctionGenerator.process()`` per tick. Each ``produce()``
@@ -2461,10 +2545,10 @@ class TableProducerState(_VgiCallStateHolder, ProducerState):
     filters from the init request are automatically applied to each output
     batch after ``process()`` produces it.
 
-    The init request, init response, and attach plaintext live in the
-    stream's :class:`VgiCallState`, which the transport seals once at init.
-    What remains here is the cursor: ``_user_state_bytes``, and nothing
-    else.  Transient fields are restored via ``rehydrate()``.
+    The init request and init response live in the ``init`` ref (see
+    :class:`VgiStreamInit`). What remains here is the cursor:
+    ``_user_state_bytes`` and the dynamic-filter history. Transient fields are
+    restored at the turn's entry.
 
     ``_user_state`` is serialized when it is an ``ArrowSerializableDataclass``,
     allowing iteration state to survive HTTP round-trips.  When the state type
@@ -2506,31 +2590,29 @@ class TableProducerState(_VgiCallStateHolder, ProducerState):
             self._user_state_bytes = self._user_state.serialize_to_bytes()
         return super()._to_row_dict()
 
-    def rehydrate(self, implementation: object) -> None:
-        """Restore transient fields from serialized init data."""
-        from vgi.worker import Worker
-
-        worker: Worker = implementation  # type: ignore[assignment]
-        # HTTP turn: re-open the sealed attach rather than read a decrypted
-        # copy off the wire (see VgiCallState). No-op without a catalog.
-        self._attach_pt = self._attach_plaintext(worker)
-        func_cls = worker._resolve_function(self._call.init_call.bind_call)
+    def _hydrate(self, worker: Any, *, have_output_schema: bool) -> None:
+        """Restore transient fields from the resolved init (an HTTP turn's entry)."""
+        init = self._init
+        assert init is not None
+        func_cls = worker._resolve_function(init.init_call.bind_call)
         assert issubclass(func_cls, TableFunctionGenerator)
         self._func_cls = func_cls
         self._vgi_tracer = worker._vgi_tracer
-        proj_ids = _effective_projection_ids(func_cls, self._call.init_call.projection_ids)
-        output_schema = project_schema(proj_ids, self._call.init_call.output_schema)
+        proj_ids = _effective_projection_ids(func_cls, init.init_call.projection_ids)
+        # A cancel turn of a stream whose init carries no output schema (it is
+        # the stream's) has no schema to narrow; on_cancel gets an empty one.
+        output_schema = project_schema(proj_ids, init.init_call.output_schema) if have_output_schema else pa.schema([])
         self._params = ProcessParams(
             args=func_cls._parse_arguments(
                 func_cls.FunctionArguments,
-                self._call.init_call.bind_call.require_arguments(),
+                resolved_arguments(init.init_call.bind_call),
                 blended=func_cls._is_blended(),
             ),
-            init_call=self._call.init_call,
-            init_response=self._call.init_response,
+            init_call=init.init_call,
+            init_response=init.init_response,
             output_schema=output_schema,
-            settings=_batch_to_scalar_dict(self._call.init_call.bind_call.settings),
-            secrets=SecretsAccessor(self._call.init_call.bind_call.secrets).to_dict(),
+            settings=_batch_to_scalar_dict(init.init_call.bind_call.settings),
+            secrets=SecretsAccessor(init.init_call.bind_call.secrets).to_dict(),
             # The worker's key, or split_payloads refuses on every continuation.
             # Over HTTP the params are rebuilt per tick, so omitting it here made
             # a rehydrated split scan reject tokens this same process had sealed
@@ -2538,26 +2620,26 @@ class TableProducerState(_VgiCallStateHolder, ProducerState):
             signing_key=worker._signing_key,
             # Storage shards on the full plaintext (uuid||catalog_bytes); the
             # body sees only the stripped catalog bytes. Re-opened from the
-            # sealed envelope rather than carried decrypted -- see VgiCallState.
+            # sealed envelope rather than carried decrypted -- see VgiStreamInit.
             storage=BoundStorage(
                 func_cls.storage,
-                self._call.init_response.execution_id,
+                init.init_response.execution_id,
                 attach_plaintext=self._attach_pt,
             ),
             attach_opaque_data=attach_catalog_bytes(self._attach_pt),
-            transaction_opaque_data=worker._unwrap_transaction_for(self._call.init_call),
+            transaction_opaque_data=worker._unwrap_transaction_for(init.init_call),
         )
         # Re-derive pushdown filters before any fallback initial_state() call so
         # manual consumers see the same required/current state after HTTP rehydrate.
         self._auto_apply = func_cls._should_auto_apply_filters()
-        if self._call.init_call.pushdown_filters is not None:
+        if init.init_call.pushdown_filters is not None and have_output_schema:
             # Everything re-parsed here was validated when it first arrived.
             with replaying_accepted_state():
                 self._pushdown_filters = _replay_filter_history(
                     func_cls.pushdown_filters(
-                        self._call.init_call.pushdown_filters,
-                        join_keys=self._call.init_call.join_keys,
-                        output_schema=self._call.init_call.output_schema,
+                        init.init_call.pushdown_filters,
+                        join_keys=init.init_call.join_keys,
+                        output_schema=init.init_call.output_schema,
                     ),
                     self._filter_delta_history,
                     self._filter_predicate_order,
@@ -2577,6 +2659,7 @@ class TableProducerState(_VgiCallStateHolder, ProducerState):
 
     def process(self, input: AnnotatedBatch, out: OutputCollector, ctx: CallContext) -> None:
         """Process tick batch — check for dynamic filter updates, then produce."""
+        self._enter_turn(ctx, out.output_schema)
         if input.custom_metadata is not None:
             encoded = input.custom_metadata.get(b"vgi_pushdown_filters")
             if encoded is not None:
@@ -2604,6 +2687,7 @@ class TableProducerState(_VgiCallStateHolder, ProducerState):
 
     def produce(self, out: OutputCollector, ctx: CallContext) -> None:
         """Produce the next output batch from the table function."""
+        init = self._enter_turn(ctx, out.output_schema)
         params = dataclasses.replace(
             self._params,
             auth_context=ctx.auth,
@@ -2614,15 +2698,15 @@ class TableProducerState(_VgiCallStateHolder, ProducerState):
         timer = _timed_exchange(
             self._vgi_tracer,
             "vgi.execute.table",
-            self._call.init_call.bind_call.function_name,
-            self._call.init_call.bind_call.function_type.value,
-            self._call.init_response.execution_id,
+            init.init_call.bind_call.function_name,
+            init.init_call.bind_call.function_type.value,
+            init.init_response.execution_id,
         )
         with timer:
             tracking_out = _TrackingOutputCollector(
                 out,
                 supports_batch_index=self._func_cls._supports_batch_index(),
-                partition_fields=_partition_fields_from_schema(self._call.init_call.output_schema),
+                partition_fields=_partition_fields_from_schema(init.init_call.output_schema),
                 partition_kind=self._func_cls._partition_kind(),
             )
             if self._auto_apply and self._pushdown_filters is not None:
@@ -2638,6 +2722,11 @@ class TableProducerState(_VgiCallStateHolder, ProducerState):
 
     def on_cancel(self, ctx: CallContext) -> None:
         """Forward cancel signal to the user function's classmethod."""
+        try:
+            self._enter_turn(ctx, None)
+        except Exception:
+            _log.debug("on_cancel: init state did not resolve", exc_info=True)
+            return
         if self._func_cls is None or self._params is None:
             return
         params = dataclasses.replace(self._params, auth_context=ctx.auth)
@@ -2648,7 +2737,7 @@ class TableProducerState(_VgiCallStateHolder, ProducerState):
 
 
 @dataclass
-class TableInOutExchangeState(_VgiCallStateHolder, ExchangeState):
+class TableInOutExchangeState(_VgiStreamInitHolder, ExchangeState):
     """Exchange state for table-in-out function streams (INPUT phase).
 
     Calls ``TableInOutGenerator.process()`` per input batch. Each
@@ -2657,12 +2746,11 @@ class TableInOutExchangeState(_VgiCallStateHolder, ExchangeState):
     When ``auto_apply_filters`` is enabled, pushdown filters from the init
     request are automatically applied to each output batch.
 
-    The init request, init response, and attach plaintext live in the
-    stream's :class:`VgiCallState`, which the transport seals once at init.
-    What remains here is the cursor: ``_user_state_bytes``, ``_more_pending``
-    (whether the last reply said more, so the next input must be a tick), and
-    the dynamic-filter history.  Transient fields are restored via
-    ``rehydrate()``.
+    The init request and init response live in the ``init`` ref (see
+    :class:`VgiStreamInit`). What remains here is the cursor:
+    ``_user_state_bytes``, ``_more_pending`` (whether the last reply said more,
+    so the next input must be a tick), and the dynamic-filter history.
+    Transient fields are restored at the turn's entry.
 
     ``_user_state`` is serialized when it is an ``ArrowSerializableDataclass``,
     allowing iteration state to survive HTTP round-trips.
@@ -2701,31 +2789,29 @@ class TableInOutExchangeState(_VgiCallStateHolder, ExchangeState):
             self._user_state_bytes = self._user_state.serialize_to_bytes()
         return super()._to_row_dict()
 
-    def rehydrate(self, implementation: object) -> None:
-        """Restore transient fields from serialized init data."""
-        from vgi.worker import Worker
-
-        worker: Worker = implementation  # type: ignore[assignment]
-        # HTTP turn: re-open the sealed attach rather than read a decrypted
-        # copy off the wire (see VgiCallState). No-op without a catalog.
-        self._attach_pt = self._attach_plaintext(worker)
-        func_cls = worker._resolve_function(self._call.init_call.bind_call)
+    def _hydrate(self, worker: Any, *, have_output_schema: bool) -> None:
+        """Restore transient fields from the resolved init (an HTTP turn's entry)."""
+        init = self._init
+        assert init is not None
+        func_cls = worker._resolve_function(init.init_call.bind_call)
         assert issubclass(func_cls, TableInOutGenerator)
         self._func_cls = func_cls
         self._vgi_tracer = worker._vgi_tracer
-        proj_ids = _effective_projection_ids(func_cls, self._call.init_call.projection_ids)
-        output_schema = project_schema(proj_ids, self._call.init_call.output_schema)
+        proj_ids = _effective_projection_ids(func_cls, init.init_call.projection_ids)
+        # A cancel turn of a stream whose init carries no output schema (it is
+        # the stream's) has no schema to narrow; on_cancel gets an empty one.
+        output_schema = project_schema(proj_ids, init.init_call.output_schema) if have_output_schema else pa.schema([])
         self._params = ProcessParams(
             args=func_cls._parse_arguments(
                 func_cls.FunctionArguments,
-                self._call.init_call.bind_call.require_arguments(),
+                resolved_arguments(init.init_call.bind_call),
                 blended=func_cls._is_blended(),
             ),
-            init_call=self._call.init_call,
-            init_response=self._call.init_response,
+            init_call=init.init_call,
+            init_response=init.init_response,
             output_schema=output_schema,
-            settings=_batch_to_scalar_dict(self._call.init_call.bind_call.settings),
-            secrets=SecretsAccessor(self._call.init_call.bind_call.secrets).to_dict(),
+            settings=_batch_to_scalar_dict(init.init_call.bind_call.settings),
+            secrets=SecretsAccessor(init.init_call.bind_call.secrets).to_dict(),
             # The worker's key, or split_payloads refuses on every continuation.
             # Over HTTP the params are rebuilt per tick, so omitting it here made
             # a rehydrated split scan reject tokens this same process had sealed
@@ -2733,24 +2819,24 @@ class TableInOutExchangeState(_VgiCallStateHolder, ExchangeState):
             signing_key=worker._signing_key,
             # Storage shards on the full plaintext (uuid||catalog_bytes); the
             # body sees only the stripped catalog bytes. Re-opened from the
-            # sealed envelope rather than carried decrypted -- see VgiCallState.
+            # sealed envelope rather than carried decrypted -- see VgiStreamInit.
             storage=BoundStorage(
                 func_cls.storage,
-                self._call.init_response.execution_id,
+                init.init_response.execution_id,
                 attach_plaintext=self._attach_pt,
             ),
             attach_opaque_data=attach_catalog_bytes(self._attach_pt),
-            transaction_opaque_data=worker._unwrap_transaction_for(self._call.init_call),
+            transaction_opaque_data=worker._unwrap_transaction_for(init.init_call),
         )
         self._auto_apply = func_cls._should_auto_apply_filters()
-        if self._call.init_call.pushdown_filters is not None:
+        if init.init_call.pushdown_filters is not None and have_output_schema:
             # Everything re-parsed here was validated when it first arrived.
             with replaying_accepted_state():
                 self._pushdown_filters = _replay_filter_history(
                     func_cls.pushdown_filters(
-                        self._call.init_call.pushdown_filters,
-                        join_keys=self._call.init_call.join_keys,
-                        output_schema=self._call.init_call.output_schema,
+                        init.init_call.pushdown_filters,
+                        join_keys=init.init_call.join_keys,
+                        output_schema=init.init_call.output_schema,
                     ),
                     self._filter_delta_history,
                     self._filter_predicate_order,
@@ -2768,6 +2854,7 @@ class TableInOutExchangeState(_VgiCallStateHolder, ExchangeState):
 
     def exchange(self, input: AnnotatedBatch, out: OutputCollector, ctx: CallContext) -> None:
         """Process one input batch through the table-in-out function."""
+        init = self._enter_turn(ctx, out.output_schema)
         if input.custom_metadata is not None:
             encoded = input.custom_metadata.get(b"vgi_pushdown_filters")
             if encoded is not None:
@@ -2801,14 +2888,14 @@ class TableInOutExchangeState(_VgiCallStateHolder, ExchangeState):
         timer = _timed_exchange(
             self._vgi_tracer,
             "vgi.execute.table_in_out",
-            self._call.init_call.bind_call.function_name,
-            self._call.init_call.bind_call.function_type.value,
-            self._call.init_response.execution_id,
+            init.init_call.bind_call.function_name,
+            init.init_call.bind_call.function_type.value,
+            init.init_response.execution_id,
         )
         # A tick asks for the next batch of the last input's output (see STATUS_KEY),
         # and is the only valid input while that output is pending.
         tick = _is_tick(input.custom_metadata)
-        name = self._call.init_call.bind_call.function_name
+        name = init.init_call.bind_call.function_name
         if tick and not self._more_pending:
             raise RuntimeError(f"{name}: continuation tick received, but no output is pending")
         if tick and input.batch.num_rows != 0:
@@ -2819,7 +2906,7 @@ class TableInOutExchangeState(_VgiCallStateHolder, ExchangeState):
             tracking_out = _TrackingOutputCollector(
                 out,
                 supports_batch_index=self._func_cls._supports_batch_index(),
-                partition_fields=_partition_fields_from_schema(self._call.init_call.output_schema),
+                partition_fields=_partition_fields_from_schema(init.init_call.output_schema),
                 partition_kind=self._func_cls._partition_kind(),
                 continuation=tick,
                 allows_more=True,
@@ -2841,6 +2928,11 @@ class TableInOutExchangeState(_VgiCallStateHolder, ExchangeState):
 
     def on_cancel(self, ctx: CallContext) -> None:
         """Forward cancel signal to the user function's classmethod."""
+        try:
+            self._enter_turn(ctx, None)
+        except Exception:
+            _log.debug("on_cancel: init state did not resolve", exc_info=True)
+            return
         if self._func_cls is None or self._params is None:
             return
         params = dataclasses.replace(self._params, auth_context=ctx.auth)

@@ -42,6 +42,10 @@ from vgi.hosted import HOSTED_CHALLENGE, HOSTED_DEFAULT_MAX_REQUEST_BYTES, hoste
 from vgi.logging_config import LogFormat, LogLevel
 from vgi.profiling import maybe_start_profile
 
+#: Maximum stream duration (protocol 3.4): cursor and call tokens and stored
+#: StateRef tags expire after 6 h.
+TOKEN_TTL_SECONDS = 21600
+
 if TYPE_CHECKING:
     import falcon
     from vgi_rpc.grants import GrantKeys
@@ -496,6 +500,19 @@ def create_app(
         identity_bearer=identity_bearer,
         strict_auth=hosted,
         www_authenticate=HOSTED_CHALLENGE if hosted else None,
+        # Protocol 3.4: a stream lives at most 6 h (cursor and call tokens and
+        # stored StateRef tags), and VGI keeps its unchanging stream state in
+        # StateRef, so an over-budget cursor is refused (cursor_too_large)
+        # rather than only warned about.
+        token_ttl=TOKEN_TTL_SECONDS,
+        cursor_rule="error",
+    )
+    from vgi.arguments_ref import install_arguments_ref_header
+
+    install_arguments_ref_header(
+        wsgi_app,
+        upload_url_provider=blob_http.upload_url_provider,
+        external_location=blob_http.external_location,
     )
 
     # Frontend: either redirect to external CDN or serve pre-rendered worker page

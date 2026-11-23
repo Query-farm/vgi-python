@@ -31,6 +31,7 @@ from vgi._test_fixtures.writable.table import (
     _result_mode,
     transactor_proxy,
 )
+from vgi.arguments_ref import resolved_arguments
 from vgi.invocation import BindResponse, GlobalInitResponse
 from vgi.table_function import BindParams, InitParams, ProcessParams, TableFunctionGenerator
 from vgi.table_in_out_function import TableInOutGenerator
@@ -46,7 +47,7 @@ __all__ = [
 
 def _get_table_name_from_bind(params: BindParams[None]) -> str:
     """Extract the table name from the first positional argument at bind time."""
-    args = params.bind_call.require_arguments()
+    args = resolved_arguments(params.bind_call)
     if not args.positional or args.positional[0] is None:
         msg = "table_name positional argument is required"
         raise ValueError(msg)
@@ -56,7 +57,7 @@ def _get_table_name_from_bind(params: BindParams[None]) -> str:
 def _get_table_name_from_process(params: ProcessParams[None]) -> str:
     """Extract the table name from the first positional argument at process time."""
     assert params.init_call is not None
-    args = params.init_call.bind_call.require_arguments()
+    args = resolved_arguments(params.init_call.bind_call)
     if not args.positional or args.positional[0] is None:
         msg = "table_name positional argument is required"
         raise ValueError(msg)

@@ -1,15 +1,13 @@
 # Copyright 2025, 2026 Query Farm LLC - https://query.farm
 
-"""The stream's call state must not carry the attach in decrypted form.
+"""The stream's ``init`` state must not carry the attach in decrypted form.
 
 ``attach_opaque_data`` routinely carries catalog credentials. It travels
-sealed, but serialized *state* does not stay sealed at rest: the access log
-records the decrypted state at DEBUG as an audit artifact
-(``vgi_rpc.rpc._server``), and on the init turn the recorded response state is
-``call_state || cursor``. So a decrypted attach inside
-:class:`~vgi.protocol.VgiCallState` would base64 credentials into the log —
-precisely what ``loggable_attach_options`` exists to prevent elsewhere — and
-would also sit decrypted in the transport's call-state cache.
+sealed, and the stream state must keep it that way: a VGI stream carries its
+init request and init response as the vgi-rpc ``StateRef`` field ``init``
+(:class:`~vgi.protocol.VgiStreamInit`), which on HTTP rides every cursor token
+(inline) or sits in object storage (stored). A decrypted attach there would
+put catalog credentials into every token and every stored object.
 
 The sealed envelope is already reachable at
 ``init_call.bind_call.attach_opaque_data``, so each turn re-opens that instead.
@@ -36,8 +34,8 @@ from vgi.invocation import BindResponse, FunctionType, GlobalInitResponse
 from vgi.protocol import (
     BindRequest,
     InitRequest,
-    VgiCallState,
     VgiProtocol,
+    VgiStreamInit,
 )
 from vgi.table_function import (
     BindParams,
@@ -134,18 +132,18 @@ def _sealed_attach() -> bytes:
         return bytes(worker._seal_attach(_UUID + _SECRET))
 
 
-class TestCallStateCarriesNoPlaintextAttach:
-    """The serialized call state must never contain the decrypted attach."""
+class TestStreamInitCarriesNoPlaintextAttach:
+    """The serialized stream init must never contain the decrypted attach."""
 
     def test_plaintext_attach_is_not_a_serialized_field(self) -> None:
-        """``VgiCallState`` has no field holding the decrypted attach."""
+        """``VgiStreamInit`` has no field holding the decrypted attach."""
         import dataclasses
 
-        names = {f.name for f in dataclasses.fields(VgiCallState)}
-        assert names == {"init_call", "init_response"}
+        names = {f.name for f in dataclasses.fields(VgiStreamInit)}
+        assert names == {"init_call", "init_response", "output_schema_from_stream"}
 
-    def test_secret_absent_from_serialized_call_state(self) -> None:
-        """Serializing a call state must not emit the attach plaintext.
+    def test_secret_absent_from_serialized_stream_init(self) -> None:
+        """Serializing a stream init must not emit the attach plaintext.
 
         The sealed envelope must still be reachable, since re-opening it is
         how each turn now obtains the plaintext.
@@ -158,11 +156,11 @@ class TestCallStateCarriesNoPlaintextAttach:
             input_schema=None,
             attach_opaque_data=sealed,
         )
-        call_state = VgiCallState(
+        stream_init = VgiStreamInit(
             init_call=InitRequest(bind_call=bind, output_schema=pa.schema([("n", pa.int64())])),
             init_response=GlobalInitResponse(execution_id=b"exec"),
         )
-        raw = call_state.serialize_to_bytes()
+        raw = stream_init.serialize_to_bytes()
 
         assert _SECRET not in raw, "decrypted attach must not reach the wire or the access log"
         assert _UUID not in raw, "the storage-sharding UUID is part of the same plaintext"

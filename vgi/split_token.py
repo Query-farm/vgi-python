@@ -125,6 +125,29 @@ class SplitTransactionEnded(SplitTokenError):
     error_kind = "SPLIT_TRANSACTION_ENDED"
 
 
+_ARGS_INLINE = b"\x00"
+_ARGS_LOCATION = b"\x01"
+
+
+def _arguments_fingerprint_input(bind_call: BindRequest) -> bytes:
+    """The arguments' part of the fingerprint (large-values spec §5a, "Split-token fingerprints").
+
+    An argument reference (``arguments_location``, also on a bind call whose
+    arguments were since resolved) contributes ``0x01 || u64le(size) ||
+    sha256[32]``, never the sealed ``ref`` (it holds a random nonce). Inline
+    arguments contribute ``0x00 ||`` their IPC bytes. Plan and init carry the
+    same bind-call bytes, so both sides take the same branch.
+    """
+    location = getattr(bind_call, "received_arguments_location", None)
+    if location is not None:
+        size: int = location.size
+        digest = bytes.fromhex(str(location.sha256))
+        return _ARGS_LOCATION + size.to_bytes(8, "little") + digest
+    arguments = getattr(bind_call, "arguments", None)
+    raw: bytes = arguments.serialize_to_bytes() if arguments is not None else b""
+    return _ARGS_INLINE + len(raw).to_bytes(8, "little") + raw
+
+
 def bind_fingerprint(bind_call: BindRequest) -> bytes:
     """Derive the 16-byte binding check for a bind call.
 
@@ -148,7 +171,9 @@ def bind_fingerprint(bind_call: BindRequest) -> bytes:
 
     _feed(b"schema_path", getattr(bind_call, "schema_path", None))
     _feed(b"function_name", getattr(bind_call, "function_name", None))
-    _feed(b"arguments", getattr(bind_call, "arguments", None))
+    h.update(b"arguments\x00")
+    h.update(_arguments_fingerprint_input(bind_call))
+    h.update(b"\x00")
     _feed(b"settings", getattr(bind_call, "settings", None))
     _feed(b"projection_ids", getattr(bind_call, "projection_ids", None))
     return h.digest()[:_FINGERPRINT_LEN]

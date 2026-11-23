@@ -42,6 +42,7 @@ from vgi.arguments import (
     _extract_setting_secret_params,
     _scalar_to_py,
 )
+from vgi.arguments_ref import resolved_arguments
 from vgi.function import _is_state_codec
 from vgi.function_storage import BoundStorage, TransactionBoundStorage, attach_catalog_bytes
 from vgi.invocation import (
@@ -1170,7 +1171,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         # catalog_bytes``) the worker unwrapped. Storage shards on its UUID;
         # bodies see only the catalog bytes via ``attach_opaque_data``.
         return BindParams[TArgs](
-            args=cls._parse_arguments(cls.FunctionArguments, input.require_arguments(), blended=cls._is_blended()),
+            args=cls._parse_arguments(cls.FunctionArguments, resolved_arguments(input), blended=cls._is_blended()),
             bind_call=input,
             settings=_batch_to_scalar_dict(input.settings),
             secrets=SecretsAccessor(input.secrets, is_retry=input.resolved_secrets_provided),
@@ -1350,7 +1351,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         auth = ctx.auth if ctx is not None else AuthContext.anonymous()
         params = InitParams[TArgs](
             args=cls._parse_arguments(
-                cls.FunctionArguments, input.bind_call.require_arguments(), blended=cls._is_blended()
+                cls.FunctionArguments, resolved_arguments(input.bind_call), blended=cls._is_blended()
             ),
             init_call=input,
             output_schema=project_schema(
