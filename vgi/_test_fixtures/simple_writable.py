@@ -250,7 +250,7 @@ def _to_arrow(values: list[Any], dtype: pa.DataType) -> pa.Array[Any]:
 
 
 def _qualified_from_bind(params: BindParams[None]) -> str:
-    args = params.bind_call.arguments
+    args = params.bind_call.require_arguments()
     if not args.positional or args.positional[0] is None:
         raise ValueError("table_name positional argument is required")
     return str(args.positional[0].as_py())
@@ -258,7 +258,7 @@ def _qualified_from_bind(params: BindParams[None]) -> str:
 
 def _qualified_from_process(params: ProcessParams[None]) -> str:
     assert params.init_call is not None
-    args = params.init_call.bind_call.arguments
+    args = params.init_call.bind_call.require_arguments()
     if not args.positional or args.positional[0] is None:
         raise ValueError("table_name positional argument is required")
     return str(args.positional[0].as_py())

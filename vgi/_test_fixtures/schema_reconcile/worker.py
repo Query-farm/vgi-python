@@ -397,7 +397,7 @@ class SchemaReconcileInsert(TableInOutGenerator[None, None]):
         out: OutputCollector,
     ) -> None:
         assert params.init_call is not None
-        spec = _spec_from_args(params.init_call.bind_call.arguments.positional)
+        spec = _spec_from_args(params.init_call.bind_call.require_arguments().positional)
         _strict_assert_schema(f"INSERT[{spec.name}]", batch.schema, _write_input_schema(USER_SCHEMA))
         names = [f.name for f in USER_SCHEMA]
         for i in range(batch.num_rows):
@@ -431,7 +431,7 @@ class SchemaReconcileUpdate(TableInOutGenerator[None, None]):
         out: OutputCollector,
     ) -> None:
         assert params.init_call is not None
-        spec = _spec_from_args(params.init_call.bind_call.arguments.positional)
+        spec = _spec_from_args(params.init_call.bind_call.require_arguments().positional)
         cols = batch.schema.names
         if "rowid" not in cols:
             raise ValueError(f"[schema_reconcile] UPDATE[{spec.name}] missing rowid column; got: {cols}")
@@ -476,7 +476,7 @@ class SchemaReconcileDelete(TableInOutGenerator[None, None]):
         out: OutputCollector,
     ) -> None:
         assert params.init_call is not None
-        spec = _spec_from_args(params.init_call.bind_call.arguments.positional)
+        spec = _spec_from_args(params.init_call.bind_call.require_arguments().positional)
         _strict_assert_schema(f"DELETE[{spec.name}]", batch.schema, _write_input_schema(spec.delete_input_schema))
         n = 0
         for i in range(batch.num_rows):
@@ -496,7 +496,7 @@ class SchemaReconcileScan(TableFunctionGenerator[None, None]):
 
     @classmethod
     def on_bind(cls, params: BindParams[None]) -> BindResponse:
-        spec = _spec_from_args(params.bind_call.arguments.positional)
+        spec = _spec_from_args(params.bind_call.require_arguments().positional)
         return BindResponse(output_schema=spec.table_schema)
 
     @classmethod
@@ -508,7 +508,7 @@ class SchemaReconcileScan(TableFunctionGenerator[None, None]):
     @classmethod
     def process(cls, params: ProcessParams[None], state: None, out: OutputCollector) -> None:
         assert params.init_call is not None
-        spec = _spec_from_args(params.init_call.bind_call.arguments.positional)
+        spec = _spec_from_args(params.init_call.bind_call.require_arguments().positional)
         out_schema = params.output_schema
         rows: list[dict[str, Any]] = []
         for rid, payload in _all_rows(spec):

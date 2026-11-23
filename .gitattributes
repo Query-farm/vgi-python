@@ -3,3 +3,7 @@
 
 # Use bd merge for beads JSONL files
 .beads/issues.jsonl merge=beads
+
+# The nested-binary conformance corpus is compared byte for byte (large-values
+# spec 3.4): never convert line endings in it.
+conformance/nested-binary/** -text

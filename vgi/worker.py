@@ -2660,7 +2660,7 @@ class Worker:
 
         return self._match_function_arguments(
             function_name=request.function_name,
-            arguments=request.arguments,
+            arguments=request.require_arguments(),
             input_schema=request.input_schema,
             argument_names=request.argument_names,
             candidates=candidates,
@@ -4160,7 +4160,7 @@ class Worker:
         params = TableBufferingParams(
             args=func_cls._parse_arguments(
                 func_cls.FunctionArguments,
-                init_call.bind_call.arguments,
+                init_call.bind_call.require_arguments(),
             ),
             init_call=init_call,
             init_response=init_response,
@@ -4933,7 +4933,7 @@ class Worker:
             params = TableBufferingParams(
                 args=type(instance)._parse_arguments(
                     type(instance).FunctionArguments,
-                    request.bind_call.arguments,
+                    request.bind_call.require_arguments(),
                 ),
                 init_call=request,
                 init_response=init_response,
@@ -5006,7 +5006,7 @@ class Worker:
             params = ProcessParams(
                 args=type(instance)._parse_arguments(
                     type(instance).FunctionArguments,
-                    request.bind_call.arguments,
+                    request.bind_call.require_arguments(),
                     blended=type(instance)._is_blended(),
                 ),
                 init_call=request,
@@ -5107,7 +5107,7 @@ class Worker:
             params = ProcessParams(
                 args=type(instance)._parse_arguments(
                     type(instance).FunctionArguments,
-                    request.bind_call.arguments,
+                    request.bind_call.require_arguments(),
                     blended=type(instance)._is_blended(),
                 ),
                 init_call=request,

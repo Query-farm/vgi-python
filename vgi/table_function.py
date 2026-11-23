@@ -1170,7 +1170,7 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         # catalog_bytes``) the worker unwrapped. Storage shards on its UUID;
         # bodies see only the catalog bytes via ``attach_opaque_data``.
         return BindParams[TArgs](
-            args=cls._parse_arguments(cls.FunctionArguments, input.arguments, blended=cls._is_blended()),
+            args=cls._parse_arguments(cls.FunctionArguments, input.require_arguments(), blended=cls._is_blended()),
             bind_call=input,
             settings=_batch_to_scalar_dict(input.settings),
             secrets=SecretsAccessor(input.secrets, is_retry=input.resolved_secrets_provided),
@@ -1349,7 +1349,9 @@ class TableFunctionBase[TArgs](vgi.function.Function):
         execution_id = getattr(input, "execution_id", None) or uuid.uuid4().bytes
         auth = ctx.auth if ctx is not None else AuthContext.anonymous()
         params = InitParams[TArgs](
-            args=cls._parse_arguments(cls.FunctionArguments, input.bind_call.arguments, blended=cls._is_blended()),
+            args=cls._parse_arguments(
+                cls.FunctionArguments, input.bind_call.require_arguments(), blended=cls._is_blended()
+            ),
             init_call=input,
             output_schema=project_schema(
                 _effective_projection_ids(cls, input.projection_ids),

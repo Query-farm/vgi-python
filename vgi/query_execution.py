@@ -263,9 +263,10 @@ class _QueryStreamState(ArrowSerializableDataclass):
 def _check_bind(request: BindRequest) -> None:
     if request.function_type != FunctionType.TABLE or request.schema_path not in (None, []):
         raise ValueError("catalog query executor is a schema-less TABLE function")
-    if len(request.arguments.positional) != 2 or request.arguments.named:
+    arguments = request.require_arguments()
+    if len(arguments.positional) != 2 or arguments.named:
         raise ValueError("catalog query executor requires exactly a receipt and one parameter batch")
-    for value in request.arguments.positional:
+    for value in arguments.positional:
         if value is None or not value.is_valid or value.type != pa.binary():
             raise ValueError("query executor arguments must be non-NULL binary values")
     if any(

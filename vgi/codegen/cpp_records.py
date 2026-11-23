@@ -51,6 +51,7 @@ from vgi.codegen._common import (
     DEFAULT_CPP_NAMESPACE,
     GeneratorError,
     close_namespace,
+    nested_binary_record,
     open_namespace,
     parse_cpp_namespace,
     provenance_comment,
@@ -288,7 +289,17 @@ def _layout(cls: type, arrow_fields: list[pa.Field[Any]], origin: str, model: _M
         initializer = None
         if presence is not Presence.OPTIONAL and has_default and default is not None:
             initializer = _literal(default, cpp_type, model, where)
-        members.append(_Member(f.name, _ident(f.name), cpp_type, presence, initializer, attr_docs.get(f.name)))
+        doc = attr_docs.get(f.name)
+        nested = nested_binary_record(f.type, annotation)
+        if nested is not None:
+            # The extension's form of the raw-preserving wrapper (large-values
+            # spec §3.3): the held bytes ARE the field, so they are re-emitted
+            # verbatim by construction. Say so where a reader decides to decode.
+            doc = (doc + " " if doc else "") + (
+                f"Raw-preserving: a complete `{nested.__name__}` IPC stream, kept and re-sent byte for "
+                f"byte (the worker compares it); decode a copy with `FromBatch`, never rebuild it."
+            )
+        members.append(_Member(f.name, _ident(f.name), cpp_type, presence, initializer, doc))
     idents = [m.ident for m in members]
     if len(idents) != len(set(idents)):
         raise GeneratorError(f"{name}: two columns map to the same C++ member name: {idents}")

@@ -1,0 +1,137 @@
+{
+  "corpus": "nested-binary",
+  "spec": "vgi docs/large-values-3.4.md \u00a73.3-\u00a73.4",
+  "generator": "vgi.codegen.nested_binary_fixtures",
+  "generator_version": "1",
+  "noncanonical_because": "bind_call.bin carries schema-level custom metadata {\"vgi.conformance\": \"nested-binary: not what an encoder writes\"}",
+  "bind_call": {
+    "file": "bind_call.bin",
+    "sha256": "f820e0bafe8e28c7b3423ff3cfaab198e46ed0a050087377c65359a66a85c4d1"
+  },
+  "embedding": [
+    {
+      "file": "init-noncanonical.arrow",
+      "record": "InitRequest",
+      "field": "bind_call",
+      "field_bytes": "bind_call.bin",
+      "field_expected": "expected.json",
+      "sha256": "0be4237a9fd64c2b2ade1062fbb0838c62d85fa1d0d20de7c6c33c358ce689f9"
+    },
+    {
+      "file": "cardinality-noncanonical.arrow",
+      "record": "TableFunctionCardinalityRequest",
+      "field": "bind_call",
+      "field_bytes": "bind_call.bin",
+      "field_expected": "expected.json",
+      "sha256": "5ae585b3b5d8048656936acc79aca44384c2b0d446c62ca3863c2930cc007444"
+    },
+    {
+      "file": "statistics-noncanonical.arrow",
+      "record": "TableFunctionStatisticsRequest",
+      "field": "bind_call",
+      "field_bytes": "bind_call.bin",
+      "field_expected": "expected.json",
+      "sha256": "eb39522ec9eb9696f78e992fcfa794df9423f6851d84d8c1c7f06bc17fe07cef"
+    },
+    {
+      "file": "dynamic-to-string-noncanonical.arrow",
+      "record": "TableFunctionDynamicToStringRequest",
+      "field": "bind_call",
+      "field_bytes": "bind_call.bin",
+      "field_expected": "expected.json",
+      "sha256": "d05a4fcdfaeb18518e9771f61f4ee13889daaa5d4a28b5cef9f467efa3cc7b06"
+    },
+    {
+      "file": "plan-noncanonical.arrow",
+      "record": "TableFunctionPlanRequest",
+      "field": "bind_call",
+      "field_bytes": "bind_call.bin",
+      "field_expected": "expected.json",
+      "sha256": "0e51cbab0be674328e800d6ad081401cc36ab5a0b682876b67716a468ec24c81"
+    },
+    {
+      "file": "projection-noncanonical.arrow",
+      "record": "TableFunctionProjectionRequest",
+      "field": "bind_call",
+      "field_bytes": "bind_call.bin",
+      "field_expected": "expected.json",
+      "sha256": "7844b4cbe15b1096a855f2aa3c81d351629619b5a22361b27c02b9a0e7f7e2f2"
+    }
+  ],
+  "binds": [
+    {
+      "file": "bind-arguments-null.arrow",
+      "record": "BindRequest",
+      "valid": true,
+      "arguments": null,
+      "arguments_location": {
+        "ref": {
+          "hex": "017365616c65642d6172677265662d66726f6d2d7468652d75706c6f61642d6772616e74"
+        },
+        "size": 624,
+        "sha256": "44b0e88d72b1bce9172983e9932bf3e71df09d0b502ea971c024a1015dcd8746"
+      },
+      "fields": {
+        "function_name": "nested_binary_fixture",
+        "arguments": null,
+        "function_type": "TABLE",
+        "input_schema": null,
+        "settings": {
+          "hex": "ffffffffb00000001000000000000a000c000600050008000a000000000104000c00000008000800000004000800000004000000020000005000000004000000c8ffffff000001021000000020000000040000000000000007000000746872656164730008000c0008000700080000000000000140000000100014000800060007000c00000010001000000000000105100000002000000004000000000000000800000074696d657a6f6e65000000000400040004000000ffffffffc800000014000000000000000c0016000600050008000c000c0000000003040018000000180000000000000000000a0018000c00040008000a0000006c0000001000000001000000000000000000000005000000000000000000000000000000000000000000000000000000080000000000000008000000000000000300000000000000100000000000000000000000000000001000000000000000080000000000000000000000020000000100000000000000000000000000000001000000000000000000000000000000000000000300000055544300000000000400000000000000ffffffff00000000"
+        },
+        "secrets": null,
+        "attach_opaque_data": {
+          "hex": "007365616c65642d6174746163682d656e76656c6f7065ff"
+        },
+        "transaction_opaque_data": {
+          "hex": "74786e2d37"
+        },
+        "resolved_secrets_provided": true,
+        "at_unit": "VERSION",
+        "at_value": "12",
+        "copy_from": {
+          "format": "csv",
+          "file_path": "s3://bucket/input.csv",
+          "expected_schema": {
+            "hex": "ffffffffa80000001000000000000a000c000600050008000a000000000104000c00000008000800000004000800000004000000020000004c00000004000000ccffffff00000102100000001c0000000400000000000000010000006e00000008000c0008000700080000000000000140000000100014000800060007000c00000010001000000000000105100000001c00000004000000000000000400000063697479000000000400040004000000"
+          }
+        },
+        "copy_to": null,
+        "schema_path": [
+          "main",
+          "fixtures"
+        ],
+        "argument_names": [
+          "city",
+          null,
+          "limit"
+        ],
+        "arguments_location": {
+          "ref": {
+            "hex": "017365616c65642d6172677265662d66726f6d2d7468652d75706c6f61642d6772616e74"
+          },
+          "size": 624,
+          "sha256": "44b0e88d72b1bce9172983e9932bf3e71df09d0b502ea971c024a1015dcd8746"
+        }
+      },
+      "sha256": "74bd9859ade48a3c77386dd89e9d6b0f1775e2335b1d4b9985995715702aeb4e"
+    },
+    {
+      "file": "bind-both-null.arrow",
+      "record": "BindRequest",
+      "valid": false,
+      "error_kind": "invalid_bind_request",
+      "error_code": "INVALID_ARGUMENT",
+      "sha256": "a289d54c500201b22def4756c70a32550ef3881d98a6cdd2247c1627b86ec209"
+    },
+    {
+      "file": "bind-both-set.arrow",
+      "record": "BindRequest",
+      "valid": false,
+      "error_kind": "invalid_bind_request",
+      "error_code": "INVALID_ARGUMENT",
+      "sha256": "08b98f511c61448420c48ebeaa5315fc9cfc5aaf1f1c5cab11919b70176d1325"
+    }
+  ],
+  "error_message": "BindRequest must set exactly one of 'arguments' and 'arguments_location'"
+}

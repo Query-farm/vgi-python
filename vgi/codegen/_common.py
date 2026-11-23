@@ -77,6 +77,7 @@ from vgi.protocol import (
     AggregateWindowDestructorRequest,
     AggregateWindowInitRequest,
     AggregateWindowRequest,
+    ArgumentsLocation,
     BindRequest,
     CatalogAttachRequest,
     CatalogCreateRequest,
@@ -158,7 +159,67 @@ SHARED_CONTRACT_TYPES: tuple[type, ...] = (
     OptionChanges,
     OptionState,
     RequiredFilterPaths,
+    # Protocol 3.4 large values (vgi docs/large-values-3.4.md §3): the bind
+    # request, its struct members, and the six requests embedding it as
+    # ``bind_call`` (a nested record carried as binary; see NESTED_BINARY_RECORDS).
+    CopyFromContext,
+    CopyToContext,
+    ArgumentsLocation,
+    BindRequest,
+    InitRequest,
+    TableFunctionCardinalityRequest,
+    TableFunctionStatisticsRequest,
+    TableFunctionDynamicToStringRequest,
+    TableFunctionPlanRequest,
+    TableFunctionProjectionRequest,
 )
+
+# Records that, when carried as a nested record in a ``binary`` column
+# (``Annotated[Record, ArrowType(pa.binary())]``), every typed generator emits as
+# the raw-preserving lazy wrapper of the large-values spec §3.3 instead of plain
+# bytes: the field holds the received bytes, decodes them on access, and
+# re-encodes as exactly those bytes. Each must be in SHARED_CONTRACT_TYPES, so
+# the generated record the wrapper decodes to exists.
+#
+# Deliberately narrower than "any record in SHARED_CONTRACT_TYPES": the catalog
+# contract records already carried as binary (SqlExpression, TableLayout,
+# OptionState, ...) stay plain bytes, as the spec's 3.4 scope says
+# (``bind_call: BindRequest`` only), so no existing generated API changes.
+NESTED_BINARY_RECORDS: tuple[type, ...] = (BindRequest,)
+
+#: The wrapper's per-language spelling, for docs and generated comments.
+NESTED_WRAPPER_NAME = "Nested"
+
+
+def nested_binary_record(dtype: pa.DataType, annotation: object) -> type | None:
+    """The record a ``binary`` column carries as a raw-preserving wrapper, else ``None``.
+
+    ``annotation`` is the field's Python type hint (``Annotated``/``Optional``
+    already stripped or not; both are handled).
+    """
+    import types
+    import typing
+
+    if not dtype.equals(pa.binary()) or annotation is None:
+        return None
+    hint = annotation
+    while True:
+        origin = typing.get_origin(hint)
+        if origin is typing.Annotated:
+            hint = typing.get_args(hint)[0]
+        elif origin is typing.Union or origin is types.UnionType:
+            members = [a for a in typing.get_args(hint) if a is not type(None)]
+            if len(members) != 1:
+                return None
+            hint = members[0]
+        else:
+            break
+    if isinstance(hint, type) and hint in NESTED_BINARY_RECORDS:
+        if hint not in SHARED_CONTRACT_TYPES:
+            raise GeneratorError(f"{hint.__name__} is in NESTED_BINARY_RECORDS but not SHARED_CONTRACT_TYPES")
+        return hint
+    return None
+
 
 # Extra dataclasses whose ARROW_SCHEMA is referenced by methods whose return
 # type is `bytes` (raw IPC). Not inferable from method signatures alone.

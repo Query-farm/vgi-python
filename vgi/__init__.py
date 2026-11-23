@@ -99,6 +99,7 @@ from vgi.metadata import (
 
 # Re-export commonly used protocol types
 from vgi.protocol import (
+    ArgumentsLocation,
     BindRequest,
     InitRequest,
     TableFunctionProjectionRequest,
@@ -182,6 +183,7 @@ __all__ = [
     "CallContext",
     "argument_specs_to_schema",
     "parameter_default_values_from_specs",
+    "ArgumentsLocation",
     "BindRequest",
     "BindRepeatability",
     "ColumnBounds",

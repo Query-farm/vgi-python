@@ -88,6 +88,23 @@ _TARGETS += [
     for repo in ("vgi-python", "vgi-go", "vgi-rust", "vgi-typescript", "vgi-java", "vgi-csharp", "vgi-c++")
 ]
 
+# The nested-binary corpus (large-values spec §3.4): binary IPC fixtures plus
+# their JSON expectations, one directory checked into every SDK that decodes a
+# request embedding ``bind_call``, so each SDK's raw-preservation tests are
+# standalone. Rendered as bytes (``emit_bytes``), not text.
+_TARGETS += [
+    (f"vgi.codegen.nested_binary_fixtures:{record}", relative, repo)
+    for record, relative in importlib.import_module("vgi.codegen.nested_binary_fixtures").targets()
+    for repo in ("vgi-python", "vgi-go", "vgi-rust", "vgi-typescript", "vgi-java", "vgi-csharp", "vgi-c++", "vgi-c")
+]
+
+# Each typed SDK's generated nested-binary conformance test (spec §3.4 tests 1-3),
+# reading the corpus above. One module per language; it names its own target.
+_TARGETS += [
+    (f"vgi.codegen.{module}", (m := importlib.import_module(f"vgi.codegen.{module}")).TARGET, m.REPO)
+    for module in ("go_nested_test", "rust_nested_test", "ts_nested_test", "java_nested_test", "csharp_nested_test")
+]
+
 # Reporting contracts have an index plus one reference page per source module.
 _TARGETS += [
     (f"vgi.codegen.reporting_docs:{record}", relative, "vgi-python")
@@ -139,14 +156,20 @@ def _repo_root(name: str, roots: dict[str, str]) -> Path | None:
     return None
 
 
-def _render(module_name: str, native_cpp_backend: str | None = None) -> str:
+def _render(module_name: str, native_cpp_backend: str | None = None) -> str | bytes:
     """Render one artifact into memory. Raises if the generator fails.
 
     ``module:record`` renders one file of a generator that emits several
-    (``emit(out, record=record)``).
+    (``emit(out, record=record)``). A generator with ``emit_bytes(record=...)``
+    produces a binary artifact, returned as ``bytes``.
     """
     module_name, _, record = module_name.partition(":")
     module = importlib.import_module(module_name)
+    if hasattr(module, "emit_bytes"):
+        data: bytes = module.emit_bytes(record=record)
+        if not data:
+            raise RuntimeError(f"{module_name}.emit_bytes() produced no output")
+        return data
     buf = io.StringIO()
     kwargs = {"record": record} if record else {}
     if native_cpp_backend is not None:
@@ -238,7 +261,10 @@ def main() -> int:
             failed.append(f"{module_name}: {exc}")
             continue
 
-        current = dest.read_text() if dest.exists() else None
+        binary = isinstance(text, bytes)
+        current: str | bytes | None = None
+        if dest.exists():
+            current = dest.read_bytes() if binary else dest.read_text()
         if current == text:
             continue
         if args.check:
@@ -248,7 +274,10 @@ def main() -> int:
         # Write beside the target, then replace: a crash mid-write leaves the
         # previous version intact rather than a truncated file.
         tmp = dest.with_suffix(dest.suffix + ".tmp")
-        tmp.write_text(text)
+        if isinstance(text, bytes):
+            tmp.write_bytes(text)
+        else:
+            tmp.write_text(text)
         tmp.replace(dest)
         wrote.append(str(dest))
 

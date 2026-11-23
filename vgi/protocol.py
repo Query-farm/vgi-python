@@ -35,7 +35,8 @@ from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Protocol, cast, get_
 
 import pyarrow as pa
 import pyarrow.compute as pc
-from vgi_rpc import ArrowSerializableDataclass, ArrowType, Transient
+from vgi_rpc import ArrowSerializableDataclass, ArrowType, IpcValidation, Transient
+from vgi_rpc.errors import Code, StatusError
 from vgi_rpc.rpc import (
     AnnotatedBatch,
     CallContext,
@@ -191,6 +192,49 @@ class CopyToContext(ArrowSerializableDataclass):
     file_path: str
 
 
+#: Error kind and message for a ``BindRequest`` that does not set exactly one of
+#: ``arguments`` and ``arguments_location`` (protocol 3.4, large-values spec §2).
+INVALID_BIND_REQUEST_KIND = "invalid_bind_request"
+INVALID_BIND_REQUEST_MESSAGE = "BindRequest must set exactly one of 'arguments' and 'arguments_location'"
+#: Error kind for a malformed ``ArgumentsLocation`` (large-values spec §2, §5a).
+INVALID_ARGUMENTS_REF_KIND = "invalid_arguments_ref"
+
+_SHA256_HEX_DIGITS = frozenset("0123456789abcdef")
+
+
+def _invalid_arguments_ref(message: str) -> StatusError:
+    return StatusError(message, code=Code.INVALID_ARGUMENT, kind=INVALID_ARGUMENTS_REF_KIND)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ArgumentsLocation(ArrowSerializableDataclass):
+    """Where a bind's externalized arguments live (protocol 3.4 argument references).
+
+    Set on [`BindRequest`][vgi.protocol.BindRequest] instead of ``arguments``
+    when the client uploaded the arguments once through the worker's
+    ``__upload_url__/init`` grant. The uploaded object holds exactly the bytes
+    ``arguments`` would have held (the one-row ``{args: struct}`` Arrow IPC
+    stream). Field order is normative: ``{ref, size, sha256}``.
+
+    Attributes:
+        ref: The sealed reference returned by the worker's upload grant (opaque
+            to the client; vgi-rpc ARGREF).
+        size: Byte length of the uploaded arguments IPC stream, at least 1.
+        sha256: SHA-256 of exactly those bytes, as 64 lowercase hex digits.
+    """
+
+    ref: bytes
+    size: int
+    sha256: str
+
+    def __post_init__(self) -> None:
+        """Reject a malformed size or digest with ``invalid_arguments_ref``."""
+        if type(self.size) is not int or self.size < 1:
+            raise _invalid_arguments_ref("arguments_location.size must be a positive byte count")
+        if len(self.sha256) != 64 or not _SHA256_HEX_DIGITS.issuperset(self.sha256):
+            raise _invalid_arguments_ref("arguments_location.sha256 must be 64 lowercase hex digits")
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class BindRequest(ArrowSerializableDataclass):
     """Consolidated bind request for all function types.
@@ -198,9 +242,13 @@ class BindRequest(ArrowSerializableDataclass):
     For table functions (no input schema), ``input_schema`` is ``None``.
     For scalar and table-in-out functions, ``input_schema`` is set.
 
+    Exactly one of ``arguments`` and ``arguments_location`` is set; anything
+    else is refused as ``invalid_bind_request`` (``INVALID_ARGUMENT``).
+
     Attributes:
         function_name: Registered name of the VGI function this message targets.
-        arguments: The bound function [`Arguments`][].
+        arguments: The bound function [`Arguments`][]; ``None`` when they were
+            externalized and ``arguments_location`` says where they live.
         function_type: Which kind of function is being bound ([`FunctionType`][]).
         input_schema: Serialized Arrow schema of the input table (``None`` for
             table functions with no input).
@@ -236,10 +284,13 @@ class BindRequest(ArrowSerializableDataclass):
             complete pre-execution argument order. Fixed parameters use their
             declared names, unnamed varargs contain ``None``, and named varargs
             retain the caller-provided name. ``None`` means names are unavailable.
+        arguments_location: Where the externalized arguments live, when
+            ``arguments`` is ``None`` (protocol 3.4 argument references). Always
+            the last field.
     """
 
     function_name: str
-    arguments: Annotated[Arguments, ArrowType(pa.binary())]
+    arguments: Annotated[Arguments | None, ArrowType(pa.binary())]
     function_type: FunctionType
     input_schema: Annotated[pa.Schema | None, ArrowType(pa.binary())] = None
     settings: Annotated[pa.RecordBatch | None, ArrowType(pa.binary())] = None
@@ -262,6 +313,79 @@ class BindRequest(ArrowSerializableDataclass):
     schema_path: SchemaPath | None = None
 
     argument_names: Annotated[list[str | None] | None, ArrowType(pa.list_(pa.string()))] = None
+
+    # Externalized arguments (protocol 3.4). MUST stay the last field: vgi-csharp
+    # decodes embedded records positionally.
+    arguments_location: ArgumentsLocation | None = None
+
+    # Raw preservation (large-values spec §3.3): a BindRequest decoded from bytes
+    # keeps them and re-encodes as them verbatim, so a request embedding it as
+    # ``bind_call`` re-emits exactly what the client sent. One built from fields,
+    # or derived with dataclasses.replace(), serializes from its fields.
+    #
+    # The exact bytes this request was decoded from, re-emitted verbatim by
+    # serialize_to_bytes(), as ``(id(owner), bytes)``. The owner id is what keeps
+    # dataclasses.replace(), which copies every init field, from carrying the
+    # bytes onto a request whose fields changed: the copy has another id.
+    _wire: Annotated[tuple[int, bytes] | None, Transient()] = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        """Require exactly one of ``arguments`` and ``arguments_location``."""
+        if (self.arguments is None) == (self.arguments_location is None):
+            raise StatusError(
+                INVALID_BIND_REQUEST_MESSAGE,
+                code=Code.INVALID_ARGUMENT,
+                kind=INVALID_BIND_REQUEST_KIND,
+            )
+
+    @classmethod
+    def deserialize_from_bytes(cls, data: bytes, ipc_validation: IpcValidation = IpcValidation.FULL) -> BindRequest:
+        """Decode a bind request and keep the bytes it was decoded from."""
+        request = super().deserialize_from_bytes(data, ipc_validation)
+        object.__setattr__(request, "_wire", (id(request), bytes(data)))
+        return request
+
+    def serialize_to_bytes(self) -> bytes:
+        """The bytes this request was decoded from, else a fresh serialization."""
+        held = self.wire_bytes
+        return held if held is not None else ArrowSerializableDataclass.serialize_to_bytes(self)
+
+    def require_arguments(self) -> Arguments:
+        """The inline (or already resolved) arguments.
+
+        Returns:
+            The bound [`Arguments`][].
+
+        Raises:
+            StatusError: ``arguments_not_resolved`` (``FAILED_PRECONDITION``) when
+                the arguments were externalized to ``arguments_location`` and
+                nothing has resolved them yet.
+        """
+        if self.arguments is None:
+            raise StatusError(
+                "BindRequest arguments are externalized (arguments_location) and were not resolved",
+                code=Code.FAILED_PRECONDITION,
+                kind="arguments_not_resolved",
+            )
+        return self.arguments
+
+    @property
+    def wire_bytes(self) -> bytes | None:
+        """The exact bytes this request was decoded from; ``None`` if built from fields."""
+        wire = self._wire
+        return wire[1] if wire is not None and wire[0] == id(self) else None
+
+    def with_resolved_arguments(self, arguments: Arguments) -> BindRequest:
+        """This request with ``arguments`` resolved in memory, re-encoding as the original bytes.
+
+        For a request that arrived with ``arguments_location``: the result carries
+        the resolved [`Arguments`][] (so code reading ``bind_call.arguments`` sees
+        the value) but still serializes as the received bytes, so the reference,
+        never the value, goes back on the wire or into stream state.
+        """
+        resolved = dataclasses.replace(self, arguments=arguments, arguments_location=None)
+        object.__setattr__(resolved, "_wire", (id(resolved), self.serialize_to_bytes()))
+        return resolved
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -2398,7 +2522,9 @@ class TableProducerState(_VgiCallStateHolder, ProducerState):
         output_schema = project_schema(proj_ids, self._call.init_call.output_schema)
         self._params = ProcessParams(
             args=func_cls._parse_arguments(
-                func_cls.FunctionArguments, self._call.init_call.bind_call.arguments, blended=func_cls._is_blended()
+                func_cls.FunctionArguments,
+                self._call.init_call.bind_call.require_arguments(),
+                blended=func_cls._is_blended(),
             ),
             init_call=self._call.init_call,
             init_response=self._call.init_response,
@@ -2591,7 +2717,9 @@ class TableInOutExchangeState(_VgiCallStateHolder, ExchangeState):
         output_schema = project_schema(proj_ids, self._call.init_call.output_schema)
         self._params = ProcessParams(
             args=func_cls._parse_arguments(
-                func_cls.FunctionArguments, self._call.init_call.bind_call.arguments, blended=func_cls._is_blended()
+                func_cls.FunctionArguments,
+                self._call.init_call.bind_call.require_arguments(),
+                blended=func_cls._is_blended(),
             ),
             init_call=self._call.init_call,
             init_response=self._call.init_response,

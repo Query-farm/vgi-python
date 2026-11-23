@@ -46,7 +46,7 @@ __all__ = [
 
 def _get_table_name_from_bind(params: BindParams[None]) -> str:
     """Extract the table name from the first positional argument at bind time."""
-    args = params.bind_call.arguments
+    args = params.bind_call.require_arguments()
     if not args.positional or args.positional[0] is None:
         msg = "table_name positional argument is required"
         raise ValueError(msg)
@@ -56,7 +56,7 @@ def _get_table_name_from_bind(params: BindParams[None]) -> str:
 def _get_table_name_from_process(params: ProcessParams[None]) -> str:
     """Extract the table name from the first positional argument at process time."""
     assert params.init_call is not None
-    args = params.init_call.bind_call.arguments
+    args = params.init_call.bind_call.require_arguments()
     if not args.positional or args.positional[0] is None:
         msg = "table_name positional argument is required"
         raise ValueError(msg)
