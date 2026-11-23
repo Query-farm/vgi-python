@@ -259,9 +259,9 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: Query-farm/vgi-rpc-python
-          # TODO(release-wave): back to main once protocol-3.4 is merged (pyproject
-          # pins vgi-rpc protocol-3.4 f0fb675; main would downgrade the overlay).
-          ref: protocol-3.4
+          # TODO(release-wave): back to main / a release once 3.4 ships. Same
+          # commit as the pyproject pin, so the overlay never moves the lock.
+          ref: 3a069830eb296ab452bd83f87a243ca71f7f7a3e
           path: vgi-rpc
 
       - name: Install uv
