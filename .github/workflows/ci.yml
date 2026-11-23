@@ -16,13 +16,6 @@ on:
 permissions:
   contents: read
 
-env:
-  # TODO(release-wave): protocol 3.4 needs unreleased vgi-rpc (StateRef, object
-  # store, argument-reference grants). Same commit as the pyproject pin. A built
-  # wheel resolves vgi-rpc from PyPI (uv sources are not part of it), so the
-  # wheel jobs install this commit alongside; drop it with the pin.
-  VGI_RPC_PIN: "vgi-rpc @ git+https://github.com/Query-farm/vgi-rpc-python@6a21ee3b2fb21d9c348c9b615fd97dce8e0bb852"
-
 jobs:
   test:
     name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
@@ -75,7 +68,7 @@ jobs:
       - name: Install the wheel with only [${{ matrix.extra }}]
         run: |
           uv venv --python 3.13 "$RUNNER_TEMP/venv"
-          VIRTUAL_ENV="$RUNNER_TEMP/venv" uv pip install "$(ls dist/vgi_python-*.whl)[${{ matrix.extra }}]" "$VGI_RPC_PIN"
+          VIRTUAL_ENV="$RUNNER_TEMP/venv" uv pip install "$(ls dist/vgi_python-*.whl)[${{ matrix.extra }}]"
 
       - name: Evaluate pushed-down filters (plain and intersects_extent)
         working-directory: ${{ runner.temp }}
@@ -245,7 +238,7 @@ jobs:
 
       - name: Import attach-path modules from the bare wheel
         run: |
-          uv run --isolated --no-project --python 3.14 --with dist/*.whl --with "$VGI_RPC_PIN" \
+          uv run --isolated --no-project --python 3.14 --with dist/*.whl \
             python -c "import vgi, vgi.worker, vgi.query_execution; print('ok')"
 
   s3-offload-localstack:
@@ -266,9 +259,9 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: Query-farm/vgi-rpc-python
-          # TODO(release-wave): back to main / a release once 3.4 ships. Same
-          # commit as the pyproject pin, so the overlay never moves the lock.
-          ref: 6a21ee3b2fb21d9c348c9b615fd97dce8e0bb852
+          # The released vgi-rpc the pyproject floor names, so the overlay
+          # matches what users install.
+          ref: v0.57.0
           path: vgi-rpc
 
       - name: Install uv
