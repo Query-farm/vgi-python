@@ -25,7 +25,20 @@ Function                   Kind                        What it moves
 ``blob_buffer_echo(t)``    table-buffering             stores each input batch raw, replays it
 ``blob_tio(t)``            table-in-out                stores each batch in state, reads back
 ``blob_store_values(t)``   table-in-out                stores each value of column 0 exactly
+``blob_param_batches``     table                       large bind parameter over many turns
+``blob_param_streams``     table (one split / stream)  large bind parameter, parallel streams
+``blob_param_scalar``      scalar (constant param)     large constant parameter of a scalar
+``blob_param_table``       catalog table               a scan binding ``blob_param_echo``
 =========================  ==========================  ========================================
+
+The four ``blob_param_*`` fixtures back the extension's protocol 3.4
+argument-reference tests (``test/sql/external_storage/arguments_ref*.test``):
+``blob_param_batches(payload, batches)`` emits ``batches`` one-row batches,
+one per stream turn; ``blob_param_streams(payload, streams)`` plans ``streams``
+splits that each emit one row; ``blob_param_scalar(i, payload)`` returns
+``sha256(payload)`` for each non-NULL ``i`` with ``payload`` a constant
+parameter; ``blob_param_table`` binds ``repeat('t', 65536)``, reports
+``STABLE_WITHIN_QUERY`` and is not inline-bound, so every scan binds over RPC.
 
 ``blob_buffer_echo`` and ``blob_tio`` pass every input column through and add
 ``payload_len`` (UTF-8 byte length) and ``payload_sha256`` (lowercase hex) of
@@ -49,6 +62,7 @@ two in step.
 from __future__ import annotations
 
 import hashlib
+import struct
 import uuid
 from dataclasses import dataclass
 from typing import Annotated, Any, ClassVar
@@ -58,15 +72,17 @@ import pyarrow.compute as pc
 from vgi_rpc import ArrowSerializableDataclass
 from vgi_rpc.rpc import OutputCollector
 
-from vgi.arguments import Arg, Param, Returns, TableInput
-from vgi.catalog import Catalog, ReadOnlyCatalogInterface, Schema
-from vgi.invocation import BindResponse
+from vgi.arguments import Arg, Arguments, ConstParam, Param, Returns, TableInput
+from vgi.catalog import Catalog, ReadOnlyCatalogInterface, Schema, Table
+from vgi.invocation import BindRepeatability, BindResponse
 from vgi.metadata import FunctionExample
+from vgi.protocol import PlanResponse, ScanSplit
 from vgi.scalar_function import ScalarFunction
 from vgi.schema_utils import schema
 from vgi.table_buffering_function import TableBufferingFunction, TableBufferingParams
 from vgi.table_function import (
     BindParams,
+    InitParams,
     ProcessParams,
     TableCardinality,
     TableFunctionGenerator,
@@ -273,6 +289,219 @@ class BlobParamEchoFunction(TableFunctionGenerator[_BlobParamArgs, _EmitOnceStat
         state.emitted = True
 
 
+def _digest(payload: str) -> tuple[int, str]:
+    raw = payload.encode()
+    return len(raw), hashlib.sha256(raw).hexdigest()
+
+
+@dataclass(slots=True, frozen=True)
+class _BlobParamBatchesArgs:
+    payload: Annotated[str, Arg(0, doc="Parameter to measure")]
+    batches: Annotated[int, Arg(1, doc="Number of one-row batches", ge=0)]
+
+
+@dataclass(kw_only=True)
+class _BatchCursor(ArrowSerializableDataclass):
+    next_batch: int = 0
+
+
+@init_single_worker
+@bind_fixed_schema
+class BlobParamBatchesFunction(TableFunctionGenerator[_BlobParamBatchesArgs, _BatchCursor]):
+    """``blob_param_batches(payload, batches)``: ``batches`` one-row batches, one per stream turn.
+
+    Row ``i`` is ``(i, strlen(payload), sha256(payload))``, so a 60-batch call is
+    at least 60 continuations, each carrying the stream's ``init`` state.
+
+    Attributes:
+        FIXED_SCHEMA: ``(i BIGINT, payload_len BIGINT, payload_sha256 VARCHAR)``.
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "blob_param_batches"
+        description = "Length and SHA-256 of a parameter, once per batch (argument references over many turns)"
+        examples = [FunctionExample(sql="SELECT * FROM blob_param_batches('abc', 3)", description="3 rows, i = 0..2")]
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = schema(i=pa.int64(), payload_len=pa.int64(), payload_sha256=pa.string())
+
+    @classmethod
+    def cardinality(cls, params: BindParams[_BlobParamBatchesArgs]) -> TableCardinality:
+        """Exactly ``batches`` rows."""
+        return TableCardinality(estimate=params.args.batches, max=params.args.batches)
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[_BlobParamBatchesArgs]) -> _BatchCursor:
+        """Start at batch 0."""
+        return _BatchCursor()
+
+    @classmethod
+    def process(cls, params: ProcessParams[_BlobParamBatchesArgs], state: _BatchCursor, out: OutputCollector) -> None:
+        """Emit one one-row batch per tick."""
+        if state.next_batch >= params.args.batches:
+            out.finish()
+            return
+        length, digest = _digest(params.args.payload)
+        out.emit(
+            pa.RecordBatch.from_pydict(
+                {"i": [state.next_batch], "payload_len": [length], "payload_sha256": [digest]},
+                schema=params.output_schema,
+            )
+        )
+        state.next_batch += 1
+
+
+@dataclass(slots=True, frozen=True)
+class _BlobParamStreamsArgs:
+    payload: Annotated[str, Arg(0, doc="Parameter to measure")]
+    streams: Annotated[int, Arg(1, doc="Number of parallel streams (one split each)", ge=1)]
+
+
+@dataclass(kw_only=True)
+class _StreamCursor(ArrowSerializableDataclass):
+    streams: list[int]
+    next_index: int = 0
+
+
+@bind_fixed_schema
+class BlobParamStreamsFunction(TableFunctionGenerator[_BlobParamStreamsArgs, _StreamCursor]):
+    """``blob_param_streams(payload, streams)``: one bind planned as ``streams`` splits.
+
+    Each split emits ``(stream index, strlen(payload), sha256(payload))``. Every
+    split's init embeds the same bind call, so with an argument reference the
+    worker process fetches the argument once (vgi-rpc's object cache).
+
+    Attributes:
+        FIXED_SCHEMA: ``(stream BIGINT, payload_len BIGINT, payload_sha256 VARCHAR)``.
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "blob_param_streams"
+        description = "Length and SHA-256 of a parameter from parallel streams (argument references)"
+        supports_splits = True
+        split_token_ttl_seconds = None
+        examples = [
+            FunctionExample(sql="SELECT * FROM blob_param_streams('abc', 4)", description="4 rows, stream = 0..3")
+        ]
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = schema(stream=pa.int64(), payload_len=pa.int64(), payload_sha256=pa.string())
+
+    @classmethod
+    def cardinality(cls, params: BindParams[_BlobParamStreamsArgs]) -> TableCardinality:
+        """One row per stream."""
+        return TableCardinality(estimate=params.args.streams, max=params.args.streams)
+
+    @classmethod
+    def on_plan(cls, params: BindParams[_BlobParamStreamsArgs], request: Any) -> PlanResponse:
+        """One split per stream; the payload is the stream index."""
+        count = params.args.streams
+        return PlanResponse(
+            splits=[ScanSplit(payload=struct.pack("<q", i), estimated_rows=1, rows_exact=True) for i in range(count)],
+            estimated_total_splits=count,
+            estimated_total_rows=count,
+        )
+
+    @classmethod
+    def on_split(cls, params: InitParams[_BlobParamStreamsArgs], request: Any, payloads: list[bytes]) -> None:
+        """Splits are redeemed from ``params.split_payloads`` in ``initial_state``."""
+        return None
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[_BlobParamStreamsArgs]) -> _StreamCursor:
+        """The stream indices this reader claimed."""
+        if getattr(params.init_call, "split_tokens", None) is None:
+            raise RuntimeError("blob_param_streams is split-only; vgi_split_scans is probably off")
+        return _StreamCursor(streams=[struct.unpack("<q", p)[0] for p in (params.split_payloads or [])])
+
+    @classmethod
+    def process(cls, params: ProcessParams[_BlobParamStreamsArgs], state: _StreamCursor, out: OutputCollector) -> None:
+        """Emit one row per claimed stream, then finish."""
+        if state.next_index >= len(state.streams):
+            out.finish()
+            return
+        length, digest = _digest(params.args.payload)
+        out.emit(
+            pa.RecordBatch.from_pydict(
+                {"stream": [state.streams[state.next_index]], "payload_len": [length], "payload_sha256": [digest]},
+                schema=params.output_schema,
+            )
+        )
+        state.next_index += 1
+
+
+class BlobParamScalarFunction(ScalarFunction):
+    """``blob_param_scalar(i, payload)``: ``sha256(payload)`` per non-NULL ``i``.
+
+    ``payload`` is a constant parameter, so it rides the scalar's bind (and
+    with it an argument reference), not its input batches.
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "blob_param_scalar"
+        description = "SHA-256 of a constant parameter for every row (argument references for scalars)"
+        examples = [FunctionExample(sql="SELECT blob_param_scalar(1, 'abc')", description="sha256('abc')")]
+
+    @classmethod
+    def compute(
+        cls,
+        i: Annotated[pa.Int64Array, Param(doc="Row value; NULL gives NULL")],
+        payload: Annotated[str, ConstParam("Constant parameter to hash")],
+    ) -> Annotated[pa.StringArray, Returns()]:
+        """``sha256(payload)`` for each row whose ``i`` is not NULL."""
+        digest = hashlib.sha256(payload.encode()).hexdigest() if payload is not None else None
+        return pa.array([None if v is None else digest for v in i.to_pylist()], type=pa.string())
+
+
+#: The fixed argument ``blob_param_table`` binds: ``repeat('t', 65536)``.
+BLOB_PARAM_TABLE_ARGUMENT = "t" * 65536
+
+
+@init_single_worker
+class BlobParamTableScan(TableFunctionGenerator[_BlobParamArgs, _EmitOnceState]):
+    """The scan behind the ``blob_param_table`` catalog table: ``blob_param_echo`` with a fixed argument.
+
+    It reports ``STABLE_WITHIN_QUERY`` and is never inline-bound, so every scan
+    binds over RPC and a serialized-plan rebind must reproduce the same bind
+    bytes (the extension's per-query argument-reference memo).
+
+    Attributes:
+        FIXED_SCHEMA: ``(payload_len BIGINT, payload_sha256 VARCHAR)``.
+    """
+
+    class Meta:
+        """Function metadata."""
+
+        name = "blob_param_table_scan"
+        description = "Length and SHA-256 of blob_param_table's fixed parameter (STABLE_WITHIN_QUERY)"
+
+    FIXED_SCHEMA: ClassVar[pa.Schema] = BlobParamEchoFunction.FIXED_SCHEMA
+
+    @classmethod
+    def on_bind(cls, params: BindParams[_BlobParamArgs]) -> BindResponse:
+        """The echo schema, promising equivalent scans within one query."""
+        return BindResponse(output_schema=cls.FIXED_SCHEMA, repeatability=BindRepeatability.STABLE_WITHIN_QUERY)
+
+    @classmethod
+    def cardinality(cls, params: BindParams[_BlobParamArgs]) -> TableCardinality:
+        """One row."""
+        return TableCardinality(estimate=1, max=1)
+
+    @classmethod
+    def initial_state(cls, params: ProcessParams[_BlobParamArgs]) -> _EmitOnceState:
+        """Not yet emitted."""
+        return _EmitOnceState()
+
+    @classmethod
+    def process(cls, params: ProcessParams[_BlobParamArgs], state: _EmitOnceState, out: OutputCollector) -> None:
+        """Emit the one row, then finish."""
+        BlobParamEchoFunction.process(params, state, out)
+
+
 # ---------------------------------------------------------------------------
 # Table-buffering and table-in-out
 # ---------------------------------------------------------------------------
@@ -473,6 +702,17 @@ _CATALOG = Catalog(
                 BlobBufferEchoFunction,
                 BlobTioFunction,
                 BlobStoreValuesFunction,
+                BlobParamBatchesFunction,
+                BlobParamStreamsFunction,
+                BlobParamScalarFunction,
+            ],
+            tables=[
+                Table(
+                    name="blob_param_table",
+                    function=BlobParamTableScan,
+                    arguments=Arguments(positional=(pa.scalar(BLOB_PARAM_TABLE_ARGUMENT),)),
+                    comment="blob_param_echo(repeat('t', 65536)), STABLE_WITHIN_QUERY, bound over RPC on every scan",
+                )
             ],
         )
     ],

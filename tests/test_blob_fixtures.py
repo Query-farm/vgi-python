@@ -54,12 +54,19 @@ def test_catalog_functions_match_the_contract() -> None:
     assert names == [
         "blob_buffer_echo",
         "blob_len",
+        "blob_param_batches",
         "blob_param_echo",
+        "blob_param_scalar",
+        "blob_param_streams",
         "blob_repeat",
         "blob_rows",
         "blob_store_values",
         "blob_tio",
     ]
+    # Protocol 3.4: the catalog table that binds blob_param_echo's twin over RPC.
+    (table,) = schema.tables
+    assert table.name == "blob_param_table"
+    assert not table.inline_bind
 
 
 @pytest.fixture
