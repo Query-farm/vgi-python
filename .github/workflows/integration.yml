@@ -28,9 +28,9 @@ env:
   # The test suite and native Actions artifact must come from this exact ref.
   # The downloader verifies its provenance against the checked-out commit.
   # TODO(release-wave): vgi's protocol-3.4 branch (protocol 3.4.0, upload URLs v2,
-  # one aggregate_destructor per execution); back to a v2.0 commit and
-  # VGI_NATIVE_RUNNER_BRANCH v2.0 once 3.4 lands there.
-  VGI_REF: 5b8b7a2a7e4e587e15573ddd62cf1dbcdf6b357e
+  # one aggregate_destructor per execution, argument references); back to a
+  # v2.0 commit and VGI_NATIVE_RUNNER_BRANCH v2.0 once 3.4 lands there.
+  VGI_REF: 4e7e4b249a321f34994b03e2cf245ca1cb3f0c41
   VGI_NATIVE_RUNNER_BRANCH: protocol-3.4
   # CI is not a user: its ATTACHes should not land in Query.Farm's adoption data.
   # The vgi extension fires a telemetry event per successful ATTACH, and this
