@@ -69,6 +69,9 @@ http = ["vgi-rpc[http]"]
 # Publishing and resolving immutable external catalog results needs the RPC
 # download/compression dependencies on every transport, including subprocess.
 external = ["vgi-rpc[external]"]
+# Direct object storage (VGI_STORAGE_BACKEND=s3 / gcs): the operator's own bucket.
+s3 = ["vgi-rpc[s3]"]
+gcs = ["vgi-rpc[gcs]"]
 iroh = ["vgi-rpc[http,iroh]"]
 # transport="launch": vgi_rpc.launcher imports filelock unconditionally at
 # module level, which lives behind vgi-rpc's own `cli` extra (alongside
@@ -287,6 +290,12 @@ members = ["packages/vgi-fixtures"]
 [tool.uv.sources]
 # duckdb = { path = "/path/to/duckdb-python/dist/duckdb-*.whl" }  # local engine-build override
 vgi-fixtures = { workspace = true }
+# protocol-3.4: the direct-storage contract (vgi_rpc.storage_env) is unreleased;
+# pin the vgi-rpc commit until the 3.4 release wave, then drop this line.
+# 43c15e8 predates protocol-version negotiation (af1c329), which needs the
+# matching vgi-python change; move to >= 70cfc17 (function-storage ids without
+# the key prefix) together with it.
+vgi-rpc = { git = "https://github.com/Query-farm/vgi-rpc-python", rev = "43c15e84921a6011280c26c48ac5139fdbaef288" }
 
 [dependency-groups]
 dev = ["lxml>=6.0.2", "pytest-timeout>=2.4.0", "vgi-fixtures"]

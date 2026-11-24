@@ -241,6 +241,49 @@ jobs:
           uv run --isolated --no-project --python 3.14 --with dist/*.whl \
             python -c "import vgi, vgi.worker, vgi.query_execution; print('ok')"
 
+  direct-s3-rustfs:
+    # VGI_STORAGE_BACKEND=s3 end to end: the HTTP fixture server keeps large
+    # values in a RustFS bucket (SigV4-validating, the image vgi-rpc-java's
+    # storage-integration job uses), over plain http + path style. Covers
+    # backend selection, the startup bucket check, result externalization
+    # and checksum=none. Skipped S3 cases fail the job.
+    name: Direct S3 (RustFS)
+    runs-on: ubuntu-latest
+    env:
+      RUSTFS_IMAGE: ghcr.io/rustfs/rustfs@sha256:29c02251c085cb04edce556304a9ec0f8fba0c40300266cf4f3d953783fe2450
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+
+      - name: Start RustFS
+        run: |
+          docker run -d --name rustfs -p 127.0.0.1:9000:9000 -e RUSTFS_ACCESS_KEY=vgitestadmin \
+            -e RUSTFS_SECRET_KEY=vgitestsecret123 -e RUSTFS_CONSOLE_ENABLE=false "$RUSTFS_IMAGE"
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:9000/health >/dev/null && break; sleep 1; done
+          curl -sf http://127.0.0.1:9000/health
+
+      - name: Install dependencies
+        run: uv sync --all-extras --python 3.14
+
+      - name: Run direct-storage tests
+        env:
+          VGI_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+          VGI_TEST_S3_ACCESS_KEY: vgitestadmin
+          VGI_TEST_S3_SECRET_KEY: vgitestsecret123
+        run: |
+          set -o pipefail
+          uv run --no-sync pytest -o addopts= -p no:cacheprovider -rs \
+            tests/test_direct_storage.py tests/test_direct_storage_e2e.py 2>&1 | tee "$RUNNER_TEMP/pytest.out"
+          if grep -E "^SKIPPED" "$RUNNER_TEMP/pytest.out"; then
+            echo "::error::direct-storage tests skipped"; exit 1
+          fi
+
+      - name: RustFS logs
+        if: failure()
+        run: docker logs rustfs 2>&1 | tail -40
+
   s3-offload-localstack:
     name: S3 Offload Tests (LocalStack)
     runs-on: ubuntu-latest
@@ -259,9 +302,9 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: Query-farm/vgi-rpc-python
-          # The released vgi-rpc the pyproject floor names, so the overlay
-          # matches what users install.
-          ref: v0.57.0
+          # The vgi-rpc commit pyproject pins (direct-storage contract, unreleased);
+          # back to the released tag in the 3.4 release wave.
+          ref: 43c15e84921a6011280c26c48ac5139fdbaef288
           path: vgi-rpc
 
       - name: Install uv

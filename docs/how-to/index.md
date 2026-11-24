@@ -18,6 +18,8 @@ something real. Each guide assumes you can already write and run a basic worker.
   aggregates.
 - **[Serve over HTTP with auth](http-auth.md)** — run a worker as a network service and gate it
   with bearer/JWT auth.
+- **[Keep large values in your own bucket](object-storage.md)** — S3, S3-compatible, or GCS
+  storage for large results, arguments, and state, instead of the blob vendor.
 - **[Integrate with the optimizer](pushdown-and-statistics.md)** — accept pushed-down filters and
   report column statistics.
 Each recipe ends with a **Next steps** section that links onward to a concept page and the full

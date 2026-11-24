@@ -224,6 +224,9 @@ class BlobVendorHttpConfig:
         max_request_bytes: ``VGI_RPC_MAX_REQUEST_BYTES`` -- advertised and
             enforced. Clients (the DuckDB extension) only take the upload-URL
             path for a request larger than this, so set it with the vendor.
+        backend: ``vendor``, ``s3``, ``gcs`` or ``none`` (``VGI_STORAGE_BACKEND``).
+        direct: The ``s3`` / ``gcs`` settings
+            (``vgi_rpc.storage_env.DirectStorageConfig``), else ``None``.
 
     """
 
@@ -231,6 +234,8 @@ class BlobVendorHttpConfig:
     upload_url_provider: Any = None
     max_upload_bytes: int | None = None
     max_request_bytes: int | None = None
+    backend: str = "none"
+    direct: Any = None
 
 
 def resolve_blob_vendor_http_config(env: Mapping[str, str] | None = None) -> BlobVendorHttpConfig:
@@ -262,10 +267,29 @@ def resolve_blob_vendor_http_config(env: Mapping[str, str] | None = None) -> Blo
     max_request_bytes = _positive_int_env(environ, "VGI_RPC_MAX_REQUEST_BYTES")
     if max_request_bytes is None and hosted_mode_enabled(environ):
         max_request_bytes = HOSTED_DEFAULT_MAX_REQUEST_BYTES
-    if not environ.get("VGI_BLOB_VENDOR_URL", "").strip():
+    from vgi_rpc.storage_env import direct_storage_from_env, storage_backend_from_env
+
+    backend = storage_backend_from_env(environ)
+    if backend == "none":
         return BlobVendorHttpConfig(max_request_bytes=max_request_bytes)
     from vgi_rpc.vendor import external_config_from_env, max_upload_bytes_from_env
 
+    if backend in ("s3", "gcs"):
+        # The operator's own bucket (direct-storage contract): the worker
+        # signs URLs itself. With VGI_STORAGE_S3_CHECKSUM=none there is no
+        # upload-URL provider, so no grants / argument refs are advertised.
+        direct = direct_storage_from_env(environ)
+        assert direct is not None
+        return BlobVendorHttpConfig(
+            external_location=direct.external_location,
+            upload_url_provider=direct.upload_url_provider,
+            max_upload_bytes=max_upload_bytes_from_env(environ) if direct.upload_url_provider is not None else None,
+            max_request_bytes=max_request_bytes,
+            backend=backend,
+            direct=direct,
+        )
+    if not environ.get("VGI_BLOB_VENDOR_URL", "").strip():
+        raise ValueError("VGI_STORAGE_BACKEND=vendor needs VGI_BLOB_VENDOR_URL")
     external = external_config_from_env(environ)
     assert external is not None
     return BlobVendorHttpConfig(
@@ -273,7 +297,40 @@ def resolve_blob_vendor_http_config(env: Mapping[str, str] | None = None) -> Blo
         upload_url_provider=external.storage,
         max_upload_bytes=max_upload_bytes_from_env(environ),
         max_request_bytes=max_request_bytes,
+        backend="vendor",
     )
+
+
+def start_storage(blob_http: BlobVendorHttpConfig, *, hosted: bool, env: Mapping[str, str] | None = None) -> None:
+    """Log the storage backend and, for ``VGI_STORAGE_S3_VERIFY=1``, check the bucket before serving.
+
+    Args:
+        blob_http: The resolved settings.
+        hosted: Orchard hosted mode is on.
+        env: Unused; reserved for symmetry with the resolver.
+
+    Raises:
+        vgi_rpc.s3.StorageConfigError: The startup bucket check failed.
+
+    """
+    del env
+    direct = blob_http.direct
+    if direct is None:
+        return
+    _logger.info("Direct object storage: %s", direct.describe())
+    if hosted:
+        _logger.warning(
+            "Orchard hosted mode with VGI_STORAGE_BACKEND=%s: large values go to the operator's bucket, "
+            "not the blob vendor",
+            blob_http.backend,
+        )
+    if direct.upload_url_provider is None:
+        _logger.warning(
+            "VGI_STORAGE_S3_CHECKSUM=none: no upload grants (argument references and large inputs stay inline); "
+            "results are still externalized and verified by the reader"
+        )
+    if direct.verify_at_startup:
+        direct.storage.verify()
 
 
 def _positive_int_env(env: Mapping[str, str], name: str) -> int | None:
@@ -447,6 +504,7 @@ def create_app(
     worker._signing_key = signing_key
 
     blob_http = resolve_blob_vendor_http_config()
+    start_storage(blob_http, hosted=hosted)
 
     server = build_rpc_server(
         worker,

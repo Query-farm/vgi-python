@@ -78,7 +78,7 @@ import threading
 import uuid
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from vgi_rpc.vendor import BlobRef, VendorBlobClient
@@ -299,17 +299,31 @@ def externalize_bytes_from_env() -> int:
 
 
 def blob_client_from_env() -> VendorBlobClient | None:
-    """Build the vendor client from ``VGI_BLOB_VENDOR_URL`` and its token.
+    """Build the blob client for the configured storage backend.
+
+    ``VGI_STORAGE_BACKEND=s3`` / ``gcs`` (or inferred from
+    ``VGI_STORAGE_S3_BUCKET`` / ``VGI_STORAGE_GCS_BUCKET``): an
+    ``ObjectStoreBlobClient`` over the operator's bucket (reads verify size and
+    SHA-256; the bucket's lifecycle rule, not the worker, deletes objects).
+    Otherwise the vendor client from ``VGI_BLOB_VENDOR_URL`` and its token.
 
     Returns:
-        The client, or ``None`` when ``VGI_BLOB_VENDOR_URL`` is unset.
+        The client, or ``None`` when no blob storage is configured.
 
     Raises:
-        ValueError: If the URL is set but no token is.
+        ValueError: If the URL is set but no token is, or the storage
+            variables are malformed or conflict.
         ImportError: If vgi-rpc's blob vendor client cannot be imported.
     """
+    from vgi_rpc.storage_env import ObjectStoreBlobClient, direct_storage_from_env, storage_backend_from_env
+
+    backend = storage_backend_from_env()
+    if backend in ("s3", "gcs"):
+        direct = direct_storage_from_env()
+        assert direct is not None
+        return cast("VendorBlobClient", ObjectStoreBlobClient(direct.storage, max_fetch_bytes=MAX_BLOB_BYTES))
     url = os.environ.get(ENV_VENDOR_URL, "").strip()
-    if not url:
+    if backend == "none" or not url:
         return None
     token = os.environ.get(ENV_VENDOR_TOKEN, "").strip() or os.environ.get("VGI_CF_DO_TOKEN", "").strip()
     if not token:
@@ -349,7 +363,10 @@ def wrap_storage_from_env(base: FunctionStorage, *, max_value_bytes: int | None 
         return base
     blobs = blob_client_from_env()
     if enabled and blobs is None:
-        raise ValueError(f"{ENV_EXTERNALIZE}=1 needs the blob vendor: set {ENV_VENDOR_URL}")
+        raise ValueError(
+            f"{ENV_EXTERNALIZE}=1 needs blob storage: set {ENV_VENDOR_URL}, "
+            "VGI_STORAGE_S3_BUCKET or VGI_STORAGE_GCS_BUCKET"
+        )
     threshold = externalize_bytes_from_env()
     if max_value_bytes is not None:
         threshold = min(threshold, max_value_bytes)
