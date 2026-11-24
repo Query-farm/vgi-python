@@ -291,6 +291,7 @@ class TestHostedWorker:
         status, headers, _ = _request(worker, "HEAD", "/health")
         assert status == 200
         assert "vgi-supported-encodings" in headers
+        _assert_versions(headers)
 
     @pytest.mark.parametrize(
         ("method", "path"),
@@ -393,6 +394,17 @@ class TestHostedWorker:
         assert "resource_metadata" not in headers.get("www-authenticate", "")
         assert "vgi-supported-encodings" in headers
         assert "vgi-accept-max-response-bytes-support" in headers or "vgi-externalization-enabled" in headers
+        _assert_versions(headers)
+
+
+def _assert_versions(headers: dict[str, str]) -> None:
+    """Hosted responses -- 401s included -- advertise every protocol the worker gates (PROTOCOL_VERSIONS_V1 §4.1)."""
+    from vgi_rpc.protocol_versions import parse_versions
+
+    raw = headers.get("vgi-protocol-versions")
+    assert raw is not None, f"no VGI-Protocol-Versions in {sorted(headers)}"
+    advertised = {name: str(rng) for name, rng in parse_versions(raw).items()}
+    assert advertised == {"vgi.v3": "3.4-3.4"}, raw
 
 
 def _declared_body_status(url: str, length: int) -> int:

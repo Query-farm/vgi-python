@@ -16,6 +16,12 @@ on:
 permissions:
   contents: read
 
+env:
+  # TODO(release-wave): same commit as the pyproject vgi-rpc pin. A built wheel
+  # resolves vgi-rpc from PyPI (uv sources are not part of it), so the wheel jobs
+  # install this commit alongside; drop it with the pin.
+  VGI_RPC_PIN: "vgi-rpc @ git+https://github.com/Query-farm/vgi-rpc-python@70cfc1725dd3232cf8ab57320329f13fd91281bd"
+
 jobs:
   test:
     name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
@@ -68,7 +74,7 @@ jobs:
       - name: Install the wheel with only [${{ matrix.extra }}]
         run: |
           uv venv --python 3.13 "$RUNNER_TEMP/venv"
-          VIRTUAL_ENV="$RUNNER_TEMP/venv" uv pip install "$(ls dist/vgi_python-*.whl)[${{ matrix.extra }}]"
+          VIRTUAL_ENV="$RUNNER_TEMP/venv" uv pip install "$(ls dist/vgi_python-*.whl)[${{ matrix.extra }}]" "$VGI_RPC_PIN"
 
       - name: Evaluate pushed-down filters (plain and intersects_extent)
         working-directory: ${{ runner.temp }}
@@ -113,6 +119,12 @@ jobs:
       # gate is that it never gets to accumulate a second batch.
       - name: Type check tests (mypy)
         run: uv run mypy tests/
+
+      # PROTOCOL_VERSIONS_V1 §8: the current protocol types against the latest
+      # checked-in snapshot under schemas/. Additive changes pass; anything else
+      # fails unless the protocol's major.minor was bumped.
+      - name: Protocol schema compatibility
+        run: uv run python -m vgi.codegen.protocol_schema_snapshot check
 
   docs:
     name: Docs (build + examples + prose)
@@ -238,7 +250,7 @@ jobs:
 
       - name: Import attach-path modules from the bare wheel
         run: |
-          uv run --isolated --no-project --python 3.14 --with dist/*.whl \
+          uv run --isolated --no-project --python 3.14 --with dist/*.whl --with "$VGI_RPC_PIN" \
             python -c "import vgi, vgi.worker, vgi.query_execution; print('ok')"
 
   direct-s3-rustfs:
@@ -304,7 +316,7 @@ jobs:
           repository: Query-farm/vgi-rpc-python
           # The vgi-rpc commit pyproject pins (direct-storage contract, unreleased);
           # back to the released tag in the 3.4 release wave.
-          ref: 43c15e84921a6011280c26c48ac5139fdbaef288
+          ref: 70cfc1725dd3232cf8ab57320329f13fd91281bd
           path: vgi-rpc
 
       - name: Install uv

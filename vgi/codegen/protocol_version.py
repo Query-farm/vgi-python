@@ -44,6 +44,57 @@ def current_protocol_version() -> str:
     return value
 
 
+def supported_window(protocol: type) -> tuple[str, str]:
+    """Return the ``(MIN, MAX)`` major.minor window *protocol* supports (``PROTOCOL_VERSIONS_V1`` §7.3).
+
+    The Protocol's ``protocol_version_range`` when it declares one, else exactly
+    its ``protocol_version``'s major.minor -- the same rule the vgi-rpc server
+    gate and client negotiation apply, read through the same function, so the
+    generated constants cannot disagree with what a Python worker advertises.
+
+    Args:
+        protocol: A Protocol class declaring ``protocol_version``.
+
+    Returns:
+        ``("3.4", "3.4")`` for protocol 3.4.
+
+    Raises:
+        TypeError: The protocol declares no string ``protocol_version``.
+
+    """
+    from vgi_rpc.protocol_versions import declared_range
+
+    version = vars(protocol).get("protocol_version")
+    if not isinstance(version, str):
+        raise TypeError(f"{protocol.__name__}.protocol_version must be a str declared as a ClassVar")
+    window = declared_range(protocol, version)
+    return f"{window.min[0]}.{window.min[1]}", f"{window.max[0]}.{window.max[1]}"
+
+
+def window_constants(protocol: type, prefix: str) -> dict[str, str]:
+    """Return the generated window constants for *protocol*, named ``<prefix>_MIN`` / ``_MAX`` / ``S_CLIENT``.
+
+    ``<prefix>S_CLIENT`` is the ready-made ``vgi_rpc.protocol_versions_client``
+    / ``VGI-Client-Protocol-Versions`` value (``vgi.v3=3.4-3.4``).
+
+    Args:
+        protocol: A Protocol class declaring ``protocol_name`` and ``protocol_version``.
+        prefix: Constant-name prefix, e.g. ``VGI_PROTOCOL_VERSION``.
+
+    Returns:
+        Constant name to string value, in emission order.
+
+    """
+    from vgi_rpc.rpc._types import _protocol_wire_name
+
+    low, high = supported_window(protocol)
+    return {
+        f"{prefix}_MIN": low,
+        f"{prefix}_MAX": high,
+        f"{prefix}S_CLIENT": f"{_protocol_wire_name(protocol)}={low}-{high}",
+    }
+
+
 def emit(out: TextIO) -> None:
     """Write the protocol_version followed by a trailing newline."""
     out.write(current_protocol_version())

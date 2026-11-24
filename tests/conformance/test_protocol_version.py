@@ -9,8 +9,9 @@ the C++ extension drives a worker that advertises an incompatible
 (``vgi-fixture-bad-protocol-worker``) through the Python ``Client`` and assert
 the equivalent ``ClientError``.
 
-The framework-level enforcement rule (exact major+minor match, directional
-message, both transports) is exhaustively unit-tested in
+The framework-level enforcement rule (major.minor inside the worker's advertised
+window -- exactly 3.4-3.4 in protocol 3.4 -- refused as
+``protocol_version_unsupported`` with both windows named; PROTOCOL_VERSIONS_V1) is exhaustively unit-tested in
 ``vgi-rpc/tests/test_protocol_version.py``. This file is the VGI-level proof
 that the version travels on real VGI requests and that a mismatch is fatal —
 not a silent no-op.
@@ -29,6 +30,11 @@ from vgi.protocol import VgiProtocol
 # The version the real Python client / C++ extension declares and sends.
 CLIENT_PROTOCOL_VERSION = VgiProtocol.protocol_version
 PREVIOUS_MINOR_PROTOCOL_VERSION = "3.3.0"
+
+
+def _mm(version: str) -> str:
+    """``MAJOR.MINOR`` of a semver: what refusals name (patch is not negotiated)."""
+    return ".".join(version.split(".")[:2])
 
 
 def test_client_protocol_version_is_canonical() -> None:
@@ -52,12 +58,14 @@ def test_mismatched_worker_protocol_version_raises() -> None:
         )
 
     message = str(exc_info.value)
-    # The mismatch is reported, not swallowed, and names both versions.
-    assert "protocol_version mismatch" in message
-    assert CLIENT_PROTOCOL_VERSION in message
-    assert BAD_PROTOCOL_VERSION in message
-    # Directional hint: the client (3.4.0) is older than the worker (99.0.0).
-    assert "upgrade the VGI extension/client" in message
+    # The refusal is reported, not swallowed, and names both sides' windows.
+    assert "protocol_version_unsupported" in message
+    assert f"client speaks vgi.v3 {_mm(CLIENT_PROTOCOL_VERSION)}" in message
+    bad = _mm(BAD_PROTOCOL_VERSION)
+    assert f"this server supports vgi.v3 {bad}-{bad}" in message
+    # Directional hint: the client (3.4) is older than the worker (99.0).
+    assert "client is too old" in message
+    assert "Upgrade the client" in message
 
 
 def test_previous_minor_worker_is_rejected_instead_of_silently_backfilled() -> None:
@@ -77,6 +85,8 @@ def test_previous_minor_worker_is_rejected_instead_of_silently_backfilled() -> N
         )
 
     message = str(exc_info.value)
-    assert "protocol_version mismatch" in message
-    assert CLIENT_PROTOCOL_VERSION in message
-    assert PREVIOUS_MINOR_PROTOCOL_VERSION in message
+    assert "protocol_version_unsupported" in message
+    assert f"client speaks vgi.v3 {_mm(CLIENT_PROTOCOL_VERSION)}" in message
+    prev = _mm(PREVIOUS_MINOR_PROTOCOL_VERSION)
+    assert f"this server supports vgi.v3 {prev}-{prev}" in message
+    assert "server is too old" in message

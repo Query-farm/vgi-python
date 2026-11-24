@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 
 from vgi.codegen._common import DEFAULT_CPP_NAMESPACE, GeneratorError, parse_cpp_namespace
 from vgi.codegen.cpp_protocol_version import emit_version_header
+from vgi.codegen.protocol_version import window_constants
 from vgi.secret_protocol import VgiSecretProtocol
 
 if TYPE_CHECKING:
@@ -51,6 +52,7 @@ def emit(out: TextIO, namespace: list[str] | None = None) -> None:
         out,
         current_secret_protocol_version(),
         constant_name="VGI_SECRET_PROTOCOL_VERSION",
+        window_constants=window_constants(VgiSecretProtocol, "VGI_SECRET_PROTOCOL_VERSION"),
         source_description="VgiSecretProtocol",
         generator_module="vgi.codegen.cpp_secret_protocol_version",
         generator_command="python -m vgi.codegen.cpp_secret_protocol_version",

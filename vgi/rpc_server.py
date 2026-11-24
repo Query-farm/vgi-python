@@ -30,6 +30,7 @@ exactly as it would against a single-protocol server.
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from collections.abc import Iterable, Sequence
@@ -55,6 +56,8 @@ here rather than at each call site.
 """
 
 _TRANSPORTS: frozenset[str] = frozenset({"pipe", "unix", "tcp", "iroh", "http"})
+
+_logger = logging.getLogger(__name__)
 
 #: Transports that authenticate their callers, and so may host
 #: ``vgi_rpc.Identity.v2``. Identity answers questions about *other*
@@ -138,10 +141,12 @@ def build_rpc_server(
         if tickets is not None:
             extra = (*extra, tickets)
 
+    version_ranges = _test_protocol_ranges(primary)
     server = RpcServer(
         primary,
         worker,
         extra_protocols=extra,
+        protocol_version_ranges=version_ranges or None,
         identity=identity,
         # Explicit, never vgi-rpc's "env" default: grants are an HTTP-only
         # identity feature here, and the caller resolved them already.
@@ -160,6 +165,53 @@ def build_rpc_server(
         worker._vgi_tracer = VgiTracer.create(otel_config)
 
     return server
+
+
+#: Fixture switch (``PROTOCOL_VERSIONS_V1`` §9): make a worker advertise and
+#: accept a different version window, so the extension's tests can stand up a
+#: "fake older worker" from any fixture. A bare range (``3.3-3.3``) applies to the
+#: worker's own protocol; ``name=MIN-MAX[, ...]`` names protocols explicitly.
+TEST_PROTOCOL_RANGE_ENV = "VGI_TEST_PROTOCOL_RANGE"
+
+
+def _test_protocol_ranges(primary: type) -> dict[str, str]:
+    """Read :data:`TEST_PROTOCOL_RANGE_ENV`; empty when unset.
+
+    Args:
+        primary: The worker's own protocol, which a bare range applies to.
+
+    Returns:
+        Protocol name to ``MIN-MAX``, for ``RpcServer(protocol_version_ranges=)``.
+
+    Raises:
+        SystemExit: The value is set but malformed. A test switch that is
+            silently ignored would make the test it serves pass for the wrong
+            reason.
+
+    """
+    from vgi_rpc.protocol_versions import VersionRange, parse_versions
+    from vgi_rpc.rpc._types import _protocol_wire_name
+
+    raw = os.environ.get(TEST_PROTOCOL_RANGE_ENV, "").strip()
+    if not raw:
+        return {}
+    if "=" in raw:
+        parsed = parse_versions(raw)
+        entries = [e for e in raw.split(",") if e.strip()]
+        if len(parsed) != len(entries):
+            raise SystemExit(f"{TEST_PROTOCOL_RANGE_ENV}={raw!r}: expected name=MAJ.MIN-MAJ.MIN[, ...]")
+        ranges = {name: str(rng) for name, rng in parsed.items()}
+    else:
+        try:
+            ranges = {_protocol_wire_name(primary): str(VersionRange.parse(raw))}
+        except ValueError as exc:
+            raise SystemExit(f"{TEST_PROTOCOL_RANGE_ENV}={raw!r}: expected MAJ.MIN-MAJ.MIN ({exc})") from exc
+    _logger.warning(
+        "%s is set: advertising and accepting %s instead of the declared protocol versions (test fixture switch)",
+        TEST_PROTOCOL_RANGE_ENV,
+        ranges,
+    )
+    return ranges
 
 
 def _validated_hosted_protocols(worker: Worker | MetaWorker, primary: type) -> tuple[tuple[type, object], ...]:

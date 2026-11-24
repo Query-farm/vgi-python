@@ -38,7 +38,8 @@ from vgi.codegen._common import (
     parse_cpp_namespace,
     provenance_comment,
 )
-from vgi.codegen.protocol_version import current_protocol_version
+from vgi.codegen.protocol_version import current_protocol_version, window_constants
+from vgi.protocol import VgiProtocol
 
 if TYPE_CHECKING:
     from typing import TextIO
@@ -58,10 +59,13 @@ def emit_version_header(
     regen_command_lines: list[str],
     namespace: list[str] | None = None,
     extra_constants: dict[str, str] | None = None,
+    window_constants: dict[str, str] | None = None,
 ) -> None:
-    """Render a one-constant ``std::string_view`` protocol-version header.
+    """Render a ``std::string_view`` protocol-version header.
 
     Shared by the main protocol generator and the secret protocol generator.
+    *window_constants* are the supported-window constants
+    (:func:`vgi.codegen.protocol_version.window_constants`).
     """
     # The value is canonical semver — ASCII-only by SEMVER_REGEX construction.
     # Reject anything else loudly so we never silently emit a malformed literal.
@@ -76,11 +80,18 @@ def emit_version_header(
     body.write(open_namespace(namespace))
     body.write("\n")
     body.write(f"// Application protocol surface version declared by {source_description}.\n")
-    body.write("// Canonical semver MAJOR.MINOR.PATCH; emitted on every request batch's\n")
-    body.write("// custom_metadata under `vgi_rpc.protocol_version` so the server can\n")
-    body.write("// enforce an exact major+minor match at the dispatch boundary.\n")
+    body.write("// Canonical semver MAJOR.MINOR.PATCH: the newest version this build speaks.\n")
+    body.write("// The version sent in `vgi_rpc.protocol_version` is the negotiated\n")
+    body.write("// major.minor (PROTOCOL_VERSIONS_V1) plus this patch.\n")
     body.write(f"// Sourced from {source_description}.protocol_version (vgi-python).\n")
     body.write(f'inline constexpr std::string_view {constant_name} = "{proto_version}";\n\n')
+    if window_constants:
+        body.write("// Supported window (PROTOCOL_VERSIONS_V1 §7.3): the inclusive major.minor\n")
+        body.write("// range this build can speak, and the ready-made client advertisement\n")
+        body.write("// (`vgi_rpc.protocol_versions_client` / `VGI-Client-Protocol-Versions`).\n")
+        for name, value in window_constants.items():
+            body.write(f'inline constexpr std::string_view {name} = "{value}";\n')
+        body.write("\n")
     for name, value in (extra_constants or {}).items():
         body.write(f'inline constexpr std::string_view {name} = "{value}";\n\n')
     body.write(close_namespace(namespace))
@@ -106,6 +117,7 @@ def emit(out: TextIO, namespace: list[str] | None = None) -> None:
         out,
         current_protocol_version(),
         constant_name="VGI_PROTOCOL_VERSION",
+        window_constants=window_constants(VgiProtocol, "VGI_PROTOCOL_VERSION"),
         extra_constants={"VGI_CATALOG_CONTRACT_HASH": catalog_contract_hash()},
         source_description="VgiProtocol",
         generator_module="vgi.codegen.cpp_protocol_version",

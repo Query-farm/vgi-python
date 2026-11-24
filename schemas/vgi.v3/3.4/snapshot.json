@@ -1,0 +1,2271 @@
+{
+ "format": 1,
+ "methods": {
+  "aggregate_bind": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "aggregate_combine": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "aggregate_destructor": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "aggregate_finalize": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "aggregate_streaming_chunk": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "aggregate_streaming_close": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "aggregate_streaming_open": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "aggregate_update": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "aggregate_window": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "aggregate_window_batch": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "aggregate_window_destructor": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "aggregate_window_init": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "bind": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_attach": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_catalogs": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////zAAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAAAAAA=",
+   "params_text": [],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_contents": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////8AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAIAAABYAAAAFAAAABAAFAAIAAYABwAMAAAAEAAQAAAAAAABBRAAAAAgAAAABAAAAAAAAAANAAAAaWZfbm9uZV9tYXRjaAAAALz///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAKAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAABAAEAAQAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "if_none_match: string"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_copy_from_formats": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////8gAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAIAAABgAAAAFAAAABAAFAAIAAYABwAMAAAAEAAQAAAAAAABBBAAAAAoAAAABAAAAAAAAAAXAAAAdHJhbnNhY3Rpb25fb3BhcXVlX2RhdGEAvP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABBAAAAAoAAAABAAAAAAAAAASAAAAYXR0YWNoX29wYXF1ZV9kYXRhAAAEAAQABAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_create": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_dependencies": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////8gAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAIAAABgAAAAFAAAABAAFAAIAAYABwAMAAAAEAAQAAAAAAABBBAAAAAoAAAABAAAAAAAAAAXAAAAdHJhbnNhY3Rpb25fb3BhcXVlX2RhdGEAvP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABBAAAAAoAAAABAAAAAAAAAASAAAAYXR0YWNoX29wYXF1ZV9kYXRhAAAEAAQABAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_detach": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////4AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACgAAAAEAAAAAAAAABIAAABhdHRhY2hfb3BhcXVlX2RhdGEAAAQABAAEAAAAAAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_drop": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAFEAAAABwAAAAEAAAAAAAAAAQAAABuYW1lAAAAAAQABAAEAAAA",
+   "params_text": [
+    "name: string not null"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_index_create": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_index_drop": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////7gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAYAAABMAQAA0AAAAKQAAABsAAAAQAAAAAQAAAAU////AAABBBAAAAAoAAAABAAAAAAAAAAXAAAAdHJhbnNhY3Rpb25fb3BhcXVlX2RhdGEA0P7//xT///8AAAAGEAAAABgAAAAEAAAAAAAAAAcAAABjYXNjYWRlAPj+//88////AAAABhAAAAAkAAAABAAAAAAAAAAQAAAAaWdub3JlX25vdF9mb3VuZAAAAAAs////cP///wAAAAUQAAAAGAAAAAQAAAAAAAAABAAAAG5hbWUAAAAAVP///5j///8AAAAMFAAAACAAAAAEAAAAAQAAACgAAAALAAAAc2NoZW1hX3BhdGgAhP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAAC8////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACgAAAAEAAAAAAAAABIAAABhdHRhY2hfb3BhcXVlX2RhdGEAAAQABAAEAAAAAAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "ignore_not_found: bool not null",
+    "cascade: bool not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_index_get": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////1ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAQAAADoAAAAbAAAAEAAAAAEAAAAcP///wAAAQQQAAAAKAAAAAQAAAAAAAAAFwAAAHRyYW5zYWN0aW9uX29wYXF1ZV9kYXRhACz///9w////AAAABRAAAAAYAAAABAAAAAAAAAAEAAAAbmFtZQAAAABU////mP///wAAAAwUAAAAIAAAAAQAAAABAAAAKAAAAAsAAABzY2hlbWFfcGF0aACE////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAALz///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAKAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAABAAEAAQAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_index_option_definitions": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////ygBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAQAAAC8AAAAgAAAAFAAAAAUAAAAEAAUAAgABgAHAAwAAAAQABAAAAAAAAEEEAAAACgAAAAEAAAAAAAAABcAAAB0cmFuc2FjdGlvbl9vcGFxdWVfZGF0YQBo////rP///wAAAAUQAAAAHAAAAAQAAAAAAAAACQAAAGFsZ29yaXRobQAAAJT////Y////AAAABBAAAAAYAAAABAAAAAAAAAAFAAAAdGFibGUAAAC8////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACgAAAAEAAAAAAAAABIAAABhdHRhY2hfb3BhcXVlX2RhdGEAAAQABAAEAAAAAAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "table: binary not null",
+    "algorithm: string not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_macro_create": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_macro_drop": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////4gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAUAAAAgAQAApAAAAHgAAABAAAAABAAAADz///8AAAEEEAAAACgAAAAEAAAAAAAAABcAAAB0cmFuc2FjdGlvbl9vcGFxdWVfZGF0YQD4/v//PP///wAAAAYQAAAAJAAAAAQAAAAAAAAAEAAAAGlnbm9yZV9ub3RfZm91bmQAAAAALP///3D///8AAAAFEAAAABgAAAAEAAAAAAAAAAQAAABuYW1lAAAAAFT///+Y////AAAADBQAAAAgAAAABAAAAAEAAAAoAAAACwAAAHNjaGVtYV9wYXRoAIT///8QABQACAAGAAcADAAAABAAEAAAAAAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAvP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABBAAAAAoAAAABAAAAAAAAAASAAAAYXR0YWNoX29wYXF1ZV9kYXRhAAAEAAQABAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "ignore_not_found: bool not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_macro_get": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////1ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAQAAADoAAAAbAAAAEAAAAAEAAAAcP///wAAAQQQAAAAKAAAAAQAAAAAAAAAFwAAAHRyYW5zYWN0aW9uX29wYXF1ZV9kYXRhACz///9w////AAAABRAAAAAYAAAABAAAAAAAAAAEAAAAbmFtZQAAAABU////mP///wAAAAwUAAAAIAAAAAQAAAABAAAAKAAAAAsAAABzY2hlbWFfcGF0aACE////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAALz///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAKAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAABAAEAAQAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_query_prepare": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_query_release": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////wgBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAMAAACcAAAAUAAAABQAAAAQABQACAAGAAcADAAAABAAEAAAAAAAAQQQAAAAKAAAAAQAAAAAAAAAFwAAAHRyYW5zYWN0aW9uX29wYXF1ZV9kYXRhAIT////I////AAAABBAAAAAoAAAABAAAAAAAAAAUAAAAcHJlcGFyZWRfcXVlcnlfdG9rZW4AAAAAvP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABBAAAAAoAAAABAAAAAAAAAASAAAAYXR0YWNoX29wYXF1ZV9kYXRhAAAEAAQABAAAAAAAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "prepared_query_token: binary not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_schema_alter_metadata": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////4gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAUAAAAcAQAApAAAAHgAAABAAAAABAAAAED///8AAAEEEAAAACgAAAAEAAAAAAAAABcAAAB0cmFuc2FjdGlvbl9vcGFxdWVfZGF0YQD8/v//QP///wAAAAYQAAAAJAAAAAQAAAAAAAAAEAAAAGlnbm9yZV9ub3RfZm91bmQAAAAAMP///3T///8AAAAEEAAAABgAAAAEAAAAAAAAAAcAAABjaGFuZ2VzAFj///+c////AAAADBQAAAAcAAAABAAAAAEAAAAkAAAABAAAAHBhdGgAAAAAhP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAAC8////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACgAAAAEAAAAAAAAABIAAABhdHRhY2hfb3BhcXVlX2RhdGEAAAQABAAEAAAAAAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "path: list<item: string> not null",
+    "changes: binary not null",
+    "ignore_not_found: bool not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_schema_alter_options": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////1ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAQAAADkAAAAbAAAAEAAAAAEAAAAdP///wAAAQQQAAAAKAAAAAQAAAAAAAAAFwAAAHRyYW5zYWN0aW9uX29wYXF1ZV9kYXRhADD///90////AAAABBAAAAAYAAAABAAAAAAAAAAHAAAAY2hhbmdlcwBY////nP///wAAAAwUAAAAHAAAAAQAAAABAAAAJAAAAAQAAABwYXRoAAAAAIT///8QABQACAAGAAcADAAAABAAEAAAAAAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAvP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABBAAAAAoAAAABAAAAAAAAAASAAAAYXR0YWNoX29wYXF1ZV9kYXRhAAAEAAQABAAAAAAAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "path: list<item: string> not null",
+    "changes: binary not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_schema_contents_functions": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////4ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAEAAAAdP///wQAAAAEAAAAHAEAAKQAAABQAAAABAAAADz///8AAAEEEAAAACgAAAAEAAAAAAAAABcAAAB0cmFuc2FjdGlvbl9vcGFxdWVfZGF0YQD4/v//EAAYAAgAAAAHAAwAEAAUABAAAAAAAAAFFAAAAEAAAAAgAAAABAAAAAAAAAAEAAAAdHlwZQAAAAAIAAgAAAAEAAgAAAAMAAAACAAMAAgABwAIAAAAAAAAARAAAABY////nP///wAAAAwUAAAAHAAAAAQAAAABAAAAJAAAAAQAAABwYXRoAAAAAIT///8QABQACAAGAAcADAAAABAAEAAAAAAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAvP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABBAAAAAoAAAABAAAAAAAAAASAAAAYXR0YWNoX29wYXF1ZV9kYXRhAAAEAAQABAAAAAAAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "path: list<item: string> not null",
+    "type: dictionary<values=string, indices=int16, ordered=0> not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_schema_contents_indexes": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////yABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAMAAAC4AAAAQAAAAAQAAACc////AAABBBAAAAAoAAAABAAAAAAAAAAXAAAAdHJhbnNhY3Rpb25fb3BhcXVlX2RhdGEAWP///5z///8AAAAMFAAAABwAAAAEAAAAAQAAACQAAAAEAAAAcGF0aAAAAACE////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAALz///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAKAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAABAAEAAQAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "path: list<item: string> not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_schema_contents_macros": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////4ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAEAAAAdP///wQAAAAEAAAAHAEAAKQAAABQAAAABAAAADz///8AAAEEEAAAACgAAAAEAAAAAAAAABcAAAB0cmFuc2FjdGlvbl9vcGFxdWVfZGF0YQD4/v//EAAYAAgAAAAHAAwAEAAUABAAAAAAAAAFFAAAAEAAAAAgAAAABAAAAAAAAAAEAAAAdHlwZQAAAAAIAAgAAAAEAAgAAAAMAAAACAAMAAgABwAIAAAAAAAAARAAAABY////nP///wAAAAwUAAAAHAAAAAQAAAABAAAAJAAAAAQAAABwYXRoAAAAAIT///8QABQACAAGAAcADAAAABAAEAAAAAAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAvP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABBAAAAAoAAAABAAAAAAAAAASAAAAYXR0YWNoX29wYXF1ZV9kYXRhAAAEAAQABAAAAAAAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "path: list<item: string> not null",
+    "type: dictionary<values=string, indices=int16, ordered=0> not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_schema_contents_tables": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////yABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAMAAAC4AAAAQAAAAAQAAACc////AAABBBAAAAAoAAAABAAAAAAAAAAXAAAAdHJhbnNhY3Rpb25fb3BhcXVlX2RhdGEAWP///5z///8AAAAMFAAAABwAAAAEAAAAAQAAACQAAAAEAAAAcGF0aAAAAACE////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAALz///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAKAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAABAAEAAQAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "path: list<item: string> not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_schema_contents_views": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////yABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAMAAAC4AAAAQAAAAAQAAACc////AAABBBAAAAAoAAAABAAAAAAAAAAXAAAAdHJhbnNhY3Rpb25fb3BhcXVlX2RhdGEAWP///5z///8AAAAMFAAAABwAAAAEAAAAAQAAACQAAAAEAAAAcGF0aAAAAACE////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAALz///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAKAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAABAAEAAQAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "path: list<item: string> not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_schema_create": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////4gCAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAEAAAAbP7//wQAAAAHAAAAJAIAAKwBAABUAQAAGAEAAGwAAAAwAAAABAAAAED+//8AAAEEEAAAABgAAAAEAAAAAAAAAAcAAABvcHRpb25zAOz9//9o/v//AAABBBAAAAAoAAAABAAAAAAAAAAXAAAAdHJhbnNhY3Rpb25fb3BhcXVlX2RhdGEAJP7//6D+//8AAAERFAAAABwAAAAEAAAAAQAAABQAAAAEAAAAdGFncwAAAABQ/v//lP7//wAAAA0YAAAAIAAAAAQAAAACAAAAQAAAABQAAAAHAAAAZW50cmllcwCA/v///P7//wAAAQUQAAAAGAAAAAQAAAAAAAAABQAAAHZhbHVlAAAAqP7//+z+//8AAAAFEAAAABQAAAAEAAAAAAAAAAMAAABrZXkAzP7//0j///8AAAEFEAAAABgAAAAEAAAAAAAAAAcAAABjb21tZW50APT+//8QABgACAAAAAcADAAQABQAEAAAAAAAAAUUAAAARAAAACQAAAAEAAAAAAAAAAsAAABvbl9jb25mbGljdAAIAAgAAAAEAAgAAAAMAAAACAAMAAgABwAIAAAAAAAAARAAAABY////nP///wAAAAwUAAAAHAAAAAQAAAABAAAAJAAAAAQAAABwYXRoAAAAAIT///8QABQACAAGAAcADAAAABAAEAAAAAAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAvP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABBAAAAAoAAAABAAAAAAAAAASAAAAYXR0YWNoX29wYXF1ZV9kYXRhAAAEAAQABAAAAAAAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "path: list<item: string> not null",
+    "on_conflict: dictionary<values=string, indices=int16, ordered=0> not null",
+    "comment: string",
+    "tags: map<string, string>",
+    "transaction_opaque_data: binary",
+    "options: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_schema_drop": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////4gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAUAAAAcAQAApAAAAGwAAABAAAAABAAAAED///8AAAEEEAAAACgAAAAEAAAAAAAAABcAAAB0cmFuc2FjdGlvbl9vcGFxdWVfZGF0YQD8/v//QP///wAAAAYQAAAAGAAAAAQAAAAAAAAABwAAAGNhc2NhZGUAJP///2j///8AAAAGEAAAACQAAAAEAAAAAAAAABAAAABpZ25vcmVfbm90X2ZvdW5kAAAAAFj///+c////AAAADBQAAAAcAAAABAAAAAEAAAAkAAAABAAAAHBhdGgAAAAAhP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAAC8////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACgAAAAEAAAAAAAAABIAAABhdHRhY2hfb3BhcXVlX2RhdGEAAAQABAAEAAAAAAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "path: list<item: string> not null",
+    "ignore_not_found: bool not null",
+    "cascade: bool not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_schema_get": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////yABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAMAAAC4AAAAQAAAAAQAAACc////AAABBBAAAAAoAAAABAAAAAAAAAAXAAAAdHJhbnNhY3Rpb25fb3BhcXVlX2RhdGEAWP///5z///8AAAAMFAAAABwAAAAEAAAAAQAAACQAAAAEAAAAcGF0aAAAAACE////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAALz///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAKAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAABAAEAAQAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "path: list<item: string> not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_schema_option_definitions": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////yABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAMAAAC4AAAAQAAAAAQAAACc////AAABBBAAAAAoAAAABAAAAAAAAAAXAAAAdHJhbnNhY3Rpb25fb3BhcXVlX2RhdGEAWP///5z///8AAAAMFAAAABwAAAAEAAAAAQAAACQAAAAEAAAAcGF0aAAAAACE////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAALz///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAKAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAABAAEAAQAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "path: list<item: string> not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_schemas": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////8gAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAIAAABgAAAAFAAAABAAFAAIAAYABwAMAAAAEAAQAAAAAAABBBAAAAAoAAAABAAAAAAAAAAXAAAAdHJhbnNhY3Rpb25fb3BhcXVlX2RhdGEAvP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABBAAAAAoAAAABAAAAAAAAAASAAAAYXR0YWNoX29wYXF1ZV9kYXRhAAAEAAQABAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_table_alter_layout": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////4ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAUAAAAUAQAAmAAAAGwAAABAAAAABAAAAEj///8AAAEEEAAAACgAAAAEAAAAAAAAABcAAAB0cmFuc2FjdGlvbl9vcGFxdWVfZGF0YQAE////SP///wAAAAQQAAAAGAAAAAQAAAAAAAAABwAAAGNoYW5nZXMALP///3D///8AAAAFEAAAABgAAAAEAAAAAAAAAAQAAABuYW1lAAAAAFT///+Y////AAAADBQAAAAgAAAABAAAAAEAAAAoAAAACwAAAHNjaGVtYV9wYXRoAIT///8QABQACAAGAAcADAAAABAAEAAAAAAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAvP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABBAAAAAoAAAABAAAAAAAAAASAAAAYXR0YWNoX29wYXF1ZV9kYXRhAAAEAAQABAAAAAAAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "changes: binary not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_table_alter_options": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////4ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAUAAAAUAQAAmAAAAGwAAABAAAAABAAAAEj///8AAAEEEAAAACgAAAAEAAAAAAAAABcAAAB0cmFuc2FjdGlvbl9vcGFxdWVfZGF0YQAE////SP///wAAAAQQAAAAGAAAAAQAAAAAAAAABwAAAGNoYW5nZXMALP///3D///8AAAAFEAAAABgAAAAEAAAAAAAAAAQAAABuYW1lAAAAAFT///+Y////AAAADBQAAAAgAAAABAAAAAEAAAAoAAAACwAAAHNjaGVtYV9wYXRoAIT///8QABQACAAGAAcADAAAABAAEAAAAAAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAvP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABBAAAAAoAAAABAAAAAAAAAASAAAAYXR0YWNoX29wYXF1ZV9kYXRhAAAEAAQABAAAAAAAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "changes: binary not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_table_column_add": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////1gCAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAgAAADwAQAAdAEAAEgBAADsAAAAtAAAAHwAAABAAAAABAAAAHj+//8AAAEEEAAAACgAAAAEAAAAAAAAABcAAAB0cmFuc2FjdGlvbl9vcGFxdWVfZGF0YQA0/v//eP7//wAAAAYQAAAAKAAAAAQAAAAAAAAAFAAAAGlmX2NvbHVtbl9ub3RfZXhpc3RzAAAAAGz+//+w/v//AAAABhAAAAAkAAAABAAAAAAAAAAQAAAAaWdub3JlX25vdF9mb3VuZAAAAACg/v//5P7//wAAAAQQAAAAJAAAAAQAAAAAAAAAEQAAAGNvbHVtbl9kZWZpbml0aW9uAAAA1P7//xj///8AAAAMFAAAACAAAAAEAAAAAQAAABgAAAALAAAAY29sdW1uX3BhdGgABP///4D///8AAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAACz///9w////AAAABRAAAAAYAAAABAAAAAAAAAAEAAAAbmFtZQAAAABU////mP///wAAAAwUAAAAIAAAAAQAAAABAAAAKAAAAAsAAABzY2hlbWFfcGF0aACE////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAALz///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAKAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAABAAEAAQAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "column_path: list<item: string> not null",
+    "column_definition: binary not null",
+    "ignore_not_found: bool not null",
+    "if_column_not_exists: bool not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_table_column_comment_set": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////xACAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAcAAACoAQAALAEAAAABAACkAAAAeAAAAEAAAAAEAAAAvP7//wAAAQQQAAAAKAAAAAQAAAAAAAAAFwAAAHRyYW5zYWN0aW9uX29wYXF1ZV9kYXRhAHj+//+8/v//AAAABhAAAAAkAAAABAAAAAAAAAAQAAAAaWdub3JlX25vdF9mb3VuZAAAAACs/v//KP///wAAAQUQAAAAGAAAAAQAAAAAAAAABwAAAGNvbW1lbnQA1P7//xj///8AAAAMFAAAACAAAAAEAAAAAQAAABgAAAALAAAAY29sdW1uX3BhdGgABP///4D///8AAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAACz///9w////AAAABRAAAAAYAAAABAAAAAAAAAAEAAAAbmFtZQAAAABU////mP///wAAAAwUAAAAIAAAAAQAAAABAAAAKAAAAAsAAABzY2hlbWFfcGF0aACE////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAALz///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAKAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAABAAEAAQAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "column_path: list<item: string> not null",
+    "comment: string",
+    "ignore_not_found: bool not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_table_column_default_drop": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////+gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAYAAAB8AQAAAAEAANQAAAB4AAAAQAAAAAQAAADk/v//AAABBBAAAAAoAAAABAAAAAAAAAAXAAAAdHJhbnNhY3Rpb25fb3BhcXVlX2RhdGEAoP7//+T+//8AAAAGEAAAACQAAAAEAAAAAAAAABAAAABpZ25vcmVfbm90X2ZvdW5kAAAAANT+//8Y////AAAADBQAAAAgAAAABAAAAAEAAAAYAAAACwAAAGNvbHVtbl9wYXRoAAT///+A////AAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAAAs////cP///wAAAAUQAAAAGAAAAAQAAAAAAAAABAAAAG5hbWUAAAAAVP///5j///8AAAAMFAAAACAAAAAEAAAAAQAAACgAAAALAAAAc2NoZW1hX3BhdGgAhP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAAC8////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACgAAAAEAAAAAAAAABIAAABhdHRhY2hfb3BhcXVlX2RhdGEAAAQABAAEAAAAAAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "column_path: list<item: string> not null",
+    "ignore_not_found: bool not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_table_column_default_set": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////xgCAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAcAAACsAQAAMAEAAAQBAACoAAAAeAAAAEAAAAAEAAAAuP7//wAAAQQQAAAAKAAAAAQAAAAAAAAAFwAAAHRyYW5zYWN0aW9uX29wYXF1ZV9kYXRhAHT+//+4/v//AAAABhAAAAAkAAAABAAAAAAAAAAQAAAAaWdub3JlX25vdF9mb3VuZAAAAACo/v//7P7//wAAAAQQAAAAHAAAAAQAAAAAAAAACgAAAGV4cHJlc3Npb24AANT+//8Y////AAAADBQAAAAgAAAABAAAAAEAAAAYAAAACwAAAGNvbHVtbl9wYXRoAAT///+A////AAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAAAs////cP///wAAAAUQAAAAGAAAAAQAAAAAAAAABAAAAG5hbWUAAAAAVP///5j///8AAAAMFAAAACAAAAAEAAAAAQAAACgAAAALAAAAc2NoZW1hX3BhdGgAhP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAAC8////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACgAAAAEAAAAAAAAABIAAABhdHRhY2hfb3BhcXVlX2RhdGEAAAQABAAEAAAAAAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "column_path: list<item: string> not null",
+    "expression: binary not null",
+    "ignore_not_found: bool not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_table_column_drop": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////0gCAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAgAAADgAQAAZAEAADgBAADcAAAApAAAAGwAAABAAAAABAAAAIj+//8AAAEEEAAAACgAAAAEAAAAAAAAABcAAAB0cmFuc2FjdGlvbl9vcGFxdWVfZGF0YQBE/v//iP7//wAAAAYQAAAAGAAAAAQAAAAAAAAABwAAAGNhc2NhZGUAbP7//7D+//8AAAAGEAAAACQAAAAEAAAAAAAAABAAAABpZl9jb2x1bW5fZXhpc3RzAAAAAKD+///k/v//AAAABhAAAAAkAAAABAAAAAAAAAAQAAAAaWdub3JlX25vdF9mb3VuZAAAAADU/v//GP///wAAAAwUAAAAIAAAAAQAAAABAAAAGAAAAAsAAABjb2x1bW5fcGF0aAAE////gP///wAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAALP///3D///8AAAAFEAAAABgAAAAEAAAAAAAAAAQAAABuYW1lAAAAAFT///+Y////AAAADBQAAAAgAAAABAAAAAEAAAAoAAAACwAAAHNjaGVtYV9wYXRoAIT///8QABQACAAGAAcADAAAABAAEAAAAAAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAvP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABBAAAAAoAAAABAAAAAAAAAASAAAAYXR0YWNoX29wYXF1ZV9kYXRhAAAEAAQABAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "column_path: list<item: string> not null",
+    "ignore_not_found: bool not null",
+    "if_column_exists: bool not null",
+    "cascade: bool not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_table_column_rename": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////xgCAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAcAAACwAQAANAEAAAgBAACsAAAAeAAAAEAAAAAEAAAAtP7//wAAAQQQAAAAKAAAAAQAAAAAAAAAFwAAAHRyYW5zYWN0aW9uX29wYXF1ZV9kYXRhAHD+//+0/v//AAAABhAAAAAkAAAABAAAAAAAAAAQAAAAaWdub3JlX25vdF9mb3VuZAAAAACk/v//6P7//wAAAAUQAAAAIAAAAAQAAAAAAAAADwAAAG5ld19jb2x1bW5fbmFtZQDU/v//GP///wAAAAwUAAAAIAAAAAQAAAABAAAAGAAAAAsAAABjb2x1bW5fcGF0aAAE////gP///wAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAALP///3D///8AAAAFEAAAABgAAAAEAAAAAAAAAAQAAABuYW1lAAAAAFT///+Y////AAAADBQAAAAgAAAABAAAAAEAAAAoAAAACwAAAHNjaGVtYV9wYXRoAIT///8QABQACAAGAAcADAAAABAAEAAAAAAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAvP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABBAAAAAoAAAABAAAAAAAAAASAAAAYXR0YWNoX29wYXF1ZV9kYXRhAAAEAAQABAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "column_path: list<item: string> not null",
+    "new_column_name: string not null",
+    "ignore_not_found: bool not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_table_column_statistics_get": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////1ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAQAAADoAAAAbAAAAEAAAAAEAAAAcP///wAAAQQQAAAAKAAAAAQAAAAAAAAAFwAAAHRyYW5zYWN0aW9uX29wYXF1ZV9kYXRhACz///9w////AAAABRAAAAAYAAAABAAAAAAAAAAEAAAAbmFtZQAAAABU////mP///wAAAAwUAAAAIAAAAAQAAAABAAAAKAAAAAsAAABzY2hlbWFfcGF0aACE////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAALz///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAKAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAABAAEAAQAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgABgAHAAwAAAAQABAAAAAAAAEEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary"
+   ]
+  },
+  "catalog_table_column_type_change": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////1ACAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAgAAADkAQAAaAEAADwBAADgAAAAqAAAAHgAAABAAAAABAAAAIT+//8AAAEEEAAAACgAAAAEAAAAAAAAABcAAAB0cmFuc2FjdGlvbl9vcGFxdWVfZGF0YQBA/v//hP7//wAAAAYQAAAAJAAAAAQAAAAAAAAAEAAAAGlnbm9yZV9ub3RfZm91bmQAAAAAdP7///D+//8AAAEEEAAAABwAAAAEAAAAAAAAAAoAAABleHByZXNzaW9uAACg/v//5P7//wAAAAQQAAAAJAAAAAQAAAAAAAAAEQAAAGNvbHVtbl9kZWZpbml0aW9uAAAA1P7//xj///8AAAAMFAAAACAAAAAEAAAAAQAAABgAAAALAAAAY29sdW1uX3BhdGgABP///4D///8AAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAACz///9w////AAAABRAAAAAYAAAABAAAAAAAAAAEAAAAbmFtZQAAAABU////mP///wAAAAwUAAAAIAAAAAQAAAABAAAAKAAAAAsAAABzY2hlbWFfcGF0aACE////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAALz///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAKAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAABAAEAAQAAAAAAAAA",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "column_path: list<item: string> not null",
+    "column_definition: binary not null",
+    "expression: binary",
+    "ignore_not_found: bool not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_table_comment_set": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////7gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAYAAABMAQAA0AAAAKQAAAB4AAAAQAAAAAQAAAAU////AAABBBAAAAAoAAAABAAAAAAAAAAXAAAAdHJhbnNhY3Rpb25fb3BhcXVlX2RhdGEA0P7//xT///8AAAAGEAAAACQAAAAEAAAAAAAAABAAAABpZ25vcmVfbm90X2ZvdW5kAAAAAAT///+A////AAABBRAAAAAYAAAABAAAAAAAAAAHAAAAY29tbWVudAAs////cP///wAAAAUQAAAAGAAAAAQAAAAAAAAABAAAAG5hbWUAAAAAVP///5j///8AAAAMFAAAACAAAAAEAAAAAQAAACgAAAALAAAAc2NoZW1hX3BhdGgAhP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAAC8////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACgAAAAEAAAAAAAAABIAAABhdHRhY2hfb3BhcXVlX2RhdGEAAAQABAAEAAAAAAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "comment: string",
+    "ignore_not_found: bool not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_table_constraints_apply": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_table_create": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_table_delete_function_get": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////1ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAQAAADoAAAAbAAAAEAAAAAEAAAAcP///wAAAQQQAAAAKAAAAAQAAAAAAAAAFwAAAHRyYW5zYWN0aW9uX29wYXF1ZV9kYXRhACz///9w////AAAABRAAAAAYAAAABAAAAAAAAAAEAAAAbmFtZQAAAABU////mP///wAAAAwUAAAAIAAAAAQAAAABAAAAKAAAAAsAAABzY2hlbWFfcGF0aACE////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAALz///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAKAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAABAAEAAQAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_table_drop": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////7gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAYAAABMAQAA0AAAAKQAAABsAAAAQAAAAAQAAAAU////AAABBBAAAAAoAAAABAAAAAAAAAAXAAAAdHJhbnNhY3Rpb25fb3BhcXVlX2RhdGEA0P7//xT///8AAAAGEAAAABgAAAAEAAAAAAAAAAcAAABjYXNjYWRlAPj+//88////AAAABhAAAAAkAAAABAAAAAAAAAAQAAAAaWdub3JlX25vdF9mb3VuZAAAAAAs////cP///wAAAAUQAAAAGAAAAAQAAAAAAAAABAAAAG5hbWUAAAAAVP///5j///8AAAAMFAAAACAAAAAEAAAAAQAAACgAAAALAAAAc2NoZW1hX3BhdGgAhP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAAC8////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACgAAAAEAAAAAAAAABIAAABhdHRhY2hfb3BhcXVlX2RhdGEAAAQABAAEAAAAAAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "ignore_not_found: bool not null",
+    "cascade: bool not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_table_get": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////7ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAYAAABEAQAAyAAAAJwAAABwAAAAQAAAAAQAAAAc////AAABBBAAAAAoAAAABAAAAAAAAAAXAAAAdHJhbnNhY3Rpb25fb3BhcXVlX2RhdGEA2P7//1T///8AAAEFEAAAABwAAAAEAAAAAAAAAAgAAABhdF92YWx1ZQAAAAAE////gP///wAAAQUQAAAAGAAAAAQAAAAAAAAABwAAAGF0X3VuaXQALP///3D///8AAAAFEAAAABgAAAAEAAAAAAAAAAQAAABuYW1lAAAAAFT///+Y////AAAADBQAAAAgAAAABAAAAAEAAAAoAAAACwAAAHNjaGVtYV9wYXRoAIT///8QABQACAAGAAcADAAAABAAEAAAAAAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAvP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABBAAAAAoAAAABAAAAAAAAAASAAAAYXR0YWNoX29wYXF1ZV9kYXRhAAAEAAQABAAAAAAAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "at_unit: string",
+    "at_value: string",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_table_insert_function_get": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////5gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAUAAAAsAQAAsAAAAIQAAABIAAAABAAAADD///8AAAEFEAAAADAAAAAEAAAAAAAAAB0AAAB3cml0YWJsZV9icmFuY2hfZnVuY3Rpb25fbmFtZQAAAPT+//9w////AAABBBAAAAAoAAAABAAAAAAAAAAXAAAAdHJhbnNhY3Rpb25fb3BhcXVlX2RhdGEALP///3D///8AAAAFEAAAABgAAAAEAAAAAAAAAAQAAABuYW1lAAAAAFT///+Y////AAAADBQAAAAgAAAABAAAAAEAAAAoAAAACwAAAHNjaGVtYV9wYXRoAIT///8QABQACAAGAAcADAAAABAAEAAAAAAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAvP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABBAAAAAoAAAABAAAAAAAAAASAAAAYXR0YWNoX29wYXF1ZV9kYXRhAAAEAAQABAAAAAAAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "transaction_opaque_data: binary",
+    "writable_branch_function_name: string"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_table_not_null_drop": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////+gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAYAAAB8AQAAAAEAANQAAAB4AAAAQAAAAAQAAADk/v//AAABBBAAAAAoAAAABAAAAAAAAAAXAAAAdHJhbnNhY3Rpb25fb3BhcXVlX2RhdGEAoP7//+T+//8AAAAGEAAAACQAAAAEAAAAAAAAABAAAABpZ25vcmVfbm90X2ZvdW5kAAAAANT+//8Y////AAAADBQAAAAgAAAABAAAAAEAAAAYAAAACwAAAGNvbHVtbl9wYXRoAAT///+A////AAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAAAs////cP///wAAAAUQAAAAGAAAAAQAAAAAAAAABAAAAG5hbWUAAAAAVP///5j///8AAAAMFAAAACAAAAAEAAAAAQAAACgAAAALAAAAc2NoZW1hX3BhdGgAhP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAAC8////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACgAAAAEAAAAAAAAABIAAABhdHRhY2hfb3BhcXVlX2RhdGEAAAQABAAEAAAAAAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "column_path: list<item: string> not null",
+    "ignore_not_found: bool not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_table_not_null_set": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////+gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAYAAAB8AQAAAAEAANQAAAB4AAAAQAAAAAQAAADk/v//AAABBBAAAAAoAAAABAAAAAAAAAAXAAAAdHJhbnNhY3Rpb25fb3BhcXVlX2RhdGEAoP7//+T+//8AAAAGEAAAACQAAAAEAAAAAAAAABAAAABpZ25vcmVfbm90X2ZvdW5kAAAAANT+//8Y////AAAADBQAAAAgAAAABAAAAAEAAAAYAAAACwAAAGNvbHVtbl9wYXRoAAT///+A////AAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAAAs////cP///wAAAAUQAAAAGAAAAAQAAAAAAAAABAAAAG5hbWUAAAAAVP///5j///8AAAAMFAAAACAAAAAEAAAAAQAAACgAAAALAAAAc2NoZW1hX3BhdGgAhP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAAC8////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACgAAAAEAAAAAAAAABIAAABhdHRhY2hfb3BhcXVlX2RhdGEAAAQABAAEAAAAAAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "column_path: list<item: string> not null",
+    "ignore_not_found: bool not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_table_option_definitions": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////1ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAQAAADoAAAAbAAAAEAAAAAEAAAAcP///wAAAQQQAAAAKAAAAAQAAAAAAAAAFwAAAHRyYW5zYWN0aW9uX29wYXF1ZV9kYXRhACz///9w////AAAABRAAAAAYAAAABAAAAAAAAAAEAAAAbmFtZQAAAABU////mP///wAAAAwUAAAAIAAAAAQAAAABAAAAKAAAAAsAAABzY2hlbWFfcGF0aACE////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAALz///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAKAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAABAAEAAQAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_table_rename": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////7gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAYAAABQAQAA1AAAAKgAAAB4AAAAQAAAAAQAAAAQ////AAABBBAAAAAoAAAABAAAAAAAAAAXAAAAdHJhbnNhY3Rpb25fb3BhcXVlX2RhdGEAzP7//xD///8AAAAGEAAAACQAAAAEAAAAAAAAABAAAABpZ25vcmVfbm90X2ZvdW5kAAAAAAD///9E////AAAABRAAAAAcAAAABAAAAAAAAAAIAAAAbmV3X25hbWUAAAAALP///3D///8AAAAFEAAAABgAAAAEAAAAAAAAAAQAAABuYW1lAAAAAFT///+Y////AAAADBQAAAAgAAAABAAAAAEAAAAoAAAACwAAAHNjaGVtYV9wYXRoAIT///8QABQACAAGAAcADAAAABAAEAAAAAAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAvP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABBAAAAAoAAAABAAAAAAAAAASAAAAYXR0YWNoX29wYXF1ZV9kYXRhAAAEAAQABAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "new_name: string not null",
+    "ignore_not_found: bool not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_table_scan_branches_get": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////+gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAcAAAB8AQAAAAEAANQAAACoAAAAeAAAADwAAAAEAAAA6P7//wAAAQQQAAAAJAAAAAQAAAAAAAAAEAAAAHB1c2hkb3duX2ZpbHRlcnMAAAAAoP7//xz///8AAAEEEAAAACgAAAAEAAAAAAAAABcAAAB0cmFuc2FjdGlvbl9vcGFxdWVfZGF0YQDY/v//VP///wAAAQUQAAAAHAAAAAQAAAAAAAAACAAAAGF0X3ZhbHVlAAAAAAT///+A////AAABBRAAAAAYAAAABAAAAAAAAAAHAAAAYXRfdW5pdAAs////cP///wAAAAUQAAAAGAAAAAQAAAAAAAAABAAAAG5hbWUAAAAAVP///5j///8AAAAMFAAAACAAAAAEAAAAAQAAACgAAAALAAAAc2NoZW1hX3BhdGgAhP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAAC8////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACgAAAAEAAAAAAAAABIAAABhdHRhY2hfb3BhcXVlX2RhdGEAAAQABAAEAAAAAAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "at_unit: string",
+    "at_value: string",
+    "transaction_opaque_data: binary",
+    "pushdown_filters: binary"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_table_update_function_get": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////1ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAQAAADoAAAAbAAAAEAAAAAEAAAAcP///wAAAQQQAAAAKAAAAAQAAAAAAAAAFwAAAHRyYW5zYWN0aW9uX29wYXF1ZV9kYXRhACz///9w////AAAABRAAAAAYAAAABAAAAAAAAAAEAAAAbmFtZQAAAABU////mP///wAAAAwUAAAAIAAAAAQAAAABAAAAKAAAAAsAAABzY2hlbWFfcGF0aACE////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAALz///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAKAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAABAAEAAQAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_transaction_begin": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////4AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACgAAAAEAAAAAAAAABIAAABhdHRhY2hfb3BhcXVlX2RhdGEAAAQABAAEAAAAAAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_transaction_commit": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////7gAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAIAAABQAAAABAAAAMj///8AAAAEEAAAACgAAAAEAAAAAAAAABcAAAB0cmFuc2FjdGlvbl9vcGFxdWVfZGF0YQC8////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACgAAAAEAAAAAAAAABIAAABhdHRhY2hfb3BhcXVlX2RhdGEAAAQABAAEAAAA",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "transaction_opaque_data: binary not null"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_transaction_rollback": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////7gAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAIAAABQAAAABAAAAMj///8AAAAEEAAAACgAAAAEAAAAAAAAABcAAAB0cmFuc2FjdGlvbl9vcGFxdWVfZGF0YQC8////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACgAAAAEAAAAAAAAABIAAABhdHRhY2hfb3BhcXVlX2RhdGEAAAQABAAEAAAA",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "transaction_opaque_data: binary not null"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_version": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////8gAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAIAAABgAAAAFAAAABAAFAAIAAYABwAMAAAAEAAQAAAAAAABBBAAAAAoAAAABAAAAAAAAAAXAAAAdHJhbnNhY3Rpb25fb3BhcXVlX2RhdGEAvP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABBAAAAAoAAAABAAAAAAAAAASAAAAYXR0YWNoX29wYXF1ZV9kYXRhAAAEAAQABAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_view_column_comment_set": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////xACAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAcAAACoAQAALAEAAAABAACkAAAAeAAAAEAAAAAEAAAAvP7//wAAAQQQAAAAKAAAAAQAAAAAAAAAFwAAAHRyYW5zYWN0aW9uX29wYXF1ZV9kYXRhAHj+//+8/v//AAAABhAAAAAkAAAABAAAAAAAAAAQAAAAaWdub3JlX25vdF9mb3VuZAAAAACs/v//KP///wAAAQUQAAAAGAAAAAQAAAAAAAAABwAAAGNvbW1lbnQA1P7//xj///8AAAAMFAAAACAAAAAEAAAAAQAAABgAAAALAAAAY29sdW1uX3BhdGgABP///4D///8AAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAACz///9w////AAAABRAAAAAYAAAABAAAAAAAAAAEAAAAbmFtZQAAAABU////mP///wAAAAwUAAAAIAAAAAQAAAABAAAAKAAAAAsAAABzY2hlbWFfcGF0aACE////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAALz///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAKAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAABAAEAAQAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "column_path: list<item: string> not null",
+    "comment: string",
+    "ignore_not_found: bool not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_view_comment_set": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////7gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAYAAABMAQAA0AAAAKQAAAB4AAAAQAAAAAQAAAAU////AAABBBAAAAAoAAAABAAAAAAAAAAXAAAAdHJhbnNhY3Rpb25fb3BhcXVlX2RhdGEA0P7//xT///8AAAAGEAAAACQAAAAEAAAAAAAAABAAAABpZ25vcmVfbm90X2ZvdW5kAAAAAAT///+A////AAABBRAAAAAYAAAABAAAAAAAAAAHAAAAY29tbWVudAAs////cP///wAAAAUQAAAAGAAAAAQAAAAAAAAABAAAAG5hbWUAAAAAVP///5j///8AAAAMFAAAACAAAAAEAAAAAQAAACgAAAALAAAAc2NoZW1hX3BhdGgAhP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAAC8////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACgAAAAEAAAAAAAAABIAAABhdHRhY2hfb3BhcXVlX2RhdGEAAAQABAAEAAAAAAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "comment: string",
+    "ignore_not_found: bool not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_view_create": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "//////gDAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAEAAAAVP3//wQAAAALAAAAlAMAABgDAADsAgAAvAIAAGQCAAAYAgAAwAEAAJABAABkAQAAuAAAAAQAAADg/P//AAABERQAAAAkAAAABAAAAAEAAAAcAAAADwAAAGNvbHVtbl9jb21tZW50cwCY/P//3Pz//wAAAA0YAAAAIAAAAAQAAAACAAAAQAAAABQAAAAHAAAAZW50cmllcwDI/P//RP3//wAAAQUQAAAAGAAAAAQAAAAAAAAABQAAAHZhbHVlAAAA8Pz//zT9//8AAAAFEAAAABQAAAAEAAAAAAAAAAMAAABrZXkAFP3//5D9//8AAAERFAAAABwAAAAEAAAAAQAAABQAAAAEAAAAdGFncwAAAABA/f//hP3//wAAAA0YAAAAIAAAAAQAAAACAAAAQAAAABQAAAAHAAAAZW50cmllcwBw/f//7P3//wAAAQUQAAAAGAAAAAQAAAAAAAAABQAAAHZhbHVlAAAAmP3//9z9//8AAAAFEAAAABQAAAAEAAAAAAAAAAMAAABrZXkAvP3//zj+//8AAAEFEAAAABgAAAAEAAAAAAAAAAcAAABjb21tZW50AOT9//8o/v//AAAABRAAAAAcAAAABAAAAAAAAAAIAAAAc2VjdXJpdHkAAAAAEP7//4z+//8AAAEMFAAAABwAAAAEAAAAAQAAABQAAAAHAAAAYWxpYXNlcwA8/v//uP7//wAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAZP7//+D+//8AAAEEEAAAACgAAAAEAAAAAAAAABcAAAB0cmFuc2FjdGlvbl9vcGFxdWVfZGF0YQCc/v//EAAYAAgAAAAHAAwAEAAUABAAAAAAAAAFFAAAAEQAAAAkAAAABAAAAAAAAAALAAAAb25fY29uZmxpY3QACAAIAAAABAAIAAAADAAAAAgADAAIAAcACAAAAAAAAAEQAAAAAP///0T///8AAAAFEAAAABwAAAAEAAAAAAAAAAoAAABkZWZpbml0aW9uAAAs////cP///wAAAAUQAAAAGAAAAAQAAAAAAAAABAAAAG5hbWUAAAAAVP///5j///8AAAAMFAAAACAAAAAEAAAAAQAAACgAAAALAAAAc2NoZW1hX3BhdGgAhP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAAC8////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACgAAAAEAAAAAAAAABIAAABhdHRhY2hfb3BhcXVlX2RhdGEAAAQABAAEAAAAAAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "definition: string not null",
+    "on_conflict: dictionary<values=string, indices=int16, ordered=0> not null",
+    "transaction_opaque_data: binary",
+    "aliases: list<item: string>",
+    "security: string not null",
+    "comment: string",
+    "tags: map<string, string>",
+    "column_comments: map<string, string>"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_view_drop": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////7gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAYAAABMAQAA0AAAAKQAAABsAAAAQAAAAAQAAAAU////AAABBBAAAAAoAAAABAAAAAAAAAAXAAAAdHJhbnNhY3Rpb25fb3BhcXVlX2RhdGEA0P7//xT///8AAAAGEAAAABgAAAAEAAAAAAAAAAcAAABjYXNjYWRlAPj+//88////AAAABhAAAAAkAAAABAAAAAAAAAAQAAAAaWdub3JlX25vdF9mb3VuZAAAAAAs////cP///wAAAAUQAAAAGAAAAAQAAAAAAAAABAAAAG5hbWUAAAAAVP///5j///8AAAAMFAAAACAAAAAEAAAAAQAAACgAAAALAAAAc2NoZW1hX3BhdGgAhP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAAC8////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACgAAAAEAAAAAAAAABIAAABhdHRhY2hfb3BhcXVlX2RhdGEAAAQABAAEAAAAAAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "ignore_not_found: bool not null",
+    "cascade: bool not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "catalog_view_get": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////1ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAQAAADoAAAAbAAAAEAAAAAEAAAAcP///wAAAQQQAAAAKAAAAAQAAAAAAAAAFwAAAHRyYW5zYWN0aW9uX29wYXF1ZV9kYXRhACz///9w////AAAABRAAAAAYAAAABAAAAAAAAAAEAAAAbmFtZQAAAABU////mP///wAAAAwUAAAAIAAAAAQAAAABAAAAKAAAAAsAAABzY2hlbWFfcGF0aACE////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAALz///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAKAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAABAAEAAQAAAA=",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "catalog_view_rename": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////7gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAYAAABQAQAA1AAAAKgAAAB4AAAAQAAAAAQAAAAQ////AAABBBAAAAAoAAAABAAAAAAAAAAXAAAAdHJhbnNhY3Rpb25fb3BhcXVlX2RhdGEAzP7//xD///8AAAAGEAAAACQAAAAEAAAAAAAAABAAAABpZ25vcmVfbm90X2ZvdW5kAAAAAAD///9E////AAAABRAAAAAcAAAABAAAAAAAAAAIAAAAbmV3X25hbWUAAAAALP///3D///8AAAAFEAAAABgAAAAEAAAAAAAAAAQAAABuYW1lAAAAAFT///+Y////AAAADBQAAAAgAAAABAAAAAEAAAAoAAAACwAAAHNjaGVtYV9wYXRoAIT///8QABQACAAGAAcADAAAABAAEAAAAAAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAvP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABBAAAAAoAAAABAAAAAAAAAASAAAAYXR0YWNoX29wYXF1ZV9kYXRhAAAEAAQABAAAAA==",
+   "params_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "new_name: string not null",
+    "ignore_not_found: bool not null",
+    "transaction_opaque_data: binary"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "init": {
+   "header": "//////gAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAMAAACUAAAAVAAAAAQAAACI////AAAAAhAAAAAkAAAABAAAAAAAAAALAAAAbWF4X3dvcmtlcnMACAAMAAgABwAIAAAAAAAAAUAAAAAQABQACAAGAAcADAAAABAAEAAAAAAAAQQQAAAAHAAAAAQAAAAAAAAACwAAAG9wYXF1ZV9kYXRhAMD///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAJAAAAAQAAAAAAAAADAAAAGV4ZWN1dGlvbl9pZAAAAAAEAAQABAAAAA==",
+   "header_text": [
+    "execution_id: binary not null",
+    "opaque_data: binary",
+    "max_workers: int64 not null"
+   ],
+   "method_type": "stream",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "",
+   "result_text": []
+  },
+  "table_buffering_combine": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "table_buffering_destructor": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "table_buffering_process": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "table_function_cardinality": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "table_function_dynamic_to_string": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "table_function_plan": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "table_function_projection": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary not null"
+   ]
+  },
+  "table_function_statistics": {
+   "header": "",
+   "header_text": [],
+   "method_type": "unary",
+   "params": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAcAAAByZXF1ZXN0AAQABAAEAAAA",
+   "params_text": [
+    "request: binary not null"
+   ],
+   "result": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgABgAHAAwAAAAQABAAAAAAAAEEEAAAABwAAAAEAAAAAAAAAAYAAAByZXN1bHQAAAQABAAEAAAA",
+   "result_text": [
+    "result: binary"
+   ]
+  }
+ },
+ "protocol": "vgi.v3",
+ "protocol_version": "3.4.0",
+ "records": {
+  "AggregateBindRequest": {
+   "schema": "/////0ACAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAgAAADYAQAAmAEAAGQBAAAkAQAA+AAAAMAAAABkAAAABAAAAMT+//8AAAEMFAAAACQAAAAEAAAAAQAAABwAAAAOAAAAYXJndW1lbnRfbmFtZXMAAEz+///4/v//AAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAAB0/v//IP///wAAAQwUAAAAIAAAAAQAAAABAAAAGAAAAAsAAABzY2hlbWFfcGF0aACk/v//UP///wAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAzP7//3j///8AAAEEEAAAACQAAAAEAAAAAAAAABIAAABhdHRhY2hfb3BhcXVlX2RhdGEAAAD///+s////AAABBBAAAAAYAAAABAAAAAAAAAAHAAAAc2VjcmV0cwAo////1P///wAAAQQQAAAAHAAAAAQAAAAAAAAACAAAAHNldHRpbmdzAAAAAFT///8QABQACAAGAAcADAAAABAAEAAAAAAAAQQQAAAAIAAAAAQAAAAAAAAADAAAAGlucHV0X3NjaGVtYQAAAACU////1P///wAAAAQQAAAAHAAAAAQAAAAAAAAACQAAAGFyZ3VtZW50cwAAAMD///8QABQACAAAAAcADAAAABAAEAAAAAAAAAUQAAAAJAAAAAQAAAAAAAAADQAAAGZ1bmN0aW9uX25hbWUAAAAEAAQABAAAAAAAAAA=",
+   "schema_text": [
+    "function_name: string not null",
+    "arguments: binary not null",
+    "input_schema: binary",
+    "settings: binary",
+    "secrets: binary",
+    "attach_opaque_data: binary",
+    "schema_path: list<item: string>",
+    "argument_names: list<item: string>"
+   ]
+  },
+  "AggregateBindResponse": {
+   "schema": "/////7AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAIAAABIAAAABAAAAND///8AAAAEEAAAACAAAAAEAAAAAAAAAAwAAABleGVjdXRpb25faWQAAAAAwP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABBAAAAAkAAAABAAAAAAAAAANAAAAb3V0cHV0X3NjaGVtYQAAAAQABAAEAAAAAAAAAA==",
+   "schema_text": [
+    "output_schema: binary not null",
+    "execution_id: binary not null"
+   ]
+  },
+  "AggregateCombineRequest": {
+   "schema": "/////4ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAUAAAAcAQAA2AAAAKgAAABwAAAABAAAAKj///8AAAEMFAAAACAAAAAEAAAAAQAAABgAAAALAAAAc2NoZW1hX3BhdGgA+P7//9j///8AAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAACD///8QABQACAAGAAcADAAAABAAEAAAAAAAAQQQAAAAJAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAAZP///6T///8AAAAEEAAAABwAAAAEAAAAAAAAAAsAAABtZXJnZV9iYXRjaACQ////0P///wAAAAQQAAAAIAAAAAQAAAAAAAAADAAAAGV4ZWN1dGlvbl9pZAAAAADA////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAFEAAAACQAAAAEAAAAAAAAAA0AAABmdW5jdGlvbl9uYW1lAAAABAAEAAQAAAA=",
+   "schema_text": [
+    "function_name: string not null",
+    "execution_id: binary not null",
+    "merge_batch: binary not null",
+    "attach_opaque_data: binary",
+    "schema_path: list<item: string>"
+   ]
+  },
+  "AggregateCombineResponse": {
+   "schema": "/////zAAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAAAAAA=",
+   "schema_text": []
+  },
+  "AggregateDestructorRequest": {
+   "schema": "/////4gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAUAAAAgAQAA3AAAAKgAAABwAAAABAAAAKj///8AAAEMFAAAACAAAAAEAAAAAQAAABgAAAALAAAAc2NoZW1hX3BhdGgA9P7//9j///8AAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAABz///8QABQACAAGAAcADAAAABAAEAAAAAAAAQQQAAAAJAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAAYP///6D///8AAAAEEAAAACAAAAAEAAAAAAAAAA8AAABncm91cF9pZHNfYmF0Y2gAkP///9D///8AAAAEEAAAACAAAAAEAAAAAAAAAAwAAABleGVjdXRpb25faWQAAAAAwP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABRAAAAAkAAAABAAAAAAAAAANAAAAZnVuY3Rpb25fbmFtZQAAAAQABAAEAAAAAAAAAA==",
+   "schema_text": [
+    "function_name: string not null",
+    "execution_id: binary not null",
+    "group_ids_batch: binary not null",
+    "attach_opaque_data: binary",
+    "schema_path: list<item: string>"
+   ]
+  },
+  "AggregateDestructorResponse": {
+   "schema": "/////zAAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAAAAAA=",
+   "schema_text": []
+  },
+  "AggregateFinalizeRequest": {
+   "schema": "/////7gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAYAAABUAQAAEAEAANwAAACoAAAAcAAAAAQAAACo////AAABDBQAAAAgAAAABAAAAAEAAAAYAAAACwAAAHNjaGVtYV9wYXRoAMT+///Y////AAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAADs/v//EAAUAAgABgAHAAwAAAAQABAAAAAAAAEEEAAAACQAAAAEAAAAAAAAABIAAABhdHRhY2hfb3BhcXVlX2RhdGEAADD///9w////AAAABBAAAAAgAAAABAAAAAAAAAANAAAAb3V0cHV0X3NjaGVtYQAAAGD///+g////AAAABBAAAAAgAAAABAAAAAAAAAAPAAAAZ3JvdXBfaWRzX2JhdGNoAJD////Q////AAAABBAAAAAgAAAABAAAAAAAAAAMAAAAZXhlY3V0aW9uX2lkAAAAAMD///8QABQACAAAAAcADAAAABAAEAAAAAAAAAUQAAAAJAAAAAQAAAAAAAAADQAAAGZ1bmN0aW9uX25hbWUAAAAEAAQABAAAAA==",
+   "schema_text": [
+    "function_name: string not null",
+    "execution_id: binary not null",
+    "group_ids_batch: binary not null",
+    "output_schema: binary not null",
+    "attach_opaque_data: binary",
+    "schema_path: list<item: string>"
+   ]
+  },
+  "AggregateFinalizeResponse": {
+   "schema": "/////3gAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACQAAAAEAAAAAAAAAAwAAAByZXN1bHRfYmF0Y2gAAAAABAAEAAQAAAA=",
+   "schema_text": [
+    "result_batch: binary not null"
+   ]
+  },
+  "AggregateStreamingChunkRequest": {
+   "schema": "/////4ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAUAAAAcAQAA2AAAAKgAAABwAAAABAAAAKj///8AAAEMFAAAACAAAAAEAAAAAQAAABgAAAALAAAAc2NoZW1hX3BhdGgA+P7//9j///8AAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAACD///8QABQACAAGAAcADAAAABAAEAAAAAAAAQQQAAAAJAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAAZP///6T///8AAAAEEAAAABwAAAAEAAAAAAAAAAsAAABpbnB1dF9iYXRjaACQ////0P///wAAAAQQAAAAIAAAAAQAAAAAAAAADAAAAGV4ZWN1dGlvbl9pZAAAAADA////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAFEAAAACQAAAAEAAAAAAAAAA0AAABmdW5jdGlvbl9uYW1lAAAABAAEAAQAAAA=",
+   "schema_text": [
+    "function_name: string not null",
+    "execution_id: binary not null",
+    "input_batch: binary not null",
+    "attach_opaque_data: binary",
+    "schema_path: list<item: string>"
+   ]
+  },
+  "AggregateStreamingChunkResponse": {
+   "schema": "/////3gAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACQAAAAEAAAAAAAAAAwAAAByZXN1bHRfYmF0Y2gAAAAABAAEAAQAAAA=",
+   "schema_text": [
+    "result_batch: binary not null"
+   ]
+  },
+  "AggregateStreamingCloseRequest": {
+   "schema": "/////1ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAQAAADsAAAAqAAAAHAAAAAEAAAAqP///wAAAQwUAAAAIAAAAAQAAAABAAAAGAAAAAsAAABzY2hlbWFfcGF0aAAk////2P///wAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAATP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBBAAAAAkAAAABAAAAAAAAAASAAAAYXR0YWNoX29wYXF1ZV9kYXRhAACQ////0P///wAAAAQQAAAAIAAAAAQAAAAAAAAADAAAAGV4ZWN1dGlvbl9pZAAAAADA////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAFEAAAACQAAAAEAAAAAAAAAA0AAABmdW5jdGlvbl9uYW1lAAAABAAEAAQAAAA=",
+   "schema_text": [
+    "function_name: string not null",
+    "execution_id: binary not null",
+    "attach_opaque_data: binary",
+    "schema_path: list<item: string>"
+   ]
+  },
+  "AggregateStreamingCloseResponse": {
+   "schema": "/////zAAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAAAAAA=",
+   "schema_text": []
+  },
+  "AggregateStreamingOpenRequest": {
+   "schema": "/////5gCAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAoAAAAwAgAA8AEAALwBAAB0AQAAOAEAAAQBAADUAAAAmAAAAGAAAAAEAAAATP///wAAAQwUAAAAIAAAAAQAAAABAAAAGAAAAAsAAABzY2hlbWFfcGF0aAD4/f//fP///wAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAIP7//6T///8AAAEEEAAAACQAAAAEAAAAAAAAABIAAABhdHRhY2hfb3BhcXVlX2RhdGEAAFT+///Y////AAABBBAAAAAYAAAABAAAAAAAAAAHAAAAc2VjcmV0cwB8/v//EAAUAAgABgAHAAwAAAAQABAAAAAAAAEEEAAAABwAAAAEAAAAAAAAAAgAAABzZXR0aW5ncwAAAAC4/v//+P7//wAAAAQQAAAAIAAAAAQAAAAAAAAADQAAAG91dHB1dF9zY2hlbWEAAADo/v//KP///wAAAAIQAAAAIAAAAAQAAAAAAAAADwAAAG9yZGVyX2tleV9jb3VudADE////AAAAAUAAAABg////AAAAAhAAAAAsAAAABAAAAAAAAAATAAAAcGFydGl0aW9uX2tleV9jb3VudAAIAAwACAAHAAgAAAAAAAABQAAAAKT///8AAAAEEAAAACAAAAAEAAAAAAAAAAwAAABpbnB1dF9zY2hlbWEAAAAAlP///9T///8AAAAEEAAAABwAAAAEAAAAAAAAAAkAAABhcmd1bWVudHMAAADA////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAFEAAAACQAAAAEAAAAAAAAAA0AAABmdW5jdGlvbl9uYW1lAAAABAAEAAQAAAAAAAAA",
+   "schema_text": [
+    "function_name: string not null",
+    "arguments: binary not null",
+    "input_schema: binary not null",
+    "partition_key_count: int64 not null",
+    "order_key_count: int64 not null",
+    "output_schema: binary not null",
+    "settings: binary",
+    "secrets: binary",
+    "attach_opaque_data: binary",
+    "schema_path: list<item: string>"
+   ]
+  },
+  "AggregateStreamingOpenResponse": {
+   "schema": "/////3gAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACQAAAAEAAAAAAAAAAwAAABleGVjdXRpb25faWQAAAAABAAEAAQAAAA=",
+   "schema_text": [
+    "execution_id: binary not null"
+   ]
+  },
+  "AggregateUpdateRequest": {
+   "schema": "/////4ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAUAAAAcAQAA2AAAAKgAAABwAAAABAAAAKj///8AAAEMFAAAACAAAAAEAAAAAQAAABgAAAALAAAAc2NoZW1hX3BhdGgA+P7//9j///8AAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAACD///8QABQACAAGAAcADAAAABAAEAAAAAAAAQQQAAAAJAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAAZP///6T///8AAAAEEAAAABwAAAAEAAAAAAAAAAsAAABpbnB1dF9iYXRjaACQ////0P///wAAAAQQAAAAIAAAAAQAAAAAAAAADAAAAGV4ZWN1dGlvbl9pZAAAAADA////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAFEAAAACQAAAAEAAAAAAAAAA0AAABmdW5jdGlvbl9uYW1lAAAABAAEAAQAAAA=",
+   "schema_text": [
+    "function_name: string not null",
+    "execution_id: binary not null",
+    "input_batch: binary not null",
+    "attach_opaque_data: binary",
+    "schema_path: list<item: string>"
+   ]
+  },
+  "AggregateUpdateResponse": {
+   "schema": "/////zAAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAAAAAA=",
+   "schema_text": []
+  },
+  "AggregateWindowBatchRequest": {
+   "schema": "/////zADAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAoAAADMAgAAiAIAAEQCAAAQAgAA3AEAAGQBAAD8AAAAmAAAAGAAAAAEAAAAfP7//wAAAQwUAAAAIAAAAAQAAAABAAAAGAAAAAsAAABzY2hlbWFfcGF0aABc/f//rP7//wAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAhP3//9T+//8AAAEEEAAAACQAAAAEAAAAAAAAABIAAABhdHRhY2hfb3BhcXVlX2RhdGEAALj9///4/f//AAAADBQAAAAgAAAABAAAAAEAAAAYAAAACgAAAGZyYW1lX2VuZHMAAOj9//84////AAABAhAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAACQ/v//AAAAAUAAAABY/v//AAAADBQAAAAkAAAABAAAAAEAAAAcAAAADAAAAGZyYW1lX3N0YXJ0cwAAAABM/v//nP///wAAAQIQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAA9P7//wAAAAFAAAAAvP7//wAAAAwUAAAAJAAAAAQAAAABAAAALAAAAA4AAABmcmFtZXNfcGVyX3JvdwAAsP7//xAAFAAIAAYABwAMAAAAEAAQAAAAAAABAhAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAABo////AAAAAUAAAAAw////AAAAAhAAAAAYAAAABAAAAAAAAAAFAAAAY291bnQAAACY////AAAAAUAAAABg////AAAAAhAAAAAYAAAABAAAAAAAAAAHAAAAcm93X2lkeADI////AAAAAUAAAACQ////AAAAAhAAAAAoAAAABAAAAAAAAAAMAAAAcGFydGl0aW9uX2lkAAAAAAgADAAIAAcACAAAAAAAAAFAAAAA0P///wAAAAQQAAAAIAAAAAQAAAAAAAAADAAAAGV4ZWN1dGlvbl9pZAAAAADA////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAFEAAAACQAAAAEAAAAAAAAAA0AAABmdW5jdGlvbl9uYW1lAAAABAAEAAQAAAA=",
+   "schema_text": [
+    "function_name: string not null",
+    "execution_id: binary not null",
+    "partition_id: int64 not null",
+    "row_idx: int64 not null",
+    "count: int64 not null",
+    "frames_per_row: list<item: int64> not null",
+    "frame_starts: list<item: int64> not null",
+    "frame_ends: list<item: int64> not null",
+    "attach_opaque_data: binary",
+    "schema_path: list<item: string>"
+   ]
+  },
+  "AggregateWindowBatchResponse": {
+   "schema": "/////3gAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACQAAAAEAAAAAAAAAAwAAAByZXN1bHRfYmF0Y2gAAAAABAAEAAQAAAA=",
+   "schema_text": [
+    "result_batch: binary not null"
+   ]
+  },
+  "AggregateWindowDestructorRequest": {
+   "schema": "/////5gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAUAAAAwAQAA7AAAAKgAAABwAAAABAAAAKj///8AAAEMFAAAACAAAAAEAAAAAQAAABgAAAALAAAAc2NoZW1hX3BhdGgA5P7//9j///8AAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAAAz///8QABQACAAGAAcADAAAABAAEAAAAAAAAQQQAAAAJAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAAUP///5D///8AAAACEAAAACgAAAAEAAAAAAAAAAwAAABwYXJ0aXRpb25faWQAAAAACAAMAAgABwAIAAAAAAAAAUAAAADQ////AAAABBAAAAAgAAAABAAAAAAAAAAMAAAAZXhlY3V0aW9uX2lkAAAAAMD///8QABQACAAAAAcADAAAABAAEAAAAAAAAAUQAAAAJAAAAAQAAAAAAAAADQAAAGZ1bmN0aW9uX25hbWUAAAAEAAQABAAAAAAAAAA=",
+   "schema_text": [
+    "function_name: string not null",
+    "execution_id: binary not null",
+    "partition_id: int64 not null",
+    "attach_opaque_data: binary",
+    "schema_path: list<item: string>"
+   ]
+  },
+  "AggregateWindowDestructorResponse": {
+   "schema": "/////zAAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAAAAAA=",
+   "schema_text": []
+  },
+  "AggregateWindowInitRequest": {
+   "schema": "/////8gCAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAsAAABgAgAAHAIAANgBAACgAQAAbAEAADgBAAAIAQAA2AAAAKgAAABwAAAABAAAAKj///8AAAEMFAAAACAAAAAEAAAAAQAAABgAAAALAAAAc2NoZW1hX3BhdGgAzP3//9j///8AAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAAPT9//8QABQACAAGAAcADAAAABAAEAAAAAAAAQQQAAAAJAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAAOP7//3j+//8AAAAEEAAAABwAAAAEAAAAAAAAAAkAAABhbGxfdmFsaWQAAABk/v//pP7//wAAAAQQAAAAHAAAAAQAAAAAAAAACwAAAGZyYW1lX3N0YXRzAJD+///Q/v//AAAABBAAAAAcAAAABAAAAAAAAAALAAAAZmlsdGVyX21hc2sAvP7///z+//8AAAAEEAAAACAAAAAEAAAAAAAAAA0AAABvdXRwdXRfc2NoZW1hAAAA7P7//yz///8AAAAEEAAAACAAAAAEAAAAAAAAAA8AAABwYXJ0aXRpb25fYmF0Y2gAHP///1z///8AAAACEAAAABwAAAAEAAAAAAAAAAkAAAByb3dfY291bnQAAADI////AAAAAUAAAACQ////AAAAAhAAAAAoAAAABAAAAAAAAAAMAAAAcGFydGl0aW9uX2lkAAAAAAgADAAIAAcACAAAAAAAAAFAAAAA0P///wAAAAQQAAAAIAAAAAQAAAAAAAAADAAAAGV4ZWN1dGlvbl9pZAAAAADA////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAFEAAAACQAAAAEAAAAAAAAAA0AAABmdW5jdGlvbl9uYW1lAAAABAAEAAQAAAAAAAAA",
+   "schema_text": [
+    "function_name: string not null",
+    "execution_id: binary not null",
+    "partition_id: int64 not null",
+    "row_count: int64 not null",
+    "partition_batch: binary not null",
+    "output_schema: binary not null",
+    "filter_mask: binary not null",
+    "frame_stats: binary not null",
+    "all_valid: binary not null",
+    "attach_opaque_data: binary",
+    "schema_path: list<item: string>"
+   ]
+  },
+  "AggregateWindowInitResponse": {
+   "schema": "/////zAAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAAAAAA=",
+   "schema_text": []
+  },
+  "AggregateWindowRequest": {
+   "schema": "/////5ACAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAgAAAAsAgAA6AEAAKQBAAB0AQAA/AAAAJgAAABgAAAABAAAAOD+//8AAAEMFAAAACAAAAAEAAAAAQAAABgAAAALAAAAc2NoZW1hX3BhdGgA9P3//xD///8AAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAABz+//84////AAABBBAAAAAkAAAABAAAAAAAAAASAAAAYXR0YWNoX29wYXF1ZV9kYXRhAABQ/v//kP7//wAAAAwUAAAAIAAAAAQAAAABAAAAGAAAAAoAAABmcmFtZV9lbmRzAACA/v//nP///wAAAQIQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAKP///wAAAAFAAAAA8P7//wAAAAwUAAAAJAAAAAQAAAABAAAALAAAAAwAAABmcmFtZV9zdGFydHMAAAAA5P7//xAAFAAIAAYABwAMAAAAEAAQAAAAAAABAhAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAACc////AAAAAUAAAABk////AAAAAhAAAAAUAAAABAAAAAAAAAADAAAAcmlkAMj///8AAAABQAAAAJD///8AAAACEAAAACgAAAAEAAAAAAAAAAwAAABwYXJ0aXRpb25faWQAAAAACAAMAAgABwAIAAAAAAAAAUAAAADQ////AAAABBAAAAAgAAAABAAAAAAAAAAMAAAAZXhlY3V0aW9uX2lkAAAAAMD///8QABQACAAAAAcADAAAABAAEAAAAAAAAAUQAAAAJAAAAAQAAAAAAAAADQAAAGZ1bmN0aW9uX25hbWUAAAAEAAQABAAAAA==",
+   "schema_text": [
+    "function_name: string not null",
+    "execution_id: binary not null",
+    "partition_id: int64 not null",
+    "rid: int64 not null",
+    "frame_starts: list<item: int64> not null",
+    "frame_ends: list<item: int64> not null",
+    "attach_opaque_data: binary",
+    "schema_path: list<item: string>"
+   ]
+  },
+  "AggregateWindowResponse": {
+   "schema": "/////3gAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACQAAAAEAAAAAAAAAAwAAAByZXN1bHRfYmF0Y2gAAAAABAAEAAQAAAA=",
+   "schema_text": [
+    "result_batch: binary not null"
+   ]
+  },
+  "ArgumentsLocation": {
+   "schema": "/////9gAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAMAAAB8AAAAMAAAAAQAAACg////AAAABRAAAAAYAAAABAAAAAAAAAAGAAAAc2hhMjU2AACU////yP///wAAAAIQAAAAIAAAAAQAAAAAAAAABAAAAHNpemUAAAAACAAMAAgABwAIAAAAAAAAAUAAAAAQABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAGAAAAAQAAAAAAAAAAwAAAHJlZgAEAAQABAAAAAAAAAA=",
+   "schema_text": [
+    "ref: binary not null",
+    "size: int64 not null",
+    "sha256: string not null"
+   ]
+  },
+  "BindRequest": {
+   "schema": "/////4AFAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAEAAAARPv//wQAAAAQAAAAJAUAAOQEAAB4BAAANAQAAAQEAADYAwAAoAMAAGQDAAAkAwAA+AIAAMgCAAAIAgAAgAEAACQBAADEAAAABAAAAGj7//8AAAENHAAAADAAAAAEAAAAAwAAAIAAAABMAAAAIAAAABIAAABhcmd1bWVudHNfbG9jYXRpb24AACz7//9s+///AAAABRAAAAAYAAAABAAAAAAAAAAGAAAAc2hhMjU2AABU+///lPv//wAAAAIQAAAAGAAAAAQAAAAAAAAABAAAAHNpemUAAAAADPz//wAAAAFAAAAAxPv//wAAAAQQAAAAFAAAAAQAAAAAAAAAAwAAAHJlZgCo+///JPz//wAAAQwUAAAAJAAAAAQAAAABAAAAHAAAAA4AAABhcmd1bWVudF9uYW1lcwAA3Pv//1j8//8AAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAAAT8//+A/P//AAABDBQAAAAgAAAABAAAAAEAAAAYAAAACwAAAHNjaGVtYV9wYXRoADT8//+w/P//AAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAABc/P//2Pz//wAAAQ0YAAAAIAAAAAQAAAACAAAARAAAABQAAAAHAAAAY29weV90bwCM/P//zPz//wAAAAUQAAAAHAAAAAQAAAAAAAAACQAAAGZpbGVfcGF0aAAAALj8///4/P//AAAABRAAAAAYAAAABAAAAAAAAAAGAAAAZm9ybWF0AADg/P//XP3//wAAAQ0cAAAAKAAAAAQAAAADAAAAfAAAAEwAAAAYAAAACQAAAGNvcHlfZnJvbQAAABj9//9Y/f//AAAABBAAAAAgAAAABAAAAAAAAAAPAAAAZXhwZWN0ZWRfc2NoZW1hAEj9//+I/f//AAAABRAAAAAcAAAABAAAAAAAAAAJAAAAZmlsZV9wYXRoAAAAdP3//7T9//8AAAAFEAAAABgAAAAEAAAAAAAAAAYAAABmb3JtYXQAAJz9//8Y/v//AAABBRAAAAAcAAAABAAAAAAAAAAIAAAAYXRfdmFsdWUAAAAAyP3//0T+//8AAAEFEAAAABgAAAAEAAAAAAAAAAcAAABhdF91bml0APD9//8w/v//AAAABhAAAAAsAAAABAAAAAAAAAAZAAAAcmVzb2x2ZWRfc2VjcmV0c19wcm92aWRlZAAAACz+//+o/v//AAABBBAAAAAoAAAABAAAAAAAAAAXAAAAdHJhbnNhY3Rpb25fb3BhcXVlX2RhdGEAZP7//+D+//8AAAEEEAAAACQAAAAEAAAAAAAAABIAAABhdHRhY2hfb3BhcXVlX2RhdGEAAJj+//8U////AAABBBAAAAAYAAAABAAAAAAAAAAHAAAAc2VjcmV0cwDA/v//PP///wAAAQQQAAAAHAAAAAQAAAAAAAAACAAAAHNldHRpbmdzAAAAAOz+//9o////AAABBBAAAAAgAAAABAAAAAAAAAAMAAAAaW5wdXRfc2NoZW1hAAAAABz///8QABgACAAAAAcADAAQABQAEAAAAAAAAAUUAAAASAAAACgAAAAEAAAAAAAAAA0AAABmdW5jdGlvbl90eXBlAAAACAAIAAAABAAIAAAADAAAAAgADAAIAAcACAAAAAAAAAEQAAAAhP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBBAAAAAcAAAABAAAAAAAAAAJAAAAYXJndW1lbnRzAAAAwP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABRAAAAAkAAAABAAAAAAAAAANAAAAZnVuY3Rpb25fbmFtZQAAAAQABAAEAAAA",
+   "schema_text": [
+    "function_name: string not null",
+    "arguments: binary",
+    "function_type: dictionary<values=string, indices=int16, ordered=0> not null",
+    "input_schema: binary",
+    "settings: binary",
+    "secrets: binary",
+    "attach_opaque_data: binary",
+    "transaction_opaque_data: binary",
+    "resolved_secrets_provided: bool not null",
+    "at_unit: string",
+    "at_value: string",
+    "copy_from: struct<format: string not null, file_path: string not null, expected_schema: binary not null>",
+    "copy_to: struct<format: string not null, file_path: string not null>",
+    "schema_path: list<item: string>",
+    "argument_names: list<item: string>",
+    "arguments_location: struct<ref: binary not null, size: int64 not null, sha256: string not null>"
+   ]
+  },
+  "BindResponse": {
+   "schema": "/////7ACAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAEAAAAmP///wQAAAAHAAAAVAIAABQCAACgAQAAQAEAAOAAAABwAAAAFAAAABAAGAAIAAAABwAMABAAFAAQAAAAAAAABRQAAABIAAAAKAAAAAQAAAAAAAAADQAAAHJlcGVhdGFiaWxpdHkAAAAIAAgAAAAEAAgAAAAMAAAACAAMAAgABwAIAAAAAAAAARAAAAAA/v//QP7//wAAAAwUAAAANAAAAAQAAAABAAAALAAAAB4AAABwcm9qZWN0aW9uX2V4cHJlc3Npb25fcHJvZmlsZXMAAET+///A/v//AAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAABs/v//rP7//wAAAAwUAAAAJAAAAAQAAAABAAAAHAAAAAwAAABsb29rdXBfbmFtZXMAAAAAoP7//xz///8AAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAAMj+//8I////AAAADBQAAAAkAAAABAAAAAEAAAAcAAAADQAAAGxvb2t1cF9zY29wZXMAAAD8/v//eP///wAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAJP///2T///8AAAAMFAAAACgAAAAEAAAAAQAAACAAAAATAAAAbG9va3VwX3NlY3JldF90eXBlcwBc////2P///wAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAhP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBBAAAAAcAAAABAAAAAAAAAALAAAAb3BhcXVlX2RhdGEAwP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABBAAAAAkAAAABAAAAAAAAAANAAAAb3V0cHV0X3NjaGVtYQAAAAQABAAEAAAA",
+   "schema_text": [
+    "output_schema: binary not null",
+    "opaque_data: binary",
+    "lookup_secret_types: list<item: string> not null",
+    "lookup_scopes: list<item: string> not null",
+    "lookup_names: list<item: string> not null",
+    "projection_expression_profiles: list<item: string> not null",
+    "repeatability: dictionary<values=string, indices=int16, ordered=0> not null"
+   ]
+  },
+  "BufferedFinalizeState": {
+   "schema": "/////3ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAEAAAAHP///wQAAAAFAAAAEAEAALAAAAB4AAAATAAAABQAAAAQABQACAAGAAcADAAAABAAEAAAAAAAAQQQAAAAJAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAAGP///1j///8AAAAEEAAAABgAAAAEAAAAAAAAAAYAAABjdXJzb3IAAED///+A////AAAABBAAAAAUAAAABAAAAAAAAAADAAAAa2V5AGT///8QABgACAAAAAcADAAQABQAEAAAAAAAAAUUAAAAPAAAABwAAAAEAAAAAAAAAAIAAABucwAACAAIAAAABAAIAAAADAAAAAgADAAIAAcACAAAAAAAAAEQAAAAwP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABBAAAAAkAAAABAAAAAAAAAAMAAAAZXhlY3V0aW9uX2lkAAAAAAQABAAEAAAAAAAAAA==",
+   "schema_text": [
+    "execution_id: binary not null",
+    "ns: dictionary<values=string, indices=int16, ordered=0> not null",
+    "key: binary not null",
+    "cursor: binary not null",
+    "attach_opaque_data: binary"
+   ]
+  },
+  "CatalogAttachRequest": {
+   "schema": "/////1gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAUAAAD8AAAAwAAAAHgAAAA8AAAABAAAAGD///8AAAEEEAAAACQAAAAEAAAAAAAAABMAAABjbGllbnRfY2FwYWJpbGl0aWVzACT///+U////AAABBRAAAAAoAAAABAAAAAAAAAAWAAAAaW1wbGVtZW50YXRpb25fdmVyc2lvbgAAXP///8z///8AAAEFEAAAACQAAAAEAAAAAAAAABEAAABkYXRhX3ZlcnNpb25fc3BlYwAAAJD///8QABQACAAGAAcADAAAABAAEAAAAAAAAQQQAAAAGAAAAAQAAAAAAAAABwAAAG9wdGlvbnMAyP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABRAAAAAcAAAABAAAAAAAAAAEAAAAbmFtZQAAAAAEAAQABAAAAA==",
+   "schema_text": [
+    "name: string not null",
+    "options: binary",
+    "data_version_spec: string",
+    "implementation_version: string",
+    "client_capabilities: binary"
+   ]
+  },
+  "CatalogAttachResult": {
+   "schema": "/////1gJAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAABUAAADsCAAAoAgAAGQIAAAoCAAA5AcAAKQHAABwBwAABAcAAKQGAABEBgAAGAYAAGwFAAAsBQAAyAQAAIwEAABQBAAADAQAAMwDAACQAwAAVAMAAAQAAADc+P//AAABDTAAAABAAAAABAAAAAgAAAAIAwAApAIAAEQCAAAQAgAA3AEAAKQBAABYAAAAHAAAAA4AAABxdWVyeV9wdXNoZG93bgAAhPf//8j3//8AAAACEAAAACAAAAAEAAAAAAAAAA8AAABtYXhfcXVlcnlfYnl0ZXMAsPj//wAAAAFAAAAAAPj//wAAAA0kAAAAQAAAAAQAAAAFAAAABAEAANQAAACgAAAAaAAAACgAAAAaAAAAZGVmYXVsdF9ldmFsdWF0aW9uX2NvbnRleHQAAAz4//9Q+P//AAAABhAAAAAsAAAABAAAAAAAAAAYAAAAcHJlc2VydmVfaW5zZXJ0aW9uX29yZGVyAAAAAEj4//+M+P//AAAABRAAAAAkAAAABAAAAAAAAAASAAAAZGVmYXVsdF9udWxsX29yZGVyAAB8+P//wPj//wAAAAUQAAAAIAAAAAQAAAAAAAAADQAAAGRlZmF1bHRfb3JkZXIAAACs+P//8Pj//wAAAAUQAAAAHAAAAAQAAAAAAAAACQAAAGNvbGxhdGlvbgAAANj4//8c+f//AAAABRAAAAAcAAAABAAAAAAAAAAIAAAAdGltZXpvbmUAAAAABPn//0j5//8AAAAFEAAAACQAAAAEAAAAAAAAABMAAABjYXBhYmlsaXR5X3JldmlzaW9uADj5//98+f//AAAABRAAAAAgAAAABAAAAAAAAAAPAAAAYmFja2VuZF92ZXJzaW9uAGj5//+s+f//AAAABRAAAAAgAAAABAAAAAAAAAAOAAAAYmFja2VuZF9lbmdpbmUAAJj5///c+f//AAAADBQAAAAkAAAABAAAAAEAAAAcAAAADwAAAGV4ZWN1dGlvbl9tb2RlcwDM+f//dPv//wAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAA9Pn//zj6//8AAAAMFAAAACgAAAAEAAAAAQAAACAAAAARAAAAc2VtYW50aWNfcHJvZmlsZXMAAAAs+v//1Pv//wAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAVPr//5j6//8AAAAFEAAAABwAAAAEAAAAAAAAAAgAAABlbmNvZGluZwAAAACA+v//KPz//wAAAQQQAAAAKAAAAAQAAAAAAAAAFQAAAHNlbGVjdGVkX2NhcGFiaWxpdGllcwAAALj6//9g/P//AAABBBAAAAAoAAAABAAAAAAAAAAUAAAAY2F0YWxvZ19jYXBhYmlsaXRpZXMAAAAA8Pr//zT7//8AAAAGEAAAACwAAAAEAAAAAAAAABkAAABzdXBwb3J0c19jYXRhbG9nX2NvbnRlbnRzAAAALPv//9T8//8AAAEFEAAAADAAAAAEAAAAAAAAAB8AAAByZXNvbHZlZF9pbXBsZW1lbnRhdGlvbl92ZXJzaW9uAGz7//8U/f//AAABBRAAAAAoAAAABAAAAAAAAAAVAAAAcmVzb2x2ZWRfZGF0YV92ZXJzaW9uAAAApPv//+j7//8AAAAFEAAAACgAAAAEAAAAAAAAABYAAABnbG9iYWxfZnVuY3Rpb25fcHJlZml4AADc+///IPz//wAAAAwUAAAAKAAAAAQAAAABAAAAIAAAABAAAABnbG9iYWxfZnVuY3Rpb25zAAAAABT8//+8/f//AAABBBAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAAA8/P//gPz//wAAAAYQAAAALAAAAAQAAAAAAAAAGgAAAHN1cHBvcnRzX2NvbHVtbl9zdGF0aXN0aWNzAAB4/P//vPz//wAAABEUAAAAHAAAAAQAAAABAAAAFAAAAAQAAAB0YWdzAAAAAKT8///o/P//AAAADRgAAAAgAAAABAAAAAIAAABAAAAAFAAAAAcAAABlbnRyaWVzANT8//98/v//AAABBRAAAAAYAAAABAAAAAAAAAAFAAAAdmFsdWUAAAD8/P//QP3//wAAAAUQAAAAFAAAAAQAAAAAAAAAAwAAAGtleQAg/f//yP7//wAAAQUQAAAAGAAAAAQAAAAAAAAABwAAAGNvbW1lbnQASP3//4z9//8AAAAMFAAAACQAAAAEAAAAAQAAABwAAAAPAAAAYXR0YWNoX2NhdGFsb2dzAHz9//8k////AAABBBAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAACk/f//6P3//wAAAAwUAAAAJAAAAAQAAAABAAAAHAAAAAwAAABzZWNyZXRfdHlwZXMAAAAA2P3//4D///8AAAEEEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAAAD+//9E/v//AAAADBQAAAAgAAAABAAAAAEAAAAYAAAACAAAAHNldHRpbmdzAAAAADD+///Y////AAABBBAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAABY/v//EAAUAAgABgAHAAwAAAAQABAAAAAAAAEFEAAAACAAAAAEAAAAAAAAAA4AAABkZWZhdWx0X3NjaGVtYQAAmP7//9z+//8AAAAGEAAAACwAAAAEAAAAAAAAABsAAABhdHRhY2hfb3BhcXVlX2RhdGFfcmVxdWlyZWQA1P7//xj///8AAAACEAAAACgAAAAEAAAAAAAAAA8AAABjYXRhbG9nX3ZlcnNpb24ACAAMAAgABwAIAAAAAAAAAUAAAABY////AAAABhAAAAAoAAAABAAAAAAAAAAWAAAAY2F0YWxvZ192ZXJzaW9uX2Zyb3plbgAATP///5D///8AAAAGEAAAACgAAAAEAAAAAAAAABQAAABzdXBwb3J0c190aW1lX3RyYXZlbAAAAACE////yP///wAAAAYQAAAAKAAAAAQAAAAAAAAAFQAAAHN1cHBvcnRzX3RyYW5zYWN0aW9ucwAAALz///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAKAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAABAAEAAQAAAAAAAAA",
+   "schema_text": [
+    "attach_opaque_data: binary not null",
+    "supports_transactions: bool not null",
+    "supports_time_travel: bool not null",
+    "catalog_version_frozen: bool not null",
+    "catalog_version: int64 not null",
+    "attach_opaque_data_required: bool not null",
+    "default_schema: string",
+    "settings: list<item: binary> not null",
+    "secret_types: list<item: binary> not null",
+    "attach_catalogs: list<item: binary> not null",
+    "comment: string",
+    "tags: map<string, string> not null",
+    "supports_column_statistics: bool not null",
+    "global_functions: list<item: binary> not null",
+    "global_function_prefix: string not null",
+    "resolved_data_version: string",
+    "resolved_implementation_version: string",
+    "supports_catalog_contents: bool not null",
+    "catalog_capabilities: binary",
+    "selected_capabilities: binary",
+    "query_pushdown: struct<encoding: string not null, semantic_profiles: list<item: string> not null, execution_modes: list<item: string> not null, backend_engine: string not null, backend_version: string not null, capability_revision: string not null, default_evaluation_context: struct<timezone: string not null, collation: string not null, default_order: string not null, default_null_order: string not null, preserve_insertion_order: bool not null> not null, max_query_bytes: int64 not null>"
+   ]
+  },
+  "CatalogCapabilities": {
+   "schema": "/////7gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAQAAAAcAQAAuAAAAGAAAAAEAAAABP///wAAAAwUAAAAIAAAAAQAAAABAAAAGAAAAAsAAAB0cmFuc2FjdGlvbgDA/v//+P7//wAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAA6P7//1z///8AAAAMFAAAABwAAAAEAAAAAQAAABQAAAAFAAAAd3JpdGUAAAAU////TP///wAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAPP///7D///8AAAAMFAAAABgAAAAEAAAAAQAAABAAAAADAAAAZGRsAGT///+c////AAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAACM////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAMFAAAABwAAAAEAAAAAQAAACQAAAAEAAAAcmVhZAAAAADI////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEFEAAAABwAAAAEAAAAAAAAAAQAAABpdGVtAAAAAAQABAAEAAAAAAAAAA==",
+   "schema_text": [
+    "read: list<item: string> not null",
+    "ddl: list<item: string> not null",
+    "write: list<item: string> not null",
+    "transaction: list<item: string> not null"
+   ]
+  },
+  "CatalogContentsResponse": {
+   "schema": "/////wgCAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAkAAACUAQAAVAEAABABAADkAAAAuAAAAIwAAABcAAAAMAAAAAQAAADc/v//AAABBBAAAAAYAAAABAAAAAAAAAAHAAAAaW5kZXhlcwDM/v//BP///wAAAQQQAAAAGAAAAAQAAAAAAAAABgAAAG1hY3JvcwAA9P7//yz///8AAAEEEAAAABwAAAAEAAAAAAAAAAkAAABmdW5jdGlvbnMAAAAg////WP///wAAAQQQAAAAGAAAAAQAAAAAAAAABQAAAHZpZXdzAAAASP///4D///8AAAEEEAAAABgAAAAEAAAAAAAAAAYAAAB0YWJsZXMAAHD///+o////AAABBBAAAAAYAAAABAAAAAAAAAAHAAAAc2NoZW1hcwCY////lP///wAAAAYQAAAAIAAAAAQAAAAAAAAADAAAAG5vdF9tb2RpZmllZAAAAADI////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEFEAAAABwAAAAEAAAAAAAAAAQAAABldGFnAAAAAAQABAAEAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAACEAAAACgAAAAEAAAAAAAAAA8AAABjYXRhbG9nX3ZlcnNpb24ACAAMAAgABwAIAAAAAAAAAUAAAAAAAAAA",
+   "schema_text": [
+    "catalog_version: int64 not null",
+    "etag: string",
+    "not_modified: bool not null",
+    "schemas: binary",
+    "tables: binary",
+    "views: binary",
+    "functions: binary",
+    "macros: binary",
+    "indexes: binary"
+   ]
+  },
+  "CatalogCreateRequest": {
+   "schema": "/////xABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAEAAAAdP///wQAAAADAAAAuAAAAFAAAAAUAAAAEAAUAAgABgAHAAwAAAAQABAAAAAAAAEEEAAAABgAAAAEAAAAAAAAAAcAAABvcHRpb25zAGT///8QABgACAAAAAcADAAQABQAEAAAAAAAAAUUAAAARAAAACQAAAAEAAAAAAAAAAsAAABvbl9jb25mbGljdAAIAAgAAAAEAAgAAAAMAAAACAAMAAgABwAIAAAAAAAAARAAAADI////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAFEAAAABwAAAAEAAAAAAAAAAQAAABuYW1lAAAAAAQABAAEAAAAAAAAAA==",
+   "schema_text": [
+    "name: string not null",
+    "on_conflict: dictionary<values=string, indices=int16, ordered=0> not null",
+    "options: binary"
+   ]
+  },
+  "CatalogInfo": {
+   "schema": "/////7gCAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAYAAABYAgAADAIAAMQBAABgAQAANAAAAAQAAAAY/v//AAABBRAAAAAcAAAABAAAAAAAAAAKAAAAc291cmNlX3VybAAAxP3///z9//8AAAAMFAAAACAAAAAEAAAAAQAAABgAAAAIAAAAcmVsZWFzZXMAAAAA9P3//3T+//8AAAENIAAAACgAAAAEAAAABAAAALgAAABwAAAARAAAABQAAAAEAAAAaXRlbQAAAAAs/v//rP7//wAAAQUQAAAAHAAAAAQAAAAAAAAACQAAAG5vdGVzX3VybAAAAFj+//+Q/v//AAAABRAAAAAYAAAABAAAAAAAAAAHAAAAc3VtbWFyeQCA/v//AP///wAAAQoQAAAAJAAAAAQAAAAAAAAACwAAAHJlbGVhc2VkX2F0AAgADAAGAAgACAAAAAAAAgAEAAAAAwAAAFVUQwD8/v//AAAABRAAAAAYAAAABAAAAAAAAAAHAAAAdmVyc2lvbgDs/v//JP///wAAAAwUAAAAKAAAAAQAAAABAAAAIAAAABMAAABhdHRhY2hfb3B0aW9uX3NwZWNzACT///+k////AAABBBAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAABM////zP///wAAAQUQAAAAJAAAAAQAAAAAAAAAEQAAAGRhdGFfdmVyc2lvbl9zcGVjAAAAgP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBRAAAAAoAAAABAAAAAAAAAAWAAAAaW1wbGVtZW50YXRpb25fdmVyc2lvbgAAyP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABRAAAAAcAAAABAAAAAAAAAAEAAAAbmFtZQAAAAAEAAQABAAAAAAAAAA=",
+   "schema_text": [
+    "name: string not null",
+    "implementation_version: string",
+    "data_version_spec: string",
+    "attach_option_specs: list<item: binary> not null",
+    "releases: list<item: struct<version: string not null, released_at: timestamp[us, tz=UTC], summary: string not null, notes_url: string>> not null",
+    "source_url: string"
+   ]
+  },
+  "CatalogObjectRef": {
+   "schema": "/////zgBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAQAAADcAAAAYAAAADQAAAAEAAAAfP///wAAAQUQAAAAHAAAAAQAAAAAAAAACwAAAG93bmVyX3RhYmxlADj///9w////AAAABRAAAAAYAAAABAAAAAAAAAAEAAAAbmFtZQAAAABg////mP///wAAAAwUAAAAIAAAAAQAAAABAAAAKAAAAAsAAABzY2hlbWFfcGF0aACQ////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAAMj///8QABQACAAAAAcADAAAABAAEAAAAAAAAAUQAAAAHAAAAAQAAAAAAAAABAAAAGtpbmQAAAAABAAEAAQAAAA=",
+   "schema_text": [
+    "kind: string not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "owner_table: string"
+   ]
+  },
+  "CatalogQueryPrepareRequest": {
+   "schema": "/////9AFAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAA4AAABoBQAAKAUAAPAEAADEBAAAjAQAAGAEAAAoBAAA5AIAAKgCAABUAgAAIAIAAHgAAAA8AAAABAAAAOD6//8AAAAFEAAAACQAAAAEAAAAAAAAABEAAAByZXF1aXJlZF9vcmRlcmluZwAAAND6//+0/f//AAABBBAAAAAoAAAABAAAAAAAAAAWAAAAZXhwZWN0ZWRfb3V0cHV0X3NjaGVtYQAACPv//0z7//8AAAAMFAAAACgAAAAEAAAAAQAAACAAAAASAAAAcmVmZXJlbmNlZF9vYmplY3RzAABA+///JP7//wAAAQ0YAAAAIAAAAAQAAAACAAAASAAAABQAAAAEAAAAaXRlbQAAAABw+///tPv//wAAAAQQAAAAIAAAAAQAAAAAAAAADwAAAGV4cGVjdGVkX3NjaGVtYQCg+///5Pv//wAAAA0gAAAAKAAAAAQAAAAEAAAAzAAAAHAAAABEAAAAFAAAAAYAAABvYmplY3QAANj7//+8/v//AAABBRAAAAAcAAAABAAAAAAAAAALAAAAb3duZXJfdGFibGUABPz//0j8//8AAAAFEAAAABgAAAAEAAAAAAAAAAQAAABuYW1lAAAAACz8//9w/P//AAAADBQAAAAgAAAABAAAAAEAAAAYAAAACwAAAHNjaGVtYV9wYXRoAFz8//9A////AAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAACE/P//yPz//wAAAAUQAAAAGAAAAAQAAAAAAAAABAAAAGtpbmQAAAAArPz//5D///8AAAEFEAAAACAAAAAEAAAAAAAAAAwAAABjYXRhbG9nX2V0YWcAAAAA3Pz//8D///8AAAECEAAAACgAAAAEAAAAAAAAAA8AAABjYXRhbG9nX3ZlcnNpb24ACAAMAAgABwAIAAAAAAAAAUAAAAAQABQACAAGAAcADAAAABAAEAAAAAAAAQQQAAAAKAAAAAQAAAAAAAAAFwAAAHRyYW5zYWN0aW9uX29wYXF1ZV9kYXRhAGT9//+o/f//AAAADSQAAAA4AAAABAAAAAUAAAD8AAAAzAAAAJgAAABgAAAAIAAAABIAAABldmFsdWF0aW9uX2NvbnRleHQAAKz9///w/f//AAAABhAAAAAsAAAABAAAAAAAAAAYAAAAcHJlc2VydmVfaW5zZXJ0aW9uX29yZGVyAAAAAOj9//8s/v//AAAABRAAAAAkAAAABAAAAAAAAAASAAAAZGVmYXVsdF9udWxsX29yZGVyAAAc/v//YP7//wAAAAUQAAAAIAAAAAQAAAAAAAAADQAAAGRlZmF1bHRfb3JkZXIAAABM/v//kP7//wAAAAUQAAAAHAAAAAQAAAAAAAAACQAAAGNvbGxhdGlvbgAAAHj+//+8/v//AAAABRAAAAAcAAAABAAAAAAAAAAIAAAAdGltZXpvbmUAAAAApP7//+j+//8AAAAEEAAAACQAAAAEAAAAAAAAABAAAABwYXJhbWV0ZXJfc2NoZW1hAAAAANj+//8c////AAAABRAAAAAYAAAABAAAAAAAAAAFAAAAcXVlcnkAAAAA////RP///wAAAAUQAAAAJAAAAAQAAAAAAAAAEwAAAGNhcGFiaWxpdHlfcmV2aXNpb24ANP///3j///8AAAAFEAAAABgAAAAEAAAAAAAAAAQAAABtb2RlAAAAAFz///+g////AAAABRAAAAAkAAAABAAAAAAAAAAQAAAAc2VtYW50aWNfcHJvZmlsZQAAAACQ////1P///wAAAAUQAAAAHAAAAAQAAAAAAAAACAAAAGVuY29kaW5nAAAAALz///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAKAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAABAAEAAQAAAA=",
+   "schema_text": [
+    "attach_opaque_data: binary not null",
+    "encoding: string not null",
+    "semantic_profile: string not null",
+    "mode: string not null",
+    "capability_revision: string not null",
+    "query: string not null",
+    "parameter_schema: binary not null",
+    "evaluation_context: struct<timezone: string not null, collation: string not null, default_order: string not null, default_null_order: string not null, preserve_insertion_order: bool not null> not null",
+    "transaction_opaque_data: binary",
+    "catalog_version: int64",
+    "catalog_etag: string",
+    "referenced_objects: list<item: struct<object: struct<kind: string not null, schema_path: list<item: string> not null, name: string not null, owner_table: string> not null, expected_schema: binary not null>> not null",
+    "expected_output_schema: binary",
+    "required_ordering: string not null"
+   ]
+  },
+  "CatalogQueryPrepareResult": {
+   "schema": "/////wADAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAwAAACkAgAAZAIAACACAADkAQAAsAEAAHwBAAAsAQAA8AAAALwAAAB8AAAAQAAAAAQAAADY/f//AAABAhAAAAAgAAAABAAAAAAAAAAPAAAAZXN0aW1hdGVkX2J5dGVzAOD+//8AAAABQAAAABD+//8AAAECEAAAACAAAAAEAAAAAAAAAA4AAABlc3RpbWF0ZWRfcm93cwAAGP///wAAAAFAAAAASP7//wAAAQIQAAAAJAAAAAQAAAAAAAAAEwAAAGV4cGlyZXNfYXRfZXBvY2hfbXMAVP///wAAAAFAAAAAhP7//wAAAQQQAAAAIAAAAAQAAAAAAAAADgAAAGNvbnRleHRfZGlnZXN0AABA/v//tP7//wAAAQUQAAAAKAAAAAQAAAAAAAAAFgAAAHZhbGlkYXRlZF9jYXRhbG9nX2V0YWcAAHj+///s/v//AAABAhAAAAA0AAAABAAAAAAAAAAZAAAAdmFsaWRhdGVkX2NhdGFsb2dfdmVyc2lvbgAAAAgADAAIAAcACAAAAAAAAAFAAAAAOP///wAAAQUQAAAAIAAAAAQAAAAAAAAADwAAAHJlc3VsdF9vcmRlcmluZwD0/v//aP///wAAAQQQAAAAIAAAAAQAAAAAAAAADQAAAG91dHB1dF9zY2hlbWEAAAAk////mP///wAAAQQQAAAAKAAAAAQAAAAAAAAAFAAAAHByZXBhcmVkX3F1ZXJ5X3Rva2VuAAAAAFz////Q////AAABBRAAAAAgAAAABAAAAAAAAAANAAAAcmVhc29uX2RldGFpbAAAAIz///8QABQACAAGAAcADAAAABAAEAAAAAAAAQUQAAAAHAAAAAQAAAAAAAAACwAAAHJlYXNvbl9jb2RlAMj///8QABQACAAAAAcADAAAABAAEAAAAAAAAAUQAAAAHAAAAAQAAAAAAAAABgAAAHN0YXR1cwAABAAEAAQAAAA=",
+   "schema_text": [
+    "status: string not null",
+    "reason_code: string",
+    "reason_detail: string",
+    "prepared_query_token: binary",
+    "output_schema: binary",
+    "result_ordering: string",
+    "validated_catalog_version: int64",
+    "validated_catalog_etag: string",
+    "context_digest: binary",
+    "expires_at_epoch_ms: int64",
+    "estimated_rows: int64",
+    "estimated_bytes: int64"
+   ]
+  },
+  "CatalogVersionResponse": {
+   "schema": "/////4AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAACEAAAACAAAAAEAAAAAAAAAAcAAAB2ZXJzaW9uAAgADAAIAAcACAAAAAAAAAFAAAAAAAAAAA==",
+   "schema_text": [
+    "version: int64 not null"
+   ]
+  },
+  "CatalogsResponse": {
+   "schema": "/////7AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAMFAAAABwAAAAEAAAAAQAAACQAAAAFAAAAaXRlbXMAAADI////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEEEAAAABwAAAAEAAAAAAAAAAQAAABpdGVtAAAAAAQABAAEAAAAAAAAAA==",
+   "schema_text": [
+    "items: list<item: binary> not null"
+   ]
+  },
+  "ClientCapabilities": {
+   "schema": "/////2gDAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAcAAAAMAwAAjAIAADACAAAAAgAAnAEAAHABAAAEAAAAWP3//wAAAQ0gAAAAMAAAAAQAAAAEAAAA+AAAAJQAAABgAAAAHAAAAA4AAABxdWVyeV9wdXNoZG93bgAAKP3//2D9//8AAAACEAAAACgAAAAEAAAAAAAAAA8AAABtYXhfcXVlcnlfYnl0ZXMACAAMAAgABwAIAAAAAAAAAUAAAACg/f//AAAABRAAAAAgAAAABAAAAAAAAAAOAAAAZW5naW5lX3ZlcnNpb24AAJj9///Q/f//AAAADBQAAAAoAAAABAAAAAEAAAAgAAAAEQAAAHNlbWFudGljX3Byb2ZpbGVzAAAA0P3//0D+//8AAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAAPj9//8w/v//AAAADBQAAAAgAAAABAAAAAEAAAAYAAAACQAAAGVuY29kaW5ncwAAACj+//+Y/v//AAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAABQ/v//wP7//wAAAQQQAAAAGAAAAAQAAAAAAAAABwAAAGNhdGFsb2cAeP7//7D+//8AAAAMFAAAACgAAAAEAAAAAQAAACAAAAAQAAAAZmlsdGVyX2VuY29kaW5ncwAAAACw/v//IP///wAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAA2P7//xD///8AAAAGEAAAABwAAAAEAAAAAAAAAAoAAABjYW5fc3RyZWFtAAAE////PP///wAAAAwUAAAAIAAAAAQAAAABAAAAGAAAAAgAAABjYXRhbG9ncwAAAAA0////pP///wAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAXP///5T///8AAAAMFAAAACQAAAAEAAAAAQAAACwAAAAOAAAAbmF0aXZlX2Zvcm1hdHMAAJD///8QABQACAAGAAcADAAAABAAEAAAAAAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAyP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABRAAAAAcAAAABAAAAAAAAAAGAAAAZW5naW5lAAAEAAQABAAAAA==",
+   "schema_text": [
+    "engine: string not null",
+    "native_formats: list<item: string> not null",
+    "catalogs: list<item: string> not null",
+    "can_stream: bool not null",
+    "filter_encodings: list<item: string> not null",
+    "catalog: binary",
+    "query_pushdown: struct<encodings: list<item: string> not null, semantic_profiles: list<item: string> not null, engine_version: string not null, max_query_bytes: int64 not null>"
+   ]
+  },
+  "ClientQueryCapabilities": {
+   "schema": "/////5ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAQAAADwAAAAfAAAAEgAAAAEAAAAMP///wAAAAIQAAAAKAAAAAQAAAAAAAAADwAAAG1heF9xdWVyeV9ieXRlcwAIAAwACAAHAAgAAAAAAAABQAAAAHD///8AAAAFEAAAACAAAAAEAAAAAAAAAA4AAABlbmdpbmVfdmVyc2lvbgAAKP///6D///8AAAAMFAAAACgAAAAEAAAAAQAAACAAAAARAAAAc2VtYW50aWNfcHJvZmlsZXMAAABg////mP///wAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAiP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAADBQAAAAgAAAABAAAAAEAAAAoAAAACQAAAGVuY29kaW5ncwAAAMj///8QABQACAAGAAcADAAAABAAEAAAAAAAAQUQAAAAHAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAABAAEAAQAAAAAAAAA",
+   "schema_text": [
+    "encodings: list<item: string> not null",
+    "semantic_profiles: list<item: string> not null",
+    "engine_version: string not null",
+    "max_query_bytes: int64 not null"
+   ]
+  },
+  "ConstraintSnapshot": {
+   "schema": "/////xgBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAMAAAC4AAAAcAAAAAQAAABk////AAAADBQAAAAgAAAABAAAAAEAAAAoAAAACwAAAGNvbnN0cmFpbnRzAFz///8QABQACAAGAAcADAAAABAAEAAAAAAAAQQQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAlP///8z///8AAAAEEAAAACQAAAAEAAAAAAAAABMAAABkZWZpbml0aW9uX3JldmlzaW9uAMj///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAHAAAAAQAAAAAAAAABQAAAHRhYmxlAAAABAAEAAQAAAAAAAAA",
+   "schema_text": [
+    "table: binary not null",
+    "definition_revision: binary not null",
+    "constraints: list<item: binary> not null"
+   ]
+  },
+  "ConstraintsApplyRequest": {
+   "schema": "/////4gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAUAAAAcAQAA4AAAAKgAAABAAAAABAAAAJz///8AAAEEEAAAACgAAAAEAAAAAAAAABcAAAB0cmFuc2FjdGlvbl9vcGFxdWVfZGF0YQD8/v//QP///wAAAAwUAAAAHAAAAAQAAAABAAAAJAAAAAcAAABjaGFuZ2VzACj///8QABQACAAGAAcADAAAABAAEAAAAAAAAQQQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAYP///6T///8AAAAEEAAAACQAAAAEAAAAAAAAABEAAABleHBlY3RlZF9yZXZpc2lvbgAAAJT////Y////AAAABBAAAAAYAAAABAAAAAAAAAAFAAAAdGFibGUAAAC8////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACgAAAAEAAAAAAAAABIAAABhdHRhY2hfb3BhcXVlX2RhdGEAAAQABAAEAAAAAAAAAA==",
+   "schema_text": [
+    "attach_opaque_data: binary not null",
+    "table: binary not null",
+    "expected_revision: binary not null",
+    "changes: list<item: binary> not null",
+    "transaction_opaque_data: binary"
+   ]
+  },
+  "CopyFromContext": {
+   "schema": "/////9gAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAMAAAB4AAAAOAAAAAQAAACk////AAAABBAAAAAgAAAABAAAAAAAAAAPAAAAZXhwZWN0ZWRfc2NoZW1hAJz////U////AAAABRAAAAAcAAAABAAAAAAAAAAJAAAAZmlsZV9wYXRoAAAAyP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABRAAAAAcAAAABAAAAAAAAAAGAAAAZm9ybWF0AAAEAAQABAAAAAAAAAA=",
+   "schema_text": [
+    "format: string not null",
+    "file_path: string not null",
+    "expected_schema: binary not null"
+   ]
+  },
+  "CopyFromFormatInfo": {
+   "schema": "/////0ACAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAgAAADkAQAAGAEAAOgAAAC8AAAAkAAAAGAAAAAwAAAABAAAAID+//8AAAAGEAAAABgAAAAEAAAAAAAAAAcAAABvcmRlcmVkADz+//+o/v//AAAABRAAAAAcAAAABAAAAAAAAAALAAAAZGVzY3JpcHRpb24AaP7//9T+//8AAAAFEAAAABwAAAAEAAAAAAAAAAkAAABkaXJlY3Rpb24AAACU/v//AP///wAAAAQQAAAAGAAAAAQAAAAAAAAABwAAAG9wdGlvbnMAvP7//yj///8AAAAFEAAAABgAAAAEAAAAAAAAAAcAAABoYW5kbGVyAOT+//9Q////AAAABRAAAAAcAAAABAAAAAAAAAALAAAAZm9ybWF0X25hbWUAEP///3z///8AAAARFAAAABwAAAAEAAAAAQAAABQAAAAEAAAAdGFncwAAAAA8////qP///wAAAA0YAAAAIAAAAAQAAAACAAAAUAAAABQAAAAHAAAAZW50cmllcwBs////pP///wAAAQUQAAAAGAAAAAQAAAAAAAAABQAAAHZhbHVlAAAAlP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABRAAAAAUAAAABAAAAAAAAAADAAAAa2V5AMj///8QABQACAAGAAcADAAAABAAEAAAAAAAAQUQAAAAHAAAAAQAAAAAAAAABwAAAGNvbW1lbnQABAAEAAQAAAA=",
+   "schema_text": [
+    "comment: string",
+    "tags: map<string, string> not null",
+    "format_name: string not null",
+    "handler: string not null",
+    "options: binary not null",
+    "direction: string not null",
+    "description: string not null",
+    "ordered: bool not null"
+   ]
+  },
+  "CopyFromFormatsResponse": {
+   "schema": "/////7AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAMFAAAABwAAAAEAAAAAQAAACQAAAAFAAAAaXRlbXMAAADI////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEEEAAAABwAAAAEAAAAAAAAAAQAAABpdGVtAAAAAAQABAAEAAAAAAAAAA==",
+   "schema_text": [
+    "items: list<item: binary> not null"
+   ]
+  },
+  "CopyToContext": {
+   "schema": "/////6AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAIAAABEAAAABAAAANT///8AAAAFEAAAABwAAAAEAAAAAAAAAAkAAABmaWxlX3BhdGgAAADI////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAFEAAAABwAAAAEAAAAAAAAAAYAAABmb3JtYXQAAAQABAAEAAAA",
+   "schema_text": [
+    "format: string not null",
+    "file_path: string not null"
+   ]
+  },
+  "DependencySnapshot": {
+   "schema": "/////1ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAMAAADgAAAAZAAAAAQAAAA8////AAAADBQAAAAkAAAABAAAAAEAAAAcAAAADAAAAGRlcGVuZGVuY2llcwAAAAB0////rP///wAAAQQQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAnP///5j///8AAAAMFAAAABwAAAAEAAAAAQAAACQAAAAHAAAAb2JqZWN0cwDI////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEEEAAAABwAAAAEAAAAAAAAAAQAAABpdGVtAAAAAAQABAAEAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAACEAAAACgAAAAEAAAAAAAAAA8AAABjYXRhbG9nX3ZlcnNpb24ACAAMAAgABwAIAAAAAAAAAUAAAAA=",
+   "schema_text": [
+    "catalog_version: int64 not null",
+    "objects: list<item: binary> not null",
+    "dependencies: list<item: binary> not null"
+   ]
+  },
+  "FieldPath": {
+   "schema": "/////7AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAMFAAAACAAAAAEAAAAAQAAACgAAAAKAAAAY29tcG9uZW50cwAAyP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBRAAAAAcAAAABAAAAAAAAAAEAAAAaXRlbQAAAAAEAAQABAAAAA==",
+   "schema_text": [
+    "components: list<item: string> not null"
+   ]
+  },
+  "FunctionInfo": {
+   "schema": "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AAAAAKD///8AAAABIAAAACj+//8QABgACAAAAAcADAAQABQAEAAAAAAAAAUUAAAASAAAACgAAAAEAAAAAAAAAA0AAABmdW5jdGlvbl90eXBlAAAACAAIAAAABAAIAAAADAAAAAgADAAIAAcACAAAAAAAAAEQAAAAkP7///z+//8AAAAMFAAAACAAAAAEAAAAAQAAABgAAAALAAAAc2NoZW1hX3BhdGgAwP7///j+//8AAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAAOj+//9U////AAAABRAAAAAYAAAABAAAAAAAAAAEAAAAbmFtZQAAAAAQ////fP///wAAABEUAAAAHAAAAAQAAAABAAAAFAAAAAQAAAB0YWdzAAAAADz///+o////AAAADRgAAAAgAAAABAAAAAIAAABQAAAAFAAAAAcAAABlbnRyaWVzAGz///+k////AAABBRAAAAAYAAAABAAAAAAAAAAFAAAAdmFsdWUAAACU////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAFEAAAABQAAAAEAAAAAAAAAAMAAABrZXkAyP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBRAAAAAcAAAABAAAAAAAAAAHAAAAY29tbWVudAAEAAQABAAAAA==",
+   "schema_text": [
+    "comment: string",
+    "tags: map<string, string> not null",
+    "name: string not null",
+    "schema_path: list<item: string> not null",
+    "function_type: dictionary<values=string, indices=int16, ordered=0> not null",
+    "arguments: dictionary<values=binary, indices=int32, ordered=0> not null",
+    "output_schema: dictionary<values=binary, indices=int32, ordered=0> not null",
+    "parameter_default_values: dictionary<values=binary, indices=int32, ordered=0>",
+    "stability: dictionary<values=string, indices=int16, ordered=0>",
+    "null_handling: dictionary<values=string, indices=int16, ordered=0>",
+    "argument_monotonicity: list<item: string>",
+    "description: string not null",
+    "examples: list<item: struct<sql: string not null, description: string not null, expected_output: string>> not null",
+    "categories: list<item: string> not null",
+    "projection_pushdown: bool",
+    "filter_pushdown: bool",
+    "sampling_pushdown: bool",
+    "late_materialization: bool",
+    "filter_semantic_profiles: list<item: string> not null",
+    "additional_filter_functions: list<item: struct<namespace: string not null, name: string not null, version: uint64 not null>> not null",
+    "runtime_filter_algorithms: list<item: struct<namespace: string not null, name: string not null, version: uint64 not null>> not null",
+    "filter_evaluation_contexts: list<item: struct<profile: string not null, provider_fingerprint: string>> not null",
+    "order_preservation: dictionary<values=string, indices=int16, ordered=0>",
+    "max_workers: int32",
+    "supports_batch_index: bool not null",
+    "supports_splits: bool not null",
+    "filters_exactly_applied: bool not null",
+    "supports_positions: bool not null",
+    "split_token_ttl_seconds: int64",
+    "partition_kind: dictionary<values=string, indices=int16, ordered=0> not null",
+    "order_dependent: dictionary<values=string, indices=int16, ordered=0> not null",
+    "distinct_dependent: dictionary<values=string, indices=int16, ordered=0> not null",
+    "supports_window: bool not null",
+    "streaming_partitioned: bool not null",
+    "has_finalize: bool not null",
+    "source_order_dependent: bool not null",
+    "sink_order_dependent: bool not null",
+    "requires_input_batch_index: bool not null",
+    "input_from_args: bool not null",
+    "input_rows_per_call: int64",
+    "required_settings: list<item: string> not null",
+    "required_secrets: list<item: struct<secret_type: string not null, scope: string, secret_name: string>> not null",
+    "visibility: string"
+   ]
+  },
+  "FunctionsResponse": {
+   "schema": "/////7AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAMFAAAABwAAAAEAAAAAQAAACQAAAAFAAAAaXRlbXMAAADI////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEEEAAAABwAAAAEAAAAAAAAAAQAAABpdGVtAAAAAAQABAAEAAAAAAAAAA==",
+   "schema_text": [
+    "items: list<item: binary> not null"
+   ]
+  },
+  "GlobalInitResponse": {
+   "schema": "//////gAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAMAAACUAAAAVAAAAAQAAACI////AAAAAhAAAAAkAAAABAAAAAAAAAALAAAAbWF4X3dvcmtlcnMACAAMAAgABwAIAAAAAAAAAUAAAAAQABQACAAGAAcADAAAABAAEAAAAAAAAQQQAAAAHAAAAAQAAAAAAAAACwAAAG9wYXF1ZV9kYXRhAMD///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAJAAAAAQAAAAAAAAADAAAAGV4ZWN1dGlvbl9pZAAAAAAEAAQABAAAAA==",
+   "schema_text": [
+    "execution_id: binary not null",
+    "opaque_data: binary",
+    "max_workers: int64 not null"
+   ]
+  },
+  "IndexCreateRequest": {
+   "schema": "/////+ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAEAAAAaP///wQAAAAGAAAAgAEAAAQBAADYAAAAqAAAAFAAAAAEAAAA4P7//wAAAQQQAAAAKAAAAAQAAAAAAAAAFwAAAHRyYW5zYWN0aW9uX29wYXF1ZV9kYXRhAJz+//8QABgACAAAAAcADAAQABQAEAAAAAAAAAUUAAAARAAAACQAAAAEAAAAAAAAAAsAAABvbl9jb25mbGljdAAIAAgAAAAEAAgAAAAMAAAACAAMAAgABwAIAAAAAAAAARAAAAAA////RP///wAAAAQQAAAAHAAAAAQAAAAAAAAACgAAAGRlZmluaXRpb24AACz///9w////AAAABRAAAAAYAAAABAAAAAAAAAAEAAAAbmFtZQAAAABU////mP///wAAAAwUAAAAIAAAAAQAAAABAAAAKAAAAAsAAABzY2hlbWFfcGF0aACE////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAALz///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAKAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAABAAEAAQAAAA=",
+   "schema_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "definition: binary not null",
+    "on_conflict: dictionary<values=string, indices=int16, ordered=0> not null",
+    "transaction_opaque_data: binary"
+   ]
+  },
+  "IndexDefinition": {
+   "schema": "/////9gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAEAAAAZP///wQAAAAGAAAAgAEAAEABAADYAAAArAAAAFAAAAAEAAAADP///wAAAQQQAAAAKAAAAAQAAAAAAAAAFQAAAGFzc29jaWF0ZWRfY29uc3RyYWludAAAAKj+//8QABgACAAAAAcADAAQABQAEAAAAAAAAAUUAAAASAAAACgAAAAEAAAAAAAAAA8AAABjb25zdHJhaW50X3R5cGUACAAIAAAABAAIAAAADAAAAAgADAAIAAcACAAAAAAAAAEQAAAAEP///0j///8AAAAEEAAAABgAAAAEAAAAAAAAAAcAAABvcHRpb25zADj///9w////AAAADBQAAAAcAAAABAAAAAEAAAAkAAAABAAAAGtleXMAAAAAZP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBBAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAACc////1P///wAAAAUQAAAAHAAAAAQAAAAAAAAACQAAAGFsZ29yaXRobQAAAMj///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAHAAAAAQAAAAAAAAABQAAAHRhYmxlAAAABAAEAAQAAAAAAAAA",
+   "schema_text": [
+    "table: binary not null",
+    "algorithm: string not null",
+    "keys: list<item: binary> not null",
+    "options: binary not null",
+    "constraint_type: dictionary<values=string, indices=int16, ordered=0> not null",
+    "associated_constraint: binary"
+   ]
+  },
+  "IndexInfo": {
+   "schema": "/////xACAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAYAAAC0AQAA6AAAALwAAABgAAAAMAAAAAQAAACo/v//AAAABBAAAAAYAAAABAAAAAAAAAAHAAAAb3B0aW9ucwBk/v//0P7//wAAAAQQAAAAHAAAAAQAAAAAAAAACgAAAGRlZmluaXRpb24AAJD+///8/v//AAAADBQAAAAgAAAABAAAAAEAAAAYAAAACwAAAHNjaGVtYV9wYXRoAMD+///4/v//AAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAADo/v//VP///wAAAAUQAAAAGAAAAAQAAAAAAAAABAAAAG5hbWUAAAAAEP///3z///8AAAARFAAAABwAAAAEAAAAAQAAABQAAAAEAAAAdGFncwAAAAA8////qP///wAAAA0YAAAAIAAAAAQAAAACAAAAUAAAABQAAAAHAAAAZW50cmllcwBs////pP///wAAAQUQAAAAGAAAAAQAAAAAAAAABQAAAHZhbHVlAAAAlP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABRAAAAAUAAAABAAAAAAAAAADAAAAa2V5AMj///8QABQACAAGAAcADAAAABAAEAAAAAAAAQUQAAAAHAAAAAQAAAAAAAAABwAAAGNvbW1lbnQABAAEAAQAAAA=",
+   "schema_text": [
+    "comment: string",
+    "tags: map<string, string> not null",
+    "name: string not null",
+    "schema_path: list<item: string> not null",
+    "definition: binary not null",
+    "options: binary not null"
+   ]
+  },
+  "IndexesResponse": {
+   "schema": "/////7AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAMFAAAABwAAAAEAAAAAQAAACQAAAAFAAAAaXRlbXMAAADI////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEEEAAAABwAAAAEAAAAAAAAAAQAAABpdGVtAAAAAAQABAAEAAAAAAAAAA==",
+   "schema_text": [
+    "items: list<item: binary> not null"
+   ]
+  },
+  "InitRequest": {
+   "schema": "/////3gFAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAEAAAAAP3//wQAAAATAAAAIAUAANwEAACkBAAAJAQAAOwDAACQAwAAMAMAAPgCAACsAgAAZAIAADACAAD4AQAAxAEAAIgBAAAkAQAAyAAAAIwAAABEAAAABAAAALD7//8AAAECEAAAACQAAAAEAAAAAAAAABAAAAB0YWJsZXNhbXBsZV9zZWVkAAAAAPT7//8AAAABQAAAAOz7//8AAAEDEAAAADAAAAAEAAAAAAAAABYAAAB0YWJsZXNhbXBsZV9wZXJjZW50YWdlAAAAAAYACAAGAAYAAAAAAAIAMPz//wAAAQIQAAAAIAAAAAQAAAAAAAAADgAAAG9yZGVyX2J5X2xpbWl0AABw/P//AAAAAUAAAABI/v//AAABBRQAAABIAAAAJAAAAAQAAAAAAAAAEwAAAG9yZGVyX2J5X251bGxfb3JkZXIAqP///xAAAAACAAAAAAAAAAAAAADE/P//AAAAARAAAAAQ/P//oP7//wAAAQUUAAAAUAAAACwAAAAEAAAAAAAAABIAAABvcmRlcl9ieV9kaXJlY3Rpb24AAAgAFAAIAAQACAAAABAAAAABAAAAAAAAAAAAAAAk/f//AAAAARAAAABw/P//IP3//wAAAQUQAAAAKAAAAAQAAAAAAAAAFAAAAG9yZGVyX2J5X2NvbHVtbl9uYW1lAAAAAKj8//9Y/f//AAABBBAAAAAgAAAABAAAAAAAAAAMAAAAc3Vic3RyZWFtX2lkAAAAANj8//+I/f//AAABBBAAAAAkAAAABAAAAAAAAAAQAAAAaW5pdF9vcGFxdWVfZGF0YQAAAAAM/f//vP3//wAAAQQQAAAAIAAAAAQAAAAAAAAADAAAAGV4ZWN1dGlvbl9pZAAAAAA8/f//7P3//wAAAQQQAAAAJAAAAAQAAAAAAAAAEQAAAGZpbmFsaXplX3N0YXRlX2lkAAAAcP3//xAAGAAIAAYABwAMABAAFAAQAAAAAAABBRQAAAA4AAAAIAAAAAQAAAAAAAAABQAAAHBoYXNlAAAACAAIAAAABAAIAAAABAAAAHz+//8AAAABEAAAAMj9//94/v//AAABAhAAAAAcAAAABAAAAAAAAAAJAAAAcm93X2xpbWl0AAAAtP7//wAAAAFAAAAArP7//wAAAQwUAAAAJAAAAAQAAAABAAAAHAAAAAwAAABzcGxpdF90b2tlbnMAAAAAMP7//+D+//8AAAETEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAAFj+//8I////AAABDBQAAAAgAAAABAAAAAEAAAAYAAAACQAAAGpvaW5fa2V5cwAAAIj+//84////AAABExAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAACw/v//YP///wAAARMQAAAAJAAAAAQAAAAAAAAAEAAAAHB1c2hkb3duX2ZpbHRlcnMAAAAA5P7//5T///8AAAEMFAAAACQAAAAEAAAAAQAAABwAAAAOAAAAcHJvamVjdGlvbl9pZHMAABj////I////AAABAhAAAAAgAAAABAAAAAAAAAAEAAAAaXRlbQAAAAAIAAwACAAHAAgAAAAAAAABQAAAABAAFAAIAAYABwAMAAAAEAAQAAAAAAABBBAAAAAkAAAABAAAAAAAAAAQAAAAYmluZF9vcGFxdWVfZGF0YQAAAACU////0P///wAAAAQQAAAAIAAAAAQAAAAAAAAADQAAAG91dHB1dF9zY2hlbWEAAADE////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACAAAAAEAAAAAAAAAAkAAABiaW5kX2NhbGwAAAAEAAQABAAAAA==",
+   "schema_text": [
+    "bind_call: binary not null",
+    "output_schema: binary not null",
+    "bind_opaque_data: binary",
+    "projection_ids: list<item: int64>",
+    "pushdown_filters: large_binary",
+    "join_keys: list<item: large_binary>",
+    "split_tokens: list<item: large_binary>",
+    "row_limit: int64",
+    "phase: dictionary<values=string, indices=int16, ordered=0>",
+    "finalize_state_id: binary",
+    "execution_id: binary",
+    "init_opaque_data: binary",
+    "substream_id: binary",
+    "order_by_column_name: string",
+    "order_by_direction: dictionary<values=string, indices=int16, ordered=0>",
+    "order_by_null_order: dictionary<values=string, indices=int16, ordered=0>",
+    "order_by_limit: int64",
+    "tablesample_percentage: double",
+    "tablesample_seed: int64"
+   ]
+  },
+  "KeyGrouping": {
+   "schema": "/////7AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAMFAAAABwAAAAEAAAAAQAAACQAAAAEAAAAa2V5cwAAAADI////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEEEAAAABwAAAAEAAAAAAAAAAQAAABpdGVtAAAAAAQABAAEAAAAAAAAAA==",
+   "schema_text": [
+    "keys: list<item: binary> not null"
+   ]
+  },
+  "MacroCreateRequest": {
+   "schema": "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",
+   "schema_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "macro_type: dictionary<values=string, indices=int16, ordered=0> not null",
+    "overloads: list<item: struct<parameters: list<item: struct<name: string not null, declared_type: binary, default_value: binary, default_expression: binary, documentation: string>> not null, definition: string not null, profile: string not null, schema_path: list<item: string> not null, macro_type: string not null, evaluation_context: struct<timezone: string not null, collation: string not null, default_order: string not null, default_null_order: string not null, preserve_insertion_order: bool not null> not null>> not null",
+    "on_conflict: dictionary<values=string, indices=int16, ordered=0> not null",
+    "transaction_opaque_data: binary"
+   ]
+  },
+  "MacroInfo": {
+   "schema": "//////gFAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAEAAAAwPv//wQAAAAGAAAApAUAANgEAACsBAAAUAQAAPgDAAAEAAAAuPr//wAAAAwUAAAAIAAAAAQAAAABAAAAGAAAAAkAAABvdmVybG9hZHMAAAB8+v//tPr//wAAAQ0oAAAAMAAAAAQAAAAGAAAAQAIAABACAADkAQAAiAEAAFgBAAAUAAAABAAAAGl0ZW0AAAAAvPr//yj7//8AAAANJAAAADgAAAAEAAAABQAAAPwAAADMAAAAmAAAAGAAAAAgAAAAEgAAAGV2YWx1YXRpb25fY29udGV4dAAABPv//3D7//8AAAAGEAAAACwAAAAEAAAAAAAAABgAAABwcmVzZXJ2ZV9pbnNlcnRpb25fb3JkZXIAAAAAQPv//6z7//8AAAAFEAAAACQAAAAEAAAAAAAAABIAAABkZWZhdWx0X251bGxfb3JkZXIAAHT7///g+///AAAABRAAAAAgAAAABAAAAAAAAAANAAAAZGVmYXVsdF9vcmRlcgAAAKT7//8Q/P//AAAABRAAAAAcAAAABAAAAAAAAAAJAAAAY29sbGF0aW9uAAAA0Pv//zz8//8AAAAFEAAAABwAAAAEAAAAAAAAAAgAAAB0aW1lem9uZQAAAAD8+///aPz//wAAAAUQAAAAHAAAAAQAAAAAAAAACgAAAG1hY3JvX3R5cGUAACj8//+U/P//AAAADBQAAAAgAAAABAAAAAEAAAAYAAAACwAAAHNjaGVtYV9wYXRoAFj8//+Q/P//AAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAACA/P//7Pz//wAAAAUQAAAAGAAAAAQAAAAAAAAABwAAAHByb2ZpbGUAqPz//xT9//8AAAAFEAAAABwAAAAEAAAAAAAAAAoAAABkZWZpbml0aW9uAADU/P//QP3//wAAAAwUAAAAIAAAAAQAAAABAAAAGAAAAAoAAABwYXJhbWV0ZXJzAAAE/f//PP3//wAAAQ0kAAAALAAAAAQAAAAFAAAA6AAAALQAAACAAAAASAAAABQAAAAEAAAAaXRlbQAAAABA/f//eP3//wAAAQUQAAAAIAAAAAQAAAAAAAAADQAAAGRvY3VtZW50YXRpb24AAABw/f//qP3//wAAAQQQAAAAJAAAAAQAAAAAAAAAEgAAAGRlZmF1bHRfZXhwcmVzc2lvbgAApP3//9z9//8AAAEEEAAAACAAAAAEAAAAAAAAAA0AAABkZWZhdWx0X3ZhbHVlAAAA1P3//wz+//8AAAEEEAAAACAAAAAEAAAAAAAAAA0AAABkZWNsYXJlZF90eXBlAAAABP7//3D+//8AAAAFEAAAABgAAAAEAAAAAAAAAAQAAABuYW1lAAAAACz+//8QABgACAAAAAcADAAQABQAEAAAAAAAAAUUAAAARAAAACQAAAAEAAAAAAAAAAoAAABtYWNyb190eXBlAAAIAAgAAAAEAAgAAAAMAAAACAAMAAgABwAIAAAAAAAAARAAAACQ/v///P7//wAAAAwUAAAAIAAAAAQAAAABAAAAGAAAAAsAAABzY2hlbWFfcGF0aADA/v//+P7//wAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAA6P7//1T///8AAAAFEAAAABgAAAAEAAAAAAAAAAQAAABuYW1lAAAAABD///98////AAAAERQAAAAcAAAABAAAAAEAAAAUAAAABAAAAHRhZ3MAAAAAPP///6j///8AAAANGAAAACAAAAAEAAAAAgAAAFAAAAAUAAAABwAAAGVudHJpZXMAbP///6T///8AAAEFEAAAABgAAAAEAAAAAAAAAAUAAAB2YWx1ZQAAAJT///8QABQACAAAAAcADAAAABAAEAAAAAAAAAUQAAAAFAAAAAQAAAAAAAAAAwAAAGtleQDI////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEFEAAAABwAAAAEAAAAAAAAAAcAAABjb21tZW50AAQABAAEAAAA",
+   "schema_text": [
+    "comment: string",
+    "tags: map<string, string> not null",
+    "name: string not null",
+    "schema_path: list<item: string> not null",
+    "macro_type: dictionary<values=string, indices=int16, ordered=0> not null",
+    "overloads: list<item: struct<parameters: list<item: struct<name: string not null, declared_type: binary, default_value: binary, default_expression: binary, documentation: string>> not null, definition: string not null, profile: string not null, schema_path: list<item: string> not null, macro_type: string not null, evaluation_context: struct<timezone: string not null, collation: string not null, default_order: string not null, default_null_order: string not null, preserve_insertion_order: bool not null> not null>> not null"
+   ]
+  },
+  "MacroOverload": {
+   "schema": "/////+ADAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAYAAAAwAgAAAAIAANQBAAB4AQAASAEAAAQAAACo/P//AAAADSQAAAA4AAAABAAAAAUAAAD8AAAAzAAAAJgAAABgAAAAIAAAABIAAABldmFsdWF0aW9uX2NvbnRleHQAALj8///w/P//AAAABhAAAAAsAAAABAAAAAAAAAAYAAAAcHJlc2VydmVfaW5zZXJ0aW9uX29yZGVyAAAAAPT8//8s/f//AAAABRAAAAAkAAAABAAAAAAAAAASAAAAZGVmYXVsdF9udWxsX29yZGVyAAAo/f//YP3//wAAAAUQAAAAIAAAAAQAAAAAAAAADQAAAGRlZmF1bHRfb3JkZXIAAABY/f//kP3//wAAAAUQAAAAHAAAAAQAAAAAAAAACQAAAGNvbGxhdGlvbgAAAIT9//+8/f//AAAABRAAAAAcAAAABAAAAAAAAAAIAAAAdGltZXpvbmUAAAAAsP3//+j9//8AAAAFEAAAABwAAAAEAAAAAAAAAAoAAABtYWNyb190eXBlAADc/f//FP7//wAAAAwUAAAAIAAAAAQAAAABAAAAGAAAAAsAAABzY2hlbWFfcGF0aAAM/v//hP7//wAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAANP7//2z+//8AAAAFEAAAABgAAAAEAAAAAAAAAAcAAABwcm9maWxlAFz+//+U/v//AAAABRAAAAAcAAAABAAAAAAAAAAKAAAAZGVmaW5pdGlvbgAAiP7//8D+//8AAAAMFAAAACAAAAAEAAAAAQAAABgAAAAKAAAAcGFyYW1ldGVycwAAuP7//zD///8AAAENJAAAACwAAAAEAAAABQAAAAgBAADEAAAAgAAAAEgAAAAUAAAABAAAAGl0ZW0AAAAA9P7//2z///8AAAEFEAAAACAAAAAEAAAAAAAAAA0AAABkb2N1bWVudGF0aW9uAAAAJP///5z///8AAAEEEAAAACQAAAAEAAAAAAAAABIAAABkZWZhdWx0X2V4cHJlc3Npb24AAFj////Q////AAABBBAAAAAgAAAABAAAAAAAAAANAAAAZGVmYXVsdF92YWx1ZQAAAIj///8QABQACAAGAAcADAAAABAAEAAAAAAAAQQQAAAAIAAAAAQAAAAAAAAADQAAAGRlY2xhcmVkX3R5cGUAAADI////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAFEAAAABwAAAAEAAAAAAAAAAQAAABuYW1lAAAAAAQABAAEAAAAAAAAAA==",
+   "schema_text": [
+    "parameters: list<item: struct<name: string not null, declared_type: binary, default_value: binary, default_expression: binary, documentation: string>> not null",
+    "definition: string not null",
+    "profile: string not null",
+    "schema_path: list<item: string> not null",
+    "macro_type: string not null",
+    "evaluation_context: struct<timezone: string not null, collation: string not null, default_order: string not null, default_null_order: string not null, preserve_insertion_order: bool not null> not null"
+   ]
+  },
+  "MacrosResponse": {
+   "schema": "/////7AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAMFAAAABwAAAAEAAAAAQAAACQAAAAFAAAAaXRlbXMAAADI////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEEEAAAABwAAAAEAAAAAAAAAAQAAABpdGVtAAAAAAQABAAEAAAAAAAAAA==",
+   "schema_text": [
+    "items: list<item: binary> not null"
+   ]
+  },
+  "OptionDefinitions": {
+   "schema": "/////3ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAQAAAAQAQAA0AAAAGAAAAAEAAAAEP///wAAAAwUAAAAIAAAAAQAAAABAAAAGAAAAAsAAABhbHRlcl9uYW1lcwAI////pP///wAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAMP///2j///8AAAAMFAAAACQAAAAEAAAAAQAAACwAAAAMAAAAY3JlYXRlX25hbWVzAAAAAGT///8QABQACAAGAAcADAAAABAAEAAAAAAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAnP///9T///8AAAAEEAAAABwAAAAEAAAAAAAAAAgAAABkZWZhdWx0cwAAAADI////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAABwAAAAEAAAAAAAAAAYAAABzY2hlbWEAAAQABAAEAAAAAAAAAA==",
+   "schema_text": [
+    "schema: binary not null",
+    "defaults: binary not null",
+    "create_names: list<item: string> not null",
+    "alter_names: list<item: string> not null"
+   ]
+  },
+  "PartitionTransform": {
+   "schema": "//////AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAMAAACQAAAAUAAAABQAAAAQABQACAAGAAcADAAAABAAEAAAAAAAAQIQAAAAIAAAAAQAAAAAAAAABQAAAHBhcmFtAAAACAAMAAgABwAIAAAAAAAAAUAAAADU////AAAABRAAAAAcAAAABAAAAAAAAAAJAAAAdHJhbnNmb3JtAAAAyP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABRAAAAAcAAAABAAAAAAAAAAGAAAAY29sdW1uAAAEAAQABAAAAAAAAAA=",
+   "schema_text": [
+    "column: string not null",
+    "transform: string not null",
+    "param: int64"
+   ]
+  },
+  "PlanResponse": {
+   "schema": "/////yAFAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAABIAAACEBAAAFAQAAOADAACoAwAAaAMAACQDAADgAgAAnAIAAGACAAA0AgAA2AEAAKQBAABsAQAADAEAALAAAABsAAAAOAAAAAQAAACY+///AAABBBAAAAAgAAAABAAAAAAAAAAMAAAAZW5kX3Bvc2l0aW9uAAAAAJD7///I+///AAABBBAAAAAgAAAABAAAAAAAAAAOAAAAc3RhcnRfcG9zaXRpb24AAMD7///4+///AAABAhAAAAAoAAAABAAAAAAAAAAVAAAAY2FjaGVfbWF4X2FnZV9zZWNvbmRzAAAAPP3//wAAAAFAAAAAOPz//wAAAQwUAAAAIAAAAAQAAAABAAAAGAAAAAoAAABzb3J0X29yZGVyAAAw/P//aPz//wAAAQQQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAWPz//5D8//8AAAEMFAAAACQAAAAEAAAAAQAAABwAAAAMAAAAcGFydGl0aW9uaW5nAAAAAIz8///E/P//AAABBBAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAAC0/P//7Pz//wAAAQQQAAAAJAAAAAQAAAAAAAAAEgAAAHJhbmdlX3BhcnRpdGlvbmluZwAA6Pz//yD9//8AAAEEEAAAACAAAAAEAAAAAAAAAAwAAABrZXlfZ3JvdXBpbmcAAAAAGP3//1D9//8AAAEMFAAAACAAAAAEAAAAAQAAABgAAAAJAAAAbG9jYXRpb25zAAAASP3//4D9//8AAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAAHD9///k/f//AAAABRAAAAAYAAAABAAAAAAAAAAFAAAAc2NvcGUAAACY/f//0P3//wAAAQIQAAAAIAAAAAQAAAAAAAAADwAAAGNhdGFsb2dfdmVyc2lvbgAM////AAAAAUAAAAAI/v//AAABAhAAAAAoAAAABAAAAAAAAAAVAAAAZXN0aW1hdGVkX3RvdGFsX2J5dGVzAAAATP///wAAAAFAAAAASP7//wAAAQIQAAAAKAAAAAQAAAAAAAAAFAAAAGVzdGltYXRlZF90b3RhbF9yb3dzAAAAAIz///8AAAABQAAAAIj+//8AAAECEAAAACgAAAAEAAAAAAAAABYAAABlc3RpbWF0ZWRfdG90YWxfc3BsaXRzAADM////AAAAAUAAAADI/v//AAABAhAAAAAkAAAABAAAAAAAAAALAAAAbWF4X3dvcmtlcnMACAAMAAgABwAIAAAAAAAAAUAAAAAE////AAABBBAAAAAkAAAABAAAAAAAAAAQAAAAaW5pdF9vcGFxdWVfZGF0YQAAAAAA////OP///wAAAQQQAAAAIAAAAAQAAAAAAAAADAAAAGV4ZWN1dGlvbl9pZAAAAAAw////aP///wAAAQwUAAAAJAAAAAQAAAABAAAAHAAAAAwAAABuZXh0X2N1cnNvcnMAAAAAZP///5z///8AAAEEEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAAIz///8QABQACAAAAAcADAAAABAAEAAAAAAAAAwUAAAAHAAAAAQAAAABAAAAJAAAAAYAAABzcGxpdHMAAMj///8QABQACAAGAAcADAAAABAAEAAAAAAAAQQQAAAAHAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAABAAEAAQAAAAAAAAA",
+   "schema_text": [
+    "splits: list<item: binary> not null",
+    "next_cursors: list<item: binary>",
+    "execution_id: binary",
+    "init_opaque_data: binary",
+    "max_workers: int64",
+    "estimated_total_splits: int64",
+    "estimated_total_rows: int64",
+    "estimated_total_bytes: int64",
+    "catalog_version: int64",
+    "scope: string not null",
+    "locations: list<item: string>",
+    "key_grouping: binary",
+    "range_partitioning: binary",
+    "partitioning: list<item: binary>",
+    "sort_order: list<item: binary>",
+    "cache_max_age_seconds: int64",
+    "start_position: binary",
+    "end_position: binary"
+   ]
+  },
+  "RangeKey": {
+   "schema": "/////zABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAEAAAAVP///wQAAAADAAAA2AAAAHAAAAAEAAAAqP///wAAAAUUAAAASAAAACQAAAAEAAAAAAAAAAoAAABudWxsX29yZGVyAAAIABQACAAEAAgAAAAQAAAAAQAAAAAAAAAAAAAApP///wAAAAEQAAAAYP///xAAGAAIAAAABwAMABAAFAAQAAAAAAAABRQAAABEAAAAJAAAAAQAAAAAAAAACQAAAGRpcmVjdGlvbgAAAAgACAAAAAQACAAAAAwAAAAIAAwACAAHAAgAAAAAAAABEAAAAMT///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAIAAAAAQAAAAAAAAACQAAAHRyYW5zZm9ybQAAAAQABAAEAAAA",
+   "schema_text": [
+    "transform: binary not null",
+    "direction: dictionary<values=string, indices=int16, ordered=0> not null",
+    "null_order: dictionary<values=string, indices=int16, ordered=0> not null"
+   ]
+  },
+  "RangePartitioning": {
+   "schema": "/////+AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAIAAABIAAAABAAAAND///8AAAAEEAAAACAAAAAEAAAAAAAAAAwAAABzcGxpdF9wb2ludHMAAAAAjP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAADBQAAAAcAAAABAAAAAEAAAAkAAAABAAAAGtleXMAAAAAyP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBBAAAAAcAAAABAAAAAAAAAAEAAAAaXRlbQAAAAAEAAQABAAAAA==",
+   "schema_text": [
+    "keys: list<item: binary> not null",
+    "split_points: binary not null"
+   ]
+  },
+  "ScalarExchangeState": {
+   "schema": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgABgAHAAwAAAAQABAAAAAAAAEEEAAAABwAAAAEAAAAAAAAAAQAAABpbml0AAAAAAQABAAEAAAA",
+   "schema_text": [
+    "init: binary"
+   ]
+  },
+  "ScanSplit": {
+   "schema": "/////zgDAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAA0AAADcAgAAoAIAAFwCAAAcAgAA4AEAALABAAB4AQAARAEAAAwBAADUAAAAbAAAADgAAAAEAAAA4P3//wAAAQQQAAAAIAAAAAQAAAAAAAAADAAAAGVuZF9wb3NpdGlvbgAAAABg/f//EP7//wAAAQQQAAAAIAAAAAQAAAAAAAAADgAAAHN0YXJ0X3Bvc2l0aW9uAACQ/f//QP7//wAAAQwUAAAAJAAAAAQAAAABAAAAHAAAAAwAAABsb2NhdGlvbl9pZHMAAAAAxP3//3T+//8AAAECEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAAFz+//8AAAABQAAAAKT+//8AAAEEEAAAACQAAAAEAAAAAAAAABEAAABjb2x1bW5fc3RhdGlzdGljcwAAACj+///Y/v//AAABBBAAAAAkAAAABAAAAAAAAAAQAAAAcGFydGl0aW9uX2JvdW5kcwAAAABc/v//DP///wAAAQQQAAAAIAAAAAQAAAAAAAAADQAAAGNvbHVtbl9ib3VuZHMAAACM/v//PP///wAAAQIQAAAAHAAAAAQAAAAAAAAACwAAAHJhbmdlX2luZGV4ACj///8AAAABQAAAAHD///8AAAEEEAAAABwAAAAEAAAAAAAAAAkAAABrZXlfdmFsdWUAAADs/v//nP///wAAAQIQAAAAIAAAAAQAAAAAAAAADwAAAGVzdGltYXRlZF9ieXRlcwCM////AAAAAUAAAABc////AAAABhAAAAAcAAAABAAAAAAAAAAKAAAAcm93c19leGFjdAAAUP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABAhAAAAAoAAAABAAAAAAAAAAOAAAAZXN0aW1hdGVkX3Jvd3MAAAgADAAIAAcACAAAAAAAAAFAAAAA2P///wAAAAQQAAAAGAAAAAQAAAAAAAAABQAAAHRva2VuAAAAyP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABBAAAAAcAAAABAAAAAAAAAAHAAAAcGF5bG9hZAAEAAQABAAAAA==",
+   "schema_text": [
+    "payload: binary not null",
+    "token: binary not null",
+    "estimated_rows: int64",
+    "rows_exact: bool not null",
+    "estimated_bytes: int64",
+    "key_value: binary",
+    "range_index: int64",
+    "column_bounds: binary",
+    "partition_bounds: binary",
+    "column_statistics: binary",
+    "location_ids: list<item: int64>",
+    "start_position: binary",
+    "end_position: binary"
+   ]
+  },
+  "SchemaContents": {
+   "schema": "/////8gDAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAoAAAAwAwAA9AIAAJwCAABEAgAA4AEAAHwBAAAcAQAAvAAAAFwAAAAEAAAACP3//wAAAAwUAAAAHAAAAAQAAAABAAAAFAAAAAcAAABpbmRleGVzAMD8///4/P//AAABBBAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAADo/P//XP3//wAAAAwUAAAAJAAAAAQAAAABAAAAHAAAAAwAAAB0YWJsZV9tYWNyb3MAAAAAHP3//1T9//8AAAEEEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAAET9//+4/f//AAAADBQAAAAkAAAABAAAAAEAAAAcAAAADQAAAHNjYWxhcl9tYWNyb3MAAAB4/f//sP3//wAAAQQQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAoP3//xT+//8AAAAMFAAAACQAAAAEAAAAAQAAABwAAAAPAAAAdGFibGVfZnVuY3Rpb25zANT9//8M/v//AAABBBAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAAD8/f//cP7//wAAAAwUAAAAKAAAAAQAAAABAAAAIAAAABMAAABhZ2dyZWdhdGVfZnVuY3Rpb25zADT+//9s/v//AAABBBAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAABc/v//0P7//wAAAAwUAAAAKAAAAAQAAAABAAAAIAAAABAAAABzY2FsYXJfZnVuY3Rpb25zAAAAAJT+///M/v//AAABBBAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAAC8/v//MP///wAAAAwUAAAAHAAAAAQAAAABAAAAFAAAAAUAAAB2aWV3cwAAAOj+//8g////AAABBBAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAAAQ////hP///wAAAAwUAAAAHAAAAAQAAAABAAAAFAAAAAYAAAB0YWJsZXMAADz///90////AAABBBAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAABk////2P///wAAAAQQAAAAGAAAAAQAAAAAAAAABgAAAHNjaGVtYQAAjP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAADBQAAAAcAAAABAAAAAEAAAAkAAAABAAAAHBhdGgAAAAAyP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBRAAAAAcAAAABAAAAAAAAAAEAAAAaXRlbQAAAAAEAAQABAAAAA==",
+   "schema_text": [
+    "path: list<item: string> not null",
+    "schema: binary not null",
+    "tables: list<item: binary> not null",
+    "views: list<item: binary> not null",
+    "scalar_functions: list<item: binary> not null",
+    "aggregate_functions: list<item: binary> not null",
+    "table_functions: list<item: binary> not null",
+    "scalar_macros: list<item: binary> not null",
+    "table_macros: list<item: binary> not null",
+    "indexes: list<item: binary> not null"
+   ]
+  },
+  "SchemaInfo": {
+   "schema": "/////4ACAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAUAAAAgAgAAVAEAAPwAAAAwAAAABAAAAAT+//8AAAEEEAAAABgAAAAEAAAAAAAAAAcAAABvcHRpb25zAPT9//8s/v//AAABERQAAAAsAAAABAAAAAEAAAAkAAAAFgAAAGVzdGltYXRlZF9vYmplY3RfY291bnQAADD+//+c/v//AAAADRgAAAAgAAAABAAAAAIAAABQAAAAFAAAAAcAAABlbnRyaWVzAGD+//+Y/v//AAABAhAAAAAgAAAABAAAAAAAAAAFAAAAdmFsdWUAAAAIAAwACAAHAAgAAAAAAAABQAAAAAT///8AAAAFEAAAABQAAAAEAAAAAAAAAAMAAABrZXkAvP7//yj///8AAAAMFAAAABwAAAAEAAAAAQAAABQAAAAEAAAAcGF0aAAAAADo/v//IP///wAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAEP///3z///8AAAARFAAAABwAAAAEAAAAAQAAABQAAAAEAAAAdGFncwAAAAA8////qP///wAAAA0YAAAAIAAAAAQAAAACAAAAUAAAABQAAAAHAAAAZW50cmllcwBs////pP///wAAAQUQAAAAGAAAAAQAAAAAAAAABQAAAHZhbHVlAAAAlP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABRAAAAAUAAAABAAAAAAAAAADAAAAa2V5AMj///8QABQACAAGAAcADAAAABAAEAAAAAAAAQUQAAAAHAAAAAQAAAAAAAAABwAAAGNvbW1lbnQABAAEAAQAAAAAAAAA",
+   "schema_text": [
+    "comment: string",
+    "tags: map<string, string> not null",
+    "path: list<item: string> not null",
+    "estimated_object_count: map<string, int64>",
+    "options: binary"
+   ]
+  },
+  "SchemasResponse": {
+   "schema": "/////7AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAMFAAAABwAAAAEAAAAAQAAACQAAAAFAAAAaXRlbXMAAADI////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEEEAAAABwAAAAEAAAAAAAAAAQAAABpdGVtAAAAAAQABAAEAAAAAAAAAA==",
+   "schema_text": [
+    "items: list<item: binary> not null"
+   ]
+  },
+  "SortField": {
+   "schema": "/////ygBAAAUAAAAAAAAAAAACgAMAAYABQAIAAoAAAAAAQQABAAAAFz///8EAAAAAwAAANAAAABoAAAABAAAALD///8AAAAFFAAAAEAAAAAgAAAABAAAAAAAAAAFAAAAbnVsbHMAAAAIABAACAAEAAgAAAAMAAAAAQAAAAAAAACk////AAAAARAAAABk////EAAYAAgAAAAHAAwAEAAUABAAAAAAAAAFFAAAAEQAAAAkAAAABAAAAAAAAAAJAAAAZGlyZWN0aW9uAAAACAAIAAAABAAIAAAADAAAAAgADAAIAAcACAAAAAAAAAEQAAAAyP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABRAAAAAcAAAABAAAAAAAAAAGAAAAY29sdW1uAAAEAAQABAAAAA==",
+   "schema_text": [
+    "column: string not null",
+    "direction: dictionary<values=string, indices=int16, ordered=0> not null",
+    "nulls: dictionary<values=string, indices=int16, ordered=0> not null"
+   ]
+  },
+  "SqlExpression": {
+   "schema": "/////0gCAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAQAAADwAQAAtAEAAEgBAAAEAAAAMP7//wAAAA0kAAAAOAAAAAQAAAAFAAAA/AAAAMwAAACYAAAAYAAAACAAAAASAAAAZXZhbHVhdGlvbl9jb250ZXh0AABE/v//eP7//wAAAAYQAAAALAAAAAQAAAAAAAAAGAAAAHByZXNlcnZlX2luc2VydGlvbl9vcmRlcgAAAACA/v//tP7//wAAAAUQAAAAJAAAAAQAAAAAAAAAEgAAAGRlZmF1bHRfbnVsbF9vcmRlcgAAtP7//+j+//8AAAAFEAAAACAAAAAEAAAAAAAAAA0AAABkZWZhdWx0X29yZGVyAAAA5P7//xj///8AAAAFEAAAABwAAAAEAAAAAAAAAAkAAABjb2xsYXRpb24AAAAQ////RP///wAAAAUQAAAAHAAAAAQAAAAAAAAACAAAAHRpbWV6b25lAAAAADz///9w////AAAADBQAAAAgAAAABAAAAAEAAAAoAAAACwAAAHNjaGVtYV9wYXRoAGz///8QABQACAAGAAcADAAAABAAEAAAAAAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAApP///9j///8AAAAFEAAAABgAAAAEAAAAAAAAAAcAAABwcm9maWxlAMz///8QABQACAAAAAcADAAAABAAEAAAAAAAAAUQAAAAGAAAAAQAAAAAAAAAAwAAAHNxbAAEAAQABAAAAA==",
+   "schema_text": [
+    "sql: string not null",
+    "profile: string not null",
+    "schema_path: list<item: string> not null",
+    "evaluation_context: struct<timezone: string not null, collation: string not null, default_order: string not null, default_null_order: string not null, preserve_insertion_order: bool not null> not null"
+   ]
+  },
+  "TableBufferingCombineRequest": {
+   "schema": "/////+ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAYAAAB8AQAAOAEAAMwAAACUAAAAYAAAAAQAAAAU////AAABDBQAAAAgAAAABAAAAAEAAAAYAAAACwAAAHNjaGVtYV9wYXRoAJz+//9E////AAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAADE/v//bP///wAAAQQQAAAAIAAAAAQAAAAAAAAADgAAAHRyYW5zYWN0aW9uX2lkAAD0/v//nP///wAAAQQQAAAAJAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAAKP///2j///8AAAAMFAAAACAAAAAEAAAAAQAAACgAAAAJAAAAc3RhdGVfaWRzAAAAWP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBBAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAACQ////0P///wAAAAQQAAAAIAAAAAQAAAAAAAAADAAAAGV4ZWN1dGlvbl9pZAAAAADA////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAFEAAAACQAAAAEAAAAAAAAAA0AAABmdW5jdGlvbl9uYW1lAAAABAAEAAQAAAA=",
+   "schema_text": [
+    "function_name: string not null",
+    "execution_id: binary not null",
+    "state_ids: list<item: binary> not null",
+    "attach_opaque_data: binary",
+    "transaction_id: binary",
+    "schema_path: list<item: string>"
+   ]
+  },
+  "TableBufferingCombineResponse": {
+   "schema": "/////7gAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAMFAAAACgAAAAEAAAAAQAAADAAAAASAAAAZmluYWxpemVfc3RhdGVfaWRzAADI////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEEEAAAABwAAAAEAAAAAAAAAAQAAABpdGVtAAAAAAQABAAEAAAA",
+   "schema_text": [
+    "finalize_state_ids: list<item: binary> not null"
+   ]
+  },
+  "TableBufferingDestructorRequest": {
+   "schema": "/////4gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAUAAAAgAQAA3AAAAKQAAABgAAAABAAAAHj///8AAAEMFAAAACAAAAAEAAAAAQAAABgAAAALAAAAc2NoZW1hX3BhdGgA9P7//6j///8AAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAABz////Q////AAABBBAAAAAgAAAABAAAAAAAAAAOAAAAdHJhbnNhY3Rpb25faWQAAEz///8QABQACAAGAAcADAAAABAAEAAAAAAAAQQQAAAAJAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAAkP///9D///8AAAAEEAAAACAAAAAEAAAAAAAAAAwAAABleGVjdXRpb25faWQAAAAAwP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABRAAAAAkAAAABAAAAAAAAAANAAAAZnVuY3Rpb25fbmFtZQAAAAQABAAEAAAAAAAAAA==",
+   "schema_text": [
+    "function_name: string not null",
+    "execution_id: binary not null",
+    "attach_opaque_data: binary",
+    "transaction_id: binary",
+    "schema_path: list<item: string>"
+   ]
+  },
+  "TableBufferingDestructorResponse": {
+   "schema": "/////zAAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAAAAAA=",
+   "schema_text": []
+  },
+  "TableBufferingFinalizeState": {
+   "schema": "/////wADAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAsAAACcAgAAWAIAACQCAADcAQAArAEAAHQBAAA8AQAAzAAAAJQAAABgAAAABAAAABD+//8AAAEMFAAAACAAAAAEAAAAAQAAABgAAAAJAAAAam9pbl9rZXlzAAAAkP3//0D+//8AAAETEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAALj9//9o/v//AAABBBAAAAAgAAAABAAAAAAAAAANAAAAb3V0cHV0X3NjaGVtYQAAAOj9//+Y/v//AAABExAAAAAkAAAABAAAAAAAAAAQAAAAcHVzaGRvd25fZmlsdGVycwAAAAAc/v//zP7//wAAAQwUAAAAJAAAAAQAAAABAAAAHAAAAA4AAABwcm9qZWN0aW9uX2lkcwAAUP7//wD///8AAAECEAAAACAAAAAEAAAAAAAAAAQAAABpdGVtAAAAAAgADAAIAAcACAAAAAAAAAFAAAAAOP///wAAAQQQAAAAJAAAAAQAAAAAAAAAEgAAAGF0dGFjaF9vcGFxdWVfZGF0YQAAvP7///z+//8AAAAGEAAAACQAAAAEAAAAAAAAABEAAABzdGF0ZV9pbml0aWFsaXplZAAAAPD+//8w////AAAABBAAAAAcAAAABAAAAAAAAAAKAAAAc3RhdGVfYmxvYgAAHP///1z///8AAAAEEAAAACQAAAAEAAAAAAAAABEAAABmaW5hbGl6ZV9zdGF0ZV9pZAAAAFD///8QABQACAAGAAcADAAAABAAEAAAAAAAAQQQAAAAIAAAAAQAAAAAAAAADgAAAHRyYW5zYWN0aW9uX2lkAACQ////0P///wAAAAQQAAAAIAAAAAQAAAAAAAAADAAAAGV4ZWN1dGlvbl9pZAAAAADA////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAFEAAAACQAAAAEAAAAAAAAAA0AAABmdW5jdGlvbl9uYW1lAAAABAAEAAQAAAA=",
+   "schema_text": [
+    "function_name: string not null",
+    "execution_id: binary not null",
+    "transaction_id: binary",
+    "finalize_state_id: binary not null",
+    "state_blob: binary not null",
+    "state_initialized: bool not null",
+    "attach_opaque_data: binary",
+    "projection_ids: list<item: int64>",
+    "pushdown_filters: large_binary",
+    "output_schema: binary",
+    "join_keys: list<item: large_binary>"
+   ]
+  },
+  "TableBufferingProcessRequest": {
+   "schema": "//////gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAcAAACQAQAATAEAABwBAADkAAAAoAAAAGAAAAAEAAAAPP///wAAAQwUAAAAIAAAAAQAAAABAAAAGAAAAAsAAABzY2hlbWFfcGF0aACM/v//bP///wAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAtP7//5T///8AAAECEAAAACQAAAAEAAAAAAAAAAsAAABiYXRjaF9pbmRleAAIAAwACAAHAAgAAAAAAAABQAAAAND///8AAAEEEAAAACAAAAAEAAAAAAAAAA4AAAB0cmFuc2FjdGlvbl9pZAAAIP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBBAAAAAkAAAABAAAAAAAAAASAAAAYXR0YWNoX29wYXF1ZV9kYXRhAABk////pP///wAAAAQQAAAAHAAAAAQAAAAAAAAACwAAAGlucHV0X2JhdGNoAJD////Q////AAAABBAAAAAgAAAABAAAAAAAAAAMAAAAZXhlY3V0aW9uX2lkAAAAAMD///8QABQACAAAAAcADAAAABAAEAAAAAAAAAUQAAAAJAAAAAQAAAAAAAAADQAAAGZ1bmN0aW9uX25hbWUAAAAEAAQABAAAAAAAAAA=",
+   "schema_text": [
+    "function_name: string not null",
+    "execution_id: binary not null",
+    "input_batch: binary not null",
+    "attach_opaque_data: binary",
+    "transaction_id: binary",
+    "batch_index: int64",
+    "schema_path: list<item: string>"
+   ]
+  },
+  "TableBufferingProcessResponse": {
+   "schema": "/////3gAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACAAAAAEAAAAAAAAAAgAAABzdGF0ZV9pZAAAAAAEAAQABAAAAAAAAAA=",
+   "schema_text": [
+    "state_id: binary not null"
+   ]
+  },
+  "TableCardinality": {
+   "schema": "/////7AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAIAAABEAAAABAAAANT///8AAAECEAAAABQAAAAEAAAAAAAAAAMAAABtYXgAvP///wAAAAFAAAAAEAAUAAgABgAHAAwAAAAQABAAAAAAAAECEAAAACQAAAAEAAAAAAAAAAgAAABlc3RpbWF0ZQAAAAAIAAwACAAHAAgAAAAAAAABQAAAAA==",
+   "schema_text": [
+    "estimate: int64",
+    "max: int64"
+   ]
+  },
+  "TableCreateRequest": {
+   "schema": "/////3gDAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAEAAAA0P3//wQAAAALAAAAFAMAAJgCAABsAgAAQAIAAOgBAABwAQAANAEAAAgBAABcAAAAMAAAAAQAAABg/f//AAABBBAAAAAYAAAABAAAAAAAAAAGAAAAbGF5b3V0AAAM/f//iP3//wAAAQQQAAAAGAAAAAQAAAAAAAAABwAAAG9wdGlvbnMANP3//7D9//8AAAERFAAAABwAAAAEAAAAAQAAABQAAAAEAAAAdGFncwAAAABg/f//pP3//wAAAA0YAAAAIAAAAAQAAAACAAAAQAAAABQAAAAHAAAAZW50cmllcwCQ/f//DP7//wAAAQUQAAAAGAAAAAQAAAAAAAAABQAAAHZhbHVlAAAAuP3///z9//8AAAAFEAAAABQAAAAEAAAAAAAAAAMAAABrZXkA3P3//1j+//8AAAEFEAAAABgAAAAEAAAAAAAAAAcAAABjb21tZW50AAT+//+A/v//AAABBBAAAAAoAAAABAAAAAAAAAAXAAAAdHJhbnNhY3Rpb25fb3BhcXVlX2RhdGEAPP7//4D+//8AAAAMFAAAACwAAAAEAAAAAQAAACQAAAAWAAAAY29uc3RyYWludF9kZWZpbml0aW9ucwAAeP7///T+//8AAAEEEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAAKD+//8QABgACAAAAAcADAAQABQAEAAAAAAAAAUUAAAARAAAACQAAAAEAAAAAAAAAAsAAABvbl9jb25mbGljdAAIAAgAAAAEAAgAAAAMAAAACAAMAAgABwAIAAAAAAAAARAAAAAE////SP///wAAAAQQAAAAGAAAAAQAAAAAAAAABwAAAGNvbHVtbnMALP///3D///8AAAAFEAAAABgAAAAEAAAAAAAAAAQAAABuYW1lAAAAAFT///+Y////AAAADBQAAAAgAAAABAAAAAEAAAAoAAAACwAAAHNjaGVtYV9wYXRoAIT///8QABQACAAGAAcADAAAABAAEAAAAAAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAvP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABBAAAAAoAAAABAAAAAAAAAASAAAAYXR0YWNoX29wYXF1ZV9kYXRhAAAEAAQABAAAAAAAAAA=",
+   "schema_text": [
+    "attach_opaque_data: binary not null",
+    "schema_path: list<item: string> not null",
+    "name: string not null",
+    "columns: binary not null",
+    "on_conflict: dictionary<values=string, indices=int16, ordered=0> not null",
+    "constraint_definitions: list<item: binary> not null",
+    "transaction_opaque_data: binary",
+    "comment: string",
+    "tags: map<string, string>",
+    "options: binary",
+    "layout: binary"
+   ]
+  },
+  "TableCreateResponse": {
+   "schema": "/////3AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAGEAAAABwAAAAEAAAAAAAAAAcAAABjcmVhdGVkAAQABAAEAAAA",
+   "schema_text": [
+    "created: bool not null"
+   ]
+  },
+  "TableFunctionCardinalityRequest": {
+   "schema": "/////8AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAIAAABcAAAAFAAAABAAFAAIAAYABwAMAAAAEAAQAAAAAAABBBAAAAAkAAAABAAAAAAAAAAQAAAAYmluZF9vcGFxdWVfZGF0YQAAAADE////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACAAAAAEAAAAAAAAAAkAAABiaW5kX2NhbGwAAAAEAAQABAAAAAAAAAA=",
+   "schema_text": [
+    "bind_call: binary not null",
+    "bind_opaque_data: binary"
+   ]
+  },
+  "TableFunctionDynamicToStringRequest": {
+   "schema": "//////gAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAMAAACUAAAATAAAAAQAAACI////AAAABBAAAAAkAAAABAAAAAAAAAATAAAAZ2xvYmFsX2V4ZWN1dGlvbl9pZACA////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEEEAAAACQAAAAEAAAAAAAAABAAAABiaW5kX29wYXF1ZV9kYXRhAAAAAMT///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAIAAAAAQAAAAAAAAACQAAAGJpbmRfY2FsbAAAAAQABAAEAAAAAAAAAA==",
+   "schema_text": [
+    "bind_call: binary not null",
+    "bind_opaque_data: binary",
+    "global_execution_id: binary not null"
+   ]
+  },
+  "TableFunctionDynamicToStringResponse": {
+   "schema": "/////wgBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAIAAABsAAAABAAAAKz///8AAAAMFAAAABwAAAAEAAAAAQAAABQAAAAGAAAAdmFsdWVzAABk////nP///wAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAjP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAADBQAAAAcAAAABAAAAAEAAAAkAAAABAAAAGtleXMAAAAAyP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBRAAAAAcAAAABAAAAAAAAAAEAAAAaXRlbQAAAAAEAAQABAAAAAAAAAA=",
+   "schema_text": [
+    "keys: list<item: string> not null",
+    "values: list<item: string> not null"
+   ]
+  },
+  "TableFunctionPlanRequest": {
+   "schema": "/////3gFAAAUAAAAAAAAAAAACgAMAAYABQAIAAoAAAAAAQQABAAAAEz+//8EAAAAFAAAABwFAADUBAAAVAQAABwEAADAAwAAiAMAAEgDAAAQAwAAzAIAAKACAABsAgAANAIAAAACAADMAQAAkAEAADgBAADIAAAAjAAAAEQAAAAEAAAAiPv//wAAAQIQAAAAJAAAAAQAAAAAAAAAEAAAAHRhYmxlc2FtcGxlX3NlZWQAAAAAzPv//wAAAAFAAAAAxPv//wAAAQMQAAAAMAAAAAQAAAAAAAAAFgAAAHRhYmxlc2FtcGxlX3BlcmNlbnRhZ2UAAAAABgAIAAYABgAAAAAAAgAI/P//AAABAhAAAAAgAAAABAAAAAAAAAAOAAAAb3JkZXJfYnlfbGltaXQAAEj8//8AAAABQAAAAKT///8AAAEFFAAAAEwAAAAsAAAABAAAAAAAAAATAAAAb3JkZXJfYnlfbnVsbF9vcmRlcgAIABAACAAEAAgAAAAMAAAAAQAAAAAAAACg/P//AAAAARAAAAAc/P//EAAYAAgABgAHAAwAEAAUABAAAAAAAAEFFAAAAEQAAAAsAAAABAAAAAAAAAASAAAAb3JkZXJfYnlfZGlyZWN0aW9uAAAIAAgAAAAEAAgAAAAEAAAABP3//wAAAAEQAAAAgPz//wD9//8AAAEFEAAAACgAAAAEAAAAAAAAABQAAABvcmRlcl9ieV9jb2x1bW5fbmFtZQAAAAC4/P//OP3//wAAAQQQAAAAIAAAAAQAAAAAAAAADAAAAGVuZF9wb3NpdGlvbgAAAADo/P//aP3//wAAAQQQAAAAIAAAAAQAAAAAAAAADgAAAHN0YXJ0X3Bvc2l0aW9uAAAY/f//VP3//wAAAAYQAAAAJAAAAAQAAAAAAAAAEAAAAGZpbHRlcnNfY29tcGxldGUAAAAATP3//8z9//8AAAETEAAAACAAAAAEAAAAAAAAAA8AAAByZWZpbmVkX2ZpbHRlcnMAfP3///z9//8AAAEEEAAAABgAAAAEAAAAAAAAAAYAAABjdXJzb3IAAKT9//8k/v//AAABAhAAAAAoAAAABAAAAAAAAAAXAAAAbWF4X3NwbGl0c19wZXJfcmVzcG9uc2UAbP7//wAAAAFAAAAAZP7//wAAAQIQAAAAHAAAAAQAAAAAAAAACgAAAG1pbl9zcGxpdHMAAKD+//8AAAABQAAAAJj+//8AAAECEAAAACQAAAAEAAAAAAAAABIAAAB0YXJnZXRfc3BsaXRfYnl0ZXMAANz+//8AAAABQAAAANT+//8AAAECEAAAABwAAAAEAAAAAAAAAAkAAAByb3dfbGltaXQAAAAQ////AAAAAUAAAAAI////AAABDBQAAAAgAAAABAAAAAEAAAAYAAAACQAAAGpvaW5fa2V5cwAAALj+//84////AAABExAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAADg/v//YP///wAAARMQAAAAJAAAAAQAAAAAAAAAEAAAAHB1c2hkb3duX2ZpbHRlcnMAAAAAFP///5T///8AAAEMFAAAACQAAAAEAAAAAQAAABwAAAAOAAAAcHJvamVjdGlvbl9pZHMAAEj////I////AAABAhAAAAAgAAAABAAAAAAAAAAEAAAAaXRlbQAAAAAIAAwACAAHAAgAAAAAAAABQAAAABAAFAAIAAYABwAMAAAAEAAQAAAAAAABBBAAAAAkAAAABAAAAAAAAAAQAAAAYmluZF9vcGFxdWVfZGF0YQAAAADE////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACAAAAAEAAAAAAAAAAkAAABiaW5kX2NhbGwAAAAEAAQABAAAAA==",
+   "schema_text": [
+    "bind_call: binary not null",
+    "bind_opaque_data: binary",
+    "projection_ids: list<item: int64>",
+    "pushdown_filters: large_binary",
+    "join_keys: list<item: large_binary>",
+    "row_limit: int64",
+    "target_split_bytes: int64",
+    "min_splits: int64",
+    "max_splits_per_response: int64",
+    "cursor: binary",
+    "refined_filters: large_binary",
+    "filters_complete: bool not null",
+    "start_position: binary",
+    "end_position: binary",
+    "order_by_column_name: string",
+    "order_by_direction: dictionary<values=string, indices=int16, ordered=0>",
+    "order_by_null_order: dictionary<values=string, indices=int16, ordered=0>",
+    "order_by_limit: int64",
+    "tablesample_percentage: double",
+    "tablesample_seed: int64"
+   ]
+  },
+  "TableFunctionProjectionRequest": {
+   "schema": "/////0gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAQAAADkAAAApAAAADgAAAAEAAAAPP///wAAAAQQAAAAIAAAAAQAAAAAAAAADQAAAHJlc3VsdF9zY2hlbWEAAAAw////bP///wAAAAwUAAAAIAAAAAQAAAABAAAAKAAAAAsAAABleHByZXNzaW9ucwBg////EAAUAAgABgAHAAwAAAAQABAAAAAAAAETEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAAJj////U////AAAABBAAAAAcAAAABAAAAAAAAAALAAAAYmluZF9yZXN1bHQAxP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAABBAAAAAgAAAABAAAAAAAAAAJAAAAYmluZF9jYWxsAAAABAAEAAQAAAAAAAAA",
+   "schema_text": [
+    "bind_call: binary not null",
+    "bind_result: binary not null",
+    "expressions: list<item: large_binary> not null",
+    "result_schema: binary not null"
+   ]
+  },
+  "TableFunctionProjectionResponse": {
+   "schema": "//////gAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAIAAABEAAAABAAAAIj///8AAAEEEAAAABwAAAAEAAAAAAAAAAsAAABiaW5kX3Jlc3VsdAC4////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAMFAAAACwAAAAEAAAAAQAAADQAAAAQAAAAYWNjZXB0ZWRfaW5kaWNlcwAAAAAEAAQABAAAABAAFAAIAAYABwAMAAAAEAAQAAAAAAABAhAAAAAgAAAABAAAAAAAAAAEAAAAaXRlbQAAAAAIAAwACAAHAAgAAAAAAAABQAAAAA==",
+   "schema_text": [
+    "accepted_indices: list<item: int64> not null",
+    "bind_result: binary"
+   ]
+  },
+  "TableFunctionStatisticsRequest": {
+   "schema": "/////8AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAIAAABcAAAAFAAAABAAFAAIAAYABwAMAAAAEAAQAAAAAAABBBAAAAAkAAAABAAAAAAAAAAQAAAAYmluZF9vcGFxdWVfZGF0YQAAAADE////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAEEAAAACAAAAAEAAAAAAAAAAkAAABiaW5kX2NhbGwAAAAEAAQABAAAAAAAAAA=",
+   "schema_text": [
+    "bind_call: binary not null",
+    "bind_opaque_data: binary"
+   ]
+  },
+  "TableInOutExchangeState": {
+   "schema": "/////8ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAUAAABgAQAAGAEAALAAAAA4AAAABAAAAGz///8AAAAGEAAAACAAAAAEAAAAAAAAAA0AAABfbW9yZV9wZW5kaW5nAAAAvP7//5z///8AAAAMFAAAACwAAAAEAAAAAQAAACQAAAAXAAAAX2ZpbHRlcl9wcmVkaWNhdGVfb3JkZXIA+P7//zD///8AAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAACD///8QABQACAAAAAcADAAAABAAEAAAAAAAAAwUAAAALAAAAAQAAAABAAAAJAAAABUAAABfZmlsdGVyX2RlbHRhX2hpc3RvcnkAAABs////pP///wAAAQQQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAlP///8z///8AAAEEEAAAACQAAAAEAAAAAAAAABEAAABfdXNlcl9zdGF0ZV9ieXRlcwAAAMj///8QABQACAAGAAcADAAAABAAEAAAAAAAAQQQAAAAHAAAAAQAAAAAAAAABAAAAGluaXQAAAAABAAEAAQAAAAAAAAA",
+   "schema_text": [
+    "init: binary",
+    "_user_state_bytes: binary",
+    "_filter_delta_history: list<item: binary> not null",
+    "_filter_predicate_order: list<item: string> not null",
+    "_more_pending: bool not null"
+   ]
+  },
+  "TableInfo": {
+   "schema": "/////3gGAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAABUAAAAYBgAATAUAACAFAADEBAAAmAQAADwEAAAEBAAATAMAAAwDAADYAgAApAIAAHACAAA8AgAA8AEAALQBAAB8AQAATAEAAJAAAABkAAAAOAAAAAQAAACA+v//AAAABRAAAAAgAAAABAAAAAAAAAANAAAAc2Nhbl9wbGFubmluZwAAAET6//98+v//AAABBBAAAAAYAAAABAAAAAAAAAAGAAAAbGF5b3V0AABs+v//pPr//wAAAQQQAAAAGAAAAAQAAAAAAAAABwAAAG9wdGlvbnMAlPr//wD7//8AAAAMFAAAACgAAAAEAAAAAQAAACAAAAAQAAAAcmVxdWlyZWRfZmlsdGVycwAAAADM+v//BPv//wAAAQwUAAAAHAAAAAQAAAABAAAAFAAAAAQAAABpdGVtAAAAAPj6//8w+///AAABDBQAAAAcAAAABAAAAAEAAAAUAAAABAAAAGl0ZW0AAAAAJPv//1z7//8AAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAAEz7//+E+///AAABBBAAAAAcAAAABAAAAAAAAAALAAAAYmluZF9yZXN1bHQAePv//7D7//8AAAEEEAAAACQAAAAEAAAAAAAAABEAAABjb2x1bW5fc3RhdGlzdGljcwAAAKz7///k+///AAABAhAAAAAgAAAABAAAAAAAAAAPAAAAY2FyZGluYWxpdHlfbWF4AMD///8AAAABQAAAABz8//8AAAECEAAAADAAAAAEAAAAAAAAABQAAABjYXJkaW5hbGl0eV9lc3RpbWF0ZQAAAAAIAAwACAAHAAgAAAAAAAABQAAAAGT8//8AAAEEEAAAACAAAAAEAAAAAAAAAA8AAABkZWxldGVfZnVuY3Rpb24AXPz//5T8//8AAAEEEAAAACAAAAAEAAAAAAAAAA8AAAB1cGRhdGVfZnVuY3Rpb24AjPz//8T8//8AAAEEEAAAACAAAAAEAAAAAAAAAA8AAABpbnNlcnRfZnVuY3Rpb24AvPz///T8//8AAAEEEAAAACAAAAAEAAAAAAAAAA0AAABzY2FuX2Z1bmN0aW9uAAAA7Pz//1j9//8AAAAGEAAAACwAAAAEAAAAAAAAABoAAABzdXBwb3J0c19jb2x1bW5fc3RhdGlzdGljcwAAKP3//5T9//8AAAARFAAAACgAAAAEAAAAAQAAACAAAAASAAAAd3JpdGVfcmVzdWx0X21vZGVzAABg/f//zP3//wAAAA0YAAAAIAAAAAQAAAACAAAAQAAAABQAAAAHAAAAZW50cmllcwCQ/f//yP3//wAAAQUQAAAAGAAAAAQAAAAAAAAABQAAAHZhbHVlAAAAuP3//yT+//8AAAAFEAAAABQAAAAEAAAAAAAAAAMAAABrZXkA3P3//xT+//8AAAEEEAAAACQAAAAEAAAAAAAAABMAAABkZWZpbml0aW9uX3JldmlzaW9uABD+//98/v//AAAADBQAAAAgAAAABAAAAAEAAAAYAAAACwAAAGNvbnN0cmFpbnRzAED+//94/v//AAABBBAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAABo/v//1P7//wAAAAQQAAAAGAAAAAQAAAAAAAAABwAAAGNvbHVtbnMAkP7///z+//8AAAAMFAAAACAAAAAEAAAAAQAAABgAAAALAAAAc2NoZW1hX3BhdGgAwP7///j+//8AAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAAOj+//9U////AAAABRAAAAAYAAAABAAAAAAAAAAEAAAAbmFtZQAAAAAQ////fP///wAAABEUAAAAHAAAAAQAAAABAAAAFAAAAAQAAAB0YWdzAAAAADz///+o////AAAADRgAAAAgAAAABAAAAAIAAABQAAAAFAAAAAcAAABlbnRyaWVzAGz///+k////AAABBRAAAAAYAAAABAAAAAAAAAAFAAAAdmFsdWUAAACU////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAFEAAAABQAAAAEAAAAAAAAAAMAAABrZXkAyP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBRAAAAAcAAAABAAAAAAAAAAHAAAAY29tbWVudAAEAAQABAAAAAAAAAA=",
+   "schema_text": [
+    "comment: string",
+    "tags: map<string, string> not null",
+    "name: string not null",
+    "schema_path: list<item: string> not null",
+    "columns: binary not null",
+    "constraints: list<item: binary> not null",
+    "definition_revision: binary",
+    "write_result_modes: map<string, string> not null",
+    "supports_column_statistics: bool not null",
+    "scan_function: binary",
+    "insert_function: binary",
+    "update_function: binary",
+    "delete_function: binary",
+    "cardinality_estimate: int64",
+    "cardinality_max: int64",
+    "column_statistics: binary",
+    "bind_result: binary",
+    "required_filters: list<item: list<item: list<item: string>>> not null",
+    "options: binary",
+    "layout: binary",
+    "scan_planning: string not null"
+   ]
+  },
+  "TableLayout": {
+   "schema": "/////3ABAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAEAAAArP///wQAAAADAAAA2AAAAGwAAAAUAAAAEAAYAAgAAAAHAAwAEAAUABAAAAAAAAAFFAAAAEQAAAAkAAAABAAAAAAAAAAIAAAAY292ZXJhZ2UAAAAACAAIAAAABAAIAAAADAAAAAgADAAIAAcACAAAAAAAAAEQAAAALP///6j///8AAAAMFAAAACAAAAAEAAAAAQAAABgAAAAJAAAAc29ydGVkX2J5AAAAXP///5T///8AAAEEEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAAIT///8QABQACAAAAAcADAAAABAAEAAAAAAAAAwUAAAAJAAAAAQAAAABAAAALAAAAAwAAABwYXJ0aXRpb25fYnkAAAAAyP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBBAAAAAcAAAABAAAAAAAAAAEAAAAaXRlbQAAAAAEAAQABAAAAA==",
+   "schema_text": [
+    "partition_by: list<item: binary> not null",
+    "sorted_by: list<item: binary> not null",
+    "coverage: dictionary<values=string, indices=int16, ordered=0> not null"
+   ]
+  },
+  "TableProducerState": {
+   "schema": "/////4gBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAQAAAAsAQAA5AAAAHwAAAAEAAAAnP///wAAAAwUAAAALAAAAAQAAAABAAAAJAAAABcAAABfZmlsdGVyX3ByZWRpY2F0ZV9vcmRlcgD4/v//MP///wAAAQUQAAAAGAAAAAQAAAAAAAAABAAAAGl0ZW0AAAAAIP///xAAFAAIAAAABwAMAAAAEAAQAAAAAAAADBQAAAAsAAAABAAAAAEAAAAkAAAAFQAAAF9maWx0ZXJfZGVsdGFfaGlzdG9yeQAAAGz///+k////AAABBBAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAACU////zP///wAAAQQQAAAAJAAAAAQAAAAAAAAAEQAAAF91c2VyX3N0YXRlX2J5dGVzAAAAyP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBBAAAAAcAAAABAAAAAAAAAAEAAAAaW5pdAAAAAAEAAQABAAAAA==",
+   "schema_text": [
+    "init: binary",
+    "_user_state_bytes: binary",
+    "_filter_delta_history: list<item: binary> not null",
+    "_filter_predicate_order: list<item: string> not null"
+   ]
+  },
+  "TablesResponse": {
+   "schema": "/////7AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAMFAAAABwAAAAEAAAAAQAAACQAAAAFAAAAaXRlbXMAAADI////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEEEAAAABwAAAAEAAAAAAAAAAQAAABpdGVtAAAAAAQABAAEAAAAAAAAAA==",
+   "schema_text": [
+    "items: list<item: binary> not null"
+   ]
+  },
+  "TransactionBeginResponse": {
+   "schema": "/////4AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgABgAHAAwAAAAQABAAAAAAAAEEEAAAACwAAAAEAAAAAAAAABcAAAB0cmFuc2FjdGlvbl9vcGFxdWVfZGF0YQAEAAQABAAAAA==",
+   "schema_text": [
+    "transaction_opaque_data: binary"
+   ]
+  },
+  "TransformSpec": {
+   "schema": "/////wgBAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAMAAACsAAAANAAAAAQAAACo////AAABBBAAAAAcAAAABAAAAAAAAAAKAAAAcGFyYW1ldGVycwAAaP///5z///8AAAAMFAAAABwAAAAEAAAAAQAAACQAAAAGAAAAaW5wdXRzAACU////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEEEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAAMz///8QABQACAAAAAcADAAAABAAEAAAAAAAAAUQAAAAGAAAAAQAAAAAAAAAAgAAAGlkAAAEAAQABAAAAAAAAAA=",
+   "schema_text": [
+    "id: string not null",
+    "inputs: list<item: binary> not null",
+    "parameters: binary"
+   ]
+  },
+  "VgiStreamInit": {
+   "schema": "/////+gAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAMAAACIAAAARAAAAAQAAACU////AAAABhAAAAAsAAAABAAAAAAAAAAZAAAAb3V0cHV0X3NjaGVtYV9mcm9tX3N0cmVhbQAAAJT////Q////AAAABBAAAAAgAAAABAAAAAAAAAANAAAAaW5pdF9yZXNwb25zZQAAAMT///8QABQACAAAAAcADAAAABAAEAAAAAAAAAQQAAAAIAAAAAQAAAAAAAAACQAAAGluaXRfY2FsbAAAAAQABAAEAAAA",
+   "schema_text": [
+    "init_call: binary not null",
+    "init_response: binary not null",
+    "output_schema_from_stream: bool not null"
+   ]
+  },
+  "ViewInfo": {
+   "schema": "/////yADAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAgAAADEAgAA+AEAAMwBAABwAQAAQAEAAIwAAAA0AAAABAAAAKD9//8AAAAFEAAAABwAAAAEAAAAAAAAAAgAAABzZWN1cml0eQAAAABg/f//zP3//wAAAAwUAAAAHAAAAAQAAAABAAAAFAAAAAcAAABhbGlhc2VzAIz9///E/f//AAABBRAAAAAYAAAABAAAAAAAAAAEAAAAaXRlbQAAAAC0/f//IP7//wAAABEUAAAAJAAAAAQAAAABAAAAHAAAAA8AAABjb2x1bW5fY29tbWVudHMA6P3//1T+//8AAAANGAAAACAAAAAEAAAAAgAAAEAAAAAUAAAABwAAAGVudHJpZXMAGP7//1D+//8AAAEFEAAAABgAAAAEAAAAAAAAAAUAAAB2YWx1ZQAAAED+//+s/v//AAAABRAAAAAUAAAABAAAAAAAAAADAAAAa2V5AGT+///Q/v//AAAABRAAAAAcAAAABAAAAAAAAAAKAAAAZGVmaW5pdGlvbgAAkP7///z+//8AAAAMFAAAACAAAAAEAAAAAQAAABgAAAALAAAAc2NoZW1hX3BhdGgAwP7///j+//8AAAEFEAAAABgAAAAEAAAAAAAAAAQAAABpdGVtAAAAAOj+//9U////AAAABRAAAAAYAAAABAAAAAAAAAAEAAAAbmFtZQAAAAAQ////fP///wAAABEUAAAAHAAAAAQAAAABAAAAFAAAAAQAAAB0YWdzAAAAADz///+o////AAAADRgAAAAgAAAABAAAAAIAAABQAAAAFAAAAAcAAABlbnRyaWVzAGz///+k////AAABBRAAAAAYAAAABAAAAAAAAAAFAAAAdmFsdWUAAACU////EAAUAAgAAAAHAAwAAAAQABAAAAAAAAAFEAAAABQAAAAEAAAAAAAAAAMAAABrZXkAyP///xAAFAAIAAYABwAMAAAAEAAQAAAAAAABBRAAAAAcAAAABAAAAAAAAAAHAAAAY29tbWVudAAEAAQABAAAAA==",
+   "schema_text": [
+    "comment: string",
+    "tags: map<string, string> not null",
+    "name: string not null",
+    "schema_path: list<item: string> not null",
+    "definition: string not null",
+    "column_comments: map<string, string> not null",
+    "aliases: list<item: string> not null",
+    "security: string not null"
+   ]
+  },
+  "ViewsResponse": {
+   "schema": "/////7AAAAAQAAAAAAAKAAwABgAFAAgACgAAAAABBAAMAAAACAAIAAAABAAIAAAABAAAAAEAAAAUAAAAEAAUAAgAAAAHAAwAAAAQABAAAAAAAAAMFAAAABwAAAAEAAAAAQAAACQAAAAFAAAAaXRlbXMAAADI////EAAUAAgABgAHAAwAAAAQABAAAAAAAAEEEAAAABwAAAAEAAAAAAAAAAQAAABpdGVtAAAAAAQABAAEAAAAAAAAAA==",
+   "schema_text": [
+    "items: list<item: binary> not null"
+   ]
+  }
+ }
+}
