@@ -37,7 +37,7 @@ def _free_port() -> int:
 
 
 def _s3() -> object:
-    import boto3
+    import boto3  # type: ignore[import-untyped]
 
     return boto3.client(
         "s3",
@@ -130,6 +130,7 @@ def _random_bytes(base: str, size: int) -> tuple[bytes, bytes | None]:
         finally:
             stream.close()
     value = out.batch.column("result").to_pylist()[0]
+    assert isinstance(value, bytes)
     source = out.custom_metadata.get(LOCATION_SOURCE_KEY) if out.custom_metadata is not None else None
     return value, source
 
