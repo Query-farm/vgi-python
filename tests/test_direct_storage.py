@@ -36,6 +36,7 @@ def test_s3_backend_wires_every_role() -> None:
     assert cfg.upload_url_provider is storage
     assert cfg.max_upload_bytes == 1048576
     assert storage.endpoint_url == "https://s3.example.com" and storage.addressing_style == "path"
+    assert storage.prefix == "rpc/"
 
 
 def test_checksum_none_advertises_no_grants() -> None:
@@ -105,3 +106,4 @@ def test_function_storage_uses_the_bucket(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.delenv("VGI_BLOB_VENDOR_URL", raising=False)
     client: Any = blob_client_from_env()
     assert isinstance(client, ObjectStoreBlobClient)
+    assert client._prefix == "fs/"

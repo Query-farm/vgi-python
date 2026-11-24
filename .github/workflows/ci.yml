@@ -20,7 +20,7 @@ env:
   # TODO(release-wave): same commit as the pyproject vgi-rpc pin. A built wheel
   # resolves vgi-rpc from PyPI (uv sources are not part of it), so the wheel jobs
   # install this commit alongside; drop it with the pin.
-  VGI_RPC_PIN: "vgi-rpc @ git+https://github.com/Query-farm/vgi-rpc-python@70cfc1725dd3232cf8ab57320329f13fd91281bd"
+  VGI_RPC_PIN: "vgi-rpc @ git+https://github.com/Query-farm/vgi-rpc-python@1d40c513ebf4afa493437c34257951d76b39ce41"
 
 jobs:
   test:
@@ -316,7 +316,7 @@ jobs:
           repository: Query-farm/vgi-rpc-python
           # The vgi-rpc commit pyproject pins (direct-storage contract, unreleased);
           # back to the released tag in the 3.4 release wave.
-          ref: 70cfc1725dd3232cf8ab57320329f13fd91281bd
+          ref: 1d40c513ebf4afa493437c34257951d76b39ce41
           path: vgi-rpc
 
       - name: Install uv

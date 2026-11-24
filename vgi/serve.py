@@ -318,6 +318,8 @@ def start_storage(blob_http: BlobVendorHttpConfig, *, hosted: bool, env: Mapping
     if direct is None:
         return
     _logger.info("Direct object storage: %s", direct.describe())
+    for warning in direct.startup_warnings():
+        _logger.warning("%s", warning)
     if hosted:
         _logger.warning(
             "Orchard hosted mode with VGI_STORAGE_BACKEND=%s: large values go to the operator's bucket, "

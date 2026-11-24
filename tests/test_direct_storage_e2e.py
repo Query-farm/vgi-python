@@ -152,8 +152,8 @@ def test_results_externalize_to_the_bucket(bucket: str) -> None:
     assert source is not None
     url = urlsplit(source.decode())
     assert url.netloc == urlsplit(_ENDPOINT).netloc
-    assert url.path.startswith(f"/{bucket}/e2e/")
-    assert any(k.startswith("e2e/") for k in _keys(bucket))
+    assert url.path.startswith(f"/{bucket}/e2e/rpc/")
+    assert any(k.startswith("e2e/rpc/") for k in _keys(bucket))
 
 
 def test_checksum_none_issues_no_grants(bucket: str) -> None:

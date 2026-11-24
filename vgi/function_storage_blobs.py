@@ -303,8 +303,9 @@ def blob_client_from_env() -> VendorBlobClient | None:
 
     ``VGI_STORAGE_BACKEND=s3`` / ``gcs`` (or inferred from
     ``VGI_STORAGE_S3_BUCKET`` / ``VGI_STORAGE_GCS_BUCKET``): an
-    ``ObjectStoreBlobClient`` over the operator's bucket (reads verify size and
-    SHA-256; the bucket's lifecycle rule, not the worker, deletes objects).
+    ``ObjectStoreBlobClient`` over the operator's bucket, keys under
+    ``<prefix>fs/`` (reads verify size and SHA-256; deletes are best effort,
+    the bucket's lifecycle rule removes the rest).
     Otherwise the vendor client from ``VGI_BLOB_VENDOR_URL`` and its token.
 
     Returns:
@@ -315,13 +316,12 @@ def blob_client_from_env() -> VendorBlobClient | None:
             variables are malformed or conflict.
         ImportError: If vgi-rpc's blob vendor client cannot be imported.
     """
-    from vgi_rpc.storage_env import ObjectStoreBlobClient, direct_storage_from_env, storage_backend_from_env
+    from vgi_rpc.storage_env import function_blob_client_from_env, storage_backend_from_env
 
     backend = storage_backend_from_env()
     if backend in ("s3", "gcs"):
-        direct = direct_storage_from_env()
-        assert direct is not None
-        return cast("VendorBlobClient", ObjectStoreBlobClient(direct.storage, max_fetch_bytes=MAX_BLOB_BYTES))
+        # Keys under <prefix>fs/ (2-day lifecycle); deletes are best effort.
+        return cast("VendorBlobClient", function_blob_client_from_env())
     url = os.environ.get(ENV_VENDOR_URL, "").strip()
     if backend == "none" or not url:
         return None

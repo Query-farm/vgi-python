@@ -293,9 +293,9 @@ vgi-fixtures = { workspace = true }
 # protocol-3.4: the direct-storage contract (vgi_rpc.storage_env) and protocol
 # version negotiation (PROTOCOL_VERSIONS_V1: VGI-Protocol-Versions,
 # protocol_version_ranges=, protocol_version_unsupported) are unreleased; pin the
-# vgi-rpc commit until the 3.4 release wave, then drop this line. 70cfc17 also
-# carries function-storage ids without the key prefix.
-vgi-rpc = { git = "https://github.com/Query-farm/vgi-rpc-python", rev = "70cfc1725dd3232cf8ab57320329f13fd91281bd" }
+# vgi-rpc commit until the 3.4 release wave, then drop this line. 1d40c51 also
+# carries function-storage ids without the key prefix and the rpc/ + fs/ layout.
+vgi-rpc = { git = "https://github.com/Query-farm/vgi-rpc-python", rev = "1d40c513ebf4afa493437c34257951d76b39ce41" }
 
 [dependency-groups]
 dev = ["lxml>=6.0.2", "pytest-timeout>=2.4.0", "vgi-fixtures"]

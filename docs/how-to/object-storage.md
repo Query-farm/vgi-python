@@ -30,10 +30,17 @@ a profile (including `role_arn` and `credential_process`), web identity
 (EKS IRSA, GitHub OIDC), container credentials, or EC2 instance metadata. To
 use keys that differ from the process's AWS identity, set
 `VGI_STORAGE_S3_ACCESS_KEY_ID`, `VGI_STORAGE_S3_SECRET_ACCESS_KEY` and, for
-temporary keys, `VGI_STORAGE_S3_SESSION_TOKEN`.
+temporary keys, `VGI_STORAGE_S3_SESSION_TOKEN` with
+`VGI_STORAGE_S3_SESSION_EXPIRES` (RFC 3339 or epoch seconds). Without the
+expiry, the worker can't keep signed URLs inside the token's lifetime and logs
+a warning at startup; `credential_process` and the standard chain report
+expiry themselves.
 
-Add a lifecycle rule that expires the prefix after one or two days. The
-worker never deletes objects.
+Objects go under `<prefix>rpc/` (results, upload grants, stored state and
+argument objects) and `<prefix>fs/` (function-storage values). Add lifecycle
+rules that expire `rpc/` after 1 day and `fs/` after 2 days, as the blob vendor
+does. Function storage deletes its own objects when it can; the lifecycle rules
+remove everything else.
 
 ## S3-compatible services
 
@@ -52,10 +59,12 @@ override that.
 If DuckDB clients reach storage at a different address than the worker does
 (for example `http://minio:9000` inside Docker and `https://s3.example.com`
 outside), set `VGI_STORAGE_S3_PUBLIC_ENDPOINT` to the outside address. It is
-used only in the signed URLs handed to clients.
+used only in the signed URLs handed to clients. The worker must be able to
+reach the public address too: large client requests come back as signed URLs
+on it, and the signature covers the host.
 
-Signed URLs over plain `http://` are refused unless you set
-`VGI_STORAGE_ALLOW_PLAIN_HTTP=1`. The DuckDB extension needs its
+A plain `http://` endpoint or public endpoint stops the worker at startup
+unless you set `VGI_STORAGE_ALLOW_PLAIN_HTTP=1`. The DuckDB extension needs its
 `vgi_storage_allow_plain_http` setting too.
 
 ### Services that don't enforce SHA-256
@@ -92,10 +101,12 @@ GCS-compatible endpoint.
 | `VGI_STORAGE_S3_PUBLIC_ENDPOINT` | Endpoint used only in signed URLs | the endpoint |
 | `VGI_STORAGE_S3_CHECKSUM` | `sha256` or `none` | `sha256` |
 | `VGI_STORAGE_S3_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`, `_SESSION_TOKEN` | Explicit credentials | AWS chain |
+| `VGI_STORAGE_S3_SESSION_EXPIRES` | Expiry of an explicit session token | |
 | `VGI_STORAGE_S3_VERIFY` | `1`: check the bucket at startup | checked on first use |
 | `VGI_STORAGE_GCS_BUCKET`, `_PREFIX`, `_ENDPOINT`, `_CREDENTIALS_FILE` | GCS bucket and options | ADC |
+| `VGI_STORAGE_GCS_VERIFY` | `1`: check the GCS bucket at startup | checked on first use |
 | `VGI_STORAGE_URL_TTL_SECONDS` | Signed URL lifetime | 3600 |
-| `VGI_STORAGE_ALLOW_PLAIN_HTTP` | Allow `http://` signed URLs | off |
+| `VGI_STORAGE_ALLOW_PLAIN_HTTP` | Allow `http://` endpoints and signed URLs | off |
 | `VGI_RPC_STORAGE_STALL_TIMEOUT_SECONDS` | Fail a transfer when no bytes move for this long | 30 |
 
 Setting more than one of `VGI_BLOB_VENDOR_URL`, `VGI_STORAGE_S3_BUCKET` and
@@ -109,8 +120,8 @@ grant, the worker refreshes credentials that have less than 15 minutes left.
 
 ## The bucket check
 
-On first use, or at startup with `VGI_STORAGE_S3_VERIFY=1`, the worker sends a
-HEAD request for the bucket. If it fails, the error says what to fix: the
+On first use, or at startup with `VGI_STORAGE_S3_VERIFY=1`
+(`VGI_STORAGE_GCS_VERIFY=1` for GCS), the worker checks the bucket. If it fails, the error says what to fix: the
 bucket doesn't exist, access is denied (naming where the credentials came
 from), or the bucket is in a different region (naming that region).
 
