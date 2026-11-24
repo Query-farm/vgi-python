@@ -10,7 +10,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Annotated, Any
+from typing import Annotated, Any, BinaryIO
 
 import pyarrow as pa
 import pytest
@@ -336,8 +336,10 @@ class _S3:
             raise _S3Error("NoSuchKey")
         return {"Body": io.BytesIO(self.store.objects["/" + Key][0]), "ETag": self.etags[Key]}
 
-    def put_object(self, *, Bucket: str, Key: str, Body: bytes, **kwargs: Any) -> None:
+    def put_object(self, *, Bucket: str, Key: str, Body: bytes | BinaryIO, **kwargs: Any) -> None:
         del Bucket
+        # Like boto3, accept bytes or a file object (object uploads stream).
+        Body = Body if isinstance(Body, bytes) else Body.read()
         if kwargs.get("IfNoneMatch") == "*" and Key in self.etags:
             raise _S3Error("PreconditionFailed")
         if "IfMatch" in kwargs and kwargs["IfMatch"] != self.etags.get(Key):

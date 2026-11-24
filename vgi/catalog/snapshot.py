@@ -9,6 +9,7 @@ validated both the RPC envelope and all nested catalog collections.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import threading
 import time
@@ -200,6 +201,13 @@ class S3CatalogPublicationRepository:
     Configure bucket lifecycle to retain objects at least retention_seconds;
     manifests use a separate prefix and are conditionally tombstoned. No
     credentials or signed URLs occur in object keys.
+
+    Object bodies are passed as file objects, so botocore writes them in
+    small blocks and its ``read_timeout`` acts as a stall timeout on each
+    write (a ``bytes`` body over TLS is one write under one timeout).  Give
+    the client ``botocore.config.Config(connect_timeout=30, read_timeout=30,
+    retries={"total_max_attempts": 3, "mode": "standard"})`` to match the
+    vgi-rpc storage defaults.
     """
 
     def __init__(
@@ -295,7 +303,11 @@ class S3CatalogPublicationRepository:
         key = self.prefix + "objects/" + uuid.uuid4().hex + ".arrow"
         args = {"ContentEncoding": content_encoding} if content_encoding else {}
         self.client.put_object(
-            Bucket=self.bucket, Key=key, Body=data, ContentType="application/vnd.apache.arrow.stream", **args
+            Bucket=self.bucket,
+            Key=key,
+            Body=io.BytesIO(data),
+            ContentType="application/vnd.apache.arrow.stream",
+            **args,
         )
         url = self.client.generate_presigned_url(
             "get_object", Params={"Bucket": self.bucket, "Key": key}, ExpiresIn=self.url_ttl_seconds
