@@ -1,6 +1,6 @@
 [project]
 name = "vgi-python"
-version = "0.55.0"
+version = "0.55.1"
 description = "Vector Gateway Interface - Connect DuckDB to external programs via Apache Arrow"
 readme = "README.md"
 keywords = [
@@ -40,7 +40,7 @@ dependencies = [
     "pyarrow",
     "typer>=0.9",
     "platformdirs",
-    "vgi-rpc>=0.57.0",
+    "vgi-rpc>=0.57.1",
     "httpx2>=2.12.0",
     # vgi.query_execution seals execution handles with vgi_rpc.crypto, which
     # imports pycryptodome. vgi-rpc only pulls it in under its `http` extra, but
@@ -292,12 +292,6 @@ members = ["packages/vgi-fixtures"]
 [tool.uv.sources]
 # duckdb = { path = "/path/to/duckdb-python/dist/duckdb-*.whl" }  # local engine-build override
 vgi-fixtures = { workspace = true }
-# protocol-3.4: the direct-storage contract (vgi_rpc.storage_env) and protocol
-# version negotiation (PROTOCOL_VERSIONS_V1: VGI-Protocol-Versions,
-# protocol_version_ranges=, protocol_version_unsupported) are unreleased; pin the
-# vgi-rpc commit until the 3.4 release wave, then drop this line. 1d40c51 also
-# carries function-storage ids without the key prefix and the rpc/ + fs/ layout.
-vgi-rpc = { git = "https://github.com/Query-farm/vgi-rpc-python", rev = "1d40c513ebf4afa493437c34257951d76b39ce41" }
 
 [dependency-groups]
 dev = ["lxml>=6.0.2", "pytest-timeout>=2.4.0", "vgi-fixtures"]

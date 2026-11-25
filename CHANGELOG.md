@@ -1,15 +1,23 @@
 # Changelog
 
-## Unreleased
+## 0.55.1 (2026-11-24)
+
+Patch release on VGI protocol 3.4 and vgi-rpc 0.57.1. The wire protocol is unchanged.
+
+### Features
+
+- **Storage timeouts** (vgi-rpc 0.57.1): large-value transfers use a 30 s connect timeout and a 30 s stall timeout, with no whole-request deadline, and 3 attempts. `VGI_RPC_STORAGE_STALL_TIMEOUT_SECONDS` tunes the stall timeout. S3 catalog publications stream their bodies, so the read timeout acts as a stall timeout there too.
+- **Direct object storage for self-hosted workers**: `vgi-serve`, hosted mode and the HTTP fixture server can keep large values in your own bucket instead of the blob vendor. Set `VGI_STORAGE_BACKEND` (`vendor` | `s3` | `gcs` | `none`) with `VGI_STORAGE_S3_*` / `VGI_STORAGE_GCS_*`. S3 uses the full AWS credential chain, including session tokens. `VGI_STORAGE_S3_CHECKSUM=none` turns off upload URLs. Keys go under `rpc/` and `fs/`. Install with the new `vgi-python[s3]` / `vgi-python[gcs]` extras. See `docs/how-to/object-storage.md`.
+- **Protocol version negotiation** (`PROTOCOL_VERSIONS_V1`): every server advertises the protocols it gates in `VGI-Protocol-Versions` (`vgi.v3=3.4-3.4`, `vgi.secret.v1=1.0-1.0`, and `vgi.attach_tickets.v1=2.0-2.0` when hosted). A version outside the window is refused with `protocol_version_unsupported`. `VGI_TEST_PROTOCOL_RANGE` overrides a fixture worker's window. Per-version schema snapshots are checked in CI.
 
 ### Fixes
 
-- **The `[haybarn]` extra pins `haybarn==2.0.1rc3`** (was `2.0.0rc11`). The 3.4 `vgi` extension is only served to
-  Haybarn 2.0.1, so a worker whose tests attach `vgi` through this extra got the 3.3 build and failed. Haybarn
-  2.0.1-rc3 is added to the `vgi.duckdb.standard.v1` engine allowlist (`STANDARD_V1_ENGINE_VERSIONS`) after the
-  filter conformance corpus passed on it (92/92); 2.0.0-rc11 stays accepted. The filter specification (section 6)
-  and the DuckDB filter adapter document now name Haybarn v2.0.1-rc3 as the reference distribution. `[duckdb]`
-  stays `duckdb==2.0.0`.
+- **The `[haybarn]` extra pins `haybarn==2.0.1rc3`** (was `2.0.0rc11`). The 3.4 `vgi` extension is only served to Haybarn 2.0.1, so a worker that attached `vgi` through this extra got the 3.3 build and failed. Haybarn 2.0.1rc3 is now the trusted filter engine (`vgi.duckdb.standard.v1`, filter corpus 92/92); 2.0.0rc11 is still accepted. `[duckdb]` stays `duckdb==2.0.0`.
+
+### Notes
+
+- **Haybarn 2.0.1rc3 is required for the 3.4 `vgi` extension.**
+- **macOS: install one engine.** A process that loads both haybarn 2.0.1rc3 and stock duckdb 2.0.0 can crash on macOS ("Fatal Python error: Bus error"). Install either `vgi-python[haybarn]` or `vgi-python[duckdb]`, not both. vgi itself loads only one engine (haybarn if present), so this affects code that imports `duckdb` directly next to haybarn. Linux and Windows are unaffected.
 
 ## 0.55.0 (2026-11-23)
 
