@@ -14,11 +14,11 @@ import json
 import sqlite3
 from contextlib import closing
 from dataclasses import replace
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
-import duckdb
 import pyarrow as pa
 
+from vgi._duckdb import engine_module as _duckdb_engine
 from vgi.catalog import (
     AttachOpaqueData,
     CatalogObjectRef,
@@ -48,6 +48,14 @@ from vgi.worker import Worker
 from .expression_reference import evaluate_expression, validate_expression
 from .schema_options_reference import DEFINITIONS, PROFILES, SchemaOptionsCatalog, _key
 from .typing_helpers import present
+
+# The in-process engine vgi resolves (haybarn preferred, duckdb fallback), never a
+# second engine: two different DuckDB builds in one process crash on macOS.
+if TYPE_CHECKING:
+    import duckdb
+else:
+    duckdb = _duckdb_engine()
+
 
 DEPENDENCY_PROFILES = replace(
     PROFILES,

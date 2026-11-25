@@ -430,7 +430,9 @@ class TestStatisticsFromDuckDB:
     """Tests for the DuckDB statistics extraction helper."""
 
     def test_basic_types(self) -> None:
-        import duckdb
+        from vgi._duckdb import engine_module
+
+        duckdb = engine_module()
 
         from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 
@@ -453,7 +455,9 @@ class TestStatisticsFromDuckDB:
         assert stats["id"].contains_unicode is None  # non-string column
 
     def test_all_null_column(self) -> None:
-        import duckdb
+        from vgi._duckdb import engine_module
+
+        duckdb = engine_module()
 
         from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 
@@ -468,7 +472,9 @@ class TestStatisticsFromDuckDB:
         assert stats["x"].has_not_null is False
 
     def test_empty_table(self) -> None:
-        import duckdb
+        from vgi._duckdb import engine_module
+
+        duckdb = engine_module()
 
         from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 
@@ -482,7 +488,9 @@ class TestStatisticsFromDuckDB:
         assert stats["y"].max_string_length is None  # empty table
 
     def test_geometry_2d(self) -> None:
-        import duckdb
+        from vgi._duckdb import engine_module
+
+        duckdb = engine_module()
 
         from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 
@@ -502,7 +510,9 @@ class TestStatisticsFromDuckDB:
 
     def test_geometry_with_leading_null(self) -> None:
         """Geometry detection works even when the first row is NULL."""
-        import duckdb
+        from vgi._duckdb import engine_module
+
+        duckdb = engine_module()
 
         from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 
@@ -520,7 +530,9 @@ class TestStatisticsFromDuckDB:
 
     def test_list_columns(self) -> None:
         """List columns use list_min/list_max for child element bounds."""
-        import duckdb
+        from vgi._duckdb import engine_module
+
+        duckdb = engine_module()
 
         from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 
@@ -539,7 +551,9 @@ class TestStatisticsFromDuckDB:
 
     def test_nested_list(self) -> None:
         """Nested list (INT[][]) uses list_min/list_max which naturally peels one layer."""
-        import duckdb
+        from vgi._duckdb import engine_module
+
+        duckdb = engine_module()
 
         from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 
@@ -558,7 +572,9 @@ class TestStatisticsFromDuckDB:
 
     def test_struct_column(self) -> None:
         """Struct columns use lexicographic min/max; FromConstant+Merge gives per-field bounds."""
-        import duckdb
+        from vgi._duckdb import engine_module
+
+        duckdb = engine_module()
 
         from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 
@@ -574,7 +590,9 @@ class TestStatisticsFromDuckDB:
 
     def test_struct_mixed_field_types(self) -> None:
         """Struct with mixed field types (int, string, float, bool)."""
-        import duckdb
+        from vgi._duckdb import engine_module
+
+        duckdb = engine_module()
 
         from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 
@@ -602,7 +620,9 @@ class TestStatisticsFromDuckDB:
 
     def test_struct_with_null_fields(self) -> None:
         """Struct where some inner fields are NULL."""
-        import duckdb
+        from vgi._duckdb import engine_module
+
+        duckdb = engine_module()
 
         from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 
@@ -649,7 +669,9 @@ class TestStatisticsFromDuckDB:
 
     def test_map_column(self) -> None:
         """MAP columns use standard min/max (lexicographic on underlying key-value list)."""
-        import duckdb
+        from vgi._duckdb import engine_module
+
+        duckdb = engine_module()
 
         from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 
@@ -664,7 +686,9 @@ class TestStatisticsFromDuckDB:
 
     def test_map_serialization_roundtrip(self) -> None:
         """MAP stats serialize through sparse union and deserialize correctly."""
-        import duckdb
+        from vgi._duckdb import engine_module
+
+        duckdb = engine_module()
 
         from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 
@@ -700,7 +724,9 @@ class TestStatisticsFromDuckDB:
 
     def test_fixed_size_array(self) -> None:
         """Fixed-size ARRAY columns use list_min/list_max with regular list type."""
-        import duckdb
+        from vgi._duckdb import engine_module
+
+        duckdb = engine_module()
 
         from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 
@@ -716,7 +742,9 @@ class TestStatisticsFromDuckDB:
 
     def test_list_all_empty(self) -> None:
         """List column with only empty lists produces None min/max."""
-        import duckdb
+        from vgi._duckdb import engine_module
+
+        duckdb = engine_module()
 
         from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 
@@ -729,7 +757,9 @@ class TestStatisticsFromDuckDB:
         assert stats["vals"].max is None
 
     def test_resolves_for_table_descriptor(self) -> None:
-        import duckdb
+        from vgi._duckdb import engine_module
+
+        duckdb = engine_module()
 
         from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 
@@ -748,7 +778,9 @@ class TestStatisticsFromDuckDB:
 
     def test_dictionary_encoded_column(self) -> None:
         """Dictionary-encoded (ENUM) columns report actual values, not dictionary indices."""
-        import duckdb
+        from vgi._duckdb import engine_module
+
+        duckdb = engine_module()
 
         from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 
@@ -771,7 +803,9 @@ class TestStatisticsFromDuckDB:
 
     def test_dictionary_encoded_serialization_roundtrip(self) -> None:
         """Dictionary-encoded stats serialize correctly through sparse union."""
-        import duckdb
+        from vgi._duckdb import engine_module
+
+        duckdb = engine_module()
 
         from vgi.catalog.duckdb_statistics import column_statistics_from_duckdb
 
@@ -792,7 +826,9 @@ class TestStatisticsFromDuckDB:
 
     def test_column_statistics_from_duckdb(self) -> None:
         """column_statistics_from_duckdb returns resolved ColumnStatistics list."""
-        import duckdb
+        from vgi._duckdb import engine_module
+
+        duckdb = engine_module()
 
         from vgi.catalog.catalog_interface import TableColumnStatisticsResult
         from vgi.catalog.duckdb_statistics import column_statistics_from_duckdb
@@ -829,7 +865,9 @@ class TestStatisticsFromDuckDB:
 
     def test_contains_unicode(self) -> None:
         """contains_unicode detects non-ASCII characters in string columns."""
-        import duckdb
+        from vgi._duckdb import engine_module
+
+        duckdb = engine_module()
 
         from vgi.catalog.duckdb_statistics import statistics_from_duckdb
 

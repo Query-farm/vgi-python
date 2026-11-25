@@ -10,17 +10,25 @@ integers, booleans, UTF-8 strings and NULL. Broader types/contexts fail closed.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import duckdb
 import pyarrow as pa
 
 from vgi._duckdb import arrow_table
+from vgi._duckdb import engine_module as _duckdb_engine
 from vgi.catalog._expression_grammar import _cast_type_id, _constant_type_id, _function_arguments, _has_named_argument
 from vgi.catalog.capabilities import ROW_SCALAR_EXPRESSION
 from vgi.catalog.evaluation_context import QueryEvaluationContext
 from vgi.catalog.sql import SqlExpression
 from vgi.schema_path import schema_path_key
+
+# The in-process engine vgi resolves (haybarn preferred, duckdb fallback), never a
+# second engine: two different DuckDB builds in one process crash on macOS.
+if TYPE_CHECKING:
+    import duckdb
+else:
+    duckdb = _duckdb_engine()
+
 
 _ROLES = {"default", "generated", "check", "using", "layout", "index"}
 _TYPES = {"BOOLEAN", "TINYINT", "SMALLINT", "INTEGER", "BIGINT", "VARCHAR", "SQLNULL", "NULL"}

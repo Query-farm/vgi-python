@@ -16,12 +16,12 @@ import sqlite3
 from collections.abc import Sequence
 from contextlib import closing
 from dataclasses import replace
-from typing import Any, Literal, Never, overload
+from typing import TYPE_CHECKING, Any, Literal, Never, overload
 
-import duckdb
 import pyarrow as pa
 
 from vgi._duckdb import arrow_table
+from vgi._duckdb import engine_module as _duckdb_engine
 from vgi.catalog import SchemaInfo, TableInfo
 from vgi.catalog.capabilities import (
     ROW_SCALAR_EXPRESSION,
@@ -49,6 +49,14 @@ from vgi.worker import Worker
 
 from .expression_reference import validate_expression as _validate_expression
 from .schema_options_reference import DEFINITIONS, PROFILES, SchemaOptionsCatalog
+
+# The in-process engine vgi resolves (haybarn preferred, duckdb fallback), never a
+# second engine: two different DuckDB builds in one process crash on macOS.
+if TYPE_CHECKING:
+    import duckdb
+else:
+    duckdb = _duckdb_engine()
+
 
 TABLE_PROFILES = CatalogCapabilities(
     read=sorted([*PROFILES.read, TABLE_OPTIONS_READ, TABLE_LAYOUT_READ, ROW_SCALAR_EXPRESSION]),

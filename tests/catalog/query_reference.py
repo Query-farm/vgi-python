@@ -16,13 +16,13 @@ import time
 import uuid
 from contextlib import closing
 from dataclasses import replace
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
-import duckdb
 import pyarrow as pa
 from vgi_rpc.rpc import CallContext
 from vgi_rpc.utils import deserialize_record_batch, serialize_record_batch_bytes
 
+from vgi._duckdb import engine_module as _duckdb_engine
 from vgi.catalog import AttachOpaqueData, CatalogAttachResult, TransactionOpaqueData
 from vgi.catalog.query import (
     QUERY_ENCODING,
@@ -40,6 +40,14 @@ from vgi.query_provider import CatalogQueryProvider, QueryExecution, QueryOwner,
 from vgi.worker import Worker
 
 from .schema_options_reference import SchemaOptionsCatalog
+
+# The in-process engine vgi resolves (haybarn preferred, duckdb fallback), never a
+# second engine: two different DuckDB builds in one process crash on macOS.
+if TYPE_CHECKING:
+    import duckdb
+else:
+    duckdb = _duckdb_engine()
+
 
 QUERIES = {
     "SELECT $value AS result": ["value"],

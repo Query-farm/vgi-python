@@ -27,13 +27,13 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, ClassVar, Literal, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, overload
 from wsgiref.simple_server import make_server
 
-import duckdb
 import pyarrow as pa
 from vgi_rpc.rpc import CallContext
 
+from vgi._duckdb import engine_module as _duckdb_engine
 from vgi.catalog import (
     AttachOpaqueData,
     CatalogAttachResult,
@@ -66,6 +66,14 @@ from vgi.schema_path import SchemaPath
 from vgi.worker import Worker
 
 from .typing_helpers import present
+
+# The in-process engine vgi resolves (haybarn preferred, duckdb fallback), never a
+# second engine: two different DuckDB builds in one process crash on macOS.
+if TYPE_CHECKING:
+    import duckdb
+else:
+    duckdb = _duckdb_engine()
+
 
 INSERT = "INSERT INTO items VALUES ($id, $label)"
 INSERT_RETURNING = INSERT + " RETURNING id, label"

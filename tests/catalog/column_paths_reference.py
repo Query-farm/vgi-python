@@ -18,13 +18,13 @@ import sqlite3
 import uuid
 from contextlib import closing
 from dataclasses import replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import duckdb
 import pyarrow as pa
 import pyarrow.compute as pc
 
 from vgi._duckdb import arrow_table
+from vgi._duckdb import engine_module as _duckdb_engine
 from vgi.catalog import TableInfo
 from vgi.catalog.capabilities import (
     COLUMN_NESTED_ADD,
@@ -63,6 +63,14 @@ from vgi.worker import Worker
 from .expression_reference import validate_expression as _validate_expression
 from .table_layout_reference import TABLE_PROFILES, TableLayoutCatalog, _table_key
 from .typing_helpers import present
+
+# The in-process engine vgi resolves (haybarn preferred, duckdb fallback), never a
+# second engine: two different DuckDB builds in one process crash on macOS.
+if TYPE_CHECKING:
+    import duckdb
+else:
+    duckdb = _duckdb_engine()
+
 
 COLUMN_PROFILES = CatalogCapabilities(
     read=sorted([*TABLE_PROFILES.read, CONSTRAINT_RECORDS_READ]),

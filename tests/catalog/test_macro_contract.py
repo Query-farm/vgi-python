@@ -6,12 +6,12 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
-import duckdb
 import pyarrow as pa
 import pytest
 
+from vgi._duckdb import engine_module as _duckdb_engine
 from vgi.argument_spec import macro_arguments_schema
 from vgi.catalog import MacroType
 from vgi.catalog.evaluation_context import QueryEvaluationContext
@@ -29,6 +29,13 @@ from vgi.catalog.macros import (
 from vgi.typed_values import TypedValueBatch
 
 from .typing_helpers import present
+
+# The in-process engine vgi resolves (haybarn preferred, duckdb fallback), never a
+# second engine: two different DuckDB builds in one process crash on macOS.
+if TYPE_CHECKING:
+    import duckdb
+else:
+    duckdb = _duckdb_engine()
 
 
 def literal(

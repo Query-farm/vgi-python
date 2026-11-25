@@ -23,11 +23,11 @@ import sqlite3
 import uuid
 from contextlib import closing
 from dataclasses import replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import duckdb
 import pyarrow as pa
 
+from vgi._duckdb import engine_module as _duckdb_engine
 from vgi.catalog.constraints import (
     ConstraintDefinition,
     ConstraintEnforcement,
@@ -43,6 +43,13 @@ from vgi.catalog.constraints import (
 from vgi.catalog.dependencies import CatalogObjectRef
 
 from .expression_reference import evaluate_expression
+
+# The in-process engine vgi resolves (haybarn preferred, duckdb fallback), never a
+# second engine: two different DuckDB builds in one process crash on macOS.
+if TYPE_CHECKING:
+    import duckdb
+else:
+    duckdb = _duckdb_engine()
 
 
 def _fold(value: str) -> str:

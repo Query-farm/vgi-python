@@ -7,12 +7,12 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
-import duckdb
 import pyarrow as pa
 import pytest
 
+from vgi._duckdb import engine_module as _duckdb_engine
 from vgi.catalog.capabilities import ROW_SCALAR_EXPRESSION
 from vgi.catalog.constraints import (
     ConstraintChange,
@@ -34,6 +34,14 @@ from vgi.catalog.sql import SqlExpression
 
 from .constraints_reference import ConstraintCatalog
 from .typing_helpers import present
+
+# The in-process engine vgi resolves (haybarn preferred, duckdb fallback), never a
+# second engine: two different DuckDB builds in one process crash on macOS.
+if TYPE_CHECKING:
+    import duckdb
+else:
+    duckdb = _duckdb_engine()
+
 
 ATTACH = b"constraint-owner"
 COLUMNS = pa.schema(
