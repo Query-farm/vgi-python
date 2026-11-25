@@ -68,3 +68,61 @@ def test_dict_access_still_works() -> None:
     s = _secrets()
     assert s["my_s3"]["key_id"] == "AAA"
     assert s.get("missing") is None
+
+
+# Cases follow DuckDB's BaseSecret::MatchScore (Haybarn 2.0.1, duckdb#28684):
+# an authority-only URI scope has an implicit trailing "/".
+_SCOPE_CASES = [
+    # authority-only scopes: exact host, or a "/" right after it
+    ("snmp://10.0.0.1", "snmp://10.0.0.1", True),
+    ("snmp://10.0.0.1", "snmp://10.0.0.1/x", True),
+    ("snmp://10.0.0.1", "snmp://10.0.0.15", False),
+    ("snmp://10.0.0.1", "snmp://10.0.0.1:161", False),
+    ("s3://bucket", "s3://bucket/key", True),
+    ("s3://bucket", "s3://bucket-evil/key", False),
+    ("s3://bucket", "s3://bucket?x=1", False),
+    ("dlt://vgi_dlt_fixture", "dlt://vgi_dlt_fixture:shop", False),
+    ("dlt://vgi_dlt_fixture", "dlt://vgi_dlt_fixture/shop", True),
+    # a scope with anything after the authority stays a plain prefix
+    ("s3://bucket/", "s3://bucket/key", True),
+    ("s3://bucket/pre", "s3://bucket/prefix/x", True),
+    ("s3://bucket/pre", "s3://bucket/other", False),
+    ("https://h?a", "https://h?ab", True),
+    ("https://h#f", "https://h#fx", True),
+    ("a://b\\c", "a://b\\cd", True),
+    # empty authority, or not a URI at all: plain prefix
+    ("snmp://", "snmp://anything", True),
+    ("snmp://10.0.0.", "snmp://10.0.0.15:161", False),
+    ("foo", "foobar", True),
+    ("c:\\data", "c:\\data2\\x", True),
+    ("x:/y://z", "x:/y://zz", True),
+    # not a prefix at all
+    ("s3://bucket", "s3://buck", False),
+    ("", "s3://bucket", False),
+]
+
+
+def test_scope_matches_follows_duckdb() -> None:
+    """scope_matches agrees with DuckDB's authority-boundary rule."""
+    from vgi.table_function import scope_matches
+
+    for prefix, path, want in _SCOPE_CASES:
+        assert scope_matches(prefix, path) is want, (prefix, path, want)
+
+
+def test_authority_only_scope_does_not_cross_hosts() -> None:
+    """An authority-only scope never selects a secret for a neighbouring host or port."""
+    s = ResolvedSecrets(
+        {
+            "host1": {"type": "snmp", "key_id": "h1", "scope": "snmp://10.0.0.1"},
+            "host15": {"type": "snmp", "key_id": "h15", "scope": "snmp://10.0.0.15"},
+            "default": {"type": "snmp", "key_id": "default"},
+        }
+    )
+    assert _key_id(s.for_scope("snmp://10.0.0.1")) == "h1"
+    assert _key_id(s.for_scope("snmp://10.0.0.1/sys")) == "h1"
+    assert _key_id(s.for_scope("snmp://10.0.0.15")) == "h15"
+    # host:port is not under the authority-only scope: falls back to the unscoped secret
+    assert _key_id(s.for_scope("snmp://10.0.0.1:161")) == "default"
+    assert _key_id(s.lookup("snmp", scope="snmp://10.0.0.1:161")) == "default"
+    assert _key_id(s.lookup("snmp", scope="snmp://10.0.0.1")) == "h1"

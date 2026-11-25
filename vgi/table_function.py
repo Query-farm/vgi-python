@@ -290,6 +290,9 @@ class ResolvedSecrets(dict[str, dict[str, Any]]):
         The connector serializes each secret's scope as a newline-joined list of
         prefixes; a secret with no (or empty) scope matches as a last-resort
         fallback. Returns ``None`` only when there are no candidate secrets.
+        Matching follows DuckDB exactly (see :func:`scope_matches`): an
+        authority-only scope such as ``snmp://10.0.0.1`` only covers that host
+        and paths under it, never ``snmp://10.0.0.15`` or ``snmp://10.0.0.1:161``.
         """
         return self._select_for_scope(path, None)
 
@@ -351,10 +354,52 @@ class ResolvedSecrets(dict[str, dict[str, Any]]):
                     fallback = fields
                 continue
             for prefix in scope.split("\n"):
-                if prefix and path.startswith(prefix) and len(prefix) > best_len:
+                if prefix and scope_matches(prefix, path) and len(prefix) > best_len:
                     best_len = len(prefix)
                     best = fields
         return best if best is not None else fallback
+
+
+def _uri_authority(text: str) -> str:
+    r"""The URI authority of ``text``, or ``""``; mirrors DuckDB's ``StringUtil::GetURIAuthority``.
+
+    ``text`` counts as a URI only if it contains ``://`` after a non-empty
+    scheme and its first ``/`` or ``\`` is the one that starts that ``://``.
+    The authority runs from after ``://`` to the first ``/``, ``\``, ``?`` or
+    ``#`` (or the end).
+    """
+    scheme_end = text.find("://")
+    if scheme_end <= 0:
+        return ""
+    first_slash = min((i for i in (text.find("/"), text.find("\\")) if i != -1), default=-1)
+    if first_slash != scheme_end + 1:
+        return ""
+    start = scheme_end + 3
+    ends = [i for i in (text.find(c, start) for c in "/\\?#") if i != -1]
+    return text[start : min(ends)] if ends else text[start:]
+
+
+def scope_matches(prefix: str, path: str) -> bool:
+    """Whether a secret scope ``prefix`` covers ``path``, exactly as DuckDB decides.
+
+    A scope matches when it is a string prefix of ``path``, except that an
+    authority-only URI scope (``scheme://authority`` with nothing after the
+    authority) has an implicit trailing ``/``: ``snmp://10.0.0.1`` covers
+    ``snmp://10.0.0.1`` and ``snmp://10.0.0.1/x`` but not ``snmp://10.0.0.15``
+    or ``snmp://10.0.0.1:161``, and ``s3://bucket`` no longer covers
+    ``s3://bucket-evil/``. This is DuckDB's ``BaseSecret::MatchScore`` as of the
+    Haybarn 2.0.1 engine (upstream duckdb#28684). Matching it keeps a worker
+    from choosing a secret DuckDB itself would not resolve for that path.
+    An empty ``prefix`` is not a scope; callers treat unscoped secrets as the
+    fallback separately.
+    """
+    if not prefix or not path.startswith(prefix):
+        return False
+    authority = _uri_authority(prefix)
+    authority_only = bool(authority) and len(prefix) == prefix.find("://") + 3 + len(authority)
+    if not authority_only:
+        return True
+    return len(path) == len(prefix) or path[len(prefix)] == "/"
 
 
 class SecretsAccessor:
