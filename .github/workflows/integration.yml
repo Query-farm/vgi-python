@@ -27,10 +27,10 @@ concurrency:
 env:
   # The test suite and native Actions artifact must come from this exact ref.
   # The downloader verifies its provenance against the checked-out commit.
-  # vgi d780e74 = the published 3.4 extension (v2.0 ebf28ea) plus the merge.test
-  # update for Haybarn 2.0.1-rc3. It is the head of vgi's protocol-3.4 branch,
-  # whose native runner artifacts the downloader verifies against.
-  VGI_REF: d780e7485ae392644b86fd6935b75aaad992447a
+  # vgi ebf28ea = the published 3.4 extension (v2.0 and protocol-3.4). Its
+  # native runner artifact comes from vgi's protocol-3.4 Integration suite run.
+  # d780e74 (ebf28ea + a merge.test update) has no native runner artifact.
+  VGI_REF: ebf28ead2703ab2b0f3ec818aa9a63a99bd8863f
   VGI_NATIVE_RUNNER_BRANCH: protocol-3.4
   # CI is not a user: its ATTACHes should not land in Query.Farm's adoption data.
   # The vgi extension fires a telemetry event per successful ATTACH, and this
