@@ -52,9 +52,12 @@ DuckDB 1.5 exposes concrete `TableFilter` subclasses and single-column table-fun
 The DuckDB 1.5 API offers one root scan column, so this adapter emits only single-column expressions even though the VGI wire permits multiple references. This is an engine-adapter limitation, not a protocol restriction.
 
 The v1 semantic oracle is upstream DuckDB v2.0.0 commit
-`d54cbbe3df17e8e5ce68312f483b4155836112aa`. Haybarn v2.0.0-rc11 commit
-`9b1a0c5829c056edaecd8ee8e7249a70fb8f50c8` is a reference distribution expected to pass the same corpus; upstream
-behavior wins if an unlisted Haybarn patch differs. (It was DuckDB v1.5.5 while the extension ran on 1.5; see the
+`d54cbbe3df17e8e5ce68312f483b4155836112aa`. Haybarn v2.0.1-rc3 commit
+`b2aa6ca65bd8d146cd0aa80f1c4f35da8e2f9430` is the reference distribution expected to pass the same corpus; upstream
+behavior wins if an unlisted Haybarn patch differs. Haybarn v2.0.0-rc11 commit
+`9b1a0c5829c056edaecd8ee8e7249a70fb8f50c8` remains accepted. The reference moved to 2.0.1-rc3 because the
+protocol 3.4 `vgi` extension is built on it (and served only to Haybarn 2.0.1); the complete filter conformance corpus
+passes on it (92/92). (It was DuckDB v1.5.5 while the extension ran on 1.5; see the
 specification, section 6.)
 
 ## 4. DuckDB 2.0 filter model
@@ -265,7 +268,7 @@ Generated VGI models should be used for request, response, and AST construction.
 
 The DuckDB 1.5 integration suite covers:
 
-- differential behavior against upstream DuckDB v2.0.0 and Haybarn v2.0.0-rc11 for the complete v1 conformance corpus;
+- differential behavior against upstream DuckDB v2.0.0 and Haybarn v2.0.1-rc3 (and v2.0.0-rc11) for the complete v1 conformance corpus;
 - every concrete supported filter class;
 - required versus optional behavior;
 - nested struct fields;

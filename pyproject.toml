@@ -55,15 +55,17 @@ dependencies = [
 # fallback. Neither is a hard dependency — install one via these extras.
 # Both are pinned EXACTLY: expression-filter evaluation implements
 # vgi.duckdb.standard.v1, whose oracle is upstream DuckDB 2.0.0 (Haybarn
-# 2.0.0-rc11), and vgi/filter_v2.py refuses any other engine build
+# 2.0.0-rc11 and 2.0.1-rc3), and vgi/filter_v2.py refuses any other engine build
 # (STANDARD_V1_ENGINE_VERSIONS). A looser range lets a resolver pick e.g.
-# duckdb 2.0.1, and every pushed-down filter then fails to bind. Change these
+# duckdb 2.0.1, and every pushed-down filter then fails to bind. Haybarn is
+# 2.0.1rc3 because the 3.4 vgi extension is only served to Haybarn 2.0.1, so a
+# worker that attaches vgi through this extra needs it. Change these
 # only together with STANDARD_V1_ENGINE_VERSIONS (a test keeps them in step).
 # numpy: the engine's create_function needs it, and the evaluator registers the
 # duckdb.spatial/intersects_extent@1 UDF with it (only for predicates that call
 # that function). Filter evaluation never runs without one of these extras, so
 # numpy belongs here rather than in the core dependencies.
-haybarn = ["haybarn==2.0.0rc11", "numpy>=2.4.1"]
+haybarn = ["haybarn==2.0.1rc3", "numpy>=2.4.1"]
 duckdb = ["duckdb==2.0.0", "numpy>=2.4.1"]
 http = ["vgi-rpc[http]"]
 # Publishing and resolving immutable external catalog results needs the RPC

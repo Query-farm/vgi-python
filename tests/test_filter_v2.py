@@ -730,6 +730,8 @@ def test_engine_pins_match_standard_v1_oracle() -> None:
     [
         ("duckdb", "2.0.0", True),
         ("haybarn", "2.0.0rc11", True),
+        ("haybarn", "2.0.1rc3", True),
+        ("haybarn", "2.0.1", False),
         ("duckdb", "2.0.1", False),
         ("duckdb", "1.5.5", False),
         ("haybarn", "1.5.5rc1", False),

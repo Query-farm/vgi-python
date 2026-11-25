@@ -27,7 +27,8 @@ DUCKDB_SESSION_CONTEXT = "vgi.duckdb.session.v1"
 #: Engine builds whose observable SQL behavior *is* the ``vgi.duckdb.standard.v1``
 #: oracle, by distribution name -> exact ``__version__`` strings. The profile is
 #: pinned to upstream DuckDB v2.0.0 (Haybarn v2.0.0-rc11 is its reference
-#: distribution), the engine the DuckDB ``vgi`` extension now runs on, and is
+#: distribution; v2.0.1-rc3, the engine the 3.4 ``vgi`` extension is built on and
+#: is served to, passes the same corpus), and is
 #: not a reference to the moving 2.0.x release family
 #: (vgi-filter-encoding-v2-spec.md section 6). A later release is not added
 #: here merely because the conformance corpus passes: patch releases have
@@ -36,7 +37,7 @@ DUCKDB_SESSION_CONTEXT = "vgi.duckdb.session.v1"
 #: two in step.
 STANDARD_V1_ENGINE_VERSIONS: dict[str, frozenset[str]] = {
     "duckdb": frozenset({"2.0.0"}),
-    "haybarn": frozenset({"2.0.0rc11", "2.0.0-rc11"}),
+    "haybarn": frozenset({"2.0.0rc11", "2.0.0-rc11", "2.0.1rc3", "2.0.1-rc3"}),
 }
 
 MAX_JSON_BYTES = 1 << 20

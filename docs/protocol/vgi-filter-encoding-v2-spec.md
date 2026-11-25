@@ -668,8 +668,11 @@ function set below. Its normative oracle is the observable SQL behavior of upstr
 `d54cbbe3df17e8e5ce68312f483b4155836112aa`, after applying the evaluation-context settings required by section 11.3.
 It is not a reference to the moving `2.0.x` release family.
 
-Haybarn `v2.0.0-rc11`, tag commit `9b1a0c5829c056edaecd8ee8e7249a70fb8f50c8`, is a reference distribution built
-on DuckDB 2.0 and is expected to conform to `vgi.duckdb.standard.v1`. If an unlisted Haybarn modification
+Haybarn `v2.0.1-rc3`, tag commit `b2aa6ca65bd8d146cd0aa80f1c4f35da8e2f9430`, is the reference distribution built
+on DuckDB 2.0 and is expected to conform to `vgi.duckdb.standard.v1`. Haybarn `v2.0.0-rc11`, tag commit
+`9b1a0c5829c056edaecd8ee8e7249a70fb8f50c8`, remains an accepted conforming distribution. The reference moved from
+rc11 to 2.0.1-rc3 because the protocol 3.4 DuckDB `vgi` extension is built on Haybarn 2.0.1-rc3 and is served only
+to Haybarn 2.0.1; the complete filter conformance corpus passes unchanged on 2.0.1-rc3 (92/92). If an unlisted Haybarn modification
 and upstream DuckDB v2.0.0 produce different observable expression behavior, upstream DuckDB v2.0.0 is the tie-breaking
 oracle unless this specification explicitly states otherwise.
 
@@ -1346,7 +1349,7 @@ Required positive cases include:
 26. successful strict matching when producer, advertised capability, and filter batch carry the identical provider
     fingerprint; and
 27. core-node values, result types, NULLs, and error categories matching upstream DuckDB v2.0.0 under
-    `vgi.duckdb.standard.v1`, with Haybarn v2.0.0-rc11 passing the same corpus.
+    `vgi.duckdb.standard.v1`, with Haybarn v2.0.1-rc3 (and v2.0.0-rc11) passing the same corpus.
 
 Exact-evaluation parity cases include arithmetic overflow, integer and floating-point division by zero, and failing
 casts. Each case verifies whether evaluation returns a value or raises an error, along with the error category required
@@ -1425,7 +1428,7 @@ This proposal makes the following choices:
 - VGI 2.0 has one filter encoding and no v1 compatibility mode.
 - The wire is a unified expression AST inside the existing Arrow IPC container.
 - `vgi.duckdb.standard.v1` pins core and standard-function behavior to upstream DuckDB v2.0.0; Haybarn
-  v2.0.0-rc11 is a conforming reference distribution.
+  v2.0.1-rc3 is the conforming reference distribution, and v2.0.0-rc11 remains accepted.
 - Embedded DuckDB is the recommended portable evaluator.
 - DataFusion native pushdown is an optional deeper optimization with a residual correctness backstop.
 - Polars is treated primarily as a client and retains its native residual.

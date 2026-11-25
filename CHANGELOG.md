@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- **The `[haybarn]` extra pins `haybarn==2.0.1rc3`** (was `2.0.0rc11`). The 3.4 `vgi` extension is only served to
+  Haybarn 2.0.1, so a worker whose tests attach `vgi` through this extra got the 3.3 build and failed. Haybarn
+  2.0.1-rc3 is added to the `vgi.duckdb.standard.v1` engine allowlist (`STANDARD_V1_ENGINE_VERSIONS`) after the
+  filter conformance corpus passed on it (92/92); 2.0.0-rc11 stays accepted. The filter specification (section 6)
+  and the DuckDB filter adapter document now name Haybarn v2.0.1-rc3 as the reference distribution. `[duckdb]`
+  stays `duckdb==2.0.0`.
+
 ## 0.55.0 (2026-11-23)
 
 ### Breaking
