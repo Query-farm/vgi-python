@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.55.2 (2026-11-25)
+
+Patch release on VGI protocol 3.4. The wire protocol is unchanged.
+
+### Fixes
+
+- **Secret scopes follow DuckDB 2.0.1's authority boundary** ([duckdb#28684](https://github.com/duckdb/duckdb/pull/28684)). `ResolvedSecrets` used a plain string prefix, so a worker could pick a secret DuckDB would never resolve for that path. An authority-only scope now gets an implicit trailing `/`: `snmp://host` covers `snmp://host` and `snmp://host/x`, but no longer `snmp://host:161` or `snmp://host2`, and `s3://bucket` no longer covers `s3://bucket-evil/`. `scope_matches()` mirrors DuckDB's `BaseSecret::MatchScore` and is tested against 3,025 vectors generated from DuckDB's C++.
+
 ## 0.55.1 (2026-11-24)
 
 Patch release on VGI protocol 3.4 and vgi-rpc 0.57.1. The wire protocol is unchanged.
